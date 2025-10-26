@@ -4,7 +4,6 @@
    [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.string :as str]
-   [differ.core :as differ]
    [gniazdo.core :as ws]))
 
 ;; ============================================================================
@@ -19,23 +18,68 @@
          :side nil
          :uid nil
          :socket nil
-         :lobby-list nil}))
+         :lobby-list nil
+         :client-id nil}))
+
+(defn deep-merge
+  "Recursively merge maps"
+  [a b]
+  (if (and (map? a) (map? b))
+    (merge-with deep-merge a b)
+    b))
 
 (defn apply-diff
   "Apply a diff to current state to get new state"
   [old-state diff]
   (if old-state
-    (differ/patch old-state diff)
+    ;; Use deep-merge instead of differ/patch
+    ;; The server sends incremental updates, not differ-style diffs
+    (deep-merge old-state diff)
     diff))
 
 (defn update-game-state!
-  "Update game state from a diff"
+  "Update game state from a diff (or array of diffs)"
   [diff]
-  (let [old-state (:last-state @client-state)
-        new-state (apply-diff old-state diff)]
-    (swap! client-state assoc
-           :game-state new-state
-           :last-state new-state)))
+  (try
+    (let [old-state (:last-state @client-state)
+          ;; Normalize to always be a sequence of diffs
+          ;; Check the structure carefully
+          diffs (cond
+                  ;; Empty vector - nothing to do
+                  (and (vector? diff) (empty? diff))
+                  []
+
+                  ;; Vector of maps - use as-is
+                  (and (vector? diff)
+                       (> (count diff) 0)
+                       (every? #(or (map? %) (nil? %)) diff))
+                  diff
+
+                  ;; Single map - wrap it
+                  (map? diff)
+                  [diff]
+
+                  ;; Nil - skip
+                  (nil? diff)
+                  []
+
+                  ;; Unknown - log and wrap
+                  :else
+                  (do
+                    (println "⚠️  Unknown diff type:" (type diff))
+                    (println "   Value:" (pr-str (take 100 (pr-str diff))))
+                    [diff]))
+          ;; Filter out nil and empty diffs, then apply
+          filtered-diffs (filter #(and (some? %) (not (and (map? %) (empty? %)))) diffs)
+          new-state (reduce apply-diff old-state filtered-diffs)]
+      (swap! client-state assoc
+             :game-state new-state
+             :last-state new-state))
+    (catch Exception e
+      (println "❌ Error in update-game-state!:" (.getMessage e))
+      (println "   Diff type:" (type diff))
+      (println "   Diff:" (pr-str (take 200 (pr-str diff))))
+      (.printStackTrace e))))
 
 (defn set-full-state!
   "Set initial game state"
@@ -92,6 +136,10 @@
 (defn handle-message
   "Handle parsed message"
   [{:keys [type data] :as msg}]
+  ;; Record all messages (except pings)
+  (when (not= type :chsk/ws-ping)
+    (swap! client-state update :messages (fn [msgs] (conj (vec msgs) msg))))
+
   (case type
     :chsk/handshake
     (do
@@ -139,6 +187,9 @@
           (swap! client-state assoc :gameid gameid)
           (println "   GameID:" gameid))))
 
+    :lobby/notification
+    (println "🔔 Lobby notification:" data)
+
     ;; Default
     (when (not= type :chsk/ws-ping)
       (println "Unhandled message type:" type))))
@@ -160,8 +211,9 @@
   [url]
   (println "🔌 Connecting to" url "...")
   (try
-    ;; Generate a unique client-id for Sente
-    (let [client-id (str "ai-client-" (java.util.UUID/randomUUID))
+    ;; Reuse existing client-id if available, otherwise generate new one
+    (let [existing-id (:client-id @client-state)
+          client-id (or existing-id (str "ai-client-" (java.util.UUID/randomUUID)))
           ;; Add client-id as query parameter for Sente handshake
           full-url (str url "?client-id=" client-id)
           socket (ws/connect full-url
@@ -173,8 +225,12 @@
                                         (swap! client-state assoc :connected false))
                              :on-error (fn [& args]
                                         (println "❌ Error:" (first args))))]
-      (swap! client-state assoc :socket socket)
-      (println "✨ WebSocket connection initiated with client-id:" client-id)
+      (swap! client-state assoc
+             :socket socket
+             :client-id client-id)
+      (if existing-id
+        (println "✨ WebSocket reconnected with existing client-id:" client-id)
+        (println "✨ WebSocket connection initiated with new client-id:" client-id))
       socket)
     (catch Exception e
       (println "❌ Connection failed:" (.getMessage e))
@@ -197,9 +253,10 @@
   [event-type data]
   (if-let [socket (:socket @client-state)]
     (try
-      ;; Encode with EDN (Sente's WebSocket default)
-      (let [msg (pr-str [event-type data])]
+      ;; Sente expects double-wrapped messages: [[:event-type data]]
+      (let [msg (pr-str [[event-type data]])]
         (ws/send-msg socket msg)
+        (println "📤 Sent:" event-type)
         true)
       (catch Exception e
         (println "❌ Send failed:" (.getMessage e))
@@ -214,10 +271,14 @@
   [command args]
   (let [gameid (:gameid @client-state)]
     (if gameid
-      (send-message! :game/action
-                     {:gameid gameid
-                      :command command
-                      :args args})
+      ;; Convert gameid string to UUID object for server
+      (let [gameid-uuid (if (string? gameid)
+                          (java.util.UUID/fromString gameid)
+                          gameid)]
+        (send-message! :game/action
+                       {:gameid gameid-uuid
+                        :command command
+                        :args args}))
       (println "❌ No active game"))))
 
 ;; ============================================================================
@@ -227,19 +288,8 @@
 (defn request-lobby-list!
   "Request the list of available games"
   []
-  ;; Try double-wrapping like the handshake: [[:lobby/list]]
-  (if-let [socket (:socket @client-state)]
-    (try
-      (let [msg (pr-str [[:lobby/list]])]  ;; Double-wrapped like handshake
-        (ws/send-msg socket msg)
-        (println "📤 Sent: :lobby/list (double-wrapped)")
-        true)
-      (catch Exception e
-        (println "❌ Send failed:" (.getMessage e))
-        false))
-    (do
-      (println "❌ Not connected")
-      false)))
+  ;; Use send-message! with nil data (server doesn't need data for lobby list)
+  (send-message! :lobby/list nil))
 
 (defn join-game!
   "Join a game by ID

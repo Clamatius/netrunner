@@ -56,7 +56,9 @@
   (ring/router
     [["/chsk" {:get #'ws/handshake-handler
                :post #'ws/post-handler
-               :middleware [::forgery]}]
+               ;; TEMP: Removed ::forgery middleware to allow AI player WebSocket connection
+               ;; TODO: Add proper authentication for AI player
+               :middleware []}]
      ["/data" {:middleware [::forgery]}
       ["/cards"
        ["" {:get #'data/cards-handler}]

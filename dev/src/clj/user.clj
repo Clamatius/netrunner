@@ -29,3 +29,7 @@
 (import-vars
   [kaocha.repl
    run])
+
+(require '[nrepl.server :as nrepl])
+(defonce nrepl-server (nrepl/start-server :port 7888))
+(println "nREPL server started on port 7888")
