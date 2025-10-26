@@ -53,18 +53,28 @@
 (defn wrap-user [handler]
   (fn [{db :system/db
         auth :system/auth
-        :keys [cookies] :as req}]
+        :keys [cookies params] :as req}]
     (let [user (some-> (get cookies "session")
                        (:value)
                        (->> (unsign-token auth))
                        (#(mc/find-one-as-map db "users" {:_id (->object-id (:_id %))
                                                          :emailhash (:emailhash %)}))
                        (select-keys user-keys)
-                       (update :_id str))]
-      (if (active-user? user)
+                       (update :_id str))
+          ;; TEMP: Allow AI players without authentication
+          ;; Create a fake user for client-ids that start with "ai-client-"
+          client-id (:client-id params)
+          ai-user (when (and client-id (str/starts-with? (str client-id) "ai-client-"))
+                    {:username (str "AI-" (subs (str client-id) 10 18))
+                     :emailhash "ai"
+                     :_id "ai-player"
+                     :special true
+                     :stats {:games-started 0 :games-completed 0}})
+          final-user (or user ai-user)]
+      (if (or (active-user? final-user) ai-user)
         (handler (-> req
-                     (assoc :user user)
-                     (assoc-in [:session :uid] (:username user))))
+                     (assoc :user final-user)
+                     (assoc-in [:session :uid] (:username final-user))))
         (handler req)))))
 
 (defn register-handler
