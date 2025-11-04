@@ -294,11 +294,26 @@
       (println "Runner gameid:" (get-in @clients [:runner :gameid]))
       (println "\nReady for next steps (mulligan, turns, etc.)")))
 
-  @clients)
+  (println "\n💡 Use (check-state) and (check-prompts) to inspect game")
+  (println "💡 Use (auto-mulligan!) to respond to mulligan prompts")
+  nil)  ; Don't return @clients - it's huge and will spam console
 
 ;; ============================================================================
 ;; Helper: Check prompts
 ;; ============================================================================
+
+(defn check-messages
+  "Debug helper: Show what messages have been received"
+  ([]
+   (check-messages 10))
+  ([n]
+   (println "\n=== RECENT MESSAGES ===")
+   (doseq [client-name [:corp :runner]]
+     (let [msgs (get-in @clients [client-name :messages])
+           recent (take-last n msgs)]
+       (println "\n[" client-name "] Received" (count msgs) "total messages, showing last" (min n (count msgs)))
+       (doseq [{:keys [type data]} recent]
+         (println "  -" type))))))
 
 (defn check-prompts []
   (println "\n=== CURRENT PROMPTS ===")
@@ -320,14 +335,15 @@
   (println "\n=== GAME STATE ===")
   (doseq [client-name [:corp :runner]]
     (let [gs (get-in @clients [client-name :game-state])]
-      (when gs
+      (if gs
         (let [side (keyword (name client-name))
               player-state (get gs side)]
           (println "\n[" client-name "]")
           (println "  Credits:" (:credit player-state))
           (println "  Clicks:" (:click player-state))
           (println "  Hand size:" (:hand-count player-state))
-          (println "  Deck size:" (:deck-count player-state))))))
+          (println "  Deck size:" (:deck-count player-state)))
+        (println "\n[" client-name "] ⚠️  No game state yet"))))
 
   ;; Deck count summary for quick verification
   (let [corp-deck (get-in @clients [:corp :game-state :corp :deck-count])
@@ -335,8 +351,14 @@
         corp-hand (get-in @clients [:corp :game-state :corp :hand-count])
         runner-hand (get-in @clients [:runner :game-state :runner :hand-count])]
     (println "\n=== DECK VERIFICATION ===")
-    (println "Corp: " corp-deck "cards in deck," corp-hand "in hand (expect ~29 in deck after draw)")
-    (println "Runner:" runner-deck "cards in deck," runner-hand "in hand (expect ~25 in deck after draw)")))
+    (if (and corp-deck runner-deck)
+      (do
+        (println "Corp: " corp-deck "cards in deck," corp-hand "in hand (expect ~29 in deck after draw)")
+        (println "Runner:" runner-deck "cards in deck," runner-hand "in hand (expect ~25 in deck after draw)"))
+      (do
+        (println "⚠️  Game state not yet synchronized from server")
+        (println "Try waiting a few seconds and running (check-state) again")
+        (println "Or check message log: (count (get-in @clients [:corp :messages]))")))))
 
 (comment
   ;; Run the test
@@ -346,6 +368,13 @@
   (Thread/sleep 3000)
   (check-state)
   (check-prompts)
+
+  ;; Debug: See what messages have been received
+  (check-messages)       ; Last 10 messages
+  (check-messages 20)    ; Last 20 messages
+
+  ;; Debug: Check if game state is set
+  (keys (get-in @clients [:corp :game-state]))
 
   ;; Respond to mulligan prompts (keeps both hands)
   (auto-mulligan!)
