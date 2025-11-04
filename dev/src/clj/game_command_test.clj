@@ -52,6 +52,37 @@
    "Unity" "Unity"])
 
 ;; ============================================================================
+;; Card Lookup Helpers
+;; ============================================================================
+
+(defn card-info
+  "Quick lookup of card properties from the card database.
+  Returns a map with useful info for testing."
+  [card-name]
+  (when-let [card (get @all-cards card-name)]
+    {:title (:title card)
+     :type (:type card)
+     :cost (:cost card)
+     :faction (:faction card)
+     :side (:side card)
+     :strength (:strength card)
+     :agenda-points (:agendapoints card)
+     :advancement-cost (:advancementcost card)
+     :memory (:memoryunits card)
+     :influence (:influence card)}))
+
+(defn print-card-info
+  "Print card information in readable format"
+  [card-name]
+  (if-let [info (card-info card-name)]
+    (do
+      (println "\n=== Card Info:" card-name "===")
+      (doseq [[k v] info]
+        (when v
+          (println (str "  " (name k) ":") v))))
+    (println "Card not found:" card-name)))
+
+;; ============================================================================
 ;; Test Setup Helpers
 ;; ============================================================================
 
@@ -672,14 +703,19 @@
       (println "Cost: 1 click + 3 credits"))
     (print-board-state state)
 
-    ;; Install hardware
-    (println "\n--- Runner installs Docklands Pass (Hardware) ---")
+    ;; Attempt to install hardware - but not enough credits!
+    (println "\n--- Runner attempts to install Docklands Pass (Hardware) ---")
     (let [clicks-before (:click (:runner @state))
-          credits-before (:credit (:runner @state))]
+          credits-before (:credit (:runner @state))
+          docklands (find-card "Docklands Pass" (:hand (:runner @state)))]
       (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (println "Docklands Pass install cost:" (:cost docklands))
+      (println "Can afford Docklands Pass?" (>= credits-before (:cost docklands)))
       (play-from-hand state :runner "Docklands Pass")
       (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
-      (println "Cost: 1 click + 0 credits (free!)"))
+      (if (find-card "Docklands Pass" (:hand (:runner @state)))
+        (println "INSTALL FAILED - Not enough credits! Still in hand.")
+        (println "Installed successfully")))
     (print-board-state state)
 
     ;; Final state
@@ -687,11 +723,15 @@
     (print-board-state state)
     (println "\n--- Summary ---")
     (println "Programs installed: 2 (Carmen, Cleaver)")
-    (println "- Carmen: Fracter (breaks Barrier ICE)")
-    (println "- Cleaver: Fracter (breaks Barrier ICE)")
-    (println "Total clicks used: 4 (Sure Gamble + Carmen + Cleaver + Docklands Pass attempt)")
+    (println "- Carmen: Fracter (breaks Barrier ICE) - Cost: 5 credits")
+    (println "- Cleaver: Fracter (breaks Barrier ICE) - Cost: 3 credits")
+    (println "\nDocklands Pass FAILED to install:")
+    (println "- Costs 2 credits, but only 1 credit remaining")
+    (println "- This demonstrates resource management!")
+    (println "- Must budget credits carefully when building rig")
+    (println "\nTotal clicks used: 4 (Sure Gamble + 2 program installs + 1 failed install)")
     (println "Total credits spent: 8 (5 for Carmen + 3 for Cleaver)")
-    (println "\nPrograms are icebreakers - tools used to break through Corp ICE during runs")
+    (println "\nKey lesson: Check affordability before attempting installs!")
 
     (println "\n✅ Test complete!")
     nil))
@@ -701,6 +741,12 @@
 ;; ============================================================================
 
 (comment
+  ;; Card lookup helpers - quick info about any card
+  (print-card-info "Carmen")
+  (print-card-info "Docklands Pass")
+  (print-card-info "Hedge Fund")
+  (card-info "Nico Campaign")  ; Returns map instead of printing
+
   ;; Run basic turn flow test (returns nil, won't spam)
   (test-basic-turn-flow)
 
