@@ -1,21 +1,31 @@
 #!/bin/bash
 # Unified REPL launcher with output logging for Claude Code dev loop
-# Starts the REPL, error watcher, and captures all output with timestamps
+# Starts the REPL, error watcher, and captures all output with timestamps + sequence numbers
 
 set -e
 
 REPL_OUTPUT="dev/repl-output.log"
+COUNTER_FILE="dev/.repl-counter"
 ERROR_WATCHER_PID=""
 
-# Function to add timestamps to each line
-add_timestamps() {
+# Reset sequence counter on startup
+echo "0" > "$COUNTER_FILE"
+
+# Function to add sequence counter + timestamp to each line
+add_sequence_and_timestamp() {
   while IFS= read -r line; do
+    # Atomically increment counter
+    COUNTER=$(awk '{print $1+1}' "$COUNTER_FILE")
+    echo "$COUNTER" > "$COUNTER_FILE"
+
     # Use gdate if available (from brew coreutils), otherwise fall back to date
     if command -v gdate &> /dev/null; then
-      echo "[$(gdate -u +"%Y-%m-%dT%H:%M:%S.%3NZ")] $line"
+      TIMESTAMP=$(gdate -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
     else
-      echo "[$(date -u +"%Y-%m-%dT%H:%M:%S")Z] $line"
+      TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S")Z
     fi
+
+    printf "[SEQ:%05d] [%s] %s\n" "$COUNTER" "$TIMESTAMP" "$line"
   done
 }
 
@@ -50,6 +60,6 @@ echo ""
 echo "Starting REPL..."
 echo "════════════════════════════════════════════════════════════════"
 
-# Start REPL and capture output with timestamps
+# Start REPL and capture output with sequence numbers + timestamps
 # Use script command for proper TTY handling, or direct tee for simpler approach
-lein repl 2>&1 | tee >(add_timestamps >> "$REPL_OUTPUT")
+lein repl 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")

@@ -84,3 +84,5 @@ data/cards-zh-hant.edn
 # Coding agents
 .claude/
 CLAUDE.local.md
+dev/.repl-counter
+dev/.error-state
