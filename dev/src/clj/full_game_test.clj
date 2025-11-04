@@ -236,12 +236,13 @@
   (connect! :runner)
   (Thread/sleep 3000)
 
-  ;; Step 2: Corp creates System Gateway game
-  (println "\nStep 2: Creating System Gateway game...")
+  ;; Step 2: Corp creates System Gateway beginner game
+  (println "\nStep 2: Creating System Gateway beginner game...")
   (send! :corp :lobby/create
          {:title "AI Test Game"
           :side "Corp"
           :format "system-gateway"
+          :gateway-type "beginner"
           :spectatorhands false})
   (Thread/sleep 5000)  ; Increased to 5s to ensure async response arrives
 
