@@ -85,18 +85,20 @@
 (defn print-game-state
   "Print current game state for both sides"
   [state]
-  (println "\n=== GAME STATE ===")
-  (println "Corp:")
-  (println "  Credits:" (:credit (get-corp)))
-  (println "  Clicks:" (:click (get-corp)))
-  (println "  Hand:" (mapv :title (:hand (get-corp))))
-  (println "  Deck size:" (count (:deck (get-corp))))
+  (let [corp (:corp @state)
+        runner (:runner @state)]
+    (println "\n=== GAME STATE ===")
+    (println "Corp:")
+    (println "  Credits:" (:credit corp))
+    (println "  Clicks:" (:click corp))
+    (println "  Hand:" (mapv :title (:hand corp)))
+    (println "  Deck size:" (count (:deck corp)))
 
-  (println "\nRunner:")
-  (println "  Credits:" (:credit (get-runner)))
-  (println "  Clicks:" (:click (get-runner)))
-  (println "  Hand:" (mapv :title (:hand (get-runner))))
-  (println "  Deck size:" (count (:deck (get-runner)))))
+    (println "\nRunner:")
+    (println "  Credits:" (:credit runner))
+    (println "  Clicks:" (:click runner))
+    (println "  Hand:" (mapv :title (:hand runner)))
+    (println "  Deck size:" (count (:deck runner)))))
 
 (defn print-board-state
   "Print installed cards on both sides"
