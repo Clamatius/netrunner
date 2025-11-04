@@ -6,6 +6,48 @@
    [gniazdo.core :as ws]))
 
 ;; ============================================================================
+;; System Gateway Beginner Decks (from jinteki.preconstructed)
+;; ============================================================================
+
+(def gateway-beginner-corp-deck
+  "System Gateway beginner Corp deck - fixed order for reproducible tests"
+  ["Offworld Office" "Offworld Office" "Offworld Office"
+   "Send a Message" "Send a Message"
+   "Superconducting Hub" "Superconducting Hub"
+   "Nico Campaign" "Nico Campaign"
+   "Regolith Mining License" "Regolith Mining License"
+   "Urtica Cipher" "Urtica Cipher"
+   "Government Subsidy" "Government Subsidy"
+   "Hedge Fund" "Hedge Fund" "Hedge Fund"
+   "Seamless Launch" "Seamless Launch"
+   "Manegarm Skunkworks"
+   "Brân 1.0" "Brân 1.0"
+   "Palisade" "Palisade" "Palisade"
+   "Diviner" "Diviner"
+   "Whitespace" "Whitespace"
+   "Karunā" "Karunā"
+   "Tithe" "Tithe"])
+
+(def gateway-beginner-runner-deck
+  "System Gateway beginner Runner deck - fixed order for reproducible tests"
+  ["Creative Commission" "Creative Commission"
+   "Jailbreak" "Jailbreak" "Jailbreak"
+   "Overclock" "Overclock"
+   "Sure Gamble" "Sure Gamble" "Sure Gamble"
+   "Tread Lightly" "Tread Lightly"
+   "VRcation" "VRcation"
+   "Docklands Pass"
+   "Pennyshaver"
+   "Red Team"
+   "Smartware Distributor" "Smartware Distributor"
+   "Telework Contract" "Telework Contract"
+   "Verbal Plasticity"
+   "Carmen" "Carmen"
+   "Cleaver" "Cleaver"
+   "Mayfly" "Mayfly"
+   "Unity" "Unity"])
+
+;; ============================================================================
 ;; State Management (based on ai_websocket_client_v2.clj)
 ;; ============================================================================
 
@@ -183,7 +225,7 @@
          {:title "AI Test Game"
           :side "Corp"
           :format "system-gateway"
-          :options {:spectatorhands false}})
+          :spectatorhands false})
   (Thread/sleep 2000)
 
   ;; Step 3: Runner joins
