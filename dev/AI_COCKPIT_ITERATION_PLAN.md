@@ -68,9 +68,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ---
 
-### Iteration 2.3: ICE Management
-**Status**: 🔜 NEXT UP
-**New mechanics**: Installing ICE, multiple ICE on same server
+### Iteration 2.3: ICE Management ✅ COMPLETE
+**Status**: ✅ COMPLETE
+**New mechanics**: Installing ICE, multiple ICE on same server, ICE installation tax
 **Test function**: `test-ice-installation`
 
 **Specific actions**:
@@ -92,7 +92,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 ## Phase 3: Runner Rig Building
 
 ### Iteration 3.1: Program Installation
-**Status**: ⏸️ PENDING
+**Status**: 🔜 NEXT UP
 **New mechanics**: Installing programs (breakers), memory tracking
 **Test function**: `test-program-installation`
 
@@ -449,9 +449,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 4 iterations (Phase 1 + Phase 2.1-2.2)
-### Current: Ready to start Phase 2, Iteration 2.3
-### Remaining: ~16-21 iterations
+### Completed: 5 iterations (Phase 1 + Phase 2 complete)
+### Current: Ready to start Phase 3, Iteration 3.1
+### Remaining: ~15-20 iterations
 
 ---
 

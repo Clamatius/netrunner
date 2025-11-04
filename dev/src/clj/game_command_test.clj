@@ -439,6 +439,95 @@
     nil))
 
 ;; ============================================================================
+;; Phase 2.3: ICE Management
+;; ============================================================================
+
+(defn test-ice-installation
+  "Test installing ICE on servers and understanding ICE positions.
+  Demonstrates:
+  - Installing ICE on central servers (HQ, R&D)
+  - Installing multiple ICE on same server
+  - ICE position ordering (outermost to innermost)
+  - Verifying ICE placement with get-ice"
+  []
+  (println "\n========================================")
+  (println "TEST: ICE Installation")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with various ICE
+                ["Palisade" "Brân 1.0" "Tithe" "Whitespace" "Hedge Fund"]
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Install ICE on HQ
+    (println "\n--- Corp installs Palisade on HQ ---")
+    (play-from-hand state :corp "Palisade" "HQ")
+    (print-board-state state)
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Check ICE on HQ
+    (let [hq-ice (get-ice state :hq)]
+      (println "\nICE on HQ (count):" (count hq-ice))
+      (println "ICE on HQ (titles):" (mapv :title hq-ice)))
+
+    ;; Install ICE on R&D
+    (println "\n--- Corp installs Brân 1.0 on R&D ---")
+    (play-from-hand state :corp "Brân 1.0" "R&D")
+    (print-board-state state)
+
+    ;; Install first ICE on a remote
+    (println "\n--- Corp installs Tithe on new remote ---")
+    (play-from-hand state :corp "Tithe" "New remote")
+    (print-board-state state)
+
+    ;; Get fresh clicks for more ICE
+    (println "\n--- Corp ends turn to get more clicks ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
+
+    ;; Install second ICE on same remote (will be outermost)
+    ;; NOTE: Installing multiple ICE on same server has a tax!
+    ;; First ICE: +0 credits, Second ICE: +1 credit, Third: +2, etc.
+    (println "\n--- Corp installs Whitespace on Remote 1 (becomes outermost) ---")
+    (let [credits-before (:credit (:corp @state))]
+      (println "Credits before install:" credits-before)
+      (println "Installing 2nd ICE on Remote 1 - will cost +1 credit tax")
+      (play-from-hand state :corp "Whitespace" "Server 1")
+      (println "Credits after install:" (:credit (:corp @state)))
+      (println "Cost paid:" (- credits-before (:credit (:corp @state))) "(base 1 click, +1 credit for 2nd ICE)"))
+    (print-board-state state)
+
+    ;; Check ICE ordering on remote 1
+    (let [remote1-ice (get-ice state :remote1)]
+      (println "\n--- ICE positioning on Remote 1 ---")
+      (println "Total ICE count:" (count remote1-ice))
+      (println "ICE positions (outermost to innermost):" (mapv :title remote1-ice))
+      (println "Position 0 (outermost):" (:title (nth remote1-ice 0)))
+      (println "Position 1 (innermost):" (:title (nth remote1-ice 1))))
+
+    ;; Final board state
+    (println "\n--- Final Board State ---")
+    (print-board-state state)
+    (print-game-state state)
+
+    (println "\n--- Summary ---")
+    (println "HQ protected by:" (mapv :title (get-ice state :hq)))
+    (println "R&D protected by:" (mapv :title (get-ice state :rd)))
+    (println "Remote 1 protected by:" (mapv :title (get-ice state :remote1)))
+    (println "(ICE ordered from outermost to innermost)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -454,6 +543,9 @@
 
   ;; Run agenda scoring test (Phase 2.2) (returns nil, won't spam)
   (test-agenda-scoring)
+
+  ;; Run ICE installation test (Phase 2.3) (returns nil, won't spam)
+  (test-ice-installation)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!
