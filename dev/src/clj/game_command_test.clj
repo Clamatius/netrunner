@@ -5,7 +5,7 @@
 (ns game-command-test
   (:require
    [game.core :as core]
-   [game.core.card :refer [get-card]]
+   [game.core.card :refer [get-card get-counters]]
    [game.test-framework :refer :all]
    [jinteki.cards :refer [all-cards]]))
 
@@ -227,6 +227,118 @@
     nil))  ; Don't return state - it's huge and will spam console
 
 ;; ============================================================================
+;; Phase 2.1: Asset Installation & Rezzing
+;; ============================================================================
+
+(defn test-asset-management
+  "Test installing assets, rezzing them, and using their abilities.
+  Demonstrates:
+  - Installing assets to remote servers
+  - Rezzing assets (paying rez cost)
+  - Using card abilities (ability index 0)
+  - Verifying credit changes from abilities"
+  []
+  (println "\n========================================")
+  (println "TEST: Asset Management")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Nico Campaign and Regolith Mining License
+                ["Nico Campaign" "Regolith Mining License" "Hedge Fund"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Install Nico Campaign to new remote
+    (println "\n--- Corp installs Nico Campaign in new remote ---")
+    (play-from-hand state :corp "Nico Campaign" "New remote")
+    (print-board-state state)
+    (print-game-state state)
+
+    ;; Get reference to the installed (but unrezzed) Nico Campaign
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- Installed card: " (:title nico))
+      (println "    Rezzed?:" (:rezzed nico))
+      (println "    Rez cost:" (:cost nico)))
+
+    ;; Rez Nico Campaign (costs 1 credit)
+    (println "\n--- Corp rezzes Nico Campaign (costs 1 credit) ---")
+    (let [nico (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))]
+      (println "Credits before rez:" credits-before)
+      (rez state :corp nico)
+      (println "Credits after rez:" (:credit (:corp @state)))
+      (println "Credit change:" (- (:credit (:corp @state)) credits-before)))
+
+    ;; Check that it's now rezzed
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- After rezzing ---")
+      (println "    Rezzed?:" (:rezzed nico)))
+
+    ;; Check Nico's counters (it starts with 9)
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- Nico Campaign counters ---")
+      (println "Credits on Nico:" (get-counters nico :credit))
+      (println "Nico automatically gives 3 credits at start of turn (passive ability)"))
+
+    ;; End Corp turn and start new one to trigger Nico's automatic ability
+    (println "\n--- Corp ends turn ---")
+    (let [credits-after-corp-turn (:credit (:corp @state))]
+      (println "Corp credits after ending turn:" credits-after-corp-turn))
+    (take-credits state :corp)
+
+    (println "\n--- Runner turn ---")
+    (let [credits-before-runner-ends (:credit (:corp @state))]
+      (println "Corp credits before runner ends turn:" credits-before-runner-ends))
+    (take-credits state :runner)
+
+    ;; At start of Corp turn, Nico should automatically trigger
+    (println "\n--- Corp turn begins (Nico auto-triggers) ---")
+    (let [nico (get-content state :remote1 0)]
+      (println "Corp credits after turn starts:" (:credit (:corp @state)))
+      (println "Nico counters after trigger:" (get-counters nico :credit))
+      (println "Nico gave 3 credits automatically (9 - 6 = 3 counters used)"))
+
+    ;; Now test Regolith Mining License
+    (println "\n--- Corp installs Regolith Mining License in new remote ---")
+    (play-from-hand state :corp "Regolith Mining License" "New remote")
+    (print-board-state state)
+
+    ;; Rez Regolith (costs 1 credit)
+    (println "\n--- Corp rezzes Regolith Mining License ---")
+    (let [regolith (get-content state :remote2 0)
+          credits-before (:credit (:corp @state))]
+      (println "Credits before rez:" credits-before)
+      (rez state :corp regolith)
+      (println "Credits after rez:" (:credit (:corp @state))))
+
+    ;; Use Regolith's ability (costs 1 click, take 3 credits from card)
+    (println "\n--- Corp uses Regolith ability (1 click: take 3 credits) ---")
+    (let [regolith (get-content state :remote2 0)
+          credits-before (:credit (:corp @state))
+          counters-before (get-counters regolith :credit)]
+      (println "Corp credits before:" credits-before)
+      (println "Regolith counters before:" counters-before " (starts with 15)")
+      (card-ability state :corp regolith 0)
+      ;; Get updated card reference to see changes
+      (let [regolith-updated (get-content state :remote2 0)]
+        (println "Corp credits after:" (:credit (:corp @state)))
+        (println "Regolith counters after:" (get-counters regolith-updated :credit))
+        (println "Credits gained:" (- (:credit (:corp @state)) credits-before))))
+
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -236,6 +348,9 @@
 
   ;; Run playing cards test (returns nil, won't spam)
   (test-playing-cards)
+
+  ;; Run asset management test (Phase 2.1) (returns nil, won't spam)
+  (test-asset-management)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!

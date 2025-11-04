@@ -22,8 +22,8 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Phase 2: Corp Economic & Board Development
 
-### Iteration 2.1: Asset Installation & Rezzing
-**Status**: 🔜 NEXT UP
+### Iteration 2.1: Asset Installation & Rezzing ✅ COMPLETE
+**Status**: ✅ COMPLETE
 **New mechanics**: Installing assets to remotes, rezzing assets, using card abilities
 **Test function**: `test-asset-management`
 
@@ -48,7 +48,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 ---
 
 ### Iteration 2.2: Agenda Management
-**Status**: ⏸️ PENDING
+**Status**: 🔜 NEXT UP
 **New mechanics**: Advancing cards, scoring agendas
 **Test function**: `test-agenda-scoring`
 
@@ -449,9 +449,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 2 iterations (Phase 1)
-### Current: Ready to start Phase 2, Iteration 2.1
-### Remaining: ~18-23 iterations
+### Completed: 3 iterations (Phase 1 + Phase 2.1)
+### Current: Ready to start Phase 2, Iteration 2.2
+### Remaining: ~17-22 iterations
 
 ---
 
