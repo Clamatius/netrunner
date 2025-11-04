@@ -339,6 +339,106 @@
     nil))
 
 ;; ============================================================================
+;; Phase 2.2: Agenda Management
+;; ============================================================================
+
+(defn test-agenda-scoring
+  "Test advancing agendas and scoring them.
+  Demonstrates:
+  - Installing agendas in remote servers
+  - Advancing agendas (spending click + credit)
+  - Checking advancement counters
+  - Scoring agendas when requirement met
+  - Verifying agenda points awarded"
+  []
+  (println "\n========================================")
+  (println "TEST: Agenda Scoring")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Offworld Office
+                ["Offworld Office" "Hedge Fund" "Hedge Fund"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Install Offworld Office in new remote
+    (println "\n--- Corp installs Offworld Office in remote ---")
+    (play-from-hand state :corp "Offworld Office" "New remote")
+    (print-board-state state)
+
+    ;; Get reference to installed agenda
+    (let [agenda (get-content state :remote1 0)]
+      (println "\n--- Installed agenda ---")
+      (println "Title:" (:title agenda))
+      (println "Advancement requirement:" (:advancementcost agenda))
+      (println "Agenda points:" (:agendapoints agenda))
+      (println "Current advancement counters:" (get-counters agenda :advancement)))
+
+    ;; End turn to get fresh clicks for advancing
+    (println "\n--- Corp ends turn to get fresh clicks ---")
+    (println "Clicks remaining:" (:click (:corp @state)))
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
+
+    ;; Advance agenda 4 times (Offworld Office needs 4 to score)
+    (println "\n--- Advancing agenda (1st advance) ---")
+    (let [agenda (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))
+          clicks-before (:click (:corp @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (advance state agenda)
+      (let [agenda-updated (get-content state :remote1 0)]
+        (println "Clicks after:" (:click (:corp @state)) "Credits after:" (:credit (:corp @state)))
+        (println "Advancement counters:" (get-counters agenda-updated :advancement))))
+
+    (println "\n--- Advancing agenda (2nd advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+
+    (println "\n--- Advancing agenda (3rd advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Need another turn for 4th advance (Corp only has 3 clicks/turn)
+    (println "\n--- Corp ends turn, needs more clicks ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (println "Corp turn 3 - Clicks available:" (:click (:corp @state)))
+
+    (println "\n--- Advancing agenda (4th advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Now score the agenda (using core action, not test helper)
+    (println "\n--- Scoring agenda ---")
+    (let [agenda (get-content state :remote1 0)
+          scored-before (count (:scored (:corp @state)))
+          points-before (:agenda-point (:corp @state))]
+      (println "Scored agendas before:" scored-before)
+      (println "Agenda points before:" points-before)
+      ;; Use core/process-action to score (not score-agenda helper which also advances)
+      (core/process-action "score" state :corp {:card agenda})
+      (println "Scored agendas after:" (count (:scored (:corp @state))))
+      (println "Agenda points after:" (:agenda-point (:corp @state)))
+      (println "Points gained:" (- (:agenda-point (:corp @state)) points-before)))
+
+    ;; Verify agenda is no longer in remote
+    (println "\n--- After scoring ---")
+    (print-board-state state)
+    (println "Scored agendas:" (mapv :title (:scored (:corp @state))))
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -351,6 +451,9 @@
 
   ;; Run asset management test (Phase 2.1) (returns nil, won't spam)
   (test-asset-management)
+
+  ;; Run agenda scoring test (Phase 2.2) (returns nil, won't spam)
+  (test-agenda-scoring)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!

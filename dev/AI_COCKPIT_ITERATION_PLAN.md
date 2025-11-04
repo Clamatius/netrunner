@@ -47,8 +47,8 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ---
 
-### Iteration 2.2: Agenda Management
-**Status**: 🔜 NEXT UP
+### Iteration 2.2: Agenda Management ✅ COMPLETE
+**Status**: ✅ COMPLETE
 **New mechanics**: Advancing cards, scoring agendas
 **Test function**: `test-agenda-scoring`
 
@@ -69,7 +69,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 ---
 
 ### Iteration 2.3: ICE Management
-**Status**: ⏸️ PENDING
+**Status**: 🔜 NEXT UP
 **New mechanics**: Installing ICE, multiple ICE on same server
 **Test function**: `test-ice-installation`
 
@@ -449,9 +449,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 3 iterations (Phase 1 + Phase 2.1)
-### Current: Ready to start Phase 2, Iteration 2.2
-### Remaining: ~17-22 iterations
+### Completed: 4 iterations (Phase 1 + Phase 2.1-2.2)
+### Current: Ready to start Phase 2, Iteration 2.3
+### Remaining: ~16-21 iterations
 
 ---
 
