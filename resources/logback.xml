@@ -4,7 +4,28 @@
       <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
     </encoder>
   </appender>
+
+  <!-- Error log for Claude Code dev loop -->
+  <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>dev/repl-errors.log</file>
+    <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+      <level>ERROR</level>
+    </filter>
+    <encoder>
+      <pattern>%date{ISO8601} [%thread] %-5level - %msg%n%ex{full}</pattern>
+    </encoder>
+    <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+      <fileNamePattern>dev/repl-errors.log.%i</fileNamePattern>
+      <minIndex>1</minIndex>
+      <maxIndex>2</maxIndex>
+    </rollingPolicy>
+    <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+      <maxFileSize>1MB</maxFileSize>
+    </triggeringPolicy>
+  </appender>
+
   <root level="INFO">
     <appender-ref ref="STDOUT" />
+    <appender-ref ref="ERROR_FILE" />
   </root>
 </configuration>

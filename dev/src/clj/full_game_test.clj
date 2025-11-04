@@ -187,23 +187,24 @@
   (Thread/sleep 2000)
 
   ;; Step 3: Runner joins
-  (when-let [gameid (get-in @clients [:corp :gameid])]
-    (println "\nStep 3: Runner joining game" gameid "...")
-    (send! :runner :lobby/join
-           {:gameid (java.util.UUID/fromString gameid)
-            :password nil
-            :options {:side "Runner"}})
-    (Thread/sleep 2000)
+  (when-let [gameid-raw (get-in @clients [:corp :gameid])]
+    (let [gameid (if (string? gameid-raw) (java.util.UUID/fromString gameid-raw) gameid-raw)]
+      (println "\nStep 3: Runner joining game" gameid "...")
+      (send! :runner :lobby/join
+             {:gameid gameid
+              :password nil
+              :options {:side "Runner"}})
+      (Thread/sleep 2000)
 
-    ;; Step 4: Start game
-    (println "\nStep 4: Starting game...")
-    (send! :corp :game/start {:gameid (java.util.UUID/fromString gameid)})
-    (Thread/sleep 2000)
+      ;; Step 4: Start game
+      (println "\nStep 4: Starting game...")
+      (send! :corp :game/start {:gameid gameid})
+      (Thread/sleep 2000)
 
-    (println "\n✅ Game started! Both clients should have state")
-    (println "Corp gameid:" (get-in @clients [:corp :gameid]))
-    (println "Runner gameid:" (get-in @clients [:runner :gameid]))
-    (println "\nReady for next steps (mulligan, turns, etc.)"))
+      (println "\n✅ Game started! Both clients should have state")
+      (println "Corp gameid:" (get-in @clients [:corp :gameid]))
+      (println "Runner gameid:" (get-in @clients [:runner :gameid]))
+      (println "\nReady for next steps (mulligan, turns, etc.)")))
 
   @clients)
 
