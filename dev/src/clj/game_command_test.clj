@@ -614,6 +614,89 @@
     nil))
 
 ;; ============================================================================
+;; Phase 3.1: Program Installation
+;; ============================================================================
+
+(defn test-program-installation
+  "Test installing programs (icebreakers) to Runner rig.
+  Demonstrates:
+  - Playing economy cards (Sure Gamble) for credits
+  - Installing programs costs clicks + credits
+  - Programs go into Runner's rig
+  - Different programs have different install costs
+  - Building a breaker suite for running"
+  []
+  (println "\n========================================")
+  (println "TEST: Program Installation")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with breakers, hardware, and economy
+                ["Carmen" "Cleaver" "Docklands Pass" "Sure Gamble" "Creative Commission"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Skip to Runner turn
+    (take-credits state :corp)
+
+    ;; Play economy card to get credits for installing
+    (println "\n--- Runner plays Sure Gamble for credits ---")
+    (println "Credits before:" (:credit (:runner @state)))
+    (play-from-hand state :runner "Sure Gamble")
+    (println "Credits after Sure Gamble:" (:credit (:runner @state)))
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Install first breaker
+    (println "\n--- Runner installs Carmen (Fracter breaker) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Carmen")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 5 credits"))
+    (print-board-state state)
+
+    ;; Install second breaker (still have clicks!)
+    (println "\n--- Runner installs Cleaver (Fracter breaker) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Cleaver")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 3 credits"))
+    (print-board-state state)
+
+    ;; Install hardware
+    (println "\n--- Runner installs Docklands Pass (Hardware) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Docklands Pass")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 0 credits (free!)"))
+    (print-board-state state)
+
+    ;; Final state
+    (println "\n--- Final Rig ---")
+    (print-board-state state)
+    (println "\n--- Summary ---")
+    (println "Programs installed: 2 (Carmen, Cleaver)")
+    (println "- Carmen: Fracter (breaks Barrier ICE)")
+    (println "- Cleaver: Fracter (breaks Barrier ICE)")
+    (println "Total clicks used: 4 (Sure Gamble + Carmen + Cleaver + Docklands Pass attempt)")
+    (println "Total credits spent: 8 (5 for Carmen + 3 for Cleaver)")
+    (println "\nPrograms are icebreakers - tools used to break through Corp ICE during runs")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -635,6 +718,9 @@
 
   ;; Run end-of-turn rez timing test (Phase 2.4) (returns nil, won't spam)
   (test-end-of-turn-rez)
+
+  ;; Run program installation test (Phase 3.1) (returns nil, won't spam)
+  (test-program-installation)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!

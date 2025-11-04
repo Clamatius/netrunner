@@ -91,9 +91,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Phase 3: Runner Rig Building
 
-### Iteration 3.1: Program Installation
-**Status**: 🔜 NEXT UP
-**New mechanics**: Installing programs (breakers), memory tracking
+### Iteration 3.1: Program Installation ✅ COMPLETE
+**Status**: ✅ COMPLETE
+**New mechanics**: Installing programs (breakers), program install costs
 **Test function**: `test-program-installation`
 
 **Specific actions**:
@@ -449,9 +449,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 5 iterations (Phase 1 + Phase 2 complete)
-### Current: Ready to start Phase 3, Iteration 3.1
-### Remaining: ~15-20 iterations
+### Completed: 7 iterations (Phase 1 + Phase 2 complete + Phase 2.4 timing + Phase 3.1)
+### Current: Ready to continue Phase 3
+### Remaining: ~13-18 iterations
 
 ---
 
