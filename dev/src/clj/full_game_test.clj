@@ -194,6 +194,7 @@
   (if-let [socket (get-in @clients [client-name :socket])]
     (try
       (let [msg (pr-str [[event-type data]])]
+        (log client-name "📤 Sending" event-type)
         (ws/send-msg socket msg)
         true)
       (catch Exception e
@@ -233,7 +234,7 @@
           :side "Corp"
           :format "system-gateway"
           :spectatorhands false})
-  (Thread/sleep 2000)
+  (Thread/sleep 5000)  ; Increased to 5s to ensure async response arrives
 
   ;; Step 3: Runner joins
   (when-let [gameid-raw (get-in @clients [:corp :gameid])]
