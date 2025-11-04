@@ -1,6 +1,60 @@
 # AI Client Testing Guide
 
-This guide explains how to test the AI WebSocket clients and verify the full game flow.
+This guide explains how to test the AI at two levels:
+
+## Two Testing Levels
+
+### 1. Integration Tests (`full_game_test.clj`)
+- WebSocket clients connecting to real server
+- Tests connection, lobby creation, game start
+- Subject to server's deck shuffling (non-deterministic)
+- Good for testing network layer and message handling
+
+### 2. Unit Tests (`game_command_test.clj`)
+- Direct game engine testing (no WebSocket/server)
+- Fixed-order decks (no shuffling - deterministic!)
+- Open-hand games where all cards are visible
+- Perfect for testing AI decision logic and action commands
+
+**Use integration tests** to verify connectivity and message flow.
+**Use unit tests** to develop and test AI game logic.
+
+---
+
+## Unit Testing (Recommended for AI Development)
+
+From your REPL:
+
+```clojure
+;; Load the unit test file
+(load-file "dev/src/clj/game_command_test.clj")
+
+;; Switch to test namespace
+(in-ns 'game-command-test)
+
+;; Run example tests
+(test-basic-turn-flow)
+(test-playing-cards)
+
+;; Create your own game for experimentation
+(def my-state (open-hand-game))
+(print-game-state my-state)
+
+;; Play actions
+(core/process-action "credit" my-state :corp nil)
+(play-from-hand my-state :corp "Hedge Fund")
+```
+
+**Key advantages:**
+- Decks are in fixed order (first 5 cards always in starting hand)
+- Both hands are visible
+- Can specify exact game state for testing specific scenarios
+- Fast - no network latency
+- Reproducible - same deck order every time
+
+---
+
+## Integration Testing (`full_game_test.clj`)
 
 ## Quick Start
 
