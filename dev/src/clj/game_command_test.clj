@@ -58,7 +58,9 @@
 (defn open-hand-game
   "Create a game with both players' hands visible for testing.
   Uses System Gateway beginner decks in fixed order.
-  Starting hand is first 5 cards from deck."
+  Starting hand is first 5 cards from deck.
+
+  NOTE: Returns game state atom. Don't print at REPL or it will spam!"
   []
   (do-game
     (new-game {:corp {:deck gateway-beginner-corp-deck
@@ -69,7 +71,9 @@
 
 (defn custom-open-hand-game
   "Create a game with custom hands for both sides.
-  Remaining deck cards are in specified order (no shuffling in tests)."
+  Remaining deck cards are in specified order (no shuffling in tests).
+
+  NOTE: Returns game state atom. Don't print at REPL or it will spam!"
   [corp-hand corp-deck runner-hand runner-deck]
   (do-game
     (new-game {:corp {:deck corp-deck
@@ -162,7 +166,8 @@
     (println "\n--- Corp Turn 2 ---")
     (print-game-state state)
 
-    state))
+    (println "\n✅ Test complete!")
+    nil))  ; Don't return state - it's huge and will spam console
 
 ;; ============================================================================
 ;; Example Test: Playing Cards
@@ -218,20 +223,22 @@
     (print-board-state state)
     (print-game-state state)
 
-    state))
+    (println "\n✅ Test complete!")
+    nil))  ; Don't return state - it's huge and will spam console
 
 ;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
 (comment
-  ;; Run basic turn flow test
+  ;; Run basic turn flow test (returns nil, won't spam)
   (test-basic-turn-flow)
 
-  ;; Run playing cards test
+  ;; Run playing cards test (returns nil, won't spam)
   (test-playing-cards)
 
   ;; Create custom game for experimentation
+  ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!
   (def my-state (open-hand-game))
   (print-game-state my-state)
 
