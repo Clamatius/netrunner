@@ -80,6 +80,85 @@ Every test function in `game_command_test.clj` is a **working example** of how t
 
 ---
 
+## Intent → Action Quick Reference
+
+**Pattern: Check → Act → Verify**
+
+### Economy
+```clojure
+;; Intent: "Get credits"
+;; Check: Have clicks?
+;; Act: (core/process-action "credit" state side nil)  ; OR play economy card
+;; Verify: (:credit (get-corp)) increased
+
+;; Intent: "Play Hedge Fund"
+;; Check: Card in hand? Have click?
+;; Act: (play-from-hand state :corp "Hedge Fund")
+;; Verify: Credits +4, card in discard
+;; If fail: Not in hand or no clicks → Click for credit instead
+```
+
+### Corp: Rez & Use
+```clojure
+;; Intent: "Rez asset"
+;; Check: Credits >= rez cost? Card installed? Not already rezzed?
+;; Act: (rez state :corp (get-content state :remote1 0))
+;; Verify: (:rezzed card) is truthy
+;; If fail: Not enough credits → Play economy first
+
+;; Intent: "Use asset ability"
+;; Check: Card rezzed? Clicks available? Can afford cost?
+;; Act: (card-ability state :corp card 0)  ; 0 = ability index
+;; Verify: Effect happened (credits gained, etc.)
+```
+
+### Corp: Advance & Score
+```clojure
+;; Intent: "Advance agenda"
+;; Check: Click + credit available? Card installed?
+;; Act: (advance state (get-content state :remote1 0))
+;; Verify: (get-counters card :advancement) increased
+;; If fail: No resources → End turn, try next turn
+
+;; Intent: "Score agenda"
+;; Check: Counters >= advancement requirement?
+;; Act: (core/process-action "score" state :corp {:card card})
+;; Verify: Card in (:scored (get-corp)), agenda points awarded
+;; If fail: Not enough counters → Advance more first
+```
+
+### Runner: Install Programs
+```clojure
+;; Intent: "Install program"
+;; Check: Credits >= install cost? Click available? MU available?
+;; Act: (play-from-hand state :runner "Carmen")
+;; Verify: Card in rig, credits decreased, MU consumed
+;; If fail: Not enough credits → Play economy first
+;; If fail: Not enough MU → Trash a program first
+
+;; Common mistake: Trying to install without checking cost
+;; Recovery: (card-info "Carmen") to check cost, play economy, try again
+```
+
+### Error Recovery Patterns
+```clojure
+;; Pattern: "I want to do X but can't afford it"
+;; 1. Check what you can afford: (card-info "Carmen") → {:cost 5}
+;; 2. Check your resources: (:credit (get-runner)) → 3
+;; 3. Play economy: (play-from-hand state :runner "Sure Gamble")
+;; 4. Retry: (play-from-hand state :runner "Carmen")
+
+;; Pattern: "I advanced but can't score yet"
+;; 1. Check counters: (get-counters agenda :advancement) → 2
+;; 2. Check requirement: (:advancementcost agenda) → 4
+;; 3. Advance more: (advance state agenda) [repeat]
+;; 4. Score when ready: (core/process-action "score" ...)
+```
+
+**Key Principle**: Always check prerequisites before acting. Use test functions to see working examples of each pattern.
+
+---
+
 ## The Real Documentation
 
 The real documentation is in **3 places**:
