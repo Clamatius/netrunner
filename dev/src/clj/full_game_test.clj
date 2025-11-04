@@ -143,7 +143,11 @@
       (swap! clients update client-name assoc :gameid gameid))
 
     :game/start
-    (log client-name "🎮 GAME STARTED!")
+    (let [state (if (string? data) (json/parse-string data true) data)]
+      (log client-name "🎮 GAME STARTED!")
+      (when state
+        (log client-name "📊 Received initial game state")
+        (swap! clients update client-name assoc :game-state state :last-state state)))
 
     :game/resync
     (let [state (if (string? data) (json/parse-string data true) data)]
