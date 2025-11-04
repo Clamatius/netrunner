@@ -226,6 +226,21 @@
           (println "  Choices:" (mapv :value (:choices prompt))))
         (println "  No prompt")))))
 
+(defn check-state
+  "Check current game state for both sides"
+  []
+  (println "\n=== GAME STATE ===")
+  (doseq [client-name [:corp :runner]]
+    (let [gs (get-in @clients [client-name :game-state])]
+      (when gs
+        (let [side (keyword (name client-name))
+              player-state (get gs side)]
+          (println "\n[" client-name "]")
+          (println "  Credits:" (:credit player-state))
+          (println "  Clicks:" (:click player-state))
+          (println "  Hand size:" (:hand-count player-state))
+          (println "  Deck size:" (:deck-count player-state)))))))
+
 (comment
   ;; Run the test
   (run-full-game-test!)
