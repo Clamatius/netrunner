@@ -200,7 +200,9 @@
       (catch Exception e
         (log client-name "❌ Send failed:" (.getMessage e))
         false))
-    false))
+    (do
+      (log client-name "❌ No socket available")
+      false)))
 
 (defn send-action! [client-name command args]
   (let [gameid-str (get-in @clients [client-name :gameid])
@@ -215,6 +217,13 @@
   (println "\n========================================")
   (println "FULL GAME TEST: Corp vs Runner")
   (println "========================================\n")
+
+  ;; Clean up any existing connections
+  (doseq [name [:corp :runner]]
+    (when-let [socket (get-in @clients [name :socket])]
+      (try
+        (ws/close socket)
+        (catch Exception _ nil))))
 
   ;; Initialize clients
   (swap! clients assoc
