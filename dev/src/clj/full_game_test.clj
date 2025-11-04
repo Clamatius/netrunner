@@ -210,6 +210,34 @@
     (send! client-name :game/action {:gameid gameid :command command :args args})))
 
 ;; ============================================================================
+;; AI Response Helpers
+;; ============================================================================
+
+(defn get-prompt [client-name]
+  "Get the current prompt for a client"
+  (let [gs (get-in @clients [client-name :game-state])
+        side (keyword (name client-name))]
+    (get-in gs [side :prompt-state])))
+
+(defn respond-to-mulligan!
+  "Respond to mulligan prompt by keeping hand"
+  [client-name]
+  (let [prompt (get-prompt client-name)
+        choices (:choices prompt)
+        keep-choice (first (filter #(= "Keep" (:value %)) choices))]
+    (when keep-choice
+      (log client-name "🎯 Keeping hand (auto-response)")
+      (send-action! client-name "choice" {:choice keep-choice :eid (:eid prompt)}))))
+
+(defn auto-mulligan!
+  "Automatically respond to mulligan prompts for both sides"
+  []
+  (doseq [client-name [:corp :runner]]
+    (let [prompt (get-prompt client-name)]
+      (when (and prompt (= :mulligan (:prompt-type prompt)))
+        (respond-to-mulligan! client-name)))))
+
+;; ============================================================================
 ;; Full Game Test
 ;; ============================================================================
 
@@ -299,16 +327,41 @@
           (println "  Credits:" (:credit player-state))
           (println "  Clicks:" (:click player-state))
           (println "  Hand size:" (:hand-count player-state))
-          (println "  Deck size:" (:deck-count player-state)))))))
+          (println "  Deck size:" (:deck-count player-state))))))
+
+  ;; Deck count summary for quick verification
+  (let [corp-deck (get-in @clients [:corp :game-state :corp :deck-count])
+        runner-deck (get-in @clients [:runner :game-state :runner :deck-count])
+        corp-hand (get-in @clients [:corp :game-state :corp :hand-count])
+        runner-hand (get-in @clients [:runner :game-state :runner :hand-count])]
+    (println "\n=== DECK VERIFICATION ===")
+    (println "Corp: " corp-deck "cards in deck," corp-hand "in hand (expect ~29 in deck after draw)")
+    (println "Runner:" runner-deck "cards in deck," runner-hand "in hand (expect ~25 in deck after draw)")))
 
 (comment
   ;; Run the test
   (run-full-game-test!)
 
-  ;; Check what prompts we have
+  ;; Wait for game to start, then check state
+  (Thread/sleep 3000)
+  (check-state)
   (check-prompts)
 
-  ;; Check client state
+  ;; Respond to mulligan prompts (keeps both hands)
+  (auto-mulligan!)
+
+  ;; After mulligan, check state again
+  (Thread/sleep 2000)
+  (check-prompts)
+  (check-state)
+
+  ;; Manual prompt response example
+  (respond-to-mulligan! :corp)
+
+  ;; Send a single action example: Corp clicks for credit
+  (send-action! :corp "credit" nil)
+
+  ;; Check full client state
   @clients
   (get-in @clients [:corp :game-state])
 
