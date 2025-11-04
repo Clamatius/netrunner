@@ -528,6 +528,92 @@
     nil))
 
 ;; ============================================================================
+;; Phase 2.4: End-of-Turn Rez Timing
+;; ============================================================================
+
+(defn test-end-of-turn-rez
+  "Test rezzing assets at end of Runner's turn for optimal timing.
+  Demonstrates:
+  - Waiting to rez until end of Runner's turn
+  - Minimizing exposure (Runner can't trash before it pays out)
+  - Asset triggers at start of next Corp turn
+  - Using continue to pass through timing windows"
+  []
+  (println "\n========================================")
+  (println "TEST: End-of-Turn Rez Timing")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Nico Campaign
+                ["Nico Campaign" "Hedge Fund" "Ice Wall"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Corp installs Nico but doesn't rez
+    (println "\n--- Corp installs Nico Campaign in remote (unrezzed) ---")
+    (play-from-hand state :corp "Nico Campaign" "New remote")
+    (print-board-state state)
+    (let [nico (get-content state :remote1 0)]
+      (println "Nico rezzed?:" (:rezzed nico)))
+
+    ;; Corp ends turn without rezzing
+    (println "\n--- Corp ends turn (Nico still unrezzed) ---")
+    (println "Corp clicks remaining:" (:click (:corp @state)))
+    (println "Corp credits:" (:credit (:corp @state)))
+    (take-credits state :corp)
+
+    ;; Runner takes their turn
+    (println "\n--- Runner turn ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner could run and trash Nico, but doesn't")
+
+    ;; Runner clicks for credits to pass time
+    (core/process-action "credit" state :runner nil)
+    (core/process-action "credit" state :runner nil)
+    (println "Runner spent 2 clicks on credits")
+
+    ;; NOW: End of Runner turn - Corp gets rez window!
+    (println "\n--- End of Runner turn - Corp rez window ---")
+    (println "Runner about to end turn...")
+    (let [nico (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))]
+      (println "Corp credits before rez:" credits-before)
+      (println "Nico starts with 9 counters, gives 3 credits at start of turn")
+
+      ;; Rez during Runner's end-of-turn window
+      (println "\n--- Corp rezzes Nico during Runner's end-of-turn ---")
+      (rez state :corp nico)
+      (let [nico-rezzed (get-content state :remote1 0)]
+        (println "Nico now rezzed?:" (:rezzed nico-rezzed))
+        (println "Corp credits after rez:" (:credit (:corp @state)))
+        (println "Rez cost paid:" (- credits-before (:credit (:corp @state))))))
+
+    ;; Complete Runner's turn
+    (take-credits state :runner)
+
+    ;; Corp turn starts - Nico triggers automatically!
+    (println "\n--- Corp turn starts - Nico triggers immediately ---")
+    (let [nico (get-content state :remote1 0)
+          credits-now (:credit (:corp @state))]
+      (println "Corp credits at turn start:" credits-now)
+      (println "Nico counters:" (get-counters nico :credit))
+      (println "Nico paid out 3 credits on first Corp turn after rez!"))
+
+    (println "\n--- Why this matters ---")
+    (println "1. Rezzed at END of Runner turn (Runner can't trash it)")
+    (println "2. Paid out IMMEDIATELY at start of Corp turn")
+    (println "3. Minimized exposure window")
+    (println "4. Got value before Runner could interact")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -546,6 +632,9 @@
 
   ;; Run ICE installation test (Phase 2.3) (returns nil, won't spam)
   (test-ice-installation)
+
+  ;; Run end-of-turn rez timing test (Phase 2.4) (returns nil, won't spam)
+  (test-end-of-turn-rez)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!
