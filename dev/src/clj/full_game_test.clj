@@ -3,7 +3,12 @@
   (:require
    [cheshire.core :as json]
    [clojure.edn :as edn]
-   [gniazdo.core :as ws]))
+   [gniazdo.core :as ws])
+  (:import [java.time Instant]))
+
+;; Add reader for time/instant tags
+(def edn-readers
+  {'time/instant #(Instant/parse %)})
 
 ;; ============================================================================
 ;; System Gateway Beginner Decks (from jinteki.preconstructed)
@@ -101,7 +106,9 @@
 
 (defn parse-edn-message [msg]
   (try
-    (let [data (if (string? msg) (edn/read-string msg) msg)]
+    (let [data (if (string? msg)
+                 (edn/read-string {:readers edn-readers} msg)
+                 msg)]
       (cond
         ;; Batched events: [[[event1] [event2]]]
         (and (vector? data) (= 1 (count data)) (vector? (first data)) (every? vector? (first data)))

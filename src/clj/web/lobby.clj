@@ -346,6 +346,7 @@
     ?data :?data
     id :id
     timestamp :timestamp}]
+  (println "DEBUG :lobby/create - user:" (:username user) "uid:" uid "data:" ?data)
   (lobby-thread
     (let [lobby (-> (create-new-lobby {:uid uid :user user :options ?data})
                     (send-message
@@ -353,6 +354,7 @@
           new-app-state (swap! app-state/app-state update :lobbies
                                register-lobby lobby uid)
           lobby? (get-in new-app-state [:lobbies (:gameid lobby)])]
+      (println "DEBUG :lobby/create - created lobby?" (some? lobby?) "gameid:" (:gameid lobby))
       (when lobby?
         (assign-tournament-properties lobby?)
         (send-lobby-state lobby?)
