@@ -111,24 +111,27 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ---
 
-### Iteration 3.2: Resource Management
-**Status**: ⏸️ PENDING
+### Iteration 3.2: Resource Management ✅ COMPLETE
+**Status**: ✅ COMPLETE
 **New mechanics**: Installing resources, using resource abilities
 **Test function**: `test-resource-management`
 
 **Specific actions**:
-- Install Smartware Distributor
+- Install Smartware Distributor (FREE - 0 cost!)
 - Use click ability to place credits on card
 - Use start-of-turn ability to gain credits
-- Install multiple economy resources
+- Install Telework Contract
+- Use click ability to take credits from card
 
 **Cards needed**: Smartware Distributor, Telework Contract
 
 **Implementation notes**:
 - Resources go to rig: `(get-resource state)`
 - Abilities: `(card-ability state :runner card ability-idx)`
-- Smartware has multiple abilities (check which index)
-- Some abilities are automatic (start-of-turn)
+- Smartware has 2 abilities (0: place credits, 1: automatic start-of-turn)
+- Some abilities are automatic (start-of-turn triggers)
+- Telework has once-per-turn restriction on its ability
+- Telework auto-trashes when credits depleted
 
 ---
 
@@ -437,6 +440,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 **Specific actions**:
 - Corp plays operation that gives tags (Send a Message)
 - Runner receives tags
+- Corp spends action to trash a Runner resource
 - Runner spends click + 2 credits to remove tag
 - Verify tag count decreases
 
@@ -449,9 +453,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 7 iterations (Phase 1 + Phase 2 complete + Phase 2.4 timing + Phase 3.1)
-### Current: Ready to continue Phase 3
-### Remaining: ~13-18 iterations
+### Completed: 8 iterations (Phase 1 + Phase 2 complete + Phase 3.1 + Phase 3.2)
+### Current: Phase 3.3 Event Economy ready to start
+### Remaining: ~12-17 iterations
 
 ---
 

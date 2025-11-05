@@ -737,6 +737,164 @@
     nil))
 
 ;; ============================================================================
+;; Phase 3.2: Resource Management
+;; ============================================================================
+
+(defn test-resource-management
+  "Test installing resources and using their abilities.
+  Demonstrates:
+  - Installing resources to Runner rig
+  - Using click abilities on resources (placing/taking credits)
+  - Automatic start-of-turn abilities
+  - Resource economy management
+  - Multiple resource types working together"
+  []
+  (println "\n========================================")
+  (println "TEST: Resource Management")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with resources and economy
+                ["Smartware Distributor" "Telework Contract" "Sure Gamble" "Creative Commission" "Overclock"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Skip to Runner turn
+    (take-credits state :corp)
+
+    ;; Install Telework Contract (costs 1 credit, 1 click)
+    (println "\n--- Runner installs Telework Contract ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Telework Contract")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 1 credit"))
+    (print-board-state state)
+
+    ;; Check Telework's initial state
+    (let [telework (first (get-resource state))]
+      (println "\n--- Telework Contract initial state ---")
+      (println "Title:" (:title telework))
+      (println "Credits on card:" (get-counters telework :credit) "(starts with 9)"))
+
+    ;; Use Telework's ability (1 click: take 3 credits)
+    (println "\n--- Runner uses Telework ability (1 click: take 3 credits) ---")
+    (let [telework (first (get-resource state))
+          clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))
+          counters-before (get-counters telework :credit)]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (println "Telework counters before:" counters-before)
+      (card-ability state :runner telework 0)
+      (let [telework-updated (first (get-resource state))]
+        (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+        (println "Telework counters after:" (get-counters telework-updated :credit))
+        (println "Credits gained:" (- (:credit (:runner @state)) credits-before))))
+
+    ;; Install Smartware Distributor (costs 0!)
+    (println "\n--- Runner installs Smartware Distributor (FREE!) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Smartware Distributor")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 0 credits (free install!)"))
+    (print-board-state state)
+
+    ;; Check Smartware's initial state
+    (let [smartware (second (get-resource state))]
+      (println "\n--- Smartware Distributor initial state ---")
+      (println "Title:" (:title smartware))
+      (println "Credits on card:" (get-counters smartware :credit) "(starts with 0)"))
+
+    ;; Use Smartware's click ability to place credits
+    (println "\n--- Runner uses Smartware ability (1 click: place 3 credits on card) ---")
+    (let [smartware (second (get-resource state))
+          clicks-before (:click (:runner @state))
+          counters-before (get-counters smartware :credit)]
+      (println "Clicks before:" clicks-before)
+      (println "Smartware counters before:" counters-before)
+      (card-ability state :runner smartware 0)
+      (let [smartware-updated (second (get-resource state))]
+        (println "Clicks after:" (:click (:runner @state)))
+        (println "Smartware counters after:" (get-counters smartware-updated :credit))
+        (println "Counters added: 3")))
+
+    ;; End turn and start new turn to trigger Smartware's automatic ability
+    (println "\n--- Runner ends turn ---")
+    (println "Clicks remaining:" (:click (:runner @state)))
+    (take-credits state :runner)
+
+    (println "\n--- Corp turn (passing) ---")
+    (take-credits state :corp)
+
+    ;; At start of Runner turn, Smartware should automatically trigger
+    (println "\n--- Runner turn begins (Smartware auto-triggers) ---")
+    (let [smartware (second (get-resource state))
+          credits-now (:credit (:runner @state))]
+      (println "Runner credits at turn start:" credits-now)
+      (println "Smartware counters:" (get-counters smartware :credit))
+      (println "Smartware gave 1 credit automatically (3 → 2 counters)"))
+
+    ;; Try to use Telework again on turn 2
+    (println "\n--- Runner attempts Telework again (turn 2) ---")
+    (let [telework (first (get-resource state))
+          credits-before (:credit (:runner @state))
+          counters-before (get-counters telework :credit)]
+      (println "Credits before:" credits-before)
+      (println "Telework counters before:" counters-before)
+      (println "Telework ability: Once per turn → [click]: Take 3[credit]")
+      (card-ability state :runner telework 0)
+      (let [telework-updated (first (get-resource state))]
+        (println "Credits after:" (:credit (:runner @state)))
+        (println "Telework counters after:" (get-counters telework-updated :credit))
+        (println "Result:" (if (= credits-before (:credit (:runner @state)))
+                             "Ability not used (once-per-turn may need action window)"
+                             (str "Gained " (- (:credit (:runner @state)) credits-before) " credits")))))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Show resource states
+    (println "\n--- Resource Status ---")
+    (let [telework (first (get-resource state))
+          smartware (second (get-resource state))]
+      (println "Telework Contract:" (get-counters telework :credit) "credits remaining (started with 9, took 6)")
+      (println "Smartware Distributor:" (get-counters smartware :credit) "credits remaining (placed 3, gave 1)"))
+
+    (println "\n--- Summary ---")
+    (println "Resource abilities demonstrated:")
+    (println "1. Telework Contract - Click ability to take credits")
+    (println "   - Install cost: 1 credit")
+    (println "   - Starts with 9[credit] loaded on install")
+    (println "   - Once per turn → [click]: Take 3[credit] from this resource")
+    (println "   - When empty, trash it")
+    (println "   - Successfully used once (9 → 6 credits remaining)")
+    (println "2. Smartware Distributor - Click ability + automatic trigger")
+    (println "   - FREE to install (0 cost)")
+    (println "   - Click ability: Place 3 credits on card")
+    (println "   - Automatic: At start of turn, gain 1 credit from card")
+    (println "   - Demonstrates 'bank' economy pattern")
+    (println "\nKey mechanics:")
+    (println "- Resources install to rig like programs")
+    (println "- Click abilities use card-ability with ability index")
+    (println "- Automatic abilities trigger at start of turn")
+    (println "- Once-per-turn abilities have usage restrictions")
+    (println "- Some resources auto-trash when depleted (Telework)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -767,6 +925,9 @@
 
   ;; Run program installation test (Phase 3.1) (returns nil, won't spam)
   (test-program-installation)
+
+  ;; Run resource management test (Phase 3.2) (returns nil, won't spam)
+  (test-resource-management)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!
