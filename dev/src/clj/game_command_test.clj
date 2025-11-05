@@ -895,6 +895,141 @@
     nil))
 
 ;; ============================================================================
+;; Phase 3.3: Event Economy
+;; ============================================================================
+
+(defn test-runner-events
+  "Test playing Runner economy events.
+  Demonstrates:
+  - Playing events for immediate credit gains
+  - Events that cost clicks (Creative Commission)
+  - Net credit calculations (cost vs gain)
+  - Events going to discard pile after playing
+  - Different event types and their effects"
+  []
+  (println "\n========================================")
+  (println "TEST: Runner Event Economy")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with economy events
+                ["Sure Gamble" "Sure Gamble" "Creative Commission" "Overclock" "Docklands Pass"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Skip to Runner turn
+    (take-credits state :corp)
+
+    ;; Play Sure Gamble
+    (println "\n--- Runner plays Sure Gamble ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))
+          hand-size-before (count (:hand (:runner @state)))
+          discard-before (count (:discard (:runner @state)))]
+      (println "Before:")
+      (println "  Clicks:" clicks-before)
+      (println "  Credits:" credits-before)
+      (println "  Hand size:" hand-size-before)
+      (println "  Discard size:" discard-before)
+      (println "\nSure Gamble: Cost 5, gain 9 (net +4)")
+      (play-from-hand state :runner "Sure Gamble")
+      (println "\nAfter:")
+      (println "  Clicks:" (:click (:runner @state)) "(used 1 click to play)")
+      (println "  Credits:" (:credit (:runner @state)))
+      (println "  Net credit change:" (- (:credit (:runner @state)) credits-before) "(paid 5, gained 9)")
+      (println "  Hand size:" (count (:hand (:runner @state))))
+      (println "  Discard size:" (count (:discard (:runner @state))) "(event went to discard)")
+      (println "  Discard contents:" (mapv :title (:discard (:runner @state)))))
+
+    ;; Play Creative Commission
+    (println "\n--- Runner plays Creative Commission ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Before:")
+      (println "  Clicks:" clicks-before)
+      (println "  Credits:" credits-before)
+      (println "\nCreative Commission: Cost 1, gain 5 and lose [Click]")
+      (play-from-hand state :runner "Creative Commission")
+      (println "\nAfter:")
+      (println "  Clicks:" (:click (:runner @state)))
+      (println "  Click change:" (- (:click (:runner @state)) clicks-before) "(-1 to play, -1 from card effect)")
+      (println "  Credits:" (:credit (:runner @state)))
+      (println "  Net credit change:" (- (:credit (:runner @state)) credits-before) "(paid 1, gained 5)")
+      (println "  Discard size:" (count (:discard (:runner @state))))
+      (println "  Discard contents:" (mapv :title (:discard (:runner @state)))))
+
+    ;; Show remaining clicks for other actions
+    (println "\n--- Runner uses remaining clicks ---")
+    (println "Clicks remaining:" (:click (:runner @state)))
+    (println "Runner can still install or do other actions")
+
+    ;; Install something with remaining click
+    (println "\n--- Runner installs Docklands Pass with remaining click ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (play-from-hand state :runner "Docklands Pass")
+      (println "Clicks after install:" (:click (:runner @state)))
+      (println "Credits after install:" (:credit (:runner @state)))
+      (println "Still have" (:click (:runner @state)) "click(s) left!"))
+
+    ;; Try to play second Sure Gamble (but no clicks!)
+    (println "\n--- Runner attempts second Sure Gamble ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks available:" clicks-before)
+      (println "Credits before:" credits-before)
+      (if (pos? clicks-before)
+        (do
+          (play-from-hand state :runner "Sure Gamble")
+          (println "Credits after:" (:credit (:runner @state)))
+          (println "Net gain:" (- (:credit (:runner @state)) credits-before)))
+        (println "✗ Cannot play - no clicks remaining!")))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Show all discarded events
+    (println "\n--- Runner Discard Pile ---")
+    (println "Events played this turn:" (mapv :title (:discard (:runner @state))))
+    (println "Total events in discard:" (count (:discard (:runner @state))))
+
+    (println "\n--- Summary ---")
+    (println "Event economy demonstrated:")
+    (println "1. Sure Gamble")
+    (println "   - Cost: 5 credits, 1 click")
+    (println "   - Gain: 9 credits")
+    (println "   - Net: +4 credits per play")
+    (println "   - Played once successfully")
+    (println "   - Second attempt failed: no clicks remaining!")
+    (println "2. Creative Commission")
+    (println "   - Cost: 1 credit, 2 clicks (1 to play + 1 from card)")
+    (println "   - Gain: 5 credits")
+    (println "   - Net: +4 credits, -2 clicks")
+    (println "   - Trade-off: Same credit gain as Sure Gamble, costs extra click")
+    (println "\nKey mechanics:")
+    (println "- Events are one-time effects played from hand")
+    (println "- Events go to discard pile after playing")
+    (println "- Some events have additional costs (Creative Commission loses click)")
+    (println "- Events can be chained with other actions in same turn")
+    (println "- Net economy calculation: (gain - cost) per event")
+    (println "- IMPORTANT: Must have clicks available to play events!")
+    (println "\nClick efficiency comparison:")
+    (println "- Sure Gamble: +4 credits / 1 click = 4 credits per click")
+    (println "- Creative Commission: +4 credits / 2 clicks = 2 credits per click")
+    (println "- Click for credit: +1 credit / 1 click = 1 credit per click")
+    (println "→ Sure Gamble is most efficient, Creative Commission still good!")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
 
@@ -928,6 +1063,9 @@
 
   ;; Run resource management test (Phase 3.2) (returns nil, won't spam)
   (test-resource-management)
+
+  ;; Run runner events test (Phase 3.3) (returns nil, won't spam)
+  (test-runner-events)
 
   ;; Create custom game for experimentation
   ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!

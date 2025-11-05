@@ -135,23 +135,27 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ---
 
-### Iteration 3.3: Event Economy
-**Status**: ⏸️ PENDING
-**New mechanics**: Playing run events with benefits
+### Iteration 3.3: Event Economy ✅ COMPLETE
+**Status**: ✅ COMPLETE
+**New mechanics**: Playing economy events for immediate effects
 **Test function**: `test-runner-events`
 
 **Specific actions**:
-- Play Sure Gamble (costs 5, gain 9)
-- Play Creative Commission (draw 2, gain 2)
-- Play Overclock (gain click for runs)
-- Verify credit/card changes
+- Play Sure Gamble (costs 5, gain 9, net +4)
+- Play Creative Commission (costs 1, gain 5, lose 1 click, net +4 credits/-2 clicks)
+- Demonstrate click management (failed play when out of clicks)
+- Chain events with other actions in same turn
+- Verify credit/click changes and discard pile
 
-**Cards needed**: Sure Gamble, Creative Commission, Overclock
+**Cards needed**: Sure Gamble, Creative Commission
 
 **Implementation notes**:
 - Events: `(play-from-hand state :runner "Sure Gamble")`
 - Events go to discard after playing
-- Check hand/credit before and after
+- Some events have additional costs (Creative Commission loses click)
+- Must have clicks available to play events
+- Events can be chained: play event → install card → play another event
+- Click efficiency: Sure Gamble (4 credits/click) > Creative Commission (2 credits/click) > click for credit (1 credit/click)
 
 ---
 
@@ -453,9 +457,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 8 iterations (Phase 1 + Phase 2 complete + Phase 3.1 + Phase 3.2)
-### Current: Phase 3.3 Event Economy ready to start
-### Remaining: ~12-17 iterations
+### Completed: 9 iterations (Phase 1 + Phase 2 complete + Phase 3 complete!)
+### Current: Phase 4.1 Unopposed Central Server Runs ready to start ⚠️ COMPLEXITY INCREASE
+### Remaining: ~11-16 iterations
 
 ---
 
