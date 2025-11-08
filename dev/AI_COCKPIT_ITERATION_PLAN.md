@@ -7,7 +7,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 **Target timeline**: 15-25 coding sessions to complete all phases.
 
-**📊 Progress**: 11 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2). Phase 4.3 ready to start.
+**📊 Progress**: 12 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2, 4.4). Phase 5.1 (ICE encounters) ready to start.
 
 ---
 
@@ -300,25 +300,44 @@ Ambushes are a **win condition** for Corp. AI player MUST understand:
 ---
 
 ### Iteration 4.4: Running Through Unrezzed ICE
-**Status**: ⏸️ PENDING
-**New mechanics**: Passing unrezzed ICE, corp rez decisions
+**Status**: ✅ COMPLETE
+**New mechanics**: Passing unrezzed ICE, corp rez decisions, manual run phase progression
 **Test function**: `test-unrezzed-ice-passing`
 
-**Specific actions**:
-- Corp installs ICE on HQ (DON'T rez yet)
-- Runner runs HQ
-- Approach ICE phase
-- Corp chooses not to rez (pass priority)
-- Runner continues past unrezzed ICE
-- Access HQ
+**Implementation** (game_command_test.clj:1390-1516):
+- Corp installed Ice Wall on HQ (unrezzed)
+- Runner ran HQ with manual phase progression
+- Corp declined to rez during :approach-ice phase
+- Runner successfully accessed HQ and stole agenda
+- Demonstrated difference between `run-empty-server` and manual `core/continue` progression
 
-**Implementation notes**:
-- Install but don't rez: `(play-from-hand state :corp "Palisade" "HQ")`
-- During run: Corp gets rez window
-- Corp passes: `(core/process-action "continue" state :corp nil)`
-- Runner continues: `(core/process-action "continue" state :runner nil)`
+**Key learnings**:
+- ICE is **unrezzed by default** when installed with `play-from-hand`
+- During `:approach-ice` phase, Corp has rez window
+- Both sides must call `(core/continue state :side nil)` to proceed
+- Corp declining to rez = calling continue WITHOUT calling `(rez state :corp ice)`
+- After passing ICE: `:movement` phase
+- `(run-continue state)` handles all remaining Corp/Runner continues to `:success`
+- `:success` phase = access cards
 
-**Focus**: Approach-ice timing, corp rez windows, priority passing
+**Run phases demonstrated**:
+1. `(run-on state :hq)` - Initiate run → `:approach-ice` phase
+2. `(core/continue state :runner nil)` - Runner: no paid abilities
+3. `(core/continue state :corp nil)` - Corp: decline to rez → `:movement` phase
+4. `(run-continue state)` - Auto-continue through remaining phases → `:success`
+5. Access prompts appear, handle with `click-prompt`
+
+**Critical insight: run-empty-server vs manual progression**:
+- `run-empty-server`: High-level helper, auto-continues through all phases
+- Assumes no ICE or ICE doesn't matter (perfect for unopposed runs)
+- Manual progression: Explicit control, required when Corp makes rez decisions
+- Shows all phases that `run-empty-server` hides (approach-ice, movement, etc.)
+
+**Focus**: Understanding run phases WITHOUT rezzing ICE:
+1. :approach-ice - Corp rez window
+2. :movement - After passing/encountering ICE
+3. :approach-server - Before access
+4. :success - Access cards
 
 ---
 

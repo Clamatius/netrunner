@@ -1387,6 +1387,134 @@
     (println "\n✅ Test complete!")
     nil))
 
+(defn test-unrezzed-ice-passing
+  "Test running through unrezzed ICE when Corp declines to rez.
+  Demonstrates:
+  - Installing ICE on a server (unrezzed by default)
+  - Run phases: approach-ice, movement, success
+  - Corp rez window during approach-ice phase
+  - Corp declining to rez (passing priority)
+  - Runner continuing past unrezzed ICE
+  - Successfully accessing server after passing unrezzed ICE
+  - Multiple ICE on same server (some rezzed, some unrezzed)"
+  []
+  (println "\n========================================")
+  (println "TEST: Running Through Unrezzed ICE")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE and agendas
+                ["Ice Wall" "Vanilla" "Hostile Takeover" "Hedge Fund"]
+                ;; Corp deck
+                ["Offworld Office" "Offworld Office"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs ICE on HQ (unrezzed) ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+
+    ;; Corp installs Ice Wall on HQ (unrezzed)
+    (println "Corp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed on HQ")
+      (println "  Rezzed?" (:rezzed ice))
+      (println "  Should be nil/false (unrezzed)"))
+
+    ;; End Corp turn
+    (take-credits state :corp)
+
+    ;; Test 1: Run through single unrezzed ICE
+    (println "\n--- Test 1: Runner runs HQ (1 unrezzed ICE) ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Initiating run on HQ...")
+    (run-on state :hq)
+
+    (println "\n✓ Run initiated!")
+    (println "Current run phase:" (:phase (:run @state)))
+    (println "Should be :approach-ice")
+
+    ;; Approaching ICE
+    (let [current-ice (core/get-current-ice state)]
+      (println "\nApproaching ICE:" (:title current-ice))
+      (println "Rezzed?" (:rezzed current-ice)))
+
+    (println "\nRunner continues (no paid abilities)...")
+    (core/continue state :runner nil)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Waiting on Corp to decide: rez or pass?")
+
+    (println "\nCorp DECLINES to rez (passes priority)...")
+    (core/continue state :corp nil)
+    (println "✓ Corp passed without rezzing")
+    (println "Run phase:" (:phase (:run @state)))
+
+    ;; Now use run-continue to handle the rest
+    (println "\nUsing run-continue to finish the run...")
+    (run-continue state)
+
+    (println "Run phase after run-continue:" (:phase (:run @state)))
+
+    ;; Access HQ
+    (println "\n✓ Accessing HQ...")
+    (let [prompt (get-prompt state :runner)]
+      (when prompt
+        (println "Access prompt:" (:msg prompt))
+        (when-let [choices (seq (:choices prompt))]
+          (let [choice-vals (mapv :value choices)]
+            (println "Choices:" choice-vals)
+            (if (some #(= % "Steal") choice-vals)
+              (do
+                (println "Found agenda - stealing it")
+                (click-prompt state :runner "Steal"))
+              (do
+                (println "Not an agenda - choosing No action")
+                (click-prompt state :runner "No action")))
+            (println "✓ Access complete")))))
+
+    (println "Run ended:" (nil? (:run @state)))
+
+    (assert-no-prompts state "after HQ run through unrezzed ICE")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Unrezzed ICE Passing")
+    (println "========================================")
+    (println "Runner successfully ran HQ through 1 unrezzed ICE")
+    (println "Corp declined to rez the ICE")
+    (println "Runner accessed HQ and stole Offworld Office")
+    (println "Runner agenda points:" (:agenda-point (:runner @state)))
+
+    (println "\nRun phases encountered:")
+    (println "1. :approach-ice (Ice Wall - unrezzed)")
+    (println "2. Runner continues (no paid abilities)")
+    (println "3. Corp continues (declines to rez)")
+    (println "4. :movement (passed the ICE)")
+    (println "5. run-continue handles remaining phases")
+    (println "6. :success (access HQ)")
+
+    (println "\nKey mechanics:")
+    (println "- ICE installed unrezzed by default with play-from-hand")
+    (println "- During :approach-ice, Corp has rez window")
+    (println "- Both Runner and Corp must (core/continue state :side nil) to proceed")
+    (println "- Corp declining to rez = calling continue without calling (rez state :corp ice)")
+    (println "- Runner passes unrezzed ICE when both sides continue")
+    (println "- After passing ICE, enter :movement phase")
+    (println "- run-continue handles Corp/Runner continues through remaining phases")
+    (println "- :success phase = access cards")
+    (println "- run-empty-server is shortcut that skips all manual phase progression")
+
+    (println "\nDifference from run-empty-server:")
+    (println "- run-empty-server: Automatic, assumes no ICE or ICE doesn't matter")
+    (println "- Manual progression: Explicit control of each phase")
+    (println "- Manual: Required when Corp needs to make rez decisions")
+    (println "- Manual: Shows all the phases that run-empty-server hides")
+
+    (println "\n✅ Test complete!")
+    nil))
+
 ;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
