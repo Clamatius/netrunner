@@ -1240,6 +1240,153 @@
     (println "\n✅ Test complete!")
     nil))
 
+(defn test-remote-access
+  "Test running on remote servers and accessing installed cards.
+  Demonstrates:
+  - Installing cards in remote servers (unrezzed)
+  - Running on remote servers (:remote1, :remote2, etc.)
+  - Accessing unrezzed cards in remotes
+  - Stealing agendas from remotes
+  - Multiple remotes in play
+  - Verifying agenda points awarded"
+  []
+  (println "\n========================================")
+  (println "TEST: Unopposed Remote Server Runs")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with agendas and other cards
+                ["Hostile Takeover" "Offworld Office" "PAD Campaign" "Ice Wall"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund" "Hedge Fund"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (core/gain-clicks state :corp 3) ; Extra clicks for multiple installs
+
+    (println "Corp hand:" (mapv :title (:hand (:corp @state))))
+    (println "Corp credits:" (:credit (:corp @state)))
+    (println "Corp clicks:" (:click (:corp @state)))
+
+    ;; Corp installs multiple cards in different remotes
+    (println "\n--- Corp installs cards in remotes ---")
+
+    ;; Install Hostile Takeover in Remote 1 (unrezzed agenda)
+    (println "Installing Hostile Takeover in Remote 1...")
+    (play-from-hand state :corp "Hostile Takeover" "New remote")
+    (assert-no-prompts state "after installing Hostile Takeover")
+    (println "✓ Installed agenda in Remote 1")
+
+    ;; Install PAD Campaign in Remote 2 (unrezzed asset)
+    (println "Installing PAD Campaign in Remote 2...")
+    (play-from-hand state :corp "PAD Campaign" "New remote")
+    (assert-no-prompts state "after installing PAD Campaign")
+    (println "✓ Installed asset in Remote 2")
+
+    ;; Install Offworld Office in Remote 3 (unrezzed agenda)
+    (println "Installing Offworld Office in Remote 3...")
+    (play-from-hand state :corp "Offworld Office" "New remote")
+    (assert-no-prompts state "after installing Offworld Office")
+    (println "✓ Installed agenda in Remote 3")
+
+    (println "\nCorp now has 3 remote servers with unrezzed cards")
+    (println "Remote 1: Hostile Takeover (agenda)")
+    (println "Remote 2: PAD Campaign (asset)")
+    (println "Remote 3: Offworld Office (agenda)")
+
+    ;; End Corp turn, start Runner turn
+    (take-credits state :corp)
+    (println "\n--- Runner turn starts ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner agenda points:" (:agenda-point (:runner @state)))
+
+    ;; Test 1: Run on Remote 1 (Hostile Takeover)
+    (println "\n--- Test 1: Run on Remote 1 (Hostile Takeover) ---")
+    (println "Running Remote 1...")
+    (run-empty-server state :remote1)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote1])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    (click-prompt state :runner "Steal")
+    (assert-no-prompts state "after Remote 1 run")
+    (println "✓ Stole Hostile Takeover!")
+    (println "   Runner agenda points:" (:agenda-point (:runner @state)))
+
+    ;; Test 2: Run on Remote 2 (PAD Campaign - asset, not agenda)
+    (println "\n--- Test 2: Run on Remote 2 (PAD Campaign) ---")
+    (println "Running Remote 2...")
+    (run-empty-server state :remote2)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote2])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    ;; PAD Campaign is an asset, so we can trash it or take no action
+    ;; For this test, we'll choose "No action" (could also pay to trash)
+    (click-prompt state :runner "No action")
+    (assert-no-prompts state "after Remote 2 run")
+    (println "✓ Chose 'No action' on asset")
+    (println "   (Could have paid credits to trash it)")
+
+    ;; Test 3: Run on Remote 3 (Offworld Office)
+    (println "\n--- Test 3: Run on Remote 3 (Offworld Office) ---")
+    (println "Running Remote 3...")
+    (run-empty-server state :remote3)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote3])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    (click-prompt state :runner "Steal")
+    ;; Note: Offworld Office's ability only triggers when SCORED by Corp, not when stolen
+    (assert-no-prompts state "after Remote 3 run")
+    (println "✓ Stole Offworld Office!")
+    (println "   Runner agenda points:" (:agenda-point (:runner @state)))
+    (println "   Note: Offworld Office ability only fires when Corp scores it, not when stolen")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Remote Server Runs")
+    (println "========================================")
+    (println "Runner final agenda points:" (:agenda-point (:runner @state)))
+    (println "   - Hostile Takeover: 1 point")
+    (println "   - Offworld Office: 2 points")
+    (println "   - Total: 3 points")
+    (println "\nRunner final clicks:" (:click (:runner @state)))
+    (println "   - Started with 4 clicks")
+    (println "   - Remote 1 run: -1 click")
+    (println "   - Remote 2 run: -1 click")
+    (println "   - Remote 3 run: -1 click")
+    (println "   - Remaining: 1 click")
+
+    (println "\nKey mechanics:")
+    (println "- Remote servers: :remote1, :remote2, :remote3, etc.")
+    (println "- Cards installed in remotes are unrezzed by default")
+    (println "- Runner can access unrezzed cards in remotes")
+    (println "- Agendas MUST be stolen when accessed (even if unrezzed)")
+    (println "- Assets/Upgrades offer 'No action' or 'Pay X to trash' choices")
+    (println "- Each remote is a separate server")
+    (println "- IMPORTANT: Stolen agendas don't trigger their abilities")
+    (println "  (Abilities only fire when Corp scores them, not when Runner steals)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
 ;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================

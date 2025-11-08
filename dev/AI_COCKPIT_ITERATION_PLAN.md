@@ -7,6 +7,8 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 **Target timeline**: 15-25 coding sessions to complete all phases.
 
+**📊 Progress**: 11 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2). Phase 4.3 ready to start.
+
 ---
 
 ## Phase 1: Foundation ✅ COMPLETE
@@ -206,26 +208,83 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 ---
 
 ### Iteration 4.2: Unopposed Remote Runs
-**Status**: ⏸️ PENDING
+**Status**: ✅ COMPLETE
 **New mechanics**: Running remotes, accessing specific cards
 **Test function**: `test-remote-access`
 
-**Specific actions**:
-- Corp installs agenda in Remote 1 (unrezzed)
-- Runner runs Remote 1
-- Access unrezzed agenda
-- Steal agenda from remote
-- Verify agenda points awarded to Runner
+**Implementation** (game_command_test.clj:1243-1388):
+- Corp installed 3 cards in 3 different remotes
+- Remote 1: Hostile Takeover (agenda) - Runner stole for 1 point
+- Remote 2: PAD Campaign (asset) - Runner chose "No action" (could pay to trash)
+- Remote 3: Offworld Office (agenda) - Runner stole for 2 points
+- Total: 3 agenda points, 3 runs, 3 clicks spent
 
-**Implementation notes**:
-- Remote servers: `:remote1`, `:remote2`, etc.
-- Accessing remote shows all cards in that remote
-- Steal: `(click-prompt state :runner "Steal")`
-- Check: `(:agenda-point (get-runner))`
+**Key learnings**:
+- Remote servers use `:remote1`, `:remote2`, `:remote3`, etc.
+- Cards installed in remotes are unrezzed by default
+- Runner can access and see unrezzed cards when running remotes
+- Agendas MUST be stolen when accessed (even unrezzed)
+- Assets offer "Pay X to trash" or "No action" choices
+- **CRITICAL**: Stolen agendas DON'T trigger their abilities
+  - Abilities only fire when Corp scores them
+  - This is different from scoring!
+- Each remote is a separate server
+- Accessing mechanics identical to central servers
+
+**Focus**: Running on remote servers (:remote1, :remote2, etc.):
+1. Corp installs cards in remotes (unrezzed)
+2. Runner initiates run on specific remote
+3. Runner accesses unrezzed cards
+4. Runner steals agendas or chooses actions for other card types
+5. Each run costs 1 click
 
 ---
 
-### Iteration 4.3: Running Through Unrezzed ICE
+### Iteration 4.3: Accessing Ambush Cards ⚠️ WIN-THREAT MECHANIC
+**Status**: ⏸️ PENDING
+**New mechanics**: Ambush on-access triggers, Corp optional abilities, net damage, flatline threat
+**Test function**: `test-accessing-ambushes`
+
+**Specific actions**:
+- Corp installs Snare! in remote (or puts in R&D)
+- Runner runs and accesses Snare!
+- Corp gets prompt: "Pay 4 credits to use Snare! ability?"
+- Corp chooses "Yes" (if can afford)
+- Runner takes 3 net damage + 1 tag
+- Verify damage applied and cards discarded
+- Test flatline scenario: Runner with 2 cards accessing Snare!
+
+**Cards to test**:
+- **Snare!/Byte!** - 4 credits: 1 tag + 3 net damage (optional)
+- **Shock!** - 1 net damage (NOT optional, fires automatically)
+- **Project Junebug** - Advancement ambush: 2 net damage per advancement counter
+
+**Implementation notes**:
+- Runner enters `(waiting? state :runner)` - Corp decides whether to fire
+- Corp pays cost: `(click-prompt state :corp "Yes")`
+- Damage applied: `(count (:discard (get-runner)))` increases
+- Flatline check: Runner loses if hand + discard < damage taken
+- Archives special: Snare!/Byte! have `(not (in-discard? card))` - don't fire in Archives
+- R&D reveal: Snare!/Byte! have `:rd-reveal` - must be revealed in R&D
+
+**Focus**: **AI MUST LEARN RISK ASSESSMENT**
+- "Can I survive 3 net damage?" before running unknown servers
+- "Does Corp have 4 credits?" before accessing R&D/remotes
+- "Is this remote an agenda or a trap?"
+- Running with 2 cards in hand vs Corp with 4 credits = potential instant loss
+- This is CRITICAL decision-making territory for AI player
+
+**Why this matters**:
+Ambushes are a **win condition** for Corp. AI player MUST understand:
+1. Check hand size before running unknown cards
+2. Track Corp credits (can they afford to fire ambush?)
+3. Calculate: "If this is Snare!, do I survive?"
+4. Archives is safer than R&D/remotes for ambushes (most don't fire)
+5. Advanced cards in remotes could be Junebug (potentially lethal!)
+
+---
+
+### Iteration 4.4: Running Through Unrezzed ICE
 **Status**: ⏸️ PENDING
 **New mechanics**: Passing unrezzed ICE, corp rez decisions
 **Test function**: `test-unrezzed-ice-passing`
