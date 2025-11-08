@@ -291,6 +291,41 @@
   ;; Use send-message! with nil data (server doesn't need data for lobby list)
   (send-message! :lobby/list nil))
 
+(defn create-lobby!
+  "Create a new game lobby
+   Options:
+     :title - game title (required)
+     :side - \"Corp\", \"Runner\", or \"Any Side\" (default: \"Any Side\")
+     :format - game format (default: \"system-gateway\" for beginner fixed decks)
+     :gateway-type - \"Beginner\" or \"Intermediate\" (default: \"Beginner\")
+     :room - \"casual\" or \"competitive\" (default: \"casual\")
+     :allow-spectator - allow spectators (default: true)
+     :spectatorhands - spectators can see hands (default: false)
+     :save-replay - save replay (default: true)
+     Other optional keys: :password, :timer, :singleton, :turmoil, etc."
+  [{:keys [title side format gateway-type room allow-spectator spectatorhands save-replay]
+    :or {side "Any Side"
+         format "system-gateway"
+         gateway-type "Beginner"
+         room "casual"
+         allow-spectator true
+         spectatorhands false
+         save-replay true}
+    :as options}]
+  (if-not title
+    (println "❌ Error: :title is required")
+    (let [lobby-options (-> options
+                            (assoc :side side
+                                   :format format
+                                   :gateway-type gateway-type
+                                   :room room
+                                   :allow-spectator allow-spectator
+                                   :spectatorhands spectatorhands
+                                   :save-replay save-replay))]
+      (send-message! :lobby/create lobby-options)
+      (println "🎮 Creating lobby:" title)
+      (println "   Format:" format (when (= format "system-gateway") (str "(" gateway-type ")"))))))
+
 (defn join-game!
   "Join a game by ID
    Options:
