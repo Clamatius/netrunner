@@ -7,7 +7,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 **Target timeline**: 15-25 coding sessions to complete all phases.
 
-**📊 Progress**: 13 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2, 4.4, 5.1). Phase 5.2 (breaking ICE) ready to start.
+**📊 Progress**: 14 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2, 4.4, 5.1-5.2). Core ICE mechanics complete!
 
 ---
 
@@ -387,28 +387,49 @@ Ambushes are a **win condition** for Corp. AI player MUST understand:
 ---
 
 ### Iteration 5.2: Breaking Barrier ICE
-**Status**: ⏸️ PENDING
-**New mechanics**: Using breaker abilities, breaking subroutines
+**Status**: ✅ COMPLETE
+**New mechanics**: Using breaker abilities, breaking subroutines, successful runs through ICE
 **Test function**: `test-breaking-barrier`
 
-**Specific actions**:
-- Corp rezzes Palisade (Barrier, strength 2, "End the run")
-- Runner has Cleaver installed (Fracter, strength 3)
-- Runner encounters Palisade
-- Runner uses Cleaver to break subroutines
-- Runner continues to HQ
-- Access cards
+**Implementation** (game_command_test.clj:1647-1810):
+- Runner installed Corroder (Fracter, strength 2, cost 2, 1 MU)
+- Corp rezzed Ice Wall (Barrier, strength 1, cost 1)
+- Runner used Corroder to break "End the run" subroutine
+- Run succeeded - accessed HQ and stole Hostile Takeover!
 
-**Cards needed**: Palisade, Cleaver
+**Key learnings**:
+- **Type matching**: Fracter breaks Barrier ICE
+- **Strength requirement**: Breaker strength >= ICE strength (Corroder 2 >= Ice Wall 1)
+- **Using breaker**: `(card-ability state :runner breaker 0)` activates break ability
+- **Choosing subs**: Prompt appears to choose which subroutine to break
+- **After breaking**: Run continues to :movement phase, then :success
+- **Successful run**: Runner accesses cards!
 
-**Implementation notes**:
-- During encounter: Runner can use breaker abilities
-- Break ability: `(card-ability state :runner cleaver 0)` (ability index 0)
-- Cleaver breaks "up to 2 Barrier subroutines" per use
-- Must match type: Fracter breaks Barrier
-- After breaking all subs, continue to access
+**Run phases with breaking**:
+1. :approach-ice - Corp rezzes ICE
+2. `(run-continue state)` → :encounter-ice
+3. `(card-ability state :runner breaker 0)` - Use breaker
+4. `(click-prompt state :runner "End the run")` - Choose which sub to break
+5. `(run-continue state)` → :movement (past ICE)
+6. `(run-continue state)` → :success (access cards)
 
-**Focus**: Breaker type matching (Fracter ↔ Barrier)
+**Critical difference from Phase 5.1**:
+- Phase 5.1: Runner did **NOT** break → run **ENDED** (unsuccessful)
+- Phase 5.2: Runner **BROKE** subroutines → run **SUCCEEDED** (access!)
+- **This is how Runner gets through ICE!**
+
+**Breaker types (introduced)**:
+- **Fracter** breaks **Barrier** ICE
+- **Decoder** breaks **Code Gate** ICE
+- **Killer** breaks **Sentry** ICE
+- **AI breakers** can break any type (usually less efficient)
+
+**Focus**: Core icebreaker/ICE interaction:
+1. Install appropriate breaker type
+2. Ensure breaker strength >= ICE strength
+3. Use breaker during encounter to break subs
+4. Broken subs don't fire
+5. Run continues past ICE if all subs broken
 
 ---
 

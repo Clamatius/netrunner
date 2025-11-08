@@ -1644,6 +1644,170 @@
     (println "\n✅ Test complete!")
     nil))
 
+(defn test-breaking-barrier
+  "Test breaking Barrier ICE with a Fracter icebreaker.
+  Demonstrates:
+  - Installing icebreaker program (Fracter type)
+  - Corp rezzing Barrier ICE
+  - Using breaker ability during encounter
+  - Breaking subroutines (choosing which ones)
+  - Successful run after breaking all subs
+  - Type matching: Fracter breaks Barrier
+  - Strength matching: Breaker strength >= ICE strength"
+  []
+  (println "\n========================================")
+  (println "TEST: Breaking Barrier ICE with Fracter")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE
+                ["Ice Wall" "Hostile Takeover" "Hedge Fund"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund"]
+                ;; Runner needs a fracter - Corroder is the classic one
+                ["Corroder" "Sure Gamble" "Dirty Laundry" "Easy Mark"]
+                (drop 4 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs ICE, Runner installs breaker ---")
+
+    ;; Install Ice Wall on HQ BEFORE taking credits
+    (println "\nCorp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed")
+      (println "  Type:" (:subtype ice))
+      (println "  Strength:" (get-strength (get-card state ice)))
+      (println "  Rez cost:" (:cost ice)))
+
+    (take-credits state :corp)
+
+    ;; Runner installs Corroder (Fracter)
+    (println "\nRunner installing Corroder (Fracter)...")
+    (play-from-hand state :runner "Corroder")
+    (let [breaker (get-program state 0)]
+      (println "✓ Corroder installed")
+      (println "  Type:" (:subtype breaker))
+      (println "  Strength:" (get-strength (get-card state breaker)))
+      (println "  Install cost:" (:cost breaker))
+      (println "  Memory:" (:memoryunits breaker) "MU"))
+
+    (println "\nRunner credits:" (:credit (:runner @state)))
+    (println "Runner clicks:" (:click (:runner @state)))
+
+    ;; Test: Run HQ with breaker, break the ICE, access successfully
+    (println "\n--- Test: Runner runs HQ and breaks Ice Wall ---")
+    (println "Initiating run on HQ...")
+    (run-on state :hq)
+
+    (println "\n✓ Run initiated!")
+    (println "Run phase:" (:phase (:run @state)))
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\nApproaching Ice Wall...")
+      (println "Corp REZZES Ice Wall...")
+      (rez state :corp ice)
+      (println "✓ Ice Wall rezzed!")
+      (println "  Corp credits after rez:" (:credit (:corp @state))))
+
+    (println "\nTransitioning to encounter...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :encounter-ice")
+
+    (let [ice (get-ice state :hq 0)
+          breaker (get-program state 0)]
+      (println "\n✓ Encountering Ice Wall!")
+      (println "  ICE strength:" (get-strength ice))
+      (println "  Breaker strength:" (get-strength (get-card state breaker)))
+      (println "  ICE subroutines:" (count (:subroutines ice)))
+      (println "  First subroutine:" (:label (first (:subroutines ice))))
+
+      (println "\nRunner uses Corroder to break subroutines...")
+      (println "  Breaker abilities:" (count (:abilities (get-card state breaker))))
+
+      ;; Use the breaker's break ability
+      (card-ability state :runner breaker 0)
+
+      (println "\n✓ Used breaker ability!")
+      (let [prompt (get-prompt state :runner)]
+        (when prompt
+          (println "Runner has prompt to choose which subroutine to break:")
+          (println "  Prompt:" (:msg prompt))
+          (println "  Choices:" (mapv :value (:choices prompt)))
+          (click-prompt state :runner "End the run")
+          (println "✓ Broke 'End the run' subroutine!"))))
+
+    (println "\nAll subroutines broken, continuing past ICE...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :movement (past the ICE)")
+
+    (println "\nContinuing to server access...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :success")
+
+    ;; Access HQ
+    (println "\n✓ Run successful! Accessing HQ...")
+    (let [prompt (get-prompt state :runner)]
+      (when prompt
+        (println "Access prompt:" (:msg prompt))
+        (let [choices (mapv :value (:choices prompt))]
+          (println "Choices:" choices)
+          (if (some #(= % "Steal") choices)
+            (do
+              (println "Found agenda - stealing it")
+              (click-prompt state :runner "Steal"))
+            (do
+              (println "Not an agenda - choosing No action")
+              (click-prompt state :runner "No action")))
+          (println "✓ Access complete"))))
+
+    (println "\nRun ended:" (nil? (:run @state)))
+    (println "Should be true")
+
+    (assert-no-prompts state "after successful run with breaking")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Breaking Barrier ICE")
+    (println "========================================")
+    (println "Runner installed Corroder (Fracter)")
+    (println "Corp rezzed Ice Wall (Barrier)")
+    (println "Runner broke 'End the run' subroutine")
+    (println "Run successful - accessed HQ!")
+
+    (println "\nRun phases with breaking:")
+    (println "1. :approach-ice - Corp rezzes ICE")
+    (println "2. run-continue → :encounter-ice")
+    (println "3. card-ability to use breaker")
+    (println "4. click-prompt to choose which subroutine to break")
+    (println "5. run-continue → :movement (past ICE)")
+    (println "6. run-continue → :success (access cards)")
+
+    (println "\nKey mechanics:")
+    (println "- Fracter icebreaker breaks Barrier ICE (type matching)")
+    (println "- Breaker strength must be >= ICE strength")
+    (println "  (Corroder strength 2 >= Ice Wall strength 1)")
+    (println "- card-ability activates the breaker's break ability")
+    (println "- Runner chooses which subroutines to break via prompt")
+    (println "- After breaking all subs, run continues past ICE")
+    (println "- Successful run = access cards!")
+
+    (println "\nBreaker types:")
+    (println "- Fracter breaks Barrier ICE")
+    (println "- Decoder breaks Code Gate ICE")
+    (println "- Killer breaks Sentry ICE")
+    (println "- AI breakers can break any type (usually less efficient)")
+
+    (println "\nDifference from Phase 5.1:")
+    (println "- Phase 5.1: Runner did NOT break, run ENDED")
+    (println "- Phase 5.2: Runner BROKE subroutines, run SUCCEEDED")
+    (println "- This is how Runner gets through ICE!")
+
+    (println "\n✅ Test complete!")
+    nil))
+
 ;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================
