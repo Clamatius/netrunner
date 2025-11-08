@@ -176,11 +176,13 @@
 
     ;; Corp turn 1
     (println "\n--- Corp Turn 1 ---")
+    (start-turn state :corp)
     (take-credits state :corp)
     (print-game-state state)
 
     ;; Runner turn 1
     (println "\n--- Runner Turn 1 ---")
+    (start-turn state :runner)
     (core/process-action "credit" state :runner nil)
     (println "Runner clicked for credit")
     (print-game-state state)
@@ -195,6 +197,7 @@
 
     ;; Corp turn 2
     (println "\n--- Corp Turn 2 ---")
+    (start-turn state :corp)
     (print-game-state state)
 
     (println "\n✅ Test complete!")
@@ -226,6 +229,7 @@
 
     ;; Corp plays Hedge Fund
     (println "\n--- Corp plays Hedge Fund ---")
+    (start-turn state :corp)
     (play-from-hand state :corp "Hedge Fund")
     (print-game-state state)
 
@@ -245,6 +249,7 @@
 
     ;; Runner plays Sure Gamble
     (println "\n--- Runner plays Sure Gamble ---")
+    (start-turn state :runner)
     (play-from-hand state :runner "Sure Gamble")
     (print-game-state state)
 
@@ -287,6 +292,7 @@
 
     ;; Install Nico Campaign to new remote
     (println "\n--- Corp installs Nico Campaign in new remote ---")
+    (start-turn state :corp)
     (play-from-hand state :corp "Nico Campaign" "New remote")
     (print-board-state state)
     (print-game-state state)
@@ -324,12 +330,14 @@
     (take-credits state :corp)
 
     (println "\n--- Runner turn ---")
+    (start-turn state :runner)
     (let [credits-before-runner-ends (:credit (:corp @state))]
       (println "Corp credits before runner ends turn:" credits-before-runner-ends))
     (take-credits state :runner)
 
     ;; At start of Corp turn, Nico should automatically trigger
     (println "\n--- Corp turn begins (Nico auto-triggers) ---")
+    (start-turn state :corp)
     (let [nico (get-content state :remote1 0)]
       (println "Corp credits after turn starts:" (:credit (:corp @state)))
       (println "Nico counters after trigger:" (get-counters nico :credit))
@@ -399,6 +407,7 @@
 
     ;; Install Offworld Office in new remote
     (println "\n--- Corp installs Offworld Office in remote ---")
+    (start-turn state :corp)
     (play-from-hand state :corp "Offworld Office" "New remote")
     (print-board-state state)
 
@@ -414,7 +423,9 @@
     (println "\n--- Corp ends turn to get fresh clicks ---")
     (println "Clicks remaining:" (:click (:corp @state)))
     (take-credits state :corp)
+    (start-turn state :runner)
     (take-credits state :runner)
+    (start-turn state :corp)
     (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
 
     ;; Advance agenda 4 times (Offworld Office needs 4 to score)
@@ -499,6 +510,7 @@
 
     ;; Install ICE on HQ
     (println "\n--- Corp installs Palisade on HQ ---")
+    (start-turn state :corp)
     (play-from-hand state :corp "Palisade" "HQ")
     (print-board-state state)
     (println "Clicks remaining:" (:click (:corp @state)))
@@ -521,7 +533,9 @@
     ;; Get fresh clicks for more ICE
     (println "\n--- Corp ends turn to get more clicks ---")
     (take-credits state :corp)
+    (start-turn state :runner)
     (take-credits state :runner)
+    (start-turn state :corp)
     (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
 
     ;; Install second ICE on same remote (will be outermost)
@@ -587,6 +601,7 @@
 
     ;; Corp installs Nico but doesn't rez
     (println "\n--- Corp installs Nico Campaign in remote (unrezzed) ---")
+    (start-turn state :corp)
     (play-from-hand state :corp "Nico Campaign" "New remote")
     (print-board-state state)
     (let [nico (get-content state :remote1 0)]
@@ -600,6 +615,7 @@
 
     ;; Runner takes their turn
     (println "\n--- Runner turn ---")
+    (start-turn state :runner)
     (println "Runner clicks:" (:click (:runner @state)))
     (println "Runner could run and trash Nico, but doesn't")
 
@@ -629,6 +645,7 @@
 
     ;; Corp turn starts - Nico triggers automatically!
     (println "\n--- Corp turn starts - Nico triggers immediately ---")
+    (start-turn state :corp)
     (let [nico (get-content state :remote1 0)
           credits-now (:credit (:corp @state))]
       (println "Corp credits at turn start:" credits-now)
@@ -674,7 +691,9 @@
     (print-board-state state)
 
     ;; Skip to Runner turn
+    (start-turn state :corp)
     (take-credits state :corp)
+    (start-turn state :runner)
 
     ;; Play economy card to get credits for installing
     (println "\n--- Runner plays Sure Gamble for credits ---")
@@ -766,7 +785,9 @@
     (print-board-state state)
 
     ;; Skip to Runner turn
+    (start-turn state :corp)
     (take-credits state :corp)
+    (start-turn state :runner)
 
     ;; Install Telework Contract (costs 1 credit, 1 click)
     (println "\n--- Runner installs Telework Contract ---")
@@ -833,10 +854,12 @@
     (take-credits state :runner)
 
     (println "\n--- Corp turn (passing) ---")
+    (start-turn state :corp)
     (take-credits state :corp)
 
     ;; At start of Runner turn, Smartware should automatically trigger
     (println "\n--- Runner turn begins (Smartware auto-triggers) ---")
+    (start-turn state :runner)
     (let [smartware (second (get-resource state))
           credits-now (:credit (:runner @state))]
       (println "Runner credits at turn start:" credits-now)
@@ -923,7 +946,9 @@
     (print-game-state state)
 
     ;; Skip to Runner turn
+    (start-turn state :corp)
     (take-credits state :corp)
+    (start-turn state :runner)
 
     ;; Play Sure Gamble
     (println "\n--- Runner plays Sure Gamble ---")
