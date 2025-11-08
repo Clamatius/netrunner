@@ -39,7 +39,11 @@
   ([gameid] (connect-game! gameid "Corp"))
   ([gameid side]
    (println "Joining game" gameid "as" side "...")
-   (ws/join-game! {:gameid gameid :side side})
+   ;; Convert string UUID to java.util.UUID if needed
+   (let [uuid (if (string? gameid)
+                (java.util.UUID/fromString gameid)
+                gameid)]
+     (ws/join-game! {:gameid uuid :side side}))
    (Thread/sleep 2000)
    (if (ws/in-game?)
      (do
@@ -78,7 +82,7 @@
   "Keep hand during mulligan"
   []
   (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "button" (:prompt-type prompt)))
+    (if (and prompt (= "mulligan" (:prompt-type prompt)))
       (let [keep-choice (first (filter #(= "Keep" (:value %)) (:choices prompt)))]
         (if keep-choice
           (do
@@ -93,7 +97,7 @@
   "Mulligan (redraw) hand"
   []
   (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "button" (:prompt-type prompt)))
+    (if (and prompt (= "mulligan" (:prompt-type prompt)))
       (let [mulligan-choice (first (filter #(= "Mulligan" (:value %)) (:choices prompt)))]
         (if mulligan-choice
           (do

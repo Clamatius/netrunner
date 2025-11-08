@@ -10,6 +10,12 @@
 ;; Load high-level actions
 (load-file "dev/src/clj/ai_actions.clj")
 
+;; Also make these available in user namespace for easier access
+(in-ns 'user)
+(require '[ai-websocket-client-v2 :as ws])
+(require '[ai-actions :as ai])
+(in-ns 'ai-client-init)
+
 ;; Auto-connect to local server
 (println "\nConnecting to ws://localhost:1042/chsk...")
 (ai-websocket-client-v2/connect! "ws://localhost:1042/chsk")

@@ -4,6 +4,7 @@
    [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.string :as str]
+   [differ.core :as differ]
    [gniazdo.core :as ws]))
 
 ;; ============================================================================
@@ -21,20 +22,13 @@
          :lobby-list nil
          :client-id nil}))
 
-(defn deep-merge
-  "Recursively merge maps"
-  [a b]
-  (if (and (map? a) (map? b))
-    (merge-with deep-merge a b)
-    b))
-
 (defn apply-diff
-  "Apply a diff to current state to get new state"
+  "Apply a diff to current state to get new state using differ library"
   [old-state diff]
   (if old-state
-    ;; Use deep-merge instead of differ/patch
-    ;; The server sends incremental updates, not differ-style diffs
-    (deep-merge old-state diff)
+    ;; Use differ/patch which properly handles sparse array updates
+    ;; like hand: [0 {:playable true} 1 {:playable true} ...]
+    (differ/patch old-state diff)
     diff))
 
 (defn update-game-state!
