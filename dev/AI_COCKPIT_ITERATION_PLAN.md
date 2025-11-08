@@ -162,9 +162,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 ## Phase 4: Basic Runs ⚠️ COMPLEXITY INCREASE
 
 ### Iteration 4.1: Unopposed Central Server Runs
-**Status**: ⏸️ PENDING
+**Status**: ✅ COMPLETE
 **New mechanics**: Running, accessing cards, "continue" timing
-**Test function**: `test-unopposed-central-runs`
+**Test function**: `test-unopposed-runs`
 
 **Specific actions**:
 - Run on HQ (no ICE) - access random cards from HQ
@@ -179,6 +179,23 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 - Or manual: `(run-on state :hq)` + respond to prompts
 - Access prompts will appear for each card
 - Stealing agenda: `(click-prompt state :runner "Steal")`
+- **CRITICAL**: Agendas MUST be stolen (only choice is "Steal")
+- Non-agendas offer "No action" choice
+
+**Implementation** (game_command_test.clj:1094-1229):
+- Archives run: Stole Hostile Takeover (1 point)
+- HQ run: Accessed operation, chose "No action"
+- R&D run: Accessed Offworld Office agenda, MUST steal (2 points)
+- Total: Runner ends with 3 agenda points
+- Each run costs 1 click
+- Used `run-empty-server` helper for clean unopposed runs
+- Used `assert-no-prompts` after each run to verify clean state
+
+**Key learnings**:
+- Agendas have ONLY "Steal" choice when accessed
+- Non-agendas (operations, ICE, etc.) have "No action" choice
+- Must handle prompt response based on card type
+- run-empty-server is perfect for unopposed runs (no ICE)
 
 **Focus**: Understanding run phases WITHOUT ICE:
 1. Run initiation
@@ -457,9 +474,9 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 ## Progress Tracking
 
-### Completed: 9 iterations (Phase 1 + Phase 2 complete + Phase 3 complete!)
-### Current: Phase 4.1 Unopposed Central Server Runs ready to start ⚠️ COMPLEXITY INCREASE
-### Remaining: ~11-16 iterations
+### Completed: 10 iterations (Phase 1-3 complete + Phase 4.1 complete!)
+### Current: Phase 4.2 Unopposed Remote Runs ready to start
+### Remaining: ~10-15 iterations
 
 ---
 

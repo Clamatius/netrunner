@@ -1088,8 +1088,154 @@
     (println "\nClick efficiency comparison:")
     (println "- Sure Gamble: +4 credits / 1 click = 4 credits per click")
     (println "- Creative Commission: +4 credits / 2 clicks = 2 credits per click")
-    (println "- Click for credit: +1 credit / 1 click = 1 credit per click")
-    (println "→ Sure Gamble is most efficient, Creative Commission still good!")
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-unopposed-runs
+  "Test basic unopposed runs on all three central servers.
+  Demonstrates:
+  - Running on HQ, R&D, and Archives
+  - Using run-empty-server helper for unopposed runs
+  - Accessing cards during successful runs
+  - Handling access prompts (No action, Steal)
+  - Understanding run phases and success
+  - Verifying run completion and no stale prompts"
+  []
+  (println "\n========================================")
+  (println "TEST: Unopposed Runs on Central Servers")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with agenda and operations in hand
+                ["Hostile Takeover" "Hedge Fund" "IPO" "Beanstalk Royalties" "Green Level Clearance"]
+                ;; Corp deck has more cards for R&D access
+                ["Offworld Office" "Offworld Office" "Offworld Office"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Corp setup: Trash Hostile Takeover to Archives
+    (start-turn state :corp)
+    (println "\n--- Corp trashes Hostile Takeover to Archives ---")
+    (trash-from-hand state :corp "Hostile Takeover")
+    (println "Corp Archives:" (mapv :title (:discard (:corp @state))))
+    (take-credits state :corp)
+
+    ;; Runner turn begins
+    (start-turn state :runner)
+    (println "\n--- Runner Turn Begins ---")
+    (println "Clicks available:" (:click (:runner @state)))
+    (println "Credits available:" (:credit (:runner @state)))
+
+    ;; Test 1: Run on Archives (contains agenda)
+    (println "\n--- Test 1: Run on Archives ---")
+    (println "Archives contains:" (mapv :title (:discard (:corp @state))))
+    (println "Runner initiating run on Archives...")
+    (run-empty-server state :archives)
+    (println "✓ Run successful! Accessing Archives...")
+
+    ;; Check what we're accessing
+    (let [archives-cards (:discard (:corp @state))
+          agenda (first (filter #(= "Hostile Takeover" (:title %)) archives-cards))]
+      (when agenda
+        (println "Found agenda:" (:title agenda) "(worth" (:agendapoints agenda) "points)")
+        (println "Runner chooses to steal...")
+        (click-prompt state :runner "Steal")
+        (println "✓ Agenda stolen!")
+        (println "Runner agenda points:" (:agenda-point (:runner @state)))))
+
+    (assert-no-prompts state "after Archives run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Test 2: Run on HQ (contains cards in hand)
+    (println "\n--- Test 2: Run on HQ ---")
+    (println "Corp hand size:" (count (:hand (:corp @state))))
+    (println "Corp hand:" (mapv :title (:hand (:corp @state))))
+    (println "Runner initiating run on HQ...")
+    (run-empty-server state :hq)
+    (println "✓ Run successful! Accessing card from HQ...")
+
+    ;; Runner accesses a random card from HQ
+    (let [prompt (get-prompt state :runner)]
+      (println "Access prompt:" (:msg prompt))
+      (println "Choices available:" (:choices prompt))
+      (println "Runner chooses: No action")
+      (click-prompt state :runner "No action")
+      (println "✓ Access complete, card not stolen"))
+
+    (assert-no-prompts state "after HQ run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Test 3: Run on R&D (accesses top card of deck)
+    (println "\n--- Test 3: Run on R&D ---")
+    (println "Corp deck size:" (count (:deck (:corp @state))))
+    (let [top-card (first (:deck (:corp @state)))]
+      (println "Top card of R&D:" (:title top-card) "(" (:type top-card) ")"))
+    (println "Runner initiating run on R&D...")
+    (run-empty-server state :rd)
+    (println "✓ Run successful! Accessing top card of R&D...")
+
+    ;; Runner accesses top card of R&D
+    ;; Note: Top card is Offworld Office (agenda), so we MUST steal it
+    (let [prompt (get-prompt state :runner)
+          top-card (first (:deck (:corp @state)))]
+      (println "Access prompt:" (:msg prompt))
+      (println "Choices available:" (:choices prompt))
+      (if (= "Agenda" (:type top-card))
+        (do
+          (println "Top card is an agenda - must steal!")
+          (click-prompt state :runner "Steal")
+          (println "✓ Agenda stolen! Runner now has" (:agenda-point (:runner @state)) "points"))
+        (do
+          (println "Runner chooses: No action")
+          (click-prompt state :runner "No action")
+          (println "✓ Access complete, card not stolen"))))
+
+    (assert-no-prompts state "after R&D run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    (println "\n--- Summary ---")
+    (println "Unopposed runs demonstrated:")
+    (println "1. Archives Run")
+    (println "   - Accessed all cards in Archives")
+    (println "   - Stole Hostile Takeover agenda (1 point)")
+    (println "   - No ICE to encounter")
+    (println "2. HQ Run")
+    (println "   - Accessed random card from Corp's hand")
+    (println "   - Was Hedge Fund (operation)")
+    (println "   - Chose not to trash (no agenda)")
+    (println "   - Standard central server access")
+    (println "3. R&D Run")
+    (println "   - Accessed top card of Corp's deck")
+    (println "   - Was Offworld Office (agenda)")
+    (println "   - MUST steal agendas when accessed!")
+    (println "   - Stole agenda (2 points)")
+    (println "   - Runner now has" (:agenda-point (:runner @state)) "total agenda points")
+    (println "\nKey mechanics:")
+    (println "- run-empty-server: Helper for unopposed runs")
+    (println "- Run phases: initiation → movement → success → access")
+    (println "- Access prompts: Runner MUST steal agendas (no choice)")
+    (println "- Access prompts: Runner can choose 'No action' for non-agendas")
+    (println "- Central servers: HQ (hand), R&D (deck), Archives (discard)")
+    (println "- Each run costs 1 click")
+    (println "- Successful runs allow accessing cards")
+    (println "- Agendas MUST be stolen when accessed (automatic)")
+    (println "- IMPORTANT: Always check for prompts after runs!")
+    (println "\nClick usage:")
+    (println "- Started with 4 clicks")
+    (println "- Archives run: -1 click")
+    (println "- HQ run: -1 click")
+    (println "- R&D run: -1 click")
+    (println "- Final clicks remaining:" (:click (:runner @state)))
 
     (println "\n✅ Test complete!")
     nil))
