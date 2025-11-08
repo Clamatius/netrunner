@@ -315,6 +315,203 @@
 (defn in-game? [] (some? (:gameid @client-state)))
 (defn get-lobby-list [] (:lobby-list @client-state))
 
+;; ============================================================================
+;; Connection Management
+;; ============================================================================
+
+(defn ensure-connected!
+  "Check connection and reconnect if needed. Returns true if connected."
+  ([] (ensure-connected! "ws://localhost:1042/chsk"))
+  ([url]
+   (if (connected?)
+     true
+     (do
+       (println "⚠️  Not connected, reconnecting...")
+       (connect! url)
+       (Thread/sleep 2000)
+       (connected?)))))
+
+(defn rejoin-game!
+  "Rejoin a game after reconnection using gameid from game state"
+  []
+  (when-let [gameid (get-in @client-state [:game-state :gameid])]
+    (println "♻️  Rejoining game:" gameid)
+    (let [gameid-uuid (if (string? gameid)
+                        (java.util.UUID/fromString gameid)
+                        gameid)]
+      (send-message! :lobby/join
+                     {:gameid gameid-uuid
+                      :request-side "Runner"}))
+    (Thread/sleep 2000)
+    true))
+
+;; ============================================================================
+;; Game State Queries
+;; ============================================================================
+
+(defn get-game-state [] (:game-state @client-state))
+
+(defn active-player [] (get-in @client-state [:game-state :active-player]))
+(defn my-turn? [] (= "runner" (active-player)))
+(defn turn-number [] (get-in @client-state [:game-state :turn]))
+
+(defn runner-state [] (get-in @client-state [:game-state :runner]))
+(defn corp-state [] (get-in @client-state [:game-state :corp]))
+
+(defn my-credits [] (get-in @client-state [:game-state :runner :credit]))
+(defn my-clicks [] (get-in @client-state [:game-state :runner :click]))
+(defn my-hand [] (get-in @client-state [:game-state :runner :hand]))
+(defn my-hand-count [] (get-in @client-state [:game-state :runner :hand-count]))
+(defn my-installed [] (get-in @client-state [:game-state :runner :rig]))
+
+(defn corp-credits [] (get-in @client-state [:game-state :corp :credit]))
+(defn corp-clicks [] (get-in @client-state [:game-state :corp :click]))
+(defn corp-hand-count [] (get-in @client-state [:game-state :corp :hand-count]))
+
+(defn get-prompt
+  "Get current Runner prompt, if any"
+  []
+  (get-in @client-state [:game-state :runner :prompt-state]))
+
+(defn show-prompt
+  "Display current prompt in readable format"
+  []
+  (if-let [prompt (get-prompt)]
+    (do
+      (println "\n🔔 PROMPT")
+      (println "Message:" (:msg prompt))
+      (println "Type:" (:prompt-type prompt))
+      (when-let [choices (:choices prompt)]
+        (println "Choices:")
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
+      prompt)
+    (println "No active prompt")))
+
+;; ============================================================================
+;; Action Helpers
+;; ============================================================================
+
+(defn safe-action!
+  "Send action with connection check"
+  [command args]
+  (when (ensure-connected!)
+    (send-action! command args)))
+
+(defn take-credits!
+  "Take credits for clicks"
+  []
+  (safe-action! "credit" nil))
+
+(defn draw-card!
+  "Draw a card"
+  []
+  (safe-action! "draw" nil))
+
+(defn end-turn!
+  "End the current turn"
+  []
+  (safe-action! "end-turn" nil))
+
+(defn run-server!
+  "Run on a server"
+  [server]
+  (safe-action! "run" {:server server}))
+
+(defn choose!
+  "Make a choice from a prompt by index or UUID"
+  [choice]
+  (if (number? choice)
+    ;; Choice by index
+    (let [prompt (get-prompt)
+          uuid (get-in prompt [:choices choice :uuid])]
+      (when uuid
+        (safe-action! "choice" {:choice {:uuid uuid}})))
+    ;; Choice by UUID string
+    (safe-action! "choice" {:choice {:uuid choice}})))
+
+(defn play-card!
+  "Play a card from hand by index or title"
+  [card & args]
+  (if (number? card)
+    ;; Card by index
+    (let [hand (my-hand)
+          card-obj (nth hand card nil)]
+      (when card-obj
+        (safe-action! "play" (into {:card (:cid card-obj)} args))))
+    ;; Card by title (find in hand)
+    (let [hand (my-hand)
+          card-obj (first (filter #(= card (:title %)) hand))]
+      (when card-obj
+        (safe-action! "play" (into {:card (:cid card-obj)} args))))))
+
+(defn select-card!
+  "Select a card for prompts like discard.
+   Takes a card object and prompt eid.
+   Card should have :cid, :zone, :side, :type fields."
+  [card eid]
+  (safe-action! "select"
+                {:card {:cid (:cid card)
+                        :zone (:zone card)
+                        :side (:side card)
+                        :type (:type card)}
+                 :eid eid
+                 :shift-key-held false}))
+
+(defn handle-discard-prompt!
+  "Handle discard down to hand size prompt.
+   Discards cards one at a time until hand size is acceptable.
+   Returns number of cards discarded."
+  [side]
+  (let [gs (get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])
+        hand-size-max (get-in gs [side :hand-size :total])
+        cards-to-discard (- (count hand) hand-size-max)]
+    (if (and (= "select" (:prompt-type prompt))
+             (> cards-to-discard 0))
+      (do
+        (println (format "Need to discard %d cards from hand of %d (max %d)"
+                        cards-to-discard (count hand) hand-size-max))
+        (loop [discarded 0]
+          (if (< discarded cards-to-discard)
+            (let [current-hand (get-in (get-game-state) [side :hand])
+                  card-to-discard (first current-hand)]
+              (when card-to-discard
+                (println (format "Discarding card %d/%d: %s"
+                                (inc discarded) cards-to-discard (:title card-to-discard)))
+                (select-card! card-to-discard (:eid prompt))
+                (Thread/sleep 1000)
+                (recur (inc discarded))))
+            discarded))
+        cards-to-discard)
+      0)))
+
+;; ============================================================================
+;; Status Display
+;; ============================================================================
+
+(defn show-status
+  "Display current game status"
+  []
+  (println "\n" (str/join "" (repeat 70 "=")))
+  (println "📊 GAME STATUS")
+  (println (str/join "" (repeat 70 "=")))
+  (println "\nTurn:" (turn-number) "-" (active-player))
+  (println "My turn?" (my-turn?))
+  (println "\n--- RUNNER ---")
+  (println "Credits:" (my-credits))
+  (println "Clicks:" (my-clicks))
+  (println "Hand:" (my-hand-count) "cards")
+  (println "\n--- CORP ---")
+  (println "Credits:" (corp-credits))
+  (println "Clicks:" (corp-clicks))
+  (println "Hand:" (corp-hand-count) "cards")
+  (when-let [prompt (get-prompt)]
+    (println "\n🔔 Active Prompt:" (:msg prompt)))
+  (println (str/join "" (repeat 70 "=")))
+  nil)
+
 (defn show-games
   "Display available games in a readable format"
   []
