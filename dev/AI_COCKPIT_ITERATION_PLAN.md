@@ -225,11 +225,15 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 - Runner can access and see unrezzed cards when running remotes
 - Agendas MUST be stolen when accessed (even unrezzed)
 - Assets offer "Pay X to trash" or "No action" choices
-- **CRITICAL**: Stolen agendas DON'T trigger their abilities
-  - Abilities only fire when Corp scores them
-  - This is different from scoring!
 - Each remote is a separate server
 - Accessing mechanics identical to central servers
+
+**IMPORTANT - Agenda abilities**:
+- Most agendas have `:on-score` abilities (trigger when Corp scores, not when stolen)
+- Some agendas have `:on-access` abilities (trigger when Runner accesses them)
+- **Agenda: Ambush** subtype = dangerous to access (Fetal AI, TGTBT, Obokata Protocol, etc.)
+- Offworld Office (tested here) only has `:on-score`, so no trigger when stolen
+- The AI must learn to distinguish between these patterns!
 
 **Focus**: Running on remote servers (:remote1, :remote2, etc.):
 1. Corp installs cards in remotes (unrezzed)
@@ -255,9 +259,17 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 - Test flatline scenario: Runner with 2 cards accessing Snare!
 
 **Cards to test**:
+
+*Asset: Ambush cards (installed in remotes/servers)*
 - **Snare!/Byte!** - 4 credits: 1 tag + 3 net damage (optional)
 - **Shock!** - 1 net damage (NOT optional, fires automatically)
 - **Project Junebug** - Advancement ambush: 2 net damage per advancement counter
+
+*Agenda: Ambush cards (can be anywhere)*
+- **Fetal AI** - 2 net damage + 2 credit cost to steal (automatic)
+- **Obokata Protocol** - 4 net damage cost to steal (can flatline!)
+- **TGTBT** - 1 tag on access (automatic)
+- **Sting!**, **Tomorrow's Headline**, **Fujii Asset Retrieval** - Other Agenda: Ambush variants
 
 **Implementation notes**:
 - Runner enters `(waiting? state :runner)` - Corp decides whether to fire
@@ -276,11 +288,14 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 **Why this matters**:
 Ambushes are a **win condition** for Corp. AI player MUST understand:
-1. Check hand size before running unknown cards
-2. Track Corp credits (can they afford to fire ambush?)
-3. Calculate: "If this is Snare!, do I survive?"
-4. Archives is safer than R&D/remotes for ambushes (most don't fire)
-5. Advanced cards in remotes could be Junebug (potentially lethal!)
+1. **Hand size = health pool** - Your cards in hand protect you from flatline
+2. Check hand size before running unknown cards
+3. Track Corp credits (can they afford to fire Asset: Ambush?)
+4. Calculate: "If this is Snare!, do I survive?" (need 3+ cards in hand)
+5. Calculate: "If this is Obokata Protocol, can I steal it?" (need 4+ cards or flatline!)
+6. Archives is safer than R&D/remotes for Asset: Ambush (most don't fire)
+7. Advanced cards in remotes could be Junebug (potentially lethal!)
+8. Agenda: Ambush cards are ALWAYS dangerous (can't be avoided by denying Corp credits)
 
 ---
 
