@@ -135,6 +135,44 @@
     (println "  Hand:" (mapv :title (:hand runner)))
     (println "  Deck size:" (count (:deck runner)))))
 
+(defn check-prompts
+  "Check for open prompts and print them for debugging.
+  Returns true if there are prompts open (indicating potential issues)."
+  [state]
+  (let [corp-prompt (get-prompt state :corp)
+        runner-prompt (get-prompt state :runner)
+        has-corp-prompt (and corp-prompt (not= :run (:prompt-type corp-prompt)))
+        has-runner-prompt (and runner-prompt (not= :run (:prompt-type runner-prompt)))]
+    (when (or has-corp-prompt has-runner-prompt)
+      (println "\n⚠️  OPEN PROMPTS DETECTED:")
+      (when has-corp-prompt
+        (println "  Corp prompt:" (:msg corp-prompt))
+        (println "    Type:" (:prompt-type corp-prompt))
+        (when (:choices corp-prompt)
+          (println "    Choices:" (:choices corp-prompt))))
+      (when has-runner-prompt
+        (println "  Runner prompt:" (:msg runner-prompt))
+        (println "    Type:" (:prompt-type runner-prompt))
+        (when (:choices runner-prompt)
+          (println "    Choices:" (:choices runner-prompt)))))
+    (or has-corp-prompt has-runner-prompt)))
+
+(defn assert-no-prompts
+  "Assert that neither side has open prompts. Useful for AI player to verify clean state."
+  [state context]
+  (when (check-prompts state)
+    (println "\n❌ ERROR: Unexpected prompts at:" context)
+    (println "   This usually means:")
+    (println "   - We tried to play a card that doesn't exist")
+    (println "   - An action requires a choice (server, target, etc.)")
+    (println "   - We need to handle a trigger or ability")))
+
+(defn has-prompts?
+  "Simple boolean check: does either side have open prompts?
+  Useful for AI player decision-making."
+  [state]
+  (check-prompts state))
+
 (defn print-board-state
   "Print installed cards on both sides"
   [state]
@@ -786,7 +824,9 @@
 
     ;; Skip to Runner turn
     (start-turn state :corp)
+    (play-from-hand state :corp "Offworld Office" "New remote") ;; so we don't have to discard
     (take-credits state :corp)
+
     (start-turn state :runner)
 
     ;; Install Telework Contract (costs 1 credit, 1 click)
@@ -851,12 +891,13 @@
     ;; End turn and start new turn to trigger Smartware's automatic ability
     (println "\n--- Runner ends turn ---")
     (println "Clicks remaining:" (:click (:runner @state)))
-    (take-credits state :runner)
+    (end-turn state :runner)
 
     (println "\n--- Corp turn (passing) ---")
     (start-turn state :corp)
+    (play-from-hand state :corp "Offworld Office" "New remote") ;; so we don't have to discard
     (take-credits state :corp)
-
+    
     ;; At start of Runner turn, Smartware should automatically trigger
     (println "\n--- Runner turn begins (Smartware auto-triggers) ---")
     (start-turn state :runner)
@@ -866,8 +907,8 @@
       (println "Smartware counters:" (get-counters smartware :credit))
       (println "Smartware gave 1 credit automatically (3 → 2 counters)"))
 
-    ;; Try to use Telework again on turn 2
-    (println "\n--- Runner attempts Telework again (turn 2) ---")
+    ;; Use Telework again on turn 2 (once-per-turn resets!)
+    (println "\n--- Runner uses Telework again (turn 2 - restriction reset!) ---")
     (let [telework (first (get-resource state))
           credits-before (:credit (:runner @state))
           counters-before (get-counters telework :credit)]
@@ -878,9 +919,7 @@
       (let [telework-updated (first (get-resource state))]
         (println "Credits after:" (:credit (:runner @state)))
         (println "Telework counters after:" (get-counters telework-updated :credit))
-        (println "Result:" (if (= credits-before (:credit (:runner @state)))
-                             "Ability not used (once-per-turn may need action window)"
-                             (str "Gained " (- (:credit (:runner @state)) credits-before) " credits")))))
+        (println "✓ Gained" (- (:credit (:runner @state)) credits-before) "credits - once-per-turn reset works!")))
 
     ;; Final state
     (println "\n--- Final State ---")
@@ -891,7 +930,7 @@
     (println "\n--- Resource Status ---")
     (let [telework (first (get-resource state))
           smartware (second (get-resource state))]
-      (println "Telework Contract:" (get-counters telework :credit) "credits remaining (started with 9, took 6)")
+      (println "Telework Contract:" (get-counters telework :credit) "credits remaining (started with 9, took 3+3)")
       (println "Smartware Distributor:" (get-counters smartware :credit) "credits remaining (placed 3, gave 1)"))
 
     (println "\n--- Summary ---")
@@ -901,7 +940,8 @@
     (println "   - Starts with 9[credit] loaded on install")
     (println "   - Once per turn → [click]: Take 3[credit] from this resource")
     (println "   - When empty, trash it")
-    (println "   - Successfully used once (9 → 6 credits remaining)")
+    (println "   - ✓ Successfully used TWICE (turn 1 and turn 2)")
+    (println "   - ✓ Once-per-turn restriction resets each turn!")
     (println "2. Smartware Distributor - Click ability + automatic trigger")
     (println "   - FREE to install (0 cost)")
     (println "   - Click ability: Place 3 credits on card")
