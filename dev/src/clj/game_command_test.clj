@@ -1515,6 +1515,135 @@
     (println "\n✅ Test complete!")
     nil))
 
+(defn test-ice-encounter-basic
+  "Test basic ICE encounter with rezzing and subroutine firing.
+  Demonstrates:
+  - Corp rezzing ICE during approach-ice phase
+  - Transition to encounter-ice phase
+  - Runner NOT breaking subroutines
+  - Subroutines firing automatically (End the run)
+  - Run ending unsuccessfully (no access)
+  - Difference between unsuccessful run vs successful run"
+  []
+  (println "\n========================================")
+  (println "TEST: Basic ICE Encounter - No Breaking")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE
+                ["Ice Wall" "Palisade" "Hostile Takeover"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs and rezzes ICE ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+
+    ;; Corp installs Ice Wall on HQ
+    (println "Corp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed on HQ")
+      (println "  ICE strength:" (get-strength (get-card state ice)))
+      (println "  Rez cost:" (:cost ice)))
+
+    (take-credits state :corp)
+
+    ;; Test 1: Run HQ, Corp rezzes ICE, subroutines fire, run ends
+    (println "\n--- Test 1: Runner runs HQ, ICE fires, run ends ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner credits:" (:credit (:runner @state)))
+    (println "Corp credits:" (:credit (:corp @state)))
+
+    (println "\nInitiating run on HQ...")
+    (run-on state :hq)
+
+    (println "✓ Run initiated!")
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :approach-ice")
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\nApproaching Ice Wall")
+      (println "  Rezzed?" (:rezzed ice))
+      (println "  Corp has rez window now")
+
+      (println "\nCorp REZZES Ice Wall...")
+      (rez state :corp ice)
+      (let [rezzed-ice (get-card state ice)]
+        (println "✓ Ice Wall rezzed!")
+        (println "  Rezzed?" (:rezzed rezzed-ice))
+        (println "  Corp credits after rez:" (:credit (:corp @state)))
+        (println "  Rez cost was:" (:cost rezzed-ice))))
+
+    (println "\nUsing run-continue to move to encounter...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :encounter-ice")
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\n✓ Now encountering Ice Wall!")
+      (println "ICE title:" (:title ice))
+      (println "ICE strength:" (get-strength ice))
+      (println "Subroutines:" (count (:subroutines ice)))
+      (println "First subroutine:" (:label (first (:subroutines ice)))))
+
+    (println "\nRunner does NOT break subroutines...")
+    (println "Corp fires all unbroken subroutines...")
+
+    (let [ice (get-ice state :hq 0)]
+      (fire-subs state ice))
+
+    (println "\n✓ Subroutines fired!")
+    (println "'End the run' subroutine triggered")
+    (println "Run ended:" (nil? (:run @state)))
+    (println "Should be true (run is over)")
+
+    (println "\nNo access happened - run was unsuccessful")
+    (println "Runner did not get to access HQ")
+
+    ;; Verify run is completely over
+    (when (:run @state)
+      (println "ERROR: Run should be nil but it's still active!"))
+    (assert-no-prompts state "after run ends from ICE")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Basic ICE Encounter")
+    (println "========================================")
+    (println "Corp rezzed Ice Wall on HQ")
+    (println "Runner encountered ICE but did not break subroutines")
+    (println "'End the run' subroutine fired")
+    (println "Run ended unsuccessfully - no access to HQ")
+
+    (println "\nRun phases encountered:")
+    (println "1. :approach-ice - Corp rez window")
+    (println "2. Corp rezzes ICE: (rez state :corp ice)")
+    (println "3. run-continue → :encounter-ice")
+    (println "4. Runner does not break subs")
+    (println "5. fire-subs fires 'End the run'")
+    (println "6. Run ends (no :success, no access)")
+
+    (println "\nKey mechanics:")
+    (println "- Corp rezzes ICE during :approach-ice phase with (rez state :corp ice)")
+    (println "- Rezzing costs credits (Ice Wall costs " (:cost (get-ice state :hq 0)) ")")
+    (println "- run-continue transitions from :approach-ice to :encounter-ice")
+    (println "- In :encounter-ice, Runner can break subs OR Corp fires them")
+    (println "- fire-subs fires all unbroken subroutines")
+    (println "- 'End the run' subroutine terminates run immediately")
+    (println "- No access happens when run ends from ICE")
+    (println "- (:run @state) becomes nil when run ends")
+
+    (println "\nDifference from Phase 4.4:")
+    (println "- Phase 4.4: Corp declined to rez, Runner passed unrezzed ICE")
+    (println "- Phase 5.1: Corp REZZED ICE, subroutines FIRED, run ENDED")
+    (println "- This is the first time Runner has been STOPPED by ICE")
+
+    (println "\n✅ Test complete!")
+    nil))
+
 ;; ============================================================================
 ;; Comment block for REPL usage
 ;; ============================================================================

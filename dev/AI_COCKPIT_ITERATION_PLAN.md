@@ -7,7 +7,7 @@ Build a comprehensive open-hand game test in `game_command_test.clj` that exerci
 
 **Target timeline**: 15-25 coding sessions to complete all phases.
 
-**📊 Progress**: 12 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2, 4.4). Phase 5.1 (ICE encounters) ready to start.
+**📊 Progress**: 13 iterations complete (Phase 1, 2.1-2.3, 3.1-3.3, 4.1-4.2, 4.4, 5.1). Phase 5.2 (breaking ICE) ready to start.
 
 ---
 
@@ -344,35 +344,45 @@ Ambushes are a **win condition** for Corp. AI player MUST understand:
 ## Phase 5: Encounters With ICE ⚠️ CRITICAL COMPLEXITY
 
 ### Iteration 5.1: Basic ICE Encounter (No Breaking)
-**Status**: ⏸️ PENDING
-**New mechanics**: ICE rezzing, subroutine firing, encounter phases
+**Status**: ✅ COMPLETE
+**New mechanics**: ICE rezzing, subroutine firing, encounter phases, unsuccessful runs
 **Test function**: `test-ice-encounter-basic`
 
-**Specific actions**:
-- Corp installs + rezzes Palisade on HQ
-- Runner runs HQ
-- Encounter Palisade
-- Runner does NOT break subs
-- Subroutines fire ("End the run")
-- Run ends unsuccessfully
+**Implementation** (game_command_test.clj:1518-1644):
+- Corp installed Ice Wall on HQ (cost 1, strength 1)
+- Runner ran HQ, Corp rezzed Ice Wall during :approach-ice
+- run-continue transitioned to :encounter-ice phase
+- Runner did NOT break subroutines
+- Corp fired "End the run" subroutine with `(fire-subs state ice)`
+- Run ended unsuccessfully - no access to HQ
 
-**Key run phases**:
-1. Run initiated: `(run-on state :hq)`
-2. Corp priority at initiation → `(continue state :corp)`
-3. Runner continues → `(continue state :runner)`
-4. Approach ICE (Palisade)
-5. Corp rezzes ICE → `(rez state :corp ice)`
-6. Corp priority → `(continue state :corp)`
-7. Encounter ICE
-8. Runner passes (doesn't use breaker) → `(continue state :runner)`
-9. Fire unbroken subroutines
-10. Run ends
+**Key learnings**:
+- **Rezzing ICE**: `(rez state :corp ice)` during :approach-ice phase
+- Rezzing **costs credits** (Ice Wall costs 1 credit)
+- **:encounter-ice phase**: Where Runner can break subs or Corp fires them
+- **fire-subs**: Fires all unbroken subroutines
+- **"End the run"**: Terminates run immediately, `(:run @state)` becomes `nil`
+- **No access on unsuccessful run**: Runner doesn't get to access cards
+- ICE subroutines have `:label` field describing what they do
 
-**Implementation notes**:
-- Palisade has 1 subroutine: "End the run"
-- When fired, run terminates immediately
-- No access happens
-- Check: `(get-run)` should be nil after run ends
+**Run phases demonstrated**:
+1. `(run-on state :hq)` → :approach-ice
+2. `(rez state :corp ice)` - Corp rezzes ICE (costs credits!)
+3. `(run-continue state)` → :encounter-ice
+4. `(fire-subs state ice)` - Fire unbroken subroutines
+5. "End the run" fires → Run ends (no :success, no access)
+
+**Critical difference from Phase 4.4**:
+- Phase 4.4: Corp **declined** to rez, Runner **passed** unrezzed ICE
+- Phase 5.1: Corp **REZZED** ICE, subroutines **FIRED**, run **ENDED**
+- **First time Runner has been STOPPED by ICE!**
+
+**Focus**: Understanding how ICE protects servers:
+1. Corp must pay to rez ICE (economic decision)
+2. Rezzed ICE encounters Runner during runs
+3. Subroutines fire if not broken
+4. "End the run" is the most common ICE subroutine
+5. Unsuccessful runs = no access = Corp wins that interaction
 
 ---
 
