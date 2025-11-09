@@ -567,17 +567,13 @@
       (do
         (println (format "Need to discard %d cards from hand of %d (max %d)"
                         cards-to-discard (count hand) hand-size-max))
-        (loop [discarded 0]
-          (if (< discarded cards-to-discard)
-            (let [current-hand (get-in (get-game-state) [side :hand])
-                  card-to-discard (first current-hand)]
-              (when card-to-discard
-                (println (format "Discarding card %d/%d: %s"
-                                (inc discarded) cards-to-discard (:title card-to-discard)))
-                (select-card! card-to-discard (:eid prompt))
-                (Thread/sleep 1000)
-                (recur (inc discarded))))
-            discarded))
+        ;; Snapshot hand once - local state doesn't update immediately after each select
+        (let [cards-to-discard-list (take cards-to-discard hand)]
+          (doseq [card cards-to-discard-list]
+            (println (format "Discarding: %s" (:title card)))
+            (select-card! card (:eid prompt))
+            (Thread/sleep 500)))
+        (println (format "✅ Discarded %d card(s)" cards-to-discard))
         cards-to-discard)
       0)))
 
