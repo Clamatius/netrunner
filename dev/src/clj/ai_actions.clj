@@ -632,6 +632,34 @@
             (println (str "✅ Fired unbroken subroutines on: " (:title card))))
           (println (str "❌ ICE not found installed: " ice-name)))))))
 
+(defn advance-card!
+  "Advance an installed Corp card (agenda, ICE, or asset)
+   Costs 1 click and 1 credit per advancement counter
+
+   Usage: (advance-card! \"Project Vitruvius\")
+          (advance-card! \"Oaktown Renovation\")"
+  [card-name]
+  (let [state @ws/client-state
+        side (:side state)]
+    (if (not= "Corp" side)
+      (println "❌ Only Corp can advance cards")
+      (let [card (find-installed-corp-card card-name)]
+        (if card
+          (let [gameid (:gameid state)
+                card-ref {:cid (:cid card)
+                         :zone (:zone card)
+                         :side (:side card)
+                         :type (:type card)}]
+            (ws/send-message! :game/action
+                              {:gameid (if (string? gameid)
+                                        (java.util.UUID/fromString gameid)
+                                        gameid)
+                               :command "advance"
+                               :args {:card card-ref}})
+            (Thread/sleep 1500)
+            (println (str "✅ Advanced: " (:title card))))
+          (println (str "❌ Card not found installed: " card-name)))))))
+
 ;; ============================================================================
 ;; Discard Handling
 ;; ============================================================================
