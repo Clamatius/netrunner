@@ -153,6 +153,24 @@
         clicks (get-in state [:game-state (keyword side) :click])]
     (println "⏱️  Clicks:" clicks)))
 
+(defn- format-choice
+  "Format a choice for display, handling different prompt formats"
+  [choice]
+  (cond
+    ;; Map with :value key (most common)
+    (and (map? choice) (:value choice))
+    (:value choice)
+
+    ;; Map without :value - try :label or show keys
+    (map? choice)
+    (or (:label choice)
+        (:title choice)
+        (str "Option with keys: " (keys choice)))
+
+    ;; String or number - show as-is
+    :else
+    (str choice)))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -164,10 +182,16 @@
         (println "\n🔔 Current Prompt:")
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
+        (when-let [card (:card prompt)]
+          (println "  Card:" (:title card) (when (:type card) (str "(" (:type card) ")"))))
         (when-let [choices (:choices prompt)]
           (println "  Choices:")
           (doseq [[idx choice] (map-indexed vector choices)]
-            (println (str "    " idx ". " (:value choice))))))
+            (println (str "    " idx ". " (format-choice choice)))))
+        (when-let [selectable (:selectable prompt)]
+          (when (seq selectable)
+            (println "  Selectable cards:" (count selectable)
+                     "- Use choose-card! to select by index"))))
       (println "No active prompt"))))
 
 ;; ============================================================================
@@ -342,6 +366,35 @@
         (Thread/sleep 2000)
         (println (str "✅ Chose: " (:value choice))))
       (println (str "❌ Invalid choice index: " index)))))
+
+(defn choose-by-value!
+  "Choose from prompt by matching value/label text (case-insensitive substring match).
+   Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")"
+  [value-text]
+  (let [state @ws/client-state
+        side (:side state)
+        prompt (get-in state [:game-state (keyword side) :prompt-state])
+        choices (:choices prompt)
+        value-lower (clojure.string/lower-case (str value-text))
+        ;; Find first choice whose value contains the search text
+        matching-idx (first
+                      (keep-indexed
+                       (fn [idx choice]
+                         (let [choice-val (or (:value choice) (:label choice) "")]
+                           (when (clojure.string/includes?
+                                  (clojure.string/lower-case (str choice-val))
+                                  value-lower)
+                             idx)))
+                       choices))]
+    (if matching-idx
+      (do
+        (println (str "🔍 Found match: \"" (:value (nth choices matching-idx)) "\" at index " matching-idx))
+        (choose-option! matching-idx))
+      (do
+        (println (str "❌ No choice matching \"" value-text "\" found"))
+        (println "Available choices:")
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (println (str "  " idx ". " (format-choice choice))))))))
 
 ;; ============================================================================
 ;; Card Actions
