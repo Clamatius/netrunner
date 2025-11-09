@@ -619,6 +619,31 @@
       (println (str "✅ Discarded " discarded " card(s)"))
       (println "No cards to discard"))))
 
+(defn discard-specific-cards!
+  "Discard specific cards by index positions
+
+   Usage: (discard-specific-cards! [0 2 4])  ; Discard cards at indices 0, 2, 4"
+  [indices]
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        gs (ws/get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])]
+    (if (and (= "select" (:prompt-type prompt))
+             (seq indices))
+      (let [cards-to-discard (map #(nth hand % nil) indices)
+            valid-cards (filter some? cards-to-discard)]
+        (println (format "Discarding %d specific cards by index..." (count valid-cards)))
+        (doseq [card valid-cards]
+          (println (format "  Discarding: %s" (:title card)))
+          (ws/select-card! card (:eid prompt))
+          (Thread/sleep 500))
+        (println (format "✅ Discarded %d card(s)" (count valid-cards)))
+        (count valid-cards))
+      (do
+        (println "❌ No discard prompt active or no indices provided")
+        0))))
+
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
   []

@@ -235,8 +235,24 @@ case "$COMMAND" in
 
     discard)
         ensure_connection
-        info "Discarding to hand size..."
-        execute '(ai-actions/discard-to-hand-size!)'
+        if [[ $# -eq 0 ]]; then
+            info "Auto-discarding to hand size..."
+            execute '(ai-actions/discard-to-hand-size!)'
+        else
+            # Collect all numeric indices
+            INDICES=()
+            for arg in "$@"; do
+                if [[ "$arg" =~ ^[0-9]+$ ]]; then
+                    INDICES+=("$arg")
+                else
+                    error "Invalid index: $arg (must be a number)"
+                fi
+            done
+            info "Discarding specific cards at indices: ${INDICES[*]}"
+            # Build Clojure vector from indices
+            INDICES_VEC="[${INDICES[*]}]"
+            execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
+        fi
         ;;
 
     # Card actions
