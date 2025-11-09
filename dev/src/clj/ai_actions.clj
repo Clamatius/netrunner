@@ -178,20 +178,25 @@
         side (:side state)
         prompt (get-in state [:game-state (keyword side) :prompt-state])]
     (if prompt
-      (do
+      (let [has-choices (seq (:choices prompt))
+            has-selectable (seq (:selectable prompt))]
         (println "\n🔔 Current Prompt:")
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
         (when-let [card (:card prompt)]
           (println "  Card:" (:title card) (when (:type card) (str "(" (:type card) ")"))))
-        (when-let [choices (:choices prompt)]
+        (when has-choices
           (println "  Choices:")
-          (doseq [[idx choice] (map-indexed vector choices)]
+          (doseq [[idx choice] (map-indexed vector (:choices prompt))]
             (println (str "    " idx ". " (format-choice choice)))))
-        (when-let [selectable (:selectable prompt)]
-          (when (seq selectable)
-            (println "  Selectable cards:" (count selectable)
-                     "- Use choose-card! to select by index"))))
+        (when has-selectable
+          (println "  Selectable cards:" (count (:selectable prompt))
+                   "- Use choose-card! to select by index"))
+        ;; Handle paid ability windows / passive prompts
+        (when (and (not has-choices) (not has-selectable))
+          (println "  Action: Paid ability window")
+          (println "    → No choices required")
+          (println "    → Use 'continue' command to pass priority")))
       (println "No active prompt"))))
 
 ;; ============================================================================

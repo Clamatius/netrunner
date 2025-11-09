@@ -100,6 +100,7 @@ ${GREEN}Runner Actions:${NC}
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
+  continue        - Continue/pass priority (for paid ability windows, run phases)
 
 ${GREEN}Lobby:${NC}
   list-lobbies    - List available games to join
@@ -272,6 +273,21 @@ case "$COMMAND" in
         [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
         info "Choosing option matching: $VALUE..."
         execute "(ai-actions/choose-by-value! \"$VALUE\")"
+        ;;
+
+    continue)
+        ensure_connection
+        info "Passing priority (continue)..."
+        execute '(let [state @ai-websocket-client-v2/client-state
+                       gameid (:gameid state)]
+                  (ai-websocket-client-v2/send-message! :game/action
+                    {:gameid (if (string? gameid)
+                               (java.util.UUID/fromString gameid)
+                               gameid)
+                     :command "continue"
+                     :args nil})
+                  (Thread/sleep 1000)
+                  (println "✅ Passed priority"))'
         ;;
 
     # Lobby
