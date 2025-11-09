@@ -165,6 +165,8 @@
                                               (take 5 diff)
                                               diff)))
         (update-game-state! diff)
+        ;; Auto-update game log HUD
+        (write-game-log-to-hud 30)
         (println "   ✓ Diff applied successfully")))
 
     :game/resync
