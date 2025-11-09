@@ -76,6 +76,7 @@ ${GREEN}Status Commands:${NC}
   prompt          - Show current prompt (if any)
   credits         - Show current credits
   clicks          - Show remaining clicks
+  log [N]         - Show last N game log entries (default: 20)
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
@@ -100,6 +101,7 @@ ${GREEN}Prompts:${NC}
 ${GREEN}Lobby:${NC}
   list-lobbies    - List available games to join
   join <game-id> <side>  - Join game as Runner or Corp
+  resync <game-id>       - Rejoin already-started game
 
 ${GREEN}Installation:${NC}
   install <name>  - Install card by name from hand
@@ -171,6 +173,12 @@ case "$COMMAND" in
 
     clicks)
         execute '(ai-actions/show-clicks)'
+        ;;
+
+    log)
+        N="${1:-20}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=20
+        execute "(ai-actions/show-log $N)"
         ;;
 
     # Basic actions
@@ -262,6 +270,14 @@ case "$COMMAND" in
         [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
         info "Joining game $GAME_ID as $SIDE..."
         execute "(ai-actions/connect-game! \"$GAME_ID\" \"$SIDE\")"
+        ;;
+
+    resync)
+        ensure_connection
+        GAME_ID="${1:-}"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
+        info "Resyncing game $GAME_ID..."
+        execute "(ai-actions/resync-game! \"$GAME_ID\")"
         ;;
 
     # Installation

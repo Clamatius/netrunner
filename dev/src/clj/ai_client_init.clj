@@ -16,8 +16,15 @@
 (require '[ai-actions :as ai])
 (in-ns 'ai-client-init)
 
-;; Auto-connect to local server
-(println "\nConnecting to ws://localhost:1042/chsk...")
+;; Set a fixed client-id for consistent identity
+;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation in web.auth
+(swap! ai-websocket-client-v2/client-state assoc :client-id "ai-client-fixed-id")
+
+;; Get CSRF token from the main page
+(println "\nGetting CSRF token...")
+(ai-websocket-client-v2/get-csrf-token!)
+
+(println "Connecting to ws://localhost:1042/chsk...")
 (ai-websocket-client-v2/connect! "ws://localhost:1042/chsk")
 (Thread/sleep 2000)
 

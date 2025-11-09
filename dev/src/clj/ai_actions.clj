@@ -3,6 +3,39 @@
   (:require [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
+;; Helper Functions
+;; ============================================================================
+
+(defn find-card-in-hand
+  "Find card in hand by name or index
+   Returns card object or nil if not found"
+  [name-or-index]
+  (let [state @ws/client-state
+        side (:side state)
+        hand (get-in state [:game-state (keyword side) :hand])]
+    (cond
+      (number? name-or-index)
+      (nth hand name-or-index nil)
+
+      (string? name-or-index)
+      (first (filter #(= name-or-index (:title %)) hand))
+
+      :else nil)))
+
+(defn create-card-ref
+  "Create minimal card reference for server commands"
+  [card]
+  {:cid (:cid card)
+   :zone (:zone card)
+   :side (:side card)
+   :type (:type card)})
+
+(defn show-before-after
+  "Display before/after state change"
+  [label before after]
+  (println (str label ": " before " → " after)))
+
+;; ============================================================================
 ;; Lobby Management
 ;; ============================================================================
 
@@ -51,6 +84,18 @@
        (ws/show-status))
      (println "❌ Failed to join game"))))
 
+(defn resync-game!
+  "Rejoin an already-started game by requesting full state resync
+   Usage: (resync-game! \"game-uuid\")"
+  [gameid]
+  (ws/resync-game! gameid)
+  (Thread/sleep 2000)
+  (if (ws/in-game?)
+    (do
+      (println "✅ Game state resynced successfully")
+      (ws/show-status))
+    (println "❌ Failed to resync game state")))
+
 ;; ============================================================================
 ;; Status & Information
 ;; ============================================================================
@@ -59,6 +104,11 @@
   "Show current game status"
   []
   (ws/show-status))
+
+(defn show-log
+  "Display game log (natural language event history)"
+  ([] (ws/show-game-log 20))
+  ([n] (ws/show-game-log n)))
 
 (defn show-prompt
   "Display current prompt"
@@ -73,6 +123,52 @@
     (doseq [[idx card] (map-indexed vector hand)]
       (println (format "  %d. %s [%s]" idx (:title card) (:type card))))
     hand))
+
+(defn show-hand
+  "Show hand using side-aware state access"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        hand (get-in state [:game-state (keyword side) :hand])]
+    (if hand
+      (do
+        (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
+        (doseq [[idx card] (map-indexed vector hand)]
+          (println (str "  " idx ". " (:title card) " [" (:type card) "]"))))
+      (println "No hand data available"))))
+
+(defn show-credits
+  "Show current credits (side-aware)"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        credits (get-in state [:game-state (keyword side) :credit])]
+    (println "💰 Credits:" credits)))
+
+(defn show-clicks
+  "Show remaining clicks (side-aware)"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        clicks (get-in state [:game-state (keyword side) :click])]
+    (println "⏱️  Clicks:" clicks)))
+
+(defn show-prompt-detailed
+  "Show current prompt with detailed choices"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        prompt (get-in state [:game-state (keyword side) :prompt-state])]
+    (if prompt
+      (do
+        (println "\n🔔 Current Prompt:")
+        (println "  Message:" (:msg prompt))
+        (println "  Type:" (:prompt-type prompt))
+        (when-let [choices (:choices prompt)]
+          (println "  Choices:")
+          (doseq [[idx choice] (map-indexed vector choices)]
+            (println (str "    " idx ". " (:value choice))))))
+      (println "No active prompt"))))
 
 ;; ============================================================================
 ;; Mulligan
@@ -112,29 +208,101 @@
 ;; Basic Actions
 ;; ============================================================================
 
-(defn take-credits
-  "Click for credit"
+(defn start-turn!
+  "Start your turn (gains clicks, Corp draws mandatory card)"
   []
-  (println "Taking credit...")
-  (ws/take-credits!)
-  (Thread/sleep 500)
-  (println "✅ Credit taken"))
+  (let [state @ws/client-state
+        gameid (:gameid state)]
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "start-turn"
+                       :args nil})
+    (Thread/sleep 2000)
+    (let [state @ws/client-state
+          side (:side state)
+          clicks (get-in state [:game-state (keyword side) :click])
+          credits (get-in state [:game-state (keyword side) :credit])]
+      (println "✅ Turn started!")
+      (println "   Clicks:" clicks)
+      (println "   Credits:" credits))))
 
-(defn draw-card
-  "Draw a card"
+(defn take-credit!
+  "Click for credit (shows before/after)"
   []
-  (println "Drawing card...")
-  (ws/draw-card!)
-  (Thread/sleep 500)
-  (println "✅ Card drawn"))
+  (let [state @ws/client-state
+        side (:side state)
+        before-credits (get-in state [:game-state (keyword side) :credit])
+        before-clicks (get-in state [:game-state (keyword side) :click])
+        gameid (:gameid state)]
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "credit"
+                       :args nil})
+    (Thread/sleep 1500)
+    (let [state @ws/client-state
+          side (:side state)
+          after-credits (get-in state [:game-state (keyword side) :credit])
+          after-clicks (get-in state [:game-state (keyword side) :click])]
+      (show-before-after "💰 Credits" before-credits after-credits)
+      (show-before-after "⏱️  Clicks" before-clicks after-clicks))))
 
-(defn end-turn
-  "End the current turn"
+(defn draw-card!
+  "Draw a card (shows before/after)"
   []
-  (println "Ending turn...")
-  (ws/end-turn!)
-  (Thread/sleep 500)
-  (println "✅ Turn ended"))
+  (let [state @ws/client-state
+        side (:side state)
+        before-hand (count (get-in state [:game-state (keyword side) :hand]))
+        before-clicks (get-in state [:game-state (keyword side) :click])
+        gameid (:gameid state)]
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "draw"
+                       :args nil})
+    (Thread/sleep 1500)
+    (let [state @ws/client-state
+          side (:side state)
+          after-hand (count (get-in state [:game-state (keyword side) :hand]))
+          after-clicks (get-in state [:game-state (keyword side) :click])]
+      (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
+      (show-before-after "⏱️  Clicks" before-clicks after-clicks))))
+
+(defn end-turn!
+  "End turn (validates all clicks used)"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        clicks (get-in state [:game-state (keyword side) :click])
+        gameid (:gameid state)]
+    (if (> clicks 0)
+      (do
+        (println "⚠️  WARNING: You still have" clicks "click(s) remaining!")
+        (println "   This is wasteful. Use all clicks before ending turn.")
+        (println "   Proceeding anyway..."))
+      (println "✅ All clicks used"))
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "end-turn"
+                       :args nil})
+    (Thread/sleep 2000)
+    (println "🏁 Turn ended")))
+
+;; Keep old function names for backwards compatibility
+(defn take-credits []
+  (take-credit!))
+
+(defn draw-card []
+  (draw-card!))
+
+(defn end-turn []
+  (end-turn!))
 
 ;; ============================================================================
 ;; Prompts & Choices
@@ -153,6 +321,99 @@
         (Thread/sleep 500)
         (println "✅ Choice made"))
       (println "⚠️  No active prompt"))))
+
+(defn choose-option!
+  "Choose from prompt by index (side-aware)"
+  [index]
+  (let [state @ws/client-state
+        side (:side state)
+        gameid (:gameid state)
+        prompt (get-in state [:game-state (keyword side) :prompt-state])
+        choice (nth (:choices prompt) index nil)
+        choice-uuid (:uuid choice)]
+    (if choice-uuid
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "choice"
+                           :args {:choice {:uuid choice-uuid}}})
+        (Thread/sleep 2000)
+        (println (str "✅ Chose: " (:value choice))))
+      (println (str "❌ Invalid choice index: " index)))))
+
+;; ============================================================================
+;; Card Actions
+;; ============================================================================
+
+(defn play-card!
+  "Play a card from hand by name or index
+   Usage: (play-card! \"Sure Gamble\")
+          (play-card! 0)"
+  [name-or-index]
+  (let [card (find-card-in-hand name-or-index)]
+    (if card
+      (let [state @ws/client-state
+            gameid (:gameid state)
+            card-ref (create-card-ref card)]
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "play"
+                           :args {:card card-ref}})
+        (Thread/sleep 2000)
+        (println (str "✅ Played: " (:title card))))
+      (println (str "❌ Card not found in hand: " name-or-index)))))
+
+(defn install-card!
+  "Install a card from hand by name or index
+   Usage: (install-card! \"Daily Casts\")
+          (install-card! 0)"
+  [name-or-index]
+  (let [card (find-card-in-hand name-or-index)]
+    (if card
+      (let [state @ws/client-state
+            gameid (:gameid state)
+            card-ref (create-card-ref card)]
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "install"
+                           :args {:card card-ref}})
+        (Thread/sleep 2000)
+        (println (str "✅ Installing: " (:title card))))
+      (println (str "❌ Card not found in hand: " name-or-index)))))
+
+(defn run!
+  "Run on a server (Runner only)
+   Usage: (run! \"HQ\")
+          (run! \"R&D\")
+          (run! \"remote1\")"
+  [server]
+  (let [state @ws/client-state
+        gameid (:gameid state)]
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "run"
+                       :args {:server server}})
+    (Thread/sleep 2000)
+    (println (str "🏃 Running on " server))))
+
+;; ============================================================================
+;; Discard Handling
+;; ============================================================================
+
+(defn discard-to-hand-size!
+  "Discard cards down to maximum hand size
+   Wrapper for existing handle-discard-prompt!"
+  []
+  (ws/handle-discard-prompt!)
+  (println "✅ Discard complete"))
 
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"

@@ -22,13 +22,7 @@ nohup lein with-profile base run -m nrepl.cmdline \
 
 REPL_PID=$!
 
-# Wait a moment for the server to actually start
-sleep 2
-
-# Save PID for cleanup
-echo $REPL_PID > /tmp/ai-client-repl.pid
-
-echo "AI Client REPL starting (PID: $REPL_PID)"
+echo "AI Client REPL starting (initial PID: $REPL_PID)"
 echo "Waiting for nREPL server to be ready..."
 
 # Wait for nREPL to actually be listening
@@ -46,6 +40,16 @@ for i in $(seq 1 $MAX_WAIT); do
     fi
     sleep 1
 done
+
+# Find the actual Java process PID listening on port 7889
+JAVA_PID=$(lsof -ti:7889)
+if [ -n "$JAVA_PID" ]; then
+    echo $JAVA_PID > /tmp/ai-client-repl.pid
+    echo "Saved Java process PID: $JAVA_PID"
+else
+    echo "⚠️  Warning: Could not find Java process PID"
+    echo $REPL_PID > /tmp/ai-client-repl.pid
+fi
 
 # Now load the initialization code via nREPL
 echo "Loading AI client initialization..."

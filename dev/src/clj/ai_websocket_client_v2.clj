@@ -2,10 +2,12 @@
   "WebSocket client using gniazdo (JVM WebSocket library)"
   (:require
    [cheshire.core :as json]
+   [clj-http.client :as http]
    [clojure.edn :as edn]
    [clojure.string :as str]
    [differ.core :as differ]
-   [gniazdo.core :as ws]))
+   [gniazdo.core :as ws])
+  (:import [java.net URLEncoder]))
 
 ;; ============================================================================
 ;; State Management
@@ -20,7 +22,8 @@
          :uid nil
          :socket nil
          :lobby-list nil
-         :client-id nil}))
+         :client-id nil
+         :csrf-token nil}))
 
 (defn apply-diff
   "Apply a diff to current state to get new state using differ library"
@@ -32,40 +35,22 @@
     diff))
 
 (defn update-game-state!
-  "Update game state from a diff (or array of diffs)"
+  "Update game state from a diff - matches web client implementation"
   [diff]
   (try
     (let [old-state (:last-state @client-state)
-          ;; Normalize to always be a sequence of diffs
-          ;; Check the structure carefully
-          diffs (cond
-                  ;; Empty vector - nothing to do
-                  (and (vector? diff) (empty? diff))
-                  []
-
-                  ;; Vector of maps - use as-is
-                  (and (vector? diff)
-                       (> (count diff) 0)
-                       (every? #(or (map? %) (nil? %)) diff))
-                  diff
-
-                  ;; Single map - wrap it
-                  (map? diff)
-                  [diff]
-
-                  ;; Nil - skip
-                  (nil? diff)
-                  []
-
-                  ;; Unknown - log and wrap
-                  :else
-                  (do
-                    (println "⚠️  Unknown diff type:" (type diff))
-                    (println "   Value:" (pr-str (take 100 (pr-str diff))))
-                    [diff]))
-          ;; Filter out nil and empty diffs, then apply
-          filtered-diffs (filter #(and (some? %) (not (and (map? %) (empty? %)))) diffs)
-          new-state (reduce apply-diff old-state filtered-diffs)]
+          ;; Log state BEFORE applying diff
+          _ (println "\n📝 Applying diff to state")
+          _ (println "   BEFORE - Runner credits:" (get-in old-state [:runner :credit]))
+          _ (println "   BEFORE - Runner clicks:" (get-in old-state [:runner :click]))
+          _ (println "   BEFORE - Runner hand size:" (count (get-in old-state [:runner :hand])))
+          ;; Apply diff directly using differ/patch
+          ;; Diff format from server is [alterations removals]
+          new-state (apply-diff old-state diff)
+          ;; Log state AFTER applying diff
+          _ (println "   AFTER  - Runner credits:" (get-in new-state [:runner :credit]))
+          _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
+          _ (println "   AFTER  - Runner hand size:" (count (get-in new-state [:runner :hand])))]
       (swap! client-state assoc
              :game-state new-state
              :last-state new-state))
@@ -75,12 +60,27 @@
       (println "   Diff:" (pr-str (take 200 (pr-str diff))))
       (.printStackTrace e))))
 
+(defn detect-side
+  "Detect which side we are playing by matching UID to game state"
+  [game-state our-uid]
+  (let [corp-username (get-in game-state [:corp :user :username])
+        runner-username (get-in game-state [:runner :user :username])]
+    (cond
+      (= our-uid corp-username) "corp"
+      (= our-uid runner-username) "runner"
+      :else nil)))
+
 (defn set-full-state!
-  "Set initial game state"
+  "Set initial game state and detect which side we are"
   [state]
-  (swap! client-state assoc
-         :game-state state
-         :last-state state))
+  (let [our-uid (:uid @client-state)
+        side (detect-side state our-uid)]
+    (swap! client-state assoc
+           :game-state state
+           :last-state state
+           :side side)
+    (when side
+      (println "   Detected side:" side))))
 
 ;; ============================================================================
 ;; Message Handling
@@ -146,6 +146,8 @@
                   data)]
       (println "\n🎮 GAME STARTING!")
       (println "  GameID:" (:gameid state))
+      ;; Clear game log HUD for fresh game
+      (spit "CLAUDE.local.md" "# Game Log HUD\n\nWaiting for game to start...\n")
       (set-full-state! state)
       (swap! client-state assoc :gameid (:gameid state)))
 
@@ -155,8 +157,15 @@
                       data)
           {:keys [gameid diff]} diff-data]
       (when (= gameid (:gameid @client-state))
+        (println "\n🔄 GAME/DIFF received")
+        (println "   GameID:" gameid)
+        (println "   Diff type:" (type diff))
+        (println "   Diff keys (if map):" (when (map? diff) (keys diff)))
+        (println "   Diff sample:" (pr-str (if (coll? diff)
+                                              (take 5 diff)
+                                              diff)))
         (update-game-state! diff)
-        (println "📊 State updated")))
+        (println "   ✓ Diff applied successfully")))
 
     :game/resync
     (let [state (if (string? data)
@@ -197,6 +206,32 @@
       (handle-message event))))
 
 ;; ============================================================================
+;; Authentication
+;; ============================================================================
+
+(defn get-csrf-token!
+  "Get CSRF token from the main page for WebSocket connection"
+  []
+  (try
+    (let [get-res (http/get "http://localhost:1042" {:as :text})]
+      (if (:error get-res)
+        (do
+          (println "❌ Failed to get CSRF token:" (:error get-res))
+          nil)
+        (let [csrf-token (second (re-find #"data-csrf-token=\"(.*?)\"" (str (:body get-res))))]
+          (if csrf-token
+            (do
+              (swap! client-state assoc :csrf-token csrf-token)
+              (println "✅ Got CSRF token")
+              csrf-token)
+            (do
+              (println "❌ Could not extract CSRF token from page")
+              nil)))))
+    (catch Exception e
+      (println "❌ CSRF token fetch exception:" (.getMessage e))
+      nil)))
+
+;; ============================================================================
 ;; WebSocket Connection
 ;; ============================================================================
 
@@ -208,17 +243,23 @@
     ;; Reuse existing client-id if available, otherwise generate new one
     (let [existing-id (:client-id @client-state)
           client-id (or existing-id (str "ai-client-" (java.util.UUID/randomUUID)))
+          csrf-token (:csrf-token @client-state)
           ;; Add client-id as query parameter for Sente handshake
-          full-url (str url "?client-id=" client-id)
-          socket (ws/connect full-url
-                             :on-receive on-receive
-                             :on-connect (fn [& _args]
-                                          (println "⏳ WebSocket connected, waiting for handshake..."))
-                             :on-close (fn [& args]
-                                        (println "❌ Disconnected:" (first args))
-                                        (swap! client-state assoc :connected false))
-                             :on-error (fn [& args]
-                                        (println "❌ Error:" (first args))))]
+          ;; If we have a CSRF token, also add it to URL
+          full-url (if csrf-token
+                     (str url "?client-id=" client-id
+                          "&csrf-token=" (URLEncoder/encode csrf-token "UTF-8"))
+                     (str url "?client-id=" client-id))
+          ;; Prepare connection options
+          conn-opts {:on-receive on-receive
+                     :on-connect (fn [& _args]
+                                  (println "⏳ WebSocket connected, waiting for handshake..."))
+                     :on-close (fn [& args]
+                                (println "❌ Disconnected:" (first args))
+                                (swap! client-state assoc :connected false))
+                     :on-error (fn [& args]
+                                (println "❌ Error:" (first args)))}
+          socket (ws/connect full-url conn-opts)]
       (swap! client-state assoc
              :socket socket
              :client-id client-id)
@@ -334,6 +375,17 @@
                      password (assoc :password password)))
     (println "🎮 Attempting to join game" gameid "as" request-side)))
 
+(defn resync-game!
+  "Request full game state resync (for reconnecting to started games)
+   Usage: (resync-game! gameid)"
+  [gameid]
+  (let [uuid-gameid (if (string? gameid)
+                      (java.util.UUID/fromString gameid)
+                      gameid)]
+    (swap! client-state assoc :gameid uuid-gameid)
+    (send-message! :game/resync {:gameid uuid-gameid})
+    (println "🔄 Requesting game state resync for" uuid-gameid)))
+
 ;; ============================================================================
 ;; High-Level API
 ;; ============================================================================
@@ -381,7 +433,7 @@
 (defn get-game-state [] (:game-state @client-state))
 
 (defn active-player [] (get-in @client-state [:game-state :active-player]))
-(defn my-turn? [] (= "runner" (active-player)))
+(defn my-turn? [] (= (:side @client-state) (active-player)))
 (defn turn-number [] (get-in @client-state [:game-state :turn]))
 
 (defn runner-state [] (get-in @client-state [:game-state :runner]))
@@ -563,6 +615,49 @@
     (do
       (println "No games available. Request lobby list with: (request-lobby-list!)")
       nil)))
+
+(defn get-game-log
+  "Get the game log from current game state"
+  []
+  (get-in @client-state [:game-state :log]))
+
+(defn show-game-log
+  "Display game log in readable format"
+  ([] (show-game-log 20))
+  ([n]
+   (if-let [log (get-game-log)]
+     (do
+       (println "\n📜 GAME LOG (last" n "entries)")
+       (println (str/join "" (repeat 70 "=")))
+       (doseq [entry (take-last n log)]
+         (when (map? entry)
+           (let [text (str/replace (:text entry "") "[hr]" "")
+                 user (:user entry)
+                 timestamp (:timestamp entry)]
+             (println (str "  " text)))))
+       (println (str/join "" (repeat 70 "=")))
+       nil)
+     (println "No game log available"))))
+
+(defn write-game-log-to-hud
+  "Write game log to CLAUDE.local.md for HUD visibility"
+  ([] (write-game-log-to-hud 30))
+  ([n]
+   (if-let [log (get-game-log)]
+     (let [hud-path "CLAUDE.local.md"
+           log-entries (take-last n log)
+           log-text (str/join "\n"
+                              (for [entry log-entries]
+                                (when (map? entry)
+                                  (str "- " (str/replace (:text entry "") "[hr]" "")))))]
+       (spit hud-path
+             (str "# Game Log HUD\n\n"
+                  "Last " n " game log entries (auto-updated):\n\n"
+                  log-text
+                  "\n\n---\n\n"
+                  "Updated: " (java.time.Instant/now) "\n"))
+       (println "✅ Game log written to" hud-path))
+     (println "No game log available"))))
 
 ;; ============================================================================
 ;; Usage
