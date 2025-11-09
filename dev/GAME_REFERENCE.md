@@ -142,12 +142,30 @@ Shows ability indices and descriptions to avoid wrong ability selection
 
 ### Turn Management
 
+#### Turn Flow
+
+**IMPORTANT:** The game pauses at the end of each player's turn to allow paid abilities and rez actions.
+
+**How to recognize you're waiting to start your turn:**
+- Both players have 0 clicks
+- No active prompt
+- Last log entry: `"<Opponent> is ending their turn..."`
+- Status shows: `"Waiting for <opponent> to act"` (misleading - actually waiting for YOU)
+
+**You must explicitly start your turn** - it doesn't start automatically.
+
 **Start turn:**
 ```bash
 ./send_command start-turn
 ```
 - Corp: Draws 1 card (mandatory), gains clicks (usually 3)
 - Runner: Gains clicks (usually 4), no mandatory draw
+
+**Indicate paid ability:**
+```bash
+./send_command indicate-action
+```
+Signal you want to use a paid ability during a priority window (pauses the game for you to act). Use this during opponent's turn end or other timing windows when you need to rez ICE, use card abilities, etc.
 
 **End turn:**
 ```bash
@@ -552,6 +570,7 @@ Execute arbitrary Clojure in the AI client REPL:
 | | card-text | name |
 | | abilities | name |
 | **Turn** | start-turn | - |
+| | indicate-action | - |
 | | end-turn | - |
 | **Basic** | take-credit | - |
 | | draw | - |

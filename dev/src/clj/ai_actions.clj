@@ -368,6 +368,19 @@
       (println "   Clicks:" clicks)
       (println "   Credits:" credits))))
 
+(defn indicate-action!
+  "Signal you want to use a paid ability (pauses game for priority window)"
+  []
+  (let [state @ws/client-state
+        gameid (:gameid state)]
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "indicate-action"
+                       :args nil})
+    (println "✅ Indicated paid ability")))
+
 (defn take-credit!
   "Click for credit (shows before/after)"
   []

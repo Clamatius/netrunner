@@ -85,6 +85,7 @@ ${GREEN}Status Commands:${NC}
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
+  indicate-action - Signal you want to use paid ability (pauses game)
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
   end-turn        - End your turn (validates all clicks used)
@@ -228,6 +229,12 @@ case "$COMMAND" in
         ensure_connection
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
+        ;;
+
+    indicate-action)
+        ensure_connection
+        info "Indicating paid ability..."
+        execute '(ai-actions/indicate-action!)'
         ;;
 
     take-credit)
