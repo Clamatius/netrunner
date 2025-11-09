@@ -73,12 +73,15 @@ ${BLUE}AI Player Command Interface${NC}
 
 ${GREEN}Status Commands:${NC}
   status          - Show game state (turn, credits, clicks, hand size)
+  board           - Show full game board (servers, ICE, rigs)
   hand            - Show cards in hand
   prompt          - Show current prompt (if any)
   credits         - Show current credits
   clicks          - Show remaining clicks
   archives        - Show Corp's Archives (faceup/facedown cards)
   log [N]         - Show last N game log entries (default: 20)
+  card-text <name>   - Look up card information (type, cost, text)
+  abilities <name>   - Show abilities for installed card
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
@@ -111,6 +114,9 @@ ${GREEN}Prompts:${NC}
   jack-out        - Jack out of current run (end run unsuccessfully)
 
 ${GREEN}Lobby:${NC}
+  create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
+  start-game      - Start game (after creating and opponent joins)
+  leave-game      - Leave current game lobby
   list-lobbies    - List available games to join
   join <game-id> <side>  - Join game as Runner or Corp
   resync <game-id>       - Rejoin already-started game
@@ -172,6 +178,10 @@ case "$COMMAND" in
         execute '(ai-actions/status)'
         ;;
 
+    board)
+        execute '(ai-actions/show-board)'
+        ;;
+
     hand)
         execute '(ai-actions/show-hand)'
         ;;
@@ -196,6 +206,21 @@ case "$COMMAND" in
         N="${1:-20}"
         [[ ! "$N" =~ ^[0-9]+$ ]] && N=20
         execute "(ai-actions/show-log $N)"
+        ;;
+
+    card-text)
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
+        execute "(do
+          (require (quote [card-loader]))
+          (card-loader/ensure-cards-loaded!)
+          (ai-actions/show-card-text \"$CARD_NAME\"))"
+        ;;
+
+    abilities)
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"
+        execute "(ai-actions/show-card-abilities \"$CARD_NAME\")"
         ;;
 
     # Basic actions
@@ -391,10 +416,74 @@ case "$COMMAND" in
         ;;
 
     # Lobby
+    create-game)
+        ensure_connection
+        TITLE="${1:-AI Test Game}"
+        SIDE="${2:-Any Side}"
+        PRECON="${3:-worlds-2012-a}"
+        info "Creating game: $TITLE (Side: $SIDE)..."
+        execute "(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (ws/create-lobby! {:title \"$TITLE\"
+                                      :side \"$SIDE\"
+                                      :format \"system-gateway\"
+                                      :gateway-type \"Beginner\"
+                                      :precon \"$PRECON\"
+                                      :room \"casual\"
+                                      :allow-spectator true
+                                      :spectatorhands false
+                                      :save-replay false
+                                      :api-access false
+                                      :password \"\"
+                                      :singleton false
+                                      :open-decklists false
+                                      :turmoil false
+                                      :timer nil})
+                   (Thread/sleep 2000)
+                   (println \"✅ Lobby creation request sent\"))"
+        ;;
+
+    start-game)
+        ensure_connection
+        info "Starting game..."
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (let [state @ws/client-state
+                         gameid (:gameid state)]
+                     (if gameid
+                       (do
+                         (ws/send-message! :game/start {:gameid gameid})
+                         (Thread/sleep 2000)
+                         (println "✅ Game start signal sent"))
+                       (println "❌ Not in a game lobby"))))'
+        ;;
+
+    leave-game)
+        ensure_connection
+        info "Leaving game lobby..."
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (let [state @ws/client-state
+                         gameid (:gameid state)]
+                     (if gameid
+                       (do
+                         (ws/send-message! :lobby/leave {:gameid gameid})
+                         (Thread/sleep 1000)
+                         ;; Clear client state after leaving
+                         (swap! ws/client-state assoc :gameid nil :side nil)
+                         (println "✅ Left game lobby"))
+                       (println "⚠️  Not in a game lobby"))))'
+        ;;
+
     list-lobbies)
         ensure_connection
         info "Fetching lobby list..."
-        execute '(ai-actions/list-lobbies)'
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (println "Requesting lobby list...")
+                   (ws/request-lobby-list!)
+                   (Thread/sleep 1000)
+                   (ws/show-games))'
         ;;
 
     join)

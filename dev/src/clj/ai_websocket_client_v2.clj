@@ -584,23 +584,56 @@
 (defn show-status
   "Display current game status"
   []
-  (println "\n" (str/join "" (repeat 70 "=")))
-  (println "📊 GAME STATUS")
-  (println (str/join "" (repeat 70 "=")))
-  (println "\nTurn:" (turn-number) "-" (active-player))
-  (println "My turn?" (my-turn?))
-  (println "\n--- RUNNER ---")
-  (println "Credits:" (my-credits))
-  (println "Clicks:" (my-clicks))
-  (println "Hand:" (my-hand-count) "cards")
-  (println "\n--- CORP ---")
-  (println "Credits:" (corp-credits))
-  (println "Clicks:" (corp-clicks))
-  (println "Hand:" (corp-hand-count) "cards")
-  (when-let [prompt (get-prompt)]
-    (println "\n🔔 Active Prompt:" (:msg prompt)))
-  (println (str/join "" (repeat 70 "=")))
-  nil)
+  (let [gs (get-game-state)
+        my-side (:side @client-state)
+        active-side (active-player)
+        end-turn (get-in gs [:end-turn])
+        prompt (get-prompt)
+        prompt-type (:prompt-type prompt)
+        run-state (get-in gs [:run])]
+    (println "\n" (str/join "" (repeat 70 "=")))
+    (println "📊 GAME STATUS")
+    (println (str/join "" (repeat 70 "=")))
+    (println "\nTurn:" (turn-number) "-" active-side)
+
+    ;; Active player / waiting status
+    (cond
+      ;; Waiting for opponent
+      (not= my-side active-side)
+      (println "Status: ⏳ Waiting for" active-side "to act")
+
+      ;; End of turn, need to start
+      end-turn
+      (println "Status: 🟢 Ready to start turn (use 'start-turn' command)")
+
+      ;; Waiting prompt
+      (= :waiting prompt-type)
+      (println "Status: ⏳" (:msg prompt))
+
+      ;; My turn and active
+      :else
+      (println "Status: ✅ Your turn to act"))
+
+    ;; Run status
+    (when run-state
+      (println "\n🏃 ACTIVE RUN:")
+      (println "  Server:" (:server run-state))
+      (println "  Phase:" (:phase run-state))
+      (when-let [pos (:position run-state)]
+        (println "  Position:" pos)))
+
+    (println "\n--- RUNNER ---")
+    (println "Credits:" (my-credits))
+    (println "Clicks:" (my-clicks))
+    (println "Hand:" (my-hand-count) "cards")
+    (println "\n--- CORP ---")
+    (println "Credits:" (corp-credits))
+    (println "Clicks:" (corp-clicks))
+    (println "Hand:" (corp-hand-count) "cards")
+    (when (and prompt (not= :waiting prompt-type))
+      (println "\n🔔 Active Prompt:" (:msg prompt)))
+    (println (str/join "" (repeat 70 "=")))
+    nil))
 
 (defn show-games
   "Display available games in a readable format"

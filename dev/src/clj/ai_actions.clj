@@ -1,6 +1,7 @@
 (ns ai-actions
   "High-level AI player actions - simple API for common game operations"
-  (:require [ai-websocket-client-v2 :as ws]))
+  (:require [ai-websocket-client-v2 :as ws]
+            [jinteki.cards :refer [all-cards]]))
 
 ;; ============================================================================
 ;; Helper Functions
@@ -104,6 +105,86 @@
   "Show current game status"
   []
   (ws/show-status))
+
+(defn show-board
+  "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
+  []
+  (let [state @ws/client-state
+        gs (:game-state state)
+        corp-servers (:servers (:corp gs))
+        runner-rig (get-in gs [:runner :rig])
+        corp-deck (get-in gs [:corp :deck])
+        corp-discard (get-in gs [:corp :discard])
+        runner-deck (get-in gs [:runner :deck])
+        runner-discard (get-in gs [:runner :discard])]
+    (println "\n" (clojure.string/join "" (repeat 70 "=")))
+    (println "🎮 GAME BOARD")
+    (println (clojure.string/join "" (repeat 70 "=")))
+
+    ;; Corp Servers
+    (println "\n--- CORP SERVERS ---")
+    (doseq [[server-key server] (sort-by first corp-servers)]
+      (let [server-name (name server-key)
+            ice-list (:ices server)
+            content-list (:content server)]
+        (when (or (seq ice-list) (seq content-list))
+          (println (str "\n📍 " (clojure.string/upper-case server-name)))
+
+          ;; Show ICE
+          (if (seq ice-list)
+            (doseq [[idx ice] (map-indexed vector ice-list)]
+              (let [rezzed (:rezzed ice)
+                    title (:title ice)
+                    subtype (or (first (clojure.string/split (or (:subtype ice) "") #" - ")) "?")
+                    status-icon (if rezzed "🔴" "⚪")]
+                (println (str "  ICE #" idx ": " status-icon " "
+                             (if rezzed title "Unrezzed ICE")
+                             (when rezzed (str " (" subtype ")"))))))
+            (println "  (No ICE)"))
+
+          ;; Show Content (assets/agendas)
+          (when (seq content-list)
+            (let [rezzed-content (filter :rezzed content-list)
+                  unrezzed-count (- (count content-list) (count rezzed-content))]
+              (doseq [card rezzed-content]
+                (println (str "  Content: 🔴 " (:title card) " (" (:type card) ")")))
+              (when (> unrezzed-count 0)
+                (println (str "  Content: " unrezzed-count " unrezzed card(s)"))))))))
+
+    ;; Runner Rig
+    (println "\n--- RUNNER RIG ---")
+    (let [programs (:program runner-rig)
+          hardware (:hardware runner-rig)
+          resources (:resource runner-rig)]
+      (if (seq programs)
+        (do
+          (println "\n💾 Programs:")
+          (doseq [prog programs]
+            (println (str "  • " (:title prog)
+                         (when-let [strength (:current-strength prog)] (str " (str: " strength ")"))))))
+        (println "\n💾 Programs: (none)"))
+
+      (if (seq hardware)
+        (do
+          (println "\n🔧 Hardware:")
+          (doseq [hw hardware]
+            (println (str "  • " (:title hw)))))
+        (println "🔧 Hardware: (none)"))
+
+      (if (seq resources)
+        (do
+          (println "\n📦 Resources:")
+          (doseq [res resources]
+            (println (str "  • " (:title res)))))
+        (println "📦 Resources: (none)")))
+
+    ;; Deck/Discard counts
+    (println "\n--- DECK STATUS ---")
+    (println (str "Corp Deck: " (count corp-deck) " | Discard: " (count corp-discard)))
+    (println (str "Runner Deck: " (count runner-deck) " | Discard: " (count runner-discard)))
+
+    (println (clojure.string/join "" (repeat 70 "=")))
+    nil))
 
 (defn show-log
   "Display game log (natural language event history)"
@@ -219,6 +300,46 @@
           (println "    → No choices required")
           (println "    → Use 'continue' command to pass priority")))
       (println "No active prompt"))))
+
+(defn show-card-text
+  "Display full card information including text, cost, and abilities
+   Usage: (show-card-text \"Sure Gamble\")
+          (show-card-text \"Tithe\")"
+  [card-name]
+  (if-let [card (get @all-cards card-name)]
+    (let [text (or (:text card) "")
+          ;; Strip formatting markup for readability
+          clean-text (-> text
+                        (clojure.string/replace #"\[Click\]" "[Click]")
+                        (clojure.string/replace #"\[Credit\]" "[Credit]")
+                        (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
+                        (clojure.string/replace #"\[Trash\]" "[Trash]")
+                        (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
+                        (clojure.string/replace #"\[mu\]" "[MU]")
+                        (clojure.string/replace #"<[^>]+>" ""))] ;; Remove HTML-like tags
+      (println "\n" (clojure.string/join "" (repeat 70 "=")))
+      (println "📄" (:title card))
+      (println (clojure.string/join "" (repeat 70 "=")))
+      (println "Type:" (:type card)
+               (when (:subtype card) (str "- " (:subtype card))))
+      (println "Side:" (:side card))
+      (when (:faction card)
+        (println "Faction:" (:faction card)))
+      (when-let [cost (:cost card)]
+        (println "Cost:" cost))
+      (when-let [strength (:strength card)]
+        (println "Strength:" strength))
+      (when-let [mu (:memoryunits card)]
+        (println "Memory:" mu))
+      (when-let [agenda-points (:agendapoints card)]
+        (println "Agenda Points:" agenda-points))
+      (when-let [adv-cost (:advancementcost card)]
+        (println "Advancement Requirement:" adv-cost))
+      (when (not-empty clean-text)
+        (println "\nText:")
+        (println clean-text))
+      (println (clojure.string/join "" (repeat 70 "="))))
+    (println "❌ Card not found:" card-name)))
 
 ;; ============================================================================
 ;; Basic Actions
@@ -509,6 +630,40 @@
         rig (get-in state [:game-state :runner :rig])
         all-installed (concat (:program rig) (:hardware rig) (:resource rig))]
     (first (filter #(= card-name (:title %)) all-installed))))
+
+(defn show-card-abilities
+  "Show available abilities for an installed card by name
+   Works for both Runner and Corp cards
+   Usage: (show-card-abilities \"Smartware Distributor\")
+          (show-card-abilities \"Cleaver\")"
+  [card-name]
+  (let [state @ws/client-state
+        side (:side state)
+        ;; Find card in appropriate location
+        card (if (= "Corp" side)
+               (find-installed-corp-card card-name)
+               (find-installed-card card-name))]
+    (if card
+      (let [abilities (:abilities card)]
+        (println "\n" (clojure.string/join "" (repeat 70 "=")))
+        (println "🎯" (:title card) "- ABILITIES")
+        (println (clojure.string/join "" (repeat 70 "=")))
+        (if (seq abilities)
+          (doseq [[idx ability] (map-indexed vector abilities)]
+            (let [label (or (:label ability) (:cost-label ability) (str "Ability " idx))
+                  action-icon (if (:action ability) "[Click] " "")
+                  once-str (when (:once ability)
+                            (str " (Once " (if (keyword? (:once ability))
+                                             (name (:once ability))
+                                             (:once ability)) ")"))]
+              (println (str "\n  [" idx "] " label))
+              (when-let [cost-label (:cost-label ability)]
+                (println (str "      Cost: " action-icon cost-label)))
+              (when once-str
+                (println (str "      " once-str)))))
+          (println "No abilities available"))
+        (println (clojure.string/join "" (repeat 70 "="))))
+      (println "❌ Card not found installed:" card-name))))
 
 (defn use-ability!
   "Use an installed card's ability
