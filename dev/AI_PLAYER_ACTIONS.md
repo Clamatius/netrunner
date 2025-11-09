@@ -46,8 +46,10 @@ This document captures proven Intent => Action patterns for the AI player. Each 
 | `play-index <N>` | Play card by index | `./dev/send_command play-index 0` |
 | `install <name>` | Install card by name | `./dev/send_command install "Daily Casts"` |
 | `install-index <N>` | Install card by index | `./dev/send_command install-index 0` |
-| `run <server>` | Run on server | `./dev/send_command run HQ` |
+| `run <server>` | Run on server | `./dev/send_command run "R&D"` |
 | `choose <N>` | Choose from prompt | `./dev/send_command choose 0` |
+| `choose-value <text>` | Choose by matching text | `./dev/send_command choose-value keep` |
+| `discard` | Discard to hand size | `./dev/send_command discard` |
 | `keep-hand` | Keep mulligan | `./dev/send_command keep-hand` |
 | `end-turn` | End turn | `./dev/send_command end-turn` |
 
@@ -352,14 +354,168 @@ Watch logs during game actions. After EVERY server action you should see:
 
 ---
 
+## 7. Making Runs (Runner)
+
+**Intent:** Initiate a run on a server
+
+**Action:**
+```bash
+./dev/send_command run "R&D"
+./dev/send_command run "HQ"
+./dev/send_command run "Archives"
+./dev/send_command run "remote1"
+```
+
+**CRITICAL: Server Name Format**
+Server names MUST use exact game format:
+- ✅ `"R&D"` (with ampersand)
+- ❌ `"rd"` or `"RD"` (will silently fail)
+- ✅ `"HQ"`
+- ✅ `"Archives"`
+- ✅ `"remote1"`, `"remote2"`, etc.
+
+**Run Phase Sequence:**
+
+A run is NOT a single action - it's a sequence of phases with prompts:
+
+1. **Initiation Phase**
+   - Send: `{:command "run", :args {:server "R&D"}}`
+   - Receive prompt: "Continue to Approach Server"
+   - Phase indicator: "Initiation"
+
+2. **Continue to next phase**
+   - Send: `{:command "continue", :args nil}`
+   - Or use: `./dev/send_command choose 0` (if continue is option 0)
+
+3. **Subsequent phases** (if ICE present):
+   - Approach ICE (Corp can rez)
+   - Encounter ICE (Runner can use icebreakers)
+   - Movement between ICE positions
+   - Each requires continue/choose responses
+
+4. **Approach Server**
+   - Final continue before accessing cards
+
+5. **Breach/Access**
+   - Prompt to steal agendas or trash cards
+   - Use `choose-value` for semantic selection
+
+**WebSocket Traffic Example:**
+```clojure
+;; Start run
+[[:game/action {:gameid #uuid "...",
+                :command "run",
+                :args {:server "R&D"}}]]
+
+;; Continue through phase
+[[:game/action {:gameid #uuid "...",
+                :command "continue",
+                :args nil}]]
+```
+
+**What We Learned:**
+- Previous run commands "didn't work" because they initiated the run but we never responded to continuation prompts
+- The run stalled waiting for our input at each phase
+- Must monitor prompts and respond to advance through run phases
+- Discovered correct format by capturing WebSocket traffic from web client
+
+---
+
+## 8. Discard to Hand Size
+
+**Intent:** Discard down to maximum hand size (usually 5 cards)
+
+**Action:**
+```bash
+./dev/send_command discard
+```
+
+**What Happens:**
+- Auto-detects your side (Corp or Runner)
+- Calculates how many cards to discard
+- Automatically selects and discards from end of hand
+- Uses `select-card!` with proper `eid` from prompt
+
+**Technical Details:**
+```clojure
+;; Under the hood
+(let [state @ws/client-state
+      side (keyword (:side state))
+      prompt (get-in state [:game-state side :prompt-state])
+      hand (get-in state [:game-state side :hand])
+      card-to-discard (last hand)
+      eid (:eid prompt)]
+  (ai-websocket-client-v2/select-card! card-to-discard eid))
+```
+
+**Success Criteria:**
+- Hand size reduced to maximum
+- Log shows: "AI-{uid} trashes {card-name}"
+- Prompt cleared
+
+**What We Learned:**
+- Discard prompts require selecting specific cards, not just choosing an option
+- Must use `select-card!` function with the `eid` from the prompt
+- The `discard-to-hand-size!` wrapper handles this automatically
+- Common at end of turn when you've drawn too many cards
+
+---
+
+## 9. Enhanced Prompt Handling
+
+**New Capabilities:**
+
+### Viewing Prompts
+```bash
+./dev/send_command prompt
+```
+
+**Output shows:**
+- Message text (e.g., "Keep hand?")
+- Prompt type (e.g., "mulligan", "select")
+- Card information (if relevant)
+- Available choices with indices
+- Selectable cards count
+
+### Choosing by Value (Semantic Selection)
+```bash
+./dev/send_command choose-value keep
+./dev/send_command choose-value steal
+./dev/send_command choose-value "jack out"
+```
+
+**Benefits:**
+- More intuitive than remembering indices
+- Works with partial matches (case-insensitive)
+- Shows which option was matched before selecting
+
+**What We Learned:**
+- Prompts come in different formats (maps with `:value`, raw strings, etc.)
+- New `format-choice` helper handles all formats robustly
+- Semantic selection much better for AI decision-making
+- Falls back to showing all options if no match found
+
+---
+
+## Technical Notes (Updated)
+
+### Bash History Expansion Fix
+The `send_command` script now includes `set +H` to disable bash history expansion. This prevents `!` characters in function names from being stripped. Critical for commands like:
+- `run!`
+- `choose-by-value!`
+- `discard-to-hand-size!`
+
+Without this fix, these functions would fail with "No such var" errors.
+
+---
+
 ## Next Actions to Document
 
-7. **Click for Credit** - Spend 1 click to gain 1 credit
-8. **Draw Card** - Spend 1 click to draw 1 card
-9. **Play Event** - Play an event card from hand
-10. **Install Card** - Install a resource/program/hardware
-11. **Use Installed Card** - Trigger ability on installed card
-12. **End Turn** - Complete turn and pass to opponent
+10. **Complete Run Automation** - Handle full run sequence with prompts
+11. **ICE Interaction** - Breaking subroutines, jacking out
+12. **Install with Target Selection** - Installing ICE on specific servers
+13. **Use Installed Card** - Trigger ability on installed card
+14. **Corp Scoring** - Advancing and scoring agendas
 
 ---
 
@@ -391,12 +547,26 @@ Always convert string UUIDs to Java UUID objects:
 
 - [x] Can list lobbies
 - [x] Can join as Runner
-- [ ] Can join as Corp
+- [x] Can join as Corp
 - [x] Can receive game start
 - [x] Can handle mulligan (keep hand)
 - [x] **Diff handling works without errors!**
-- [ ] Can take basic actions (credit, draw, end turn)
-- [ ] Can play cards
-- [ ] Can make runs
+- [x] Can take basic actions (credit, draw, end turn)
+- [x] Can play cards (by name and index)
+- [x] Can install cards
+- [x] Can initiate runs
+- [x] Can handle discard prompts
+- [x] Can use semantic choice selection
+- [ ] Can complete full run sequence (with continue prompts)
+- [ ] Can handle ICE encounters
+- [ ] Can access and steal/trash cards
 
-**Last Updated:** 2025-11-09 (Diff handling FIXED! 🎉)
+**Last Updated:** 2025-11-09
+
+**Recent Improvements:**
+- ✅ Fixed bash history expansion (`set +H`) - enables `!` in function names
+- ✅ Added `choose-value` for semantic prompt selection
+- ✅ Added `discard` command with auto-detection
+- ✅ Discovered correct server name format (`"R&D"` not `"rd"`)
+- ✅ Documented run phase sequence from WebSocket capture
+- ✅ Enhanced prompt display with robust format handling
