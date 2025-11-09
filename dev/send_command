@@ -101,6 +101,7 @@ ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   continue        - Continue/pass priority (for paid ability windows, run phases)
+  jack-out        - Jack out of current run (end run unsuccessfully)
 
 ${GREEN}Lobby:${NC}
   list-lobbies    - List available games to join
@@ -288,6 +289,21 @@ case "$COMMAND" in
                      :args nil})
                   (Thread/sleep 1000)
                   (println "✅ Passed priority"))'
+        ;;
+
+    jack-out)
+        ensure_connection
+        info "Jacking out of run..."
+        execute '(let [state @ai-websocket-client-v2/client-state
+                       gameid (:gameid state)]
+                  (ai-websocket-client-v2/send-message! :game/action
+                    {:gameid (if (string? gameid)
+                               (java.util.UUID/fromString gameid)
+                               gameid)
+                     :command "jack-out"
+                     :args nil})
+                  (Thread/sleep 1000)
+                  (println "✅ Jacked out (run ended unsuccessfully)"))'
         ;;
 
     # Lobby
