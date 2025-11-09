@@ -97,6 +97,7 @@ ${GREEN}Card Actions:${NC}
   use-ability <name> <N>  - Use installed card's ability N (e.g., "Smartware Distributor" 0)
   trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
+  fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
 
 ${GREEN}Runner Actions:${NC}
   run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
@@ -310,6 +311,15 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command rez <card-name>"
         info "Rezzing $CARD_NAME..."
         execute "(ai-actions/rez-card! \"$CARD_NAME\")"
+        ;;
+
+    # Fire ICE subroutines
+    fire-subs)
+        ensure_connection
+        ICE_NAME="${1:-}"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command fire-subs <ice-name>"
+        info "Firing unbroken subroutines on $ICE_NAME..."
+        execute "(ai-actions/fire-unbroken-subs! \"$ICE_NAME\")"
         ;;
 
     # Prompts

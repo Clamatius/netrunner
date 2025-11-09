@@ -604,6 +604,34 @@
             (println (str "✅ Rezzed: " (:title card))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
+(defn fire-unbroken-subs!
+  "Fire unbroken subroutines on ICE (Corp only)
+   Used during runs when Runner doesn't/can't break all subs
+
+   Usage: (fire-unbroken-subs! \"Palisade\")
+          (fire-unbroken-subs! \"IP Block\")"
+  [ice-name]
+  (let [state @ws/client-state
+        side (:side state)]
+    (if (not= "Corp" side)
+      (println "❌ Only Corp can fire ICE subroutines")
+      (let [card (find-installed-corp-card ice-name)]
+        (if card
+          (let [gameid (:gameid state)
+                card-ref {:cid (:cid card)
+                         :zone (:zone card)
+                         :side (:side card)
+                         :type (:type card)}]
+            (ws/send-message! :game/action
+                              {:gameid (if (string? gameid)
+                                        (java.util.UUID/fromString gameid)
+                                        gameid)
+                               :command "unbroken-subroutines"
+                               :args {:card card-ref}})
+            (Thread/sleep 1500)
+            (println (str "✅ Fired unbroken subroutines on: " (:title card))))
+          (println (str "❌ ICE not found installed: " ice-name)))))))
+
 ;; ============================================================================
 ;; Discard Handling
 ;; ============================================================================
