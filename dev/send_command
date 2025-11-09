@@ -211,10 +211,7 @@ case "$COMMAND" in
     card-text)
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
-        execute "(do
-          (require (quote [card-loader]))
-          (card-loader/ensure-cards-loaded!)
-          (ai-actions/show-card-text \"$CARD_NAME\"))"
+        execute "(ai-actions/show-card-text \"$CARD_NAME\")"
         ;;
 
     abilities)
