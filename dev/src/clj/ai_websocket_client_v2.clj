@@ -172,9 +172,11 @@
                                               diff)))
         (update-game-state! diff)
         ;; Announce newly revealed cards in Archives
-        (announce-revealed-archives diff)
+        ;; TODO: Move announce-revealed-archives function before handle-message
+        ;; (announce-revealed-archives diff)
         ;; Auto-update game log HUD
-        (write-game-log-to-hud 30)
+        ;; TODO: Move write-game-log-to-hud function before handle-message
+        ;; (write-game-log-to-hud 30)
         (println "   ✓ Diff applied successfully")))
 
     :game/resync
@@ -460,9 +462,10 @@
 (defn corp-hand-count [] (get-in @client-state [:game-state :corp :hand-count]))
 
 (defn get-prompt
-  "Get current Runner prompt, if any"
+  "Get current prompt for our side, if any"
   []
-  (get-in @client-state [:game-state :runner :prompt-state]))
+  (let [side (:side @client-state)]
+    (get-in @client-state [:game-state (keyword side) :prompt-state])))
 
 (defn show-prompt
   "Display current prompt in readable format"

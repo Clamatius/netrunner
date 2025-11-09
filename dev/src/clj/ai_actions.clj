@@ -221,40 +221,6 @@
       (println "No active prompt"))))
 
 ;; ============================================================================
-;; Mulligan
-;; ============================================================================
-
-(defn keep-hand
-  "Keep hand during mulligan"
-  []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
-      (let [keep-choice (first (filter #(= "Keep" (:value %)) (:choices prompt)))]
-        (if keep-choice
-          (do
-            (println "Keeping hand...")
-            (ws/send-action! "choice" {:choice {:uuid (:uuid keep-choice)}})
-            (Thread/sleep 1000)
-            (println "✅ Hand kept"))
-          (println "⚠️  No 'Keep' option found in prompt")))
-      (println "⚠️  No mulligan prompt active"))))
-
-(defn mulligan
-  "Mulligan (redraw) hand"
-  []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
-      (let [mulligan-choice (first (filter #(= "Mulligan" (:value %)) (:choices prompt)))]
-        (if mulligan-choice
-          (do
-            (println "Mulliganing hand...")
-            (ws/send-action! "choice" {:choice {:uuid (:uuid mulligan-choice)}})
-            (Thread/sleep 1000)
-            (println "✅ Hand mulliganed"))
-          (println "⚠️  No 'Mulligan' option found in prompt")))
-      (println "⚠️  No mulligan prompt active"))))
-
-;; ============================================================================
 ;; Basic Actions
 ;; ============================================================================
 
@@ -421,6 +387,30 @@
         (println "Available choices:")
         (doseq [[idx choice] (map-indexed vector choices)]
           (println (str "  " idx ". " (format-choice choice))))))))
+
+;; ============================================================================
+;; Mulligan
+;; ============================================================================
+
+(defn keep-hand
+  "Keep hand during mulligan"
+  []
+  (let [prompt (ws/get-prompt)]
+    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+      ;; Mulligan prompts are just normal choice prompts
+      ;; Option 0 is always "Keep", option 1 is always "Mulligan"
+      (choose-option! 0)
+      (println "⚠️  No mulligan prompt active"))))
+
+(defn mulligan
+  "Mulligan (redraw) hand"
+  []
+  (let [prompt (ws/get-prompt)]
+    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+      ;; Mulligan prompts are just normal choice prompts
+      ;; Option 0 is always "Keep", option 1 is always "Mulligan"
+      (choose-option! 1)
+      (println "⚠️  No mulligan prompt active"))))
 
 ;; ============================================================================
 ;; Card Actions
