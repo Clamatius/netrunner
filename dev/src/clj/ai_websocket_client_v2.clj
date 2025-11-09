@@ -207,10 +207,14 @@
 
     :chsk/ws-ping
     ;; Respond to ping with pong to keep connection alive
+    ;; Echo back ping data if present (some Sente versions use ping IDs)
     (when-let [socket (:socket @client-state)]
       (try
-        (let [pong-msg (pr-str [[:chsk/ws-pong]])]
-          (ws/send-msg socket pong-msg))
+        (let [pong-msg (if data
+                         (pr-str [[:chsk/ws-pong data]])
+                         (pr-str [[:chsk/ws-pong]]))]
+          (ws/send-msg socket pong-msg)
+          (println "📤 Sent pong" (if data (str "(id: " data ")") "")))
         (catch Exception e
           (println "❌ Failed to send pong:" (.getMessage e)))))
 

@@ -307,42 +307,53 @@
 (defn show-card-text
   "Display full card information including text, cost, and abilities
    Usage: (show-card-text \"Sure Gamble\")
-          (show-card-text \"Tithe\")"
+          (show-card-text \"Tithe\")
+
+   Note: Currently not available - requires card database from main server.
+   Workaround: Use (show-card-abilities \"Card Name\") after installing."
   [card-name]
-  (if-let [card (get @all-cards card-name)]
-    (let [text (or (:text card) "")
-          ;; Strip formatting markup for readability
-          clean-text (-> text
-                        (clojure.string/replace #"\[Click\]" "[Click]")
-                        (clojure.string/replace #"\[Credit\]" "[Credit]")
-                        (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
-                        (clojure.string/replace #"\[Trash\]" "[Trash]")
-                        (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
-                        (clojure.string/replace #"\[mu\]" "[MU]")
-                        (clojure.string/replace #"<[^>]+>" ""))] ;; Remove HTML-like tags
-      (println "\n" (clojure.string/join "" (repeat 70 "=")))
-      (println "📄" (:title card))
-      (println (clojure.string/join "" (repeat 70 "=")))
-      (println "Type:" (:type card)
-               (when (:subtype card) (str "- " (:subtype card))))
-      (println "Side:" (:side card))
-      (when (:faction card)
-        (println "Faction:" (:faction card)))
-      (when-let [cost (:cost card)]
-        (println "Cost:" cost))
-      (when-let [strength (:strength card)]
-        (println "Strength:" strength))
-      (when-let [mu (:memoryunits card)]
-        (println "Memory:" mu))
-      (when-let [agenda-points (:agendapoints card)]
-        (println "Agenda Points:" agenda-points))
-      (when-let [adv-cost (:advancementcost card)]
-        (println "Advancement Requirement:" adv-cost))
-      (when (not-empty clean-text)
-        (println "\nText:")
-        (println clean-text))
-      (println (clojure.string/join "" (repeat 70 "="))))
-    (println "❌ Card not found:" card-name)))
+  (if (empty? @all-cards)
+    (do
+      (println "❌ Card database not loaded in AI client")
+      (println "   Card text lookup requires MongoDB connection from main server.")
+      (println "   ")
+      (println "   Workaround: Use 'abilities' command after installing the card")
+      (println "   Example:")
+      (println "     ./send_command abilities \"Smartware Distributor\""))
+    (if-let [card (get @all-cards card-name)]
+      (let [text (or (:text card) "")
+            ;; Strip formatting markup for readability
+            clean-text (-> text
+                          (clojure.string/replace #"\[Click\]" "[Click]")
+                          (clojure.string/replace #"\[Credit\]" "[Credit]")
+                          (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
+                          (clojure.string/replace #"\[Trash\]" "[Trash]")
+                          (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
+                          (clojure.string/replace #"\[mu\]" "[MU]")
+                          (clojure.string/replace #"<[^>]+>" ""))] ;; Remove HTML-like tags
+        (println "\n" (clojure.string/join "" (repeat 70 "=")))
+        (println "📄" (:title card))
+        (println (clojure.string/join "" (repeat 70 "=")))
+        (println "Type:" (:type card)
+                 (when (:subtype card) (str "- " (:subtype card))))
+        (println "Side:" (:side card))
+        (when (:faction card)
+          (println "Faction:" (:faction card)))
+        (when-let [cost (:cost card)]
+          (println "Cost:" cost))
+        (when-let [strength (:strength card)]
+          (println "Strength:" strength))
+        (when-let [mu (:memoryunits card)]
+          (println "Memory:" mu))
+        (when-let [agenda-points (:agendapoints card)]
+          (println "Agenda Points:" agenda-points))
+        (when-let [adv-cost (:advancementcost card)]
+          (println "Advancement Requirement:" adv-cost))
+        (when (not-empty clean-text)
+          (println "\nText:")
+          (println clean-text))
+        (println (clojure.string/join "" (repeat 70 "="))))
+      (println "❌ Card not found:" card-name))))
 
 ;; ============================================================================
 ;; Basic Actions
