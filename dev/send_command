@@ -3,6 +3,7 @@
 # Usage: ./send_command <action> [args...]
 
 set -euo pipefail
+set +H  # Disable history expansion to allow ! in function names
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
@@ -97,6 +98,7 @@ ${GREEN}Runner Actions:${NC}
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
+  choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
 
 ${GREEN}Lobby:${NC}
   list-lobbies    - List available games to join
@@ -121,6 +123,7 @@ ${YELLOW}Examples:${NC}
   ./send_command install "Daily Casts"
   ./send_command run HQ
   ./send_command choose 0
+  ./send_command choose-value keep
   ./send_command end-turn
 
 EOF
@@ -254,6 +257,14 @@ case "$COMMAND" in
         [[ ! "$CHOICE" =~ ^[0-9]+$ ]] && error "Choice must be a number"
         info "Choosing option $CHOICE..."
         execute "(ai-actions/choose-option! $CHOICE)"
+        ;;
+
+    choose-value)
+        ensure_connection
+        VALUE="${1:-}"
+        [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
+        info "Choosing option matching: $VALUE..."
+        execute "(ai-actions/choose-by-value! \"$VALUE\")"
         ;;
 
     # Lobby
