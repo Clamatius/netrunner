@@ -153,6 +153,27 @@
         clicks (get-in state [:game-state (keyword side) :click])]
     (println "⏱️  Clicks:" clicks)))
 
+(defn show-archives
+  "Show Corp's Archives (discard pile) with faceup/facedown counts"
+  []
+  (let [state @ws/client-state
+        archives (get-in state [:game-state :corp :discard])
+        faceup (filter :seen archives)
+        facedown-count (- (count archives) (count faceup))]
+    (println "\n📂 Archives:")
+    (println (str "  Faceup: " (count faceup) " | Facedown: " facedown-count))
+    (when (seq faceup)
+      (println "\n  Revealed Cards:")
+      (doseq [card faceup]
+        (let [cost-str (if-let [cost (:cost card)] (str cost "¢") "")
+              type-str (:type card)
+              subtitle (if (not-empty cost-str)
+                        (str type-str ", " cost-str)
+                        type-str)]
+          (println (str "    • " (:title card) " (" subtitle ")")))))
+    (when (> facedown-count 0)
+      (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
+
 (defn- format-choice
   "Format a choice for display, handling different prompt formats"
   [choice]

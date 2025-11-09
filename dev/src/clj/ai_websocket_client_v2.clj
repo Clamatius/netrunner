@@ -171,6 +171,8 @@
                                               (take 5 diff)
                                               diff)))
         (update-game-state! diff)
+        ;; Announce newly revealed cards in Archives
+        (announce-revealed-archives diff)
         ;; Auto-update game log HUD
         (write-game-log-to-hud 30)
         (println "   ✓ Diff applied successfully")))
@@ -646,6 +648,30 @@
        (println (str/join "" (repeat 70 "=")))
        nil)
      (println "No game log available"))))
+
+(defn announce-revealed-archives
+  "Announce newly revealed cards in Archives from diff"
+  [diff]
+  (when (vector? diff)
+    (doseq [[old-data new-data] (partition 2 diff)]
+      (when (and (map? new-data) (:corp new-data))
+        (let [discard-changes (get-in new-data [:corp :discard])]
+          (when (vector? discard-changes)
+            (doseq [[idx card-data] (partition 2 discard-changes)]
+              (when (and (map? card-data)
+                        (:new card-data)
+                        (:seen card-data)
+                        (:title card-data))
+                (let [cost-str (if-let [cost (:cost card-data)]
+                                (str cost "¢")
+                                "")
+                      type-str (:type card-data)
+                      subtitle (if (not-empty cost-str)
+                                (str type-str ", " cost-str)
+                                type-str)]
+                  (println (str "\n📂 Revealed in Archives: "
+                              (:title card-data)
+                              " (" subtitle ")")))))))))))
 
 (defn write-game-log-to-hud
   "Write game log to CLAUDE.local.md for HUD visibility"
