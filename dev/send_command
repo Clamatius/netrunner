@@ -56,12 +56,11 @@ ensure_connection() {
           "error")))' 2>&1 | grep -E '^"(connected|disconnected|error)"$' | tr -d '"' || echo "error")
 
     if [[ "$check_result" != "connected" ]]; then
-        warn "WebSocket disconnected, reconnecting..."
+        # Silently reconnect if needed (check is fragile, so don't warn)
         TIMEOUT=10 "$AI_EVAL" '(do
           (require (quote [ai-websocket-client-v2 :as ws]))
           (ws/connect! "ws://localhost:1042/chsk")
-          (Thread/sleep 2000)
-          (println "🔌 Reconnected"))' > /dev/null 2>&1
+          (Thread/sleep 2000))' > /dev/null 2>&1
         sleep 1
     fi
 }

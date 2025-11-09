@@ -29,6 +29,9 @@ fi
 # Run expression via lein repl :connect to AI client on port 7889
 timeout "$TIMEOUT" lein repl :connect localhost:7889 <<EOF 2>&1 | \
     grep -v "^user=>" | \
+    grep -v "find-doc" | \
+    grep -v "^  #_=>" | \
+    grep -v "Welcome back!" | \
     grep -v "Connecting to nREPL" | \
     grep -v "REPL-y" | \
     grep -v "Clojure" | \

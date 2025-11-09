@@ -597,22 +597,29 @@
     (println "\nTurn:" (turn-number) "-" active-side)
 
     ;; Active player / waiting status
-    (cond
-      ;; Waiting for opponent
-      (not= my-side active-side)
-      (println "Status: ⏳ Waiting for" active-side "to act")
+    (let [runner-clicks (get-in gs [:runner :click])
+          corp-clicks (get-in gs [:corp :click])
+          both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
+      (cond
+        ;; Both players have 0 clicks - waiting to start turn
+        both-zero-clicks
+        (println "Status: 🟢 Waiting to start turn (use 'start-turn' command)")
 
-      ;; End of turn, need to start
-      end-turn
-      (println "Status: 🟢 Ready to start turn (use 'start-turn' command)")
+        ;; Waiting for opponent
+        (not= my-side active-side)
+        (println "Status: ⏳ Waiting for" active-side "to act")
 
-      ;; Waiting prompt
-      (= :waiting prompt-type)
-      (println "Status: ⏳" (:msg prompt))
+        ;; End of turn, need to start
+        end-turn
+        (println "Status: 🟢 Ready to start turn (use 'start-turn' command)")
 
-      ;; My turn and active
-      :else
-      (println "Status: ✅ Your turn to act"))
+        ;; Waiting prompt
+        (= :waiting prompt-type)
+        (println "Status: ⏳" (:msg prompt))
+
+        ;; My turn and active
+        :else
+        (println "Status: ✅ Your turn to act")))
 
     ;; Run status
     (when run-state
@@ -632,6 +639,15 @@
     (println "Hand:" (corp-hand-count) "cards")
     (when (and prompt (not= :waiting prompt-type))
       (println "\n🔔 Active Prompt:" (:msg prompt)))
+
+    ;; Show recent log entries
+    (when-let [log (get-in gs [:log])]
+      (let [recent-log (take-last 3 log)]
+        (when (seq recent-log)
+          (println "\n--- RECENT LOG ---")
+          (doseq [entry recent-log]
+            (println " " (:text entry))))))
+
     (println (str/join "" (repeat 70 "=")))
     nil))
 
