@@ -11,6 +11,54 @@ This document describes the command interface for controlling the AI player in N
 
 ---
 
+## Setup & REPL Management
+
+### Starting the AI Client REPL
+
+**Use the startup script (recommended):**
+```bash
+./dev/start-ai-client-repl.sh
+```
+This script:
+- Starts nREPL server on port 7889
+- Loads AI client initialization code
+- Establishes WebSocket connection to game server
+- Manages PID file for process tracking
+
+**Stop the REPL:**
+```bash
+./dev/stop-ai-client.sh
+```
+
+**View logs:**
+```bash
+tail -f /tmp/ai-client-repl.log
+```
+
+**Important:** Do not use `lein repl :start` directly. The startup script uses the correct profile and initialization sequence.
+
+### Restart After Disconnect
+
+If the AI client REPL crashes or you restart it:
+
+1. **Stop any existing REPL:**
+   ```bash
+   ./dev/stop-ai-client.sh
+   ```
+
+2. **Start fresh REPL:**
+   ```bash
+   ./dev/start-ai-client-repl.sh
+   ```
+
+3. **Rejoin your game** (if mid-game):
+   ```bash
+   ./send_command join "<game-id>" "<side>"
+   ./send_command resync "<game-id>"
+   ```
+
+---
+
 ## Core Concepts
 
 ### Game Structure
@@ -67,12 +115,36 @@ Many actions create prompts requiring responses:
 ./send_command join "1806d5c9-f540-4158-ab66-8182433dcf10" Runner
 ```
 
-**Rejoin disconnected game:**
+**Rejoin after REPL restart:**
 ```bash
+# After REPL restart, you lose session state and are removed from the game.
+# Use this two-step process to rejoin:
+./send_command join <game-id> <side>    # Step 1: Re-add to players list
+./send_command resync <game-id>          # Step 2: Get full game state
+
+# Example:
+./send_command join "373031fa-d7a2-4f7c-8bfd-9cc7c0d3fc4f" "Runner"
+./send_command resync "373031fa-d7a2-4f7c-8bfd-9cc7c0d3fc4f"
+```
+
+**Why both commands?**
+- The AI client doesn't persist session state (unlike web browser with cookies)
+- REPL restart = complete disconnect, server removes you from players list
+- `join` re-adds you to the game's active players
+- `resync` retrieves the current game state
+
+**How to know if you need to rejoin:**
+- Check the game log: `./send_command log`
+- If you see `"<Your-username> has left the game."` → you need to **join + resync**
+- If no disconnect message → just **resync** is enough
+
+**Resync only (if still connected):**
+```bash
+# If WebSocket connected but game state is stale:
 ./send_command resync <game-id>
 ```
 
-**Manual reconnect:**
+**Manual WebSocket reconnect:**
 ```bash
 ./send_command connect
 ```
