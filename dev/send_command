@@ -95,7 +95,7 @@ ${GREEN}Card Actions:${NC}
   play-index <N>  - Play card by index (0-4)
 
 ${GREEN}Runner Actions:${NC}
-  run <server>    - Run on server (HQ, RD, Archives, remote1, etc.)
+  run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
@@ -122,7 +122,7 @@ ${YELLOW}Examples:${NC}
   ./send_command take-credit
   ./send_command play "Sure Gamble"
   ./send_command install "Daily Casts"
-  ./send_command run HQ
+  ./send_command run "R&D"
   ./send_command choose 0
   ./send_command choose-value keep
   ./send_command end-turn

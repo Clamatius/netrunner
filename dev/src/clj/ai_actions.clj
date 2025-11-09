@@ -442,8 +442,13 @@
 
 (defn run!
   "Run on a server (Runner only)
+   Server names must match game format exactly:
+   - Central servers: \"HQ\", \"R&D\", \"Archives\"
+   - Remote servers: \"remote1\", \"remote2\", etc.
+
    Usage: (run! \"HQ\")
           (run! \"R&D\")
+          (run! \"Archives\")
           (run! \"remote1\")"
   [server]
   (let [state @ws/client-state
