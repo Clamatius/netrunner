@@ -498,6 +498,113 @@
     (println (str "🏃 Running on " server))))
 
 ;; ============================================================================
+;; Card Abilities
+;; ============================================================================
+
+(defn find-installed-card
+  "Find an installed card by title in the rig
+   Searches programs, hardware, and resources"
+  [card-name]
+  (let [state @ws/client-state
+        rig (get-in state [:game-state :runner :rig])
+        all-installed (concat (:program rig) (:hardware rig) (:resource rig))]
+    (first (filter #(= card-name (:title %)) all-installed))))
+
+(defn use-ability!
+  "Use an installed card's ability
+
+   Usage: (use-ability! \"Smartware Distributor\" 0)
+          (use-ability! \"Sure Gamble\" 1)"
+  [card-name ability-index]
+  (let [card (find-installed-card card-name)]
+    (if card
+      (let [state @ws/client-state
+            gameid (:gameid state)
+            ;; Create card reference matching wire format
+            card-ref {:cid (:cid card)
+                     :zone (:zone card)
+                     :side (:side card)
+                     :type (:type card)}]
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "ability"
+                           :args {:card card-ref
+                                  :ability ability-index}})
+        (Thread/sleep 1500)
+        (println (str "✅ Used ability " ability-index " on " (:title card))))
+      (println (str "❌ Card not found in rig: " card-name)))))
+
+(defn find-installed-corp-card
+  "Find an installed Corp card by title
+   Searches all servers for ICE, assets, and upgrades"
+  [card-name]
+  (let [state @ws/client-state
+        servers (get-in state [:game-state :corp :servers])
+        ;; Get all ICE from all servers
+        all-ice (mapcat :ices (vals servers))
+        ;; Get all content (assets/upgrades) from all servers
+        all-content (mapcat :content (vals servers))
+        all-installed (concat all-ice all-content)]
+    (first (filter #(= card-name (:title %)) all-installed))))
+
+(defn trash-installed!
+  "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)
+
+   Usage: (trash-installed! \"Palisade\")
+          (trash-installed! \"Daily Casts\")"
+  [card-name]
+  (let [state @ws/client-state
+        side (:side state)
+        ;; Find card in appropriate location based on side
+        card (if (= "Corp" side)
+               (find-installed-corp-card card-name)
+               (find-installed-card card-name))]
+    (if card
+      (let [gameid (:gameid state)
+            card-ref {:cid (:cid card)
+                     :zone (:zone card)
+                     :side (:side card)
+                     :type (:type card)}]
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "trash"
+                           :args {:card card-ref}})
+        (Thread/sleep 1500)
+        (println (str "✅ Trashed: " (:title card))))
+      (println (str "❌ Card not found installed: " card-name)))))
+
+(defn rez-card!
+  "Rez an installed Corp card (ICE, asset, or upgrade)
+
+   Usage: (rez-card! \"Prisec\")
+          (rez-card! \"IP Block\")"
+  [card-name]
+  (let [state @ws/client-state
+        side (:side state)]
+    (if (not= "Corp" side)
+      (println "❌ Only Corp can rez cards")
+      (let [card (find-installed-corp-card card-name)]
+        (if card
+          (let [gameid (:gameid state)
+                card-ref {:cid (:cid card)
+                         :zone (:zone card)
+                         :side (:side card)
+                         :type (:type card)}]
+            (ws/send-message! :game/action
+                              {:gameid (if (string? gameid)
+                                        (java.util.UUID/fromString gameid)
+                                        gameid)
+                               :command "rez"
+                               :args {:card card-ref}})
+            (Thread/sleep 1500)
+            (println (str "✅ Rezzed: " (:title card))))
+          (println (str "❌ Card not found installed: " card-name)))))))
+
+;; ============================================================================
 ;; Discard Handling
 ;; ============================================================================
 
