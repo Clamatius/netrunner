@@ -463,10 +463,14 @@
 
 (defn discard-to-hand-size!
   "Discard cards down to maximum hand size
-   Wrapper for existing handle-discard-prompt!"
+   Auto-detects side and discards until at or below max hand size"
   []
-  (ws/handle-discard-prompt!)
-  (println "✅ Discard complete"))
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        discarded (ws/handle-discard-prompt! side)]
+    (if (> discarded 0)
+      (println (str "✅ Discarded " discarded " card(s)"))
+      (println "No cards to discard"))))
 
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"

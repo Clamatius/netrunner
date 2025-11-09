@@ -85,9 +85,10 @@ ${GREEN}Basic Actions:${NC}
   draw            - Spend 1 click to draw 1 card
   end-turn        - End your turn (validates all clicks used)
 
-${GREEN}Mulligan:${NC}
+${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
   mulligan        - Mulligan (redraw) starting hand
+  discard         - Discard down to maximum hand size
 
 ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
@@ -220,6 +221,12 @@ case "$COMMAND" in
         ensure_connection
         info "Taking mulligan..."
         execute '(ai-actions/mulligan)'
+        ;;
+
+    discard)
+        ensure_connection
+        info "Discarding to hand size..."
+        execute '(ai-actions/discard-to-hand-size!)'
         ;;
 
     # Card actions
