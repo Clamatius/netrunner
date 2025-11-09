@@ -1,0 +1,296 @@
+#!/bin/bash
+# send_command - Simplified AI player control interface
+# Usage: ./send_command <action> [args...]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
+TIMEOUT="${TIMEOUT:-20}"
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+error() {
+    echo -e "${RED}❌ Error: $1${NC}" >&2
+    exit 1
+}
+
+success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+warn() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+# Check if AI client is running
+check_client() {
+    if ! lsof -i :7889 > /dev/null 2>&1; then
+        error "AI Client REPL not running. Start with: ./dev/start-ai-client-repl.sh"
+    fi
+}
+
+# Ensure WebSocket connection is active (auto-reconnect if needed)
+ensure_connection() {
+    # Check if WebSocket client is loaded and connected
+    # We check by trying to access the client-state atom which should always exist if loaded
+    local check_result=$(TIMEOUT=5 "$AI_EVAL" '(do
+      (try
+        (require (quote [ai-websocket-client-v2 :as ws]))
+        (let [state @ws/client-state
+              uid (:uid state)]
+          (if uid
+            "connected"
+            "disconnected"))
+        (catch Exception e
+          "error")))' 2>&1 | grep -E '^"(connected|disconnected|error)"$' | tr -d '"' || echo "error")
+
+    if [[ "$check_result" != "connected" ]]; then
+        warn "WebSocket disconnected, reconnecting..."
+        TIMEOUT=10 "$AI_EVAL" '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/connect! "ws://localhost:1042/chsk")
+          (Thread/sleep 2000)
+          (println "🔌 Reconnected"))' > /dev/null 2>&1
+        sleep 1
+    fi
+}
+
+# Show help
+show_help() {
+    cat << EOF
+${BLUE}AI Player Command Interface${NC}
+
+${GREEN}Status Commands:${NC}
+  status          - Show game state (turn, credits, clicks, hand size)
+  hand            - Show cards in hand
+  prompt          - Show current prompt (if any)
+  credits         - Show current credits
+  clicks          - Show remaining clicks
+
+${GREEN}Basic Actions:${NC}
+  start-turn      - Start your turn (gain clicks, Corp draws card)
+  take-credit     - Spend 1 click to gain 1 credit
+  draw            - Spend 1 click to draw 1 card
+  end-turn        - End your turn (validates all clicks used)
+
+${GREEN}Mulligan:${NC}
+  keep-hand       - Keep starting hand
+  mulligan        - Mulligan (redraw) starting hand
+
+${GREEN}Card Actions:${NC}
+  play <name>     - Play card by name (e.g., "Sure Gamble")
+  play-index <N>  - Play card by index (0-4)
+
+${GREEN}Runner Actions:${NC}
+  run <server>    - Run on server (HQ, RD, Archives, remote1, etc.)
+
+${GREEN}Prompts:${NC}
+  choose <N>      - Choose option N from current prompt (0, 1, 2...)
+
+${GREEN}Lobby:${NC}
+  list-lobbies    - List available games to join
+  join <game-id> <side>  - Join game as Runner or Corp
+
+${GREEN}Installation:${NC}
+  install <name>  - Install card by name from hand
+  install-index <N> - Install card by index from hand
+
+${GREEN}Connection:${NC}
+  connect         - Manually reconnect WebSocket to server
+
+${GREEN}Advanced:${NC}
+  eval <expr>     - Execute arbitrary Clojure expression
+
+${YELLOW}Examples:${NC}
+  ./send_command status
+  ./send_command list-lobbies
+  ./send_command take-credit
+  ./send_command play "Sure Gamble"
+  ./send_command install "Daily Casts"
+  ./send_command run HQ
+  ./send_command choose 0
+  ./send_command end-turn
+
+EOF
+}
+
+# Execute command via ai-eval.sh
+execute() {
+    local expr="$1"
+    TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr"
+}
+
+# Main command dispatcher
+COMMAND="${1:-help}"
+shift || true
+
+check_client
+
+case "$COMMAND" in
+    # Help
+    help|--help|-h)
+        show_help
+        ;;
+
+    # Connection
+    connect)
+        info "Reconnecting to game server..."
+        execute '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/connect! "ws://localhost:1042/chsk")
+          (Thread/sleep 2000)
+          (println "✅ Connected to ws://localhost:1042/chsk"))'
+        ;;
+
+    # Status commands (read-only)
+    status)
+        execute '(ai-actions/status)'
+        ;;
+
+    hand)
+        execute '(ai-actions/show-hand)'
+        ;;
+
+    prompt)
+        execute '(ai-actions/show-prompt-detailed)'
+        ;;
+
+    credits)
+        execute '(ai-actions/show-credits)'
+        ;;
+
+    clicks)
+        execute '(ai-actions/show-clicks)'
+        ;;
+
+    # Basic actions
+    start-turn)
+        ensure_connection
+        info "Starting turn..."
+        execute '(ai-actions/start-turn!)'
+        ;;
+
+    take-credit)
+        ensure_connection
+        info "Taking credit..."
+        execute '(ai-actions/take-credit!)'
+        ;;
+
+    draw)
+        ensure_connection
+        info "Drawing card..."
+        execute '(ai-actions/draw-card!)'
+        ;;
+
+    end-turn)
+        ensure_connection
+        info "Ending turn..."
+        execute '(ai-actions/end-turn!)'
+        ;;
+
+    # Mulligan
+    keep-hand)
+        ensure_connection
+        info "Keeping hand..."
+        execute '(ai-actions/keep-hand)'
+        ;;
+
+    mulligan)
+        ensure_connection
+        info "Taking mulligan..."
+        execute '(ai-actions/mulligan)'
+        ;;
+
+    # Card actions
+    play)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command play <card-name>"
+        info "Playing card: $CARD_NAME"
+        execute "(ai-actions/play-card! \"$CARD_NAME\")"
+        ;;
+
+    play-index)
+        ensure_connection
+        INDEX="${1:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command play-index <0-4>"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        info "Playing card at index $INDEX"
+        execute "(ai-actions/play-card! $INDEX)"
+        ;;
+
+    # Running
+    run)
+        ensure_connection
+        SERVER="${1:-}"
+        [[ -z "$SERVER" ]] && error "Usage: send_command run <server>"
+        info "Running on $SERVER..."
+        execute "(ai-actions/run! \"$SERVER\")"
+        ;;
+
+    # Prompts
+    choose)
+        ensure_connection
+        CHOICE="${1:-}"
+        [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index>"
+        [[ ! "$CHOICE" =~ ^[0-9]+$ ]] && error "Choice must be a number"
+        info "Choosing option $CHOICE..."
+        execute "(ai-actions/choose-option! $CHOICE)"
+        ;;
+
+    # Lobby
+    list-lobbies)
+        ensure_connection
+        info "Fetching lobby list..."
+        execute '(ai-actions/list-lobbies)'
+        ;;
+
+    join)
+        ensure_connection
+        GAME_ID="${1:-}"
+        SIDE="${2:-Runner}"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
+        info "Joining game $GAME_ID as $SIDE..."
+        execute "(ai-actions/connect-game! \"$GAME_ID\" \"$SIDE\")"
+        ;;
+
+    # Installation
+    install)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name>"
+        info "Installing card: $CARD_NAME"
+        execute "(ai-actions/install-card! \"$CARD_NAME\")"
+        ;;
+
+    install-index)
+        ensure_connection
+        INDEX="${1:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4>"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        info "Installing card at index $INDEX"
+        execute "(ai-actions/install-card! $INDEX)"
+        ;;
+
+    # Advanced
+    eval)
+        EXPR="${1:-}"
+        [[ -z "$EXPR" ]] && error "Usage: send_command eval '<clojure-expression>'"
+        execute "$EXPR"
+        ;;
+
+    # Unknown command
+    *)
+        error "Unknown command: $COMMAND\nRun './send_command help' for usage"
+        ;;
+esac
