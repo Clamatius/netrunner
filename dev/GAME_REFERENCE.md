@@ -399,6 +399,35 @@ End run at any time (before passing point of no return):
 
 ---
 
+### Damage Mechanics
+
+The Runner can take three types of damage:
+
+**Net Damage:**
+- Common source: Accessing traps and certain agendas
+- Effect: Runner discards N cards at random from hand
+- If unable to discard enough cards, Runner flatlines (loses game)
+- Example: Urtica Cipher deals 2 net damage on access
+
+**Meat Damage:**
+- Common source: Corp operations and certain card abilities
+- Effect: Identical to net damage (random discard)
+- If unable to discard enough cards, Runner flatlines (loses game)
+
+**Brain Damage:**
+- Common source: Specific ICE subroutines and Corp cards
+- Effect: Random discard PLUS permanent max hand size reduction
+- Each point of brain damage permanently reduces max hand size by 1
+- If unable to discard enough cards, Runner flatlines (loses game)
+
+**Key Differences from End-of-Turn Discard:**
+- Damage = **random discard** (no player choice)
+- End-of-turn = **chosen discard** (player selects which cards)
+- Damage can cause flatline if hand is empty
+- Commands handle damage automatically (cards are randomly trashed)
+
+---
+
 ### Prompts & Choices
 
 **Choose by index:**
