@@ -448,23 +448,42 @@
 
 (defn install-card!
   "Install a card from hand by name or index
-   Usage: (install-card! \"Daily Casts\")
-          (install-card! 0)"
-  [name-or-index]
-  (let [card (find-card-in-hand name-or-index)]
-    (if card
-      (let [state @ws/client-state
-            gameid (:gameid state)
-            card-ref (create-card-ref card)]
-        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
-                           :command "install"
-                           :args {:card card-ref}})
-        (Thread/sleep 2000)
-        (println (str "✅ Installing: " (:title card))))
-      (println (str "❌ Card not found in hand: " name-or-index)))))
+   For Corp: must specify server location
+   For Runner: server is optional (auto-installs to appropriate location)
+
+   Server values:
+   - Central servers: \"HQ\", \"R&D\", \"Archives\"
+   - New remote: \"New remote\"
+   - Existing remotes: \"Server 1\", \"Server 2\", etc.
+
+   Usage: (install-card! \"Palisade\" \"HQ\")         ; Corp ICE on HQ
+          (install-card! \"Urtica Cipher\" \"New remote\") ; Corp asset in new remote
+          (install-card! 0 \"R&D\")                   ; Corp install by index
+          (install-card! \"Unity\")                   ; Runner install"
+  ([name-or-index]
+   (install-card! name-or-index nil))
+  ([name-or-index server]
+   (let [card (find-card-in-hand name-or-index)]
+     (if card
+       (let [state @ws/client-state
+             gameid (:gameid state)
+             card-ref (create-card-ref card)
+             ;; Both Corp and Runner use "play" command
+             ;; Corp requires :server, Runner installs without :server arg
+             args (if server
+                   {:card card-ref :server server}
+                   {:card card-ref})]
+         (ws/send-message! :game/action
+                           {:gameid (if (string? gameid)
+                                     (java.util.UUID/fromString gameid)
+                                     gameid)
+                            :command "play"
+                            :args args})
+         (Thread/sleep 2000)
+         (if server
+           (println (str "✅ Installing: " (:title card) " on " server))
+           (println (str "✅ Installing: " (:title card)))))
+       (println (str "❌ Card not found in hand: " name-or-index))))))
 
 (defn run!
   "Run on a server (Runner only)

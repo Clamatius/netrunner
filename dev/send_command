@@ -110,8 +110,8 @@ ${GREEN}Lobby:${NC}
   resync <game-id>       - Rejoin already-started game
 
 ${GREEN}Installation:${NC}
-  install <name>  - Install card by name from hand
-  install-index <N> - Install card by index from hand
+  install <name> [server]  - Install card by name (Corp needs server: HQ, "R&D", "New remote")
+  install-index <N> [server] - Install card by index (Corp needs server)
 
 ${GREEN}Connection:${NC}
   connect         - Manually reconnect WebSocket to server
@@ -339,18 +339,30 @@ case "$COMMAND" in
     install)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name>"
-        info "Installing card: $CARD_NAME"
-        execute "(ai-actions/install-card! \"$CARD_NAME\")"
+        SERVER="${2:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name> [server]"
+        if [[ -n "$SERVER" ]]; then
+            info "Installing card: $CARD_NAME on $SERVER"
+            execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+        else
+            info "Installing card: $CARD_NAME"
+            execute "(ai-actions/install-card! \"$CARD_NAME\")"
+        fi
         ;;
 
     install-index)
         ensure_connection
         INDEX="${1:-}"
-        [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4>"
+        SERVER="${2:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4> [server]"
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
-        info "Installing card at index $INDEX"
-        execute "(ai-actions/install-card! $INDEX)"
+        if [[ -n "$SERVER" ]]; then
+            info "Installing card at index $INDEX on $SERVER"
+            execute "(ai-actions/install-card! $INDEX \"$SERVER\")"
+        else
+            info "Installing card at index $INDEX"
+            execute "(ai-actions/install-card! $INDEX)"
+        fi
         ;;
 
     # Advanced
