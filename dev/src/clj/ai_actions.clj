@@ -3,6 +3,9 @@
   (:require [ai-websocket-client-v2 :as ws]
             [jinteki.cards :refer [all-cards]]))
 
+;; Forward declarations
+(declare find-installed-corp-card)
+
 ;; ============================================================================
 ;; Helper Functions
 ;; ============================================================================
