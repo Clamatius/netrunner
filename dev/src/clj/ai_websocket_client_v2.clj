@@ -130,6 +130,10 @@
 (defn handle-message
   "Handle parsed message"
   [{:keys [type data] :as msg}]
+  ;; DEBUG: Log all messages being handled
+  (when (not= type :chsk/ws-ping)
+    (println "🔧 HANDLING MESSAGE:" type))
+
   ;; Record all messages (except pings)
   (when (not= type :chsk/ws-ping)
     (swap! client-state update :messages (fn [msgs] (conj (vec msgs) msg))))
@@ -155,8 +159,10 @@
     (let [diff-data (if (string? data)
                       (json/parse-string data true)
                       data)
-          {:keys [gameid diff]} diff-data]
-      (when (= gameid (:gameid @client-state))
+          {:keys [gameid diff]} diff-data
+          client-gameid (:gameid @client-state)]
+      ;; FIX: Compare as strings since JSON parses UUIDs as strings
+      (when (= (str gameid) (str client-gameid))
         (println "\n🔄 GAME/DIFF received")
         (println "   GameID:" gameid)
         (println "   Diff type:" (type diff))
