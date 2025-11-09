@@ -660,6 +660,36 @@
             (println (str "✅ Advanced: " (:title card))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
+(defn score-agenda!
+  "Score an installed agenda (Corp only)
+   Agenda must have enough advancement counters to be scored
+
+   Usage: (score-agenda! \"Project Vitruvius\")
+          (score-agenda! \"Send a Message\")"
+  [card-name]
+  (let [state @ws/client-state
+        side (:side state)]
+    (if (not= "Corp" side)
+      (println "❌ Only Corp can score agendas")
+      (let [card (find-installed-corp-card card-name)]
+        (if card
+          (if (= "Agenda" (:type card))
+            (let [gameid (:gameid state)
+                  card-ref {:cid (:cid card)
+                           :zone (:zone card)
+                           :side (:side card)
+                           :type (:type card)}]
+              (ws/send-message! :game/action
+                                {:gameid (if (string? gameid)
+                                          (java.util.UUID/fromString gameid)
+                                          gameid)
+                                 :command "score"
+                                 :args {:card card-ref}})
+              (Thread/sleep 1500)
+              (println (str "✅ Scored: " (:title card))))
+            (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
+          (println (str "❌ Card not found installed: " card-name)))))))
+
 ;; ============================================================================
 ;; Discard Handling
 ;; ============================================================================

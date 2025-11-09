@@ -99,6 +99,7 @@ ${GREEN}Card Actions:${NC}
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
   advance <name>  - Advance installed card (Corp only: agendas, ICE, assets)
+  score <name>    - Score agenda with sufficient advancement counters (Corp only)
 
 ${GREEN}Runner Actions:${NC}
   run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
@@ -330,6 +331,15 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name>"
         info "Advancing $CARD_NAME..."
         execute "(ai-actions/advance-card! \"$CARD_NAME\")"
+        ;;
+
+    # Score agenda
+    score)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command score <card-name>"
+        info "Scoring $CARD_NAME..."
+        execute "(ai-actions/score-agenda! \"$CARD_NAME\")"
         ;;
 
     # Prompts
