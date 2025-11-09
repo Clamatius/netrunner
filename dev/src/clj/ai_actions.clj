@@ -1,10 +1,35 @@
 (ns ai-actions
   "High-level AI player actions - simple API for common game operations"
   (:require [ai-websocket-client-v2 :as ws]
-            [jinteki.cards :refer [all-cards]]))
+            [jinteki.cards :refer [all-cards]]
+            [clj-http.client :as http]
+            [cheshire.core :as json]))
 
 ;; Forward declarations
 (declare find-installed-corp-card)
+
+;; ============================================================================
+;; Card Database Management
+;; ============================================================================
+
+(defn load-cards-from-api!
+  "Fetch card database from server API and populate all-cards atom
+   Only fetches once - subsequent calls are no-ops if cards already loaded"
+  []
+  (when (empty? @all-cards)
+    (try
+      (println "📦 Fetching card database from server API...")
+      (let [response (http/get "http://localhost:1042/data/cards"
+                              {:as :json
+                               :socket-timeout 10000
+                               :connection-timeout 5000})
+            cards (:body response)
+            cards-map (into {} (map (juxt :title identity)) cards)]
+        (reset! all-cards cards-map)
+        (println "✅ Loaded" (count cards-map) "cards from API"))
+      (catch Exception e
+        (println "❌ Failed to load cards from API:" (.getMessage e))
+        (println "   Make sure the game server is running on localhost:1042")))))
 
 ;; ============================================================================
 ;; Helper Functions
@@ -99,6 +124,22 @@
       (println "✅ Game state resynced successfully")
       (ws/show-status))
     (println "❌ Failed to resync game state")))
+
+(defn send-chat!
+  "Send a chat message to the game
+   Usage: (send-chat! \"Hello, world!\")"
+  [message]
+  (let [state (ws/get-game-state)
+        gameid (:gameid state)]
+    (if gameid
+      (do
+        (ws/send-message! :game/say
+          {:gameid (if (string? gameid)
+                     (java.util.UUID/fromString gameid)
+                     gameid)
+           :msg message})
+        (println "💬 Sent chat message"))
+      (println "❌ Not in a game"))))
 
 ;; ============================================================================
 ;; Status & Information
@@ -307,19 +348,15 @@
 (defn show-card-text
   "Display full card information including text, cost, and abilities
    Usage: (show-card-text \"Sure Gamble\")
-          (show-card-text \"Tithe\")
-
-   Note: Currently not available - requires card database from main server.
-   Workaround: Use (show-card-abilities \"Card Name\") after installing."
+          (show-card-text \"Tithe\")"
   [card-name]
+  ;; Auto-load cards if not already loaded
+  (load-cards-from-api!)
+
   (if (empty? @all-cards)
     (do
-      (println "❌ Card database not loaded in AI client")
-      (println "   Card text lookup requires MongoDB connection from main server.")
-      (println "   ")
-      (println "   Workaround: Use 'abilities' command after installing the card")
-      (println "   Example:")
-      (println "     ./send_command abilities \"Smartware Distributor\""))
+      (println "❌ Failed to load card database")
+      (println "   Make sure the game server is running on localhost:1042"))
     (if-let [card (get @all-cards card-name)]
       (let [text (or (:text card) "")
             ;; Strip formatting markup for readability

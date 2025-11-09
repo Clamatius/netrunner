@@ -120,6 +120,7 @@ ${GREEN}Lobby:${NC}
   list-lobbies    - List available games to join
   join <game-id> <side>  - Join game as Runner or Corp
   resync <game-id>       - Rejoin already-started game
+  chat <message>         - Send chat message to game
 
 ${GREEN}Installation:${NC}
   install <name> [server]  - Install card by name (Corp needs server: HQ, "R&D", "New remote")
@@ -504,6 +505,14 @@ case "$COMMAND" in
         [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
         info "Resyncing game $GAME_ID..."
         execute "(ai-actions/resync-game! \"$GAME_ID\")"
+        ;;
+
+    chat)
+        ensure_connection
+        MESSAGE="${1:-}"
+        [[ -z "$MESSAGE" ]] && error "Usage: send_command chat <message>"
+        info "Sending chat message..."
+        execute "(ai-actions/send-chat! \"$MESSAGE\")"
         ;;
 
     # Installation

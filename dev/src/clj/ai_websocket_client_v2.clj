@@ -7,7 +7,9 @@
    [clojure.string :as str]
    [differ.core :as differ]
    [gniazdo.core :as ws])
-  (:import [java.net URLEncoder]))
+  (:import [java.net URLEncoder]
+           [org.eclipse.jetty.websocket.client WebSocketClient]
+           [org.eclipse.jetty.util.ssl SslContextFactory]))
 
 ;; ============================================================================
 ;; State Management
@@ -275,15 +277,27 @@
                      (str url "?client-id=" client-id
                           "&csrf-token=" (URLEncoder/encode csrf-token "UTF-8"))
                      (str url "?client-id=" client-id))
+          ;; Create custom WebSocket client with longer idle timeout (10 minutes instead of 5)
+          ;; This prevents connection drops when there's no activity
+          ws-client (if (.startsWith url "wss://")
+                      (WebSocketClient. (SslContextFactory.))
+                      (WebSocketClient.))
+          _ (doto (.getPolicy ws-client)
+              ;; Set idle timeout to 10 minutes (600000 ms) to prevent timeouts
+              ;; Server sends pings every ~30 seconds, so this gives plenty of buffer
+              (.setIdleTimeout 600000))
+          _ (.start ws-client)
           ;; Prepare connection options
           conn-opts {:on-receive on-receive
                      :on-connect (fn [& _args]
                                   (println "⏳ WebSocket connected, waiting for handshake..."))
                      :on-close (fn [& args]
                                 (println "❌ Disconnected:" (first args))
+                                (.stop ws-client)  ; Clean up custom client
                                 (swap! client-state assoc :connected false))
                      :on-error (fn [& args]
-                                (println "❌ Error:" (first args)))}
+                                (println "❌ Error:" (first args)))
+                     :client ws-client}  ; Pass custom client to gniazdo
           socket (ws/connect full-url conn-opts)]
       (swap! client-state assoc
              :socket socket
