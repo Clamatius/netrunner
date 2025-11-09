@@ -205,6 +205,15 @@
     :lobby/notification
     (println "🔔 Lobby notification:" data)
 
+    :chsk/ws-ping
+    ;; Respond to ping with pong to keep connection alive
+    (when-let [socket (:socket @client-state)]
+      (try
+        (let [pong-msg (pr-str [[:chsk/ws-pong]])]
+          (ws/send-msg socket pong-msg))
+        (catch Exception e
+          (println "❌ Failed to send pong:" (.getMessage e)))))
+
     ;; Default
     (when (not= type :chsk/ws-ping)
       (println "Unhandled message type:" type))))
