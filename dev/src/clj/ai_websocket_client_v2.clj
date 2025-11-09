@@ -267,6 +267,21 @@
   [url]
   (println "🔌 Connecting to" url "...")
   (try
+    ;; Close old connection if it exists to prevent leaks
+    (when-let [old-socket (:socket @client-state)]
+      (println "🧹 Closing old socket connection...")
+      (try
+        (ws/close old-socket)
+        (catch Exception e
+          (println "⚠️  Error closing old socket:" (.getMessage e)))))
+
+    (when-let [old-client (:ws-client @client-state)]
+      (println "🧹 Stopping old WebSocket client...")
+      (try
+        (.stop old-client)
+        (catch Exception e
+          (println "⚠️  Error stopping old client:" (.getMessage e)))))
+
     ;; Reuse existing client-id if available, otherwise generate new one
     (let [existing-id (:client-id @client-state)
           client-id (or existing-id (str "ai-client-" (java.util.UUID/randomUUID)))
@@ -301,6 +316,7 @@
           socket (ws/connect full-url conn-opts)]
       (swap! client-state assoc
              :socket socket
+             :ws-client ws-client  ; Store ws-client so we can clean it up later
              :client-id client-id)
       (if existing-id
         (println "✨ WebSocket reconnected with existing client-id:" client-id)
@@ -315,8 +331,16 @@
   []
   (when-let [socket (:socket @client-state)]
     (ws/close socket)
-    (swap! client-state assoc :socket nil :connected false)
-    (println "👋 Disconnected")))
+    (println "👋 Socket disconnected"))
+
+  (when-let [ws-client (:ws-client @client-state)]
+    (try
+      (.stop ws-client)
+      (println "👋 WebSocket client stopped")
+      (catch Exception e
+        (println "⚠️  Error stopping client:" (.getMessage e)))))
+
+  (swap! client-state assoc :socket nil :ws-client nil :connected false))
 
 ;; ============================================================================
 ;; Sending Messages
