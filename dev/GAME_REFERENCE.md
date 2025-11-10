@@ -382,6 +382,12 @@ A run is NOT a single action - it's a sequence of phases requiring responses:
 # Runner waits for Corp action
 ```
 
+**ICE Positions (0-indexed):**
+- Position 0 = outermost ICE (encountered first)
+- Position 1 = second ICE from outside
+- Position N = innermost ICE (encountered last)
+- Game log shows: "approaches ice protecting HQ at position 0"
+
 **3. Encounter ICE (if rezzed)**
 Runner uses icebreakers to break subroutines:
 
@@ -424,10 +430,34 @@ Prompts appear for each accessed card:
 ```
 
 **Jacking Out**
-End run at any time (before passing point of no return):
+
+⚠️ **CRITICAL: Jack-out timing is restricted!**
+
+You can ONLY jack out **AFTER passing ICE** (between pieces of stacked ICE), NOT during approach or encounter.
+
+Legal jack-out windows:
+- ✅ After passing ICE #1, before approaching ICE #2
+- ✅ After passing all ICE, before accessing server
+- ❌ During approach-ice phase
+- ❌ During encounter-ice phase
+
 ```bash
-./send_command jack-out
+# Example: Tactical jack-out after taking damage
+./send_command run "R&D"
+./send_command continue                    # Approach ICE #1
+./send_command continue                    # Encounter ICE #1 (takes 4 net damage)
+# ICE fires, you take damage but survive
+./send_command continue                    # Pass ICE #1
+# Now approaching ICE #2 which might flatline you
+./send_command jack-out                    # ✅ Legal - save yourself!
 ```
+
+**Common mistake:** Trying to jack out when you see dangerous ICE during approach. You MUST encounter it first, let subs fire, THEN jack out if still alive.
+
+**Potential automation:** Jack-out legality could be checked automatically based on run phase:
+- `run.phase` = "approach-ice" or "encounter-ice" → jack-out ILLEGAL
+- `run.phase` = "movement" (between ICE) → jack-out LEGAL
+- Server should enforce this, but worth validating before sending command
 
 #### ICE Breaking Examples
 
