@@ -1335,6 +1335,85 @@
 ;; Help
 ;; ============================================================================
 
+(defn list-playables
+  "List all currently playable actions (cards, abilities, basic actions)
+   Useful for AI decision-making - shows exactly what can be done right now"
+  []
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        gs (:game-state state)
+        my-state (get gs side)
+        clicks (:click my-state)
+        credits (:credit my-state)
+        hand (:hand my-state)
+        rig (:rig my-state)]
+
+    (println "\n=== PLAYABLE ACTIONS ===")
+    (println (format "Clicks: %s  Credits: %s"
+                     (or clicks "?")
+                     (or credits "?")))
+
+    ;; Playable hand cards
+    (let [playable-cards (filter :playable hand)]
+      (when (seq playable-cards)
+        (println "\n📋 Hand Cards:")
+        (doseq [card playable-cards]
+          (println (format "  - %s (%s, %d credits)"
+                          (:title card)
+                          (:type card)
+                          (:cost card))))))
+
+    ;; Playable installed abilities
+    (let [all-installed (concat
+                         (get rig :hardware [])
+                         (get rig :program [])
+                         (get rig :resource []))
+          playable-abilities (for [card all-installed
+                                  [idx ability] (map-indexed vector (:abilities card))
+                                  :when (:playable ability)]
+                              {:card (:title card)
+                               :idx idx
+                               :label (:label ability)
+                               :cost (:cost-label ability)})]
+      (when (seq playable-abilities)
+        (println "\n⚙️  Installed Abilities:")
+        (doseq [{:keys [card idx label cost]} playable-abilities]
+          (println (format "  - %s: Ability %d - %s%s"
+                          card
+                          idx
+                          label
+                          (if cost (str " (" cost ")") ""))))))
+
+    ;; Basic actions (always available if clicks > 0)
+    (when (and clicks (pos? clicks))
+      (println "\n🎯 Basic Actions:")
+      (println "  - take-credit (gain 1 credit, costs 1 click)")
+      (println "  - run <server> (initiate run, costs 1 click)")
+      (when (= side :corp)
+        (println "  - draw-card (draw 1 card, costs 1 click)")
+        (println "  - purge (remove all virus counters, costs 3 clicks)")))
+
+    ;; Always available
+    (println "\n⏭️  Other Actions:")
+    (println "  - end-turn (end current turn)")
+    (println "")
+
+    ;; Return count of playable actions
+    (let [card-count (count (filter :playable hand))
+          ability-count (count (for [card (concat (get rig :hardware [])
+                                                  (get rig :program [])
+                                                  (get rig :resource []))
+                                    ability (:abilities card)
+                                    :when (:playable ability)]
+                                ability))]
+      (println (format "Total: %d playable cards, %d playable abilities, %s basic actions"
+                      card-count
+                      ability-count
+                      (if (and clicks (pos? clicks)) (if (= side :corp) "4" "2") "0")))
+      {:playable-cards card-count
+       :playable-abilities ability-count
+       :clicks clicks})))
+
 (defn help
   "Show available commands"
   []
@@ -1349,6 +1428,7 @@
   (println "  (status)                           - Show game status")
   (println "  (show-prompt)                      - Show current prompt")
   (println "  (hand)                             - Show my hand")
+  (println "  (list-playables)                   - List all playable actions")
   (println "\nMulligan:")
   (println "  (keep-hand)                        - Keep hand")
   (println "  (mulligan)                         - Redraw hand")

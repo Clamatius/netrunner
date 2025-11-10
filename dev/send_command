@@ -81,6 +81,7 @@ ${GREEN}Status Commands:${NC}
   log [N]         - Show last N game log entries (default: 20)
   card-text <name>   - Look up card information (type, cost, text)
   abilities <name>   - Show abilities for installed card
+  list-playables  - List all currently playable actions (cards, abilities)
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
@@ -226,6 +227,12 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"
         execute "(ai-actions/show-card-abilities \"$CARD_NAME\")"
+        ;;
+
+    list-playables)
+        ensure_connection
+        info "Listing all playable actions..."
+        execute "(ai-actions/list-playables)"
         ;;
 
     # Basic actions
