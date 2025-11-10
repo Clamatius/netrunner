@@ -518,6 +518,58 @@
   (let [side (:side @client-state)]
     (get-in @client-state [:game-state (keyword side) :prompt-state])))
 
+(defn get-turn-status
+  "Get structured turn status information
+   Returns map with:
+   - :whose-turn - 'runner', 'corp', or 'none'
+   - :my-turn? - boolean
+   - :turn-number - integer
+   - :can-act? - boolean (my turn AND not waiting prompt)
+   - :in-run? - boolean
+   - :run-server - server name if in run
+   - :status-emoji - visual indicator
+   - :status-text - human-readable status"
+  []
+  (let [gs (get-game-state)
+        my-side (:side @client-state)
+        active-side (active-player)
+        turn-num (turn-number)
+        end-turn (get-in gs [:end-turn])
+        prompt (get-prompt)
+        prompt-type (:prompt-type prompt)
+        run-state (get-in gs [:run])
+        runner-clicks (get-in gs [:runner :click])
+        corp-clicks (get-in gs [:corp :click])
+        both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
+        my-turn (= my-side active-side)
+
+        ;; Determine status
+        [emoji text can-act]
+        (cond
+          both-zero-clicks
+          ["🟢" "Waiting to start turn" false]
+
+          (not my-turn)
+          ["⏳" (str "Waiting for " active-side) false]
+
+          end-turn
+          ["🟢" "Ready to start turn" true]
+
+          (= :waiting prompt-type)
+          ["⏳" (or (:msg prompt) "Waiting...") false]
+
+          :else
+          ["✅" "Your turn to act" true])]
+
+    {:whose-turn active-side
+     :my-turn? my-turn
+     :turn-number turn-num
+     :can-act? can-act
+     :in-run? (boolean run-state)
+     :run-server (:server run-state)
+     :status-emoji emoji
+     :status-text text}))
+
 (defn show-prompt
   "Display current prompt in readable format"
   []

@@ -215,6 +215,11 @@ case "$COMMAND" in
         execute "(ai-actions/show-card-text \"$CARD_NAME\")"
         ;;
 
+    hand-text)
+        info "Looking up all cards in hand..."
+        execute "(ai-actions/show-hand-cards)"
+        ;;
+
     abilities)
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"

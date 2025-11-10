@@ -88,6 +88,88 @@
   [label before after]
   (println (str label ": " before " → " after)))
 
+(defn show-turn-indicator
+  "Display turn status indicator after command execution"
+  []
+  (let [status (ws/get-turn-status)
+        emoji (:status-emoji status)
+        text (:status-text status)
+        turn-num (:turn-number status)
+        in-run (:in-run? status)
+        run-server (:run-server status)
+        clicks (ws/my-clicks)]
+    (if in-run
+      (println (str emoji " " text " | In run on " run-server))
+      (if (:can-act? status)
+        (println (str emoji " " text " - " clicks " clicks remaining"))
+        (println (str emoji " " text))))))
+
+(defn capture-state-snapshot
+  "Capture current game state for before/after comparison
+   Returns map with key state values"
+  []
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        gs (:game-state state)
+        runner-state (:runner gs)
+        corp-state (:corp gs)
+        rig (:rig runner-state)
+        servers (:servers corp-state)]
+    {:credits (get-in gs [side :credit])
+     :clicks (get-in gs [side :click])
+     :hand-size (count (get-in gs [side :hand]))
+     :deck-size (count (get-in gs [side :deck]))
+     :discard-size (count (get-in gs [side :discard]))
+     :installed-count (if (= side :runner)
+                       (+ (count (:program rig))
+                          (count (:hardware rig))
+                          (count (:resource rig)))
+                       ;; Corp: count all content + ICE across servers
+                       (reduce + (map #(+ (count (:content %))
+                                         (count (:ices %)))
+                                     (vals servers))))}))
+
+(defn show-state-diff
+  "Display state changes between two snapshots
+   Compact mode shows single line, detailed shows multi-line"
+  ([before after] (show-state-diff before after false))
+  ([before after detailed?]
+   (let [credit-diff (- (:credits after) (:credits before))
+         click-diff (- (:clicks after) (:clicks before))
+         hand-diff (- (:hand-size after) (:hand-size before))
+         installed-diff (- (:installed-count after) (:installed-count before))
+         deck-diff (- (:deck-size after) (:deck-size before))
+         discard-diff (- (:discard-size after) (:discard-size before))]
+
+     (if detailed?
+       ;; Detailed mode: multi-line
+       (do
+         (when (not= credit-diff 0)
+           (println (str "💰 Credits: " (:credits before) " → " (:credits after))))
+         (when (not= click-diff 0)
+           (println (str "⏱️  Clicks: " (:clicks before) " → " (:clicks after))))
+         (when (not= hand-diff 0)
+           (println (str "🃏 Hand: " (:hand-size before) " → " (:hand-size after) " cards")))
+         (when (not= installed-diff 0)
+           (println (str "📊 Installed: " (:installed-count before) " → " (:installed-count after))))
+         (when (not= deck-diff 0)
+           (println (str "📚 Deck: " (:deck-size before) " → " (:deck-size after))))
+         (when (not= discard-diff 0)
+           (println (str "🗑️  Discard: " (:discard-size before) " → " (:discard-size after)))))
+
+       ;; Compact mode: single line
+       (let [changes (filter identity
+                            [(when (not= credit-diff 0)
+                               (str "💰 " (:credits before) "→" (:credits after)))
+                             (when (not= click-diff 0)
+                               (str "⏱️ " (:clicks before) "→" (:clicks after)))
+                             (when (not= hand-diff 0)
+                               (str "🃏 " (:hand-size before) "→" (:hand-size after)))
+                             (when (not= installed-diff 0)
+                               (str "📊 " (:installed-count before) "→" (:installed-count after)))])]
+         (when (seq changes)
+           (println (clojure.string/join "  " changes))))))))
+
 ;; ============================================================================
 ;; Lobby Management
 ;; ============================================================================
@@ -416,6 +498,75 @@
         (println (clojure.string/join "" (repeat 70 "="))))
       (println "❌ Card not found:" card-name))))
 
+(defn show-cards
+  "Display multiple cards in compact or full format
+   Usage: (show-cards [\"Sure Gamble\" \"Diesel\" \"Dirty Laundry\"])
+          (show-cards [\"Sure Gamble\" \"Diesel\"] true) ; full format"
+  ([card-names] (show-cards card-names false))
+  ([card-names full?]
+   ;; Auto-load cards if not already loaded
+   (load-cards-from-api!)
+
+   (if (empty? @all-cards)
+     (do
+       (println "❌ Failed to load card database")
+       (println "   Make sure the game server is running on localhost:1042"))
+     (do
+       (println (str "\n📚 Card Reference (" (count card-names) " cards):"))
+       (println (clojure.string/join "" (repeat 70 "─")))
+
+       (doseq [card-name card-names]
+         (if-let [card (get @all-cards card-name)]
+           (if full?
+             ;; Full format - same as show-card-text
+             (let [text (or (:text card) "")
+                   clean-text (-> text
+                                 (clojure.string/replace #"\[Click\]" "[Click]")
+                                 (clojure.string/replace #"\[Credit\]" "[Credit]")
+                                 (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
+                                 (clojure.string/replace #"\[Trash\]" "[Trash]")
+                                 (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
+                                 (clojure.string/replace #"\[mu\]" "[MU]")
+                                 (clojure.string/replace #"<[^>]+>" ""))]
+               (println (str "\n📄 " (:title card)))
+               (println "Type:" (:type card)
+                       (when (:subtype card) (str "- " (:subtype card))))
+               (when-let [cost (:cost card)] (println "Cost:" cost))
+               (when-let [strength (:strength card)] (println "Strength:" strength))
+               (when (not-empty clean-text)
+                 (println "Text:" clean-text)))
+
+             ;; Compact format - one line per card
+             (let [type-str (:type card)
+                   cost-str (when-let [c (:cost card)] (str c "¢"))
+                   subtitle (if cost-str
+                             (str type-str ", " cost-str)
+                             type-str)
+                   text (or (:text card) "")
+                   ;; Get first sentence or first 60 chars
+                   short-text (let [first-sentence (first (clojure.string/split text #"\." ))]
+                               (if (> (count first-sentence) 60)
+                                 (str (subs first-sentence 0 57) "...")
+                                 first-sentence))]
+               (println (str "📄 " (:title card) " (" subtitle ")"))
+               (when (not-empty short-text)
+                 (println (str "   " short-text)))))
+           (println (str "❌ Card not found: " card-name))))
+
+       (println (clojure.string/join "" (repeat 70 "─")))))))
+
+(defn show-hand-cards
+  "Display information for all cards currently in hand
+   Usage: (show-hand-cards)
+          (show-hand-cards true) ; full format"
+  ([] (show-hand-cards false))
+  ([full?]
+   (let [hand (ws/my-hand)
+         card-names (map :title hand)]
+     (if (empty? card-names)
+       (println "🃏 Hand is empty")
+       (show-cards card-names full?)))))
+
 ;; ============================================================================
 ;; Basic Actions
 ;; ============================================================================
@@ -438,7 +589,8 @@
           credits (get-in state [:game-state (keyword side) :credit])]
       (println "✅ Turn started!")
       (println "   Clicks:" clicks)
-      (println "   Credits:" credits))))
+      (println "   Credits:" credits)
+      (show-turn-indicator))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -473,7 +625,8 @@
           after-credits (get-in state [:game-state (keyword side) :credit])
           after-clicks (get-in state [:game-state (keyword side) :click])]
       (show-before-after "💰 Credits" before-credits after-credits)
-      (show-before-after "⏱️  Clicks" before-clicks after-clicks))))
+      (show-before-after "⏱️  Clicks" before-clicks after-clicks)
+      (show-turn-indicator))))
 
 (defn draw-card!
   "Draw a card (shows before/after)"
@@ -517,7 +670,8 @@
                        :command "end-turn"
                        :args nil})
     (Thread/sleep 2000)
-    (println "🏁 Turn ended")))
+    (println "🏁 Turn ended")
+    (show-turn-indicator)))
 
 ;; Keep old function names for backwards compatibility
 (defn take-credits []
@@ -632,7 +786,8 @@
   [name-or-index]
   (let [card (find-card-in-hand name-or-index)]
     (if card
-      (let [state @ws/client-state
+      (let [before-state (capture-state-snapshot)
+            state @ws/client-state
             gameid (:gameid state)
             card-ref (create-card-ref card)
             card-title (:title card)]
@@ -644,8 +799,12 @@
                            :args {:card card-ref}})
         ;; Wait and verify action appeared in log
         (if (verify-action-in-log card-title 3000)
-          (println (str "✅ Played: " card-title))
-          (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)"))))
+          (do
+            (println (str "✅ Played: " card-title))
+            (let [after-state (capture-state-snapshot)]
+              (show-state-diff before-state after-state false)))
+          (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
+        (show-turn-indicator))
       (println (str "❌ Card not found in hand: " name-or-index)))))
 
 (defn install-card!
@@ -667,7 +826,8 @@
   ([name-or-index server]
    (let [card (find-card-in-hand name-or-index)]
      (if card
-       (let [state @ws/client-state
+       (let [before-state (capture-state-snapshot)
+             state @ws/client-state
              gameid (:gameid state)
              card-ref (create-card-ref card)
              card-title (:title card)
@@ -684,10 +844,14 @@
                             :args args})
          ;; Wait and verify action appeared in log
          (if (verify-action-in-log card-title 3000)
-           (if server
-             (println (str "✅ Installed: " card-title " on " server))
-             (println (str "✅ Installed: " card-title)))
-           (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)"))))
+           (do
+             (if server
+               (println (str "✅ Installed: " card-title " on " server))
+               (println (str "✅ Installed: " card-title)))
+             (let [after-state (capture-state-snapshot)]
+               (show-state-diff before-state after-state false)))
+           (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
+         (show-turn-indicator))
        (println (str "❌ Card not found in hand: " name-or-index))))))
 
 (defn run!
