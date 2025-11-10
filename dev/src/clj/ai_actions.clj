@@ -997,6 +997,35 @@
         (println (str "✅ Used ability " ability-index " on " (:title card))))
       (println (str "❌ Card not found installed: " card-name)))))
 
+(defn use-runner-ability!
+  "Use a runner ability on a Corp card (e.g., bioroid click-to-break)
+   Runner abilities are special abilities on Corp cards that the Runner can activate
+   Most commonly used for bioroid ICE during encounters
+
+   Usage: (use-runner-ability! \"Brân 1.0\" 0)
+          During encounter, activates the bioroid's click-to-break ability"
+  [card-name ability-index]
+  (let [state @ws/client-state
+        ;; Find the Corp card (usually ICE during encounter)
+        card (find-installed-corp-card card-name)]
+    (if card
+      (let [gameid (:gameid state)
+            ;; Create card reference matching wire format
+            card-ref {:cid (:cid card)
+                     :zone (:zone card)
+                     :side (:side card)
+                     :type (:type card)}]
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "runner-ability"
+                           :args {:card card-ref
+                                  :ability ability-index}})
+        (Thread/sleep 1500)
+        (println (str "✅ Used runner-ability " ability-index " on " (:title card))))
+      (println (str "❌ Card not found: " card-name)))))
+
 (defn find-installed-corp-card
   "Find an installed Corp card by title
    Searches all servers for ICE, assets, and upgrades"
@@ -1469,6 +1498,23 @@
                           idx
                           label
                           (if cost (str " (" cost ")") ""))))))
+
+    ;; Runner abilities on Corp cards (e.g., bioroid click-to-break)
+    ;; Check prompt-state for runner abilities during encounters
+    (when (= side :runner)
+      (let [prompt-state (get-in gs [:runner :prompt-state])
+            prompt-card (:card prompt-state)
+            runner-abilities (:runner-abilities prompt-card)]
+        (when (seq runner-abilities)
+          (println "\n🔓 Runner Abilities (Bioroid/Corp cards):")
+          (doseq [[idx ability] (map-indexed vector runner-abilities)]
+            (println (format "  - %s: Runner-Ability %d - %s%s"
+                            (:title prompt-card)
+                            idx
+                            (:label ability)
+                            (if-let [cost (:cost-label ability)]
+                              (str " (" cost ")")
+                              "")))))))
 
     ;; Basic actions (always available if clicks > 0)
     (when (and clicks (pos? clicks))

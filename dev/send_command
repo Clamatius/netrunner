@@ -99,6 +99,7 @@ ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
   play-index <N>  - Play card by index (0-4)
   use-ability <name> <N>  - Use installed card's ability N (e.g., "Smartware Distributor" 0)
+  use-runner-ability <name> <N> - Use runner ability on Corp card (e.g., "Brân 1.0" 0 for bioroid)
   trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
@@ -340,6 +341,17 @@ case "$COMMAND" in
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
         execute "(ai-actions/use-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        ;;
+
+    use-runner-ability)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        ABILITY_INDEX="${2:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
+        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
+        [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
+        info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
+        execute "(ai-actions/use-runner-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
         ;;
 
     # Trash installed card
