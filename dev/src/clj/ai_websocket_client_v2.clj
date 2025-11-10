@@ -502,11 +502,28 @@
 (defn runner-state [] (get-in @client-state [:game-state :runner]))
 (defn corp-state [] (get-in @client-state [:game-state :corp]))
 
-(defn my-credits [] (get-in @client-state [:game-state :runner :credit]))
-(defn my-clicks [] (get-in @client-state [:game-state :runner :click]))
-(defn my-hand [] (get-in @client-state [:game-state :runner :hand]))
-(defn my-hand-count [] (get-in @client-state [:game-state :runner :hand-count]))
-(defn my-installed [] (get-in @client-state [:game-state :runner :rig]))
+(defn my-credits []
+  (let [side (keyword (:side @client-state))]
+    (get-in @client-state [:game-state side :credit])))
+
+(defn my-clicks []
+  (let [side (keyword (:side @client-state))]
+    (get-in @client-state [:game-state side :click])))
+
+(defn my-hand []
+  (let [side (keyword (:side @client-state))]
+    (get-in @client-state [:game-state side :hand])))
+
+(defn my-hand-count []
+  (let [side (keyword (:side @client-state))]
+    (get-in @client-state [:game-state side :hand-count])))
+
+(defn my-installed []
+  (let [side (keyword (:side @client-state))]
+    (if (= side :runner)
+      (get-in @client-state [:game-state :runner :rig])
+      ;; Corp doesn't have a "rig", return nil or servers
+      nil)))
 
 (defn corp-credits [] (get-in @client-state [:game-state :corp :credit]))
 (defn corp-clicks [] (get-in @client-state [:game-state :corp :click]))
