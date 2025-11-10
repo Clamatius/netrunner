@@ -1468,6 +1468,15 @@
                      (or clicks "?")
                      (or credits "?")))
 
+    ;; Check for active prompts
+    (let [prompt (first (:prompt my-state))
+          prompt-state (:prompt-state my-state)]
+      (when (or prompt prompt-state)
+        (let [msg (or (:msg prompt-state) (:msg prompt))]
+          (when msg
+            (println (format "\n⚠️  Active Prompt: %s" msg))
+            (println "   Use 'send_command prompt' to see choices, or 'send_command choose <N>' to resolve")))))
+
     ;; Playable hand cards
     (let [playable-cards (filter :playable hand)]
       (when (seq playable-cards)
