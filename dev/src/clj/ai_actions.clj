@@ -35,6 +35,30 @@
 ;; Helper Functions
 ;; ============================================================================
 
+(defn verify-action-in-log
+  "Check if a card action appears in recent game log entries
+   Returns true if card name found, false otherwise
+   Waits up to max-wait-ms for the log entry to appear"
+  [card-name max-wait-ms]
+  (let [deadline (+ (System/currentTimeMillis) max-wait-ms)
+        check-log (fn []
+                   (let [state @ws/client-state
+                         log (get-in state [:game-state :log])
+                         recent-log (take-last 5 log)]
+                     ;; Check if card name appears in any recent log entry
+                     (some #(when (string? (:text %))
+                             (clojure.string/includes? (:text %) card-name))
+                           recent-log)))]
+    ;; Poll until we find it or timeout
+    (loop []
+      (if (check-log)
+        true
+        (if (< (System/currentTimeMillis) deadline)
+          (do
+            (Thread/sleep 200)
+            (recur))
+          false)))))
+
 (defn find-card-in-hand
   "Find card in hand by name or index
    Returns card object or nil if not found"
@@ -610,15 +634,18 @@
     (if card
       (let [state @ws/client-state
             gameid (:gameid state)
-            card-ref (create-card-ref card)]
+            card-ref (create-card-ref card)
+            card-title (:title card)]
         (ws/send-message! :game/action
                           {:gameid (if (string? gameid)
                                     (java.util.UUID/fromString gameid)
                                     gameid)
                            :command "play"
                            :args {:card card-ref}})
-        (Thread/sleep 2000)
-        (println (str "✅ Played: " (:title card))))
+        ;; Wait and verify action appeared in log
+        (if (verify-action-in-log card-title 3000)
+          (println (str "✅ Played: " card-title))
+          (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)"))))
       (println (str "❌ Card not found in hand: " name-or-index)))))
 
 (defn install-card!
@@ -643,6 +670,7 @@
        (let [state @ws/client-state
              gameid (:gameid state)
              card-ref (create-card-ref card)
+             card-title (:title card)
              ;; Both Corp and Runner use "play" command
              ;; Corp requires :server, Runner installs without :server arg
              args (if server
@@ -654,10 +682,12 @@
                                      gameid)
                             :command "play"
                             :args args})
-         (Thread/sleep 2000)
-         (if server
-           (println (str "✅ Installing: " (:title card) " on " server))
-           (println (str "✅ Installing: " (:title card)))))
+         ;; Wait and verify action appeared in log
+         (if (verify-action-in-log card-title 3000)
+           (if server
+             (println (str "✅ Installed: " card-title " on " server))
+             (println (str "✅ Installed: " card-title)))
+           (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)"))))
        (println (str "❌ Card not found in hand: " name-or-index))))))
 
 (defn run!
@@ -819,8 +849,10 @@
                                         gameid)
                                :command "rez"
                                :args {:card card-ref}})
-            (Thread/sleep 1500)
-            (println (str "✅ Rezzed: " (:title card))))
+            ;; Wait and verify action appeared in log
+            (if (verify-action-in-log card-name 3000)
+              (println (str "✅ Rezzed: " card-name))
+              (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
 (defn fire-unbroken-subs!
@@ -875,8 +907,10 @@
                                         gameid)
                                :command "advance"
                                :args {:card card-ref}})
-            (Thread/sleep 1500)
-            (println (str "✅ Advanced: " (:title card))))
+            ;; Wait and verify action appeared in log
+            (if (verify-action-in-log card-name 3000)
+              (println (str "✅ Advanced: " card-name))
+              (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
 (defn score-agenda!
@@ -904,8 +938,10 @@
                                           gameid)
                                  :command "score"
                                  :args {:card card-ref}})
-              (Thread/sleep 1500)
-              (println (str "✅ Scored: " (:title card))))
+              ;; Wait and verify action appeared in log (look for "score" or card name)
+              (if (verify-action-in-log card-name 3000)
+                (println (str "✅ Scored: " card-name))
+                (println (str "⚠️  Sent score command for: " card-name " - but action not confirmed in game log (may have failed)"))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
           (println (str "❌ Card not found installed: " card-name)))))))
 
