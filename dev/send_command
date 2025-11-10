@@ -106,6 +106,7 @@ ${GREEN}Card Actions:${NC}
 
 ${GREEN}Runner Actions:${NC}
   run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
+  let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
@@ -356,6 +357,15 @@ case "$COMMAND" in
         [[ -z "$ICE_NAME" ]] && error "Usage: send_command fire-subs <ice-name>"
         info "Firing unbroken subroutines on $ICE_NAME..."
         execute "(ai-actions/fire-unbroken-subs! \"$ICE_NAME\")"
+        ;;
+
+    # Let ICE subroutines fire (Runner)
+    let-subs-fire)
+        ensure_connection
+        ICE_NAME="${1:-}"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command let-subs-fire <ice-name>"
+        info "Signaling intent to let subs fire on $ICE_NAME..."
+        execute "(ai-actions/let-subs-fire! \"$ICE_NAME\")"
         ;;
 
     # Advance card

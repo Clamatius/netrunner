@@ -1050,6 +1050,28 @@
               (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
+(defn let-subs-fire!
+  "Signal intent to let unbroken subroutines fire (Runner only)
+   Sends a system message to indicate Runner is allowing subs to fire
+
+   Usage: (let-subs-fire! \"Whitespace\")
+          (let-subs-fire! \"IP Block\")"
+  [ice-name]
+  (let [state @ws/client-state
+        side (:side state)
+        gameid (:gameid state)]
+    (if (not= "runner" (clojure.string/lower-case (or side "")))
+      (println "❌ Only Runner can let subroutines fire")
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "system-msg"
+                           :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
+        (Thread/sleep 1000)
+        (println (str "✅ Signaled intent to let subs fire on: " ice-name))))))
+
 (defn fire-unbroken-subs!
   "Fire unbroken subroutines on ICE (Corp only)
    Used during runs when Runner doesn't/can't break all subs
@@ -1059,7 +1081,8 @@
   [ice-name]
   (let [state @ws/client-state
         side (:side state)]
-    (if (not= "Corp" side)
+    ;; Use case-insensitive comparison since side is lowercase "corp"
+    (if (not= "corp" (clojure.string/lower-case (or side "")))
       (println "❌ Only Corp can fire ICE subroutines")
       (let [card (find-installed-corp-card ice-name)]
         (if card
