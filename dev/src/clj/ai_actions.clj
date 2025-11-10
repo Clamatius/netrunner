@@ -35,20 +35,50 @@
 ;; Helper Functions
 ;; ============================================================================
 
+(defn get-log-size
+  "Get current size of the game log"
+  []
+  (let [state @ws/client-state
+        log (get-in state [:game-state :log])]
+    (count log)))
+
+(defn verify-new-log-entry
+  "Check if a new log entry was added (log size increased)
+   Waits up to max-wait-ms for a new entry to appear
+   initial-size: the log size before the action was sent"
+  [initial-size max-wait-ms]
+  (let [deadline (+ (System/currentTimeMillis) max-wait-ms)]
+    ;; Poll until log size increases or timeout
+    (loop []
+      (let [current-size (get-log-size)]
+        (if (> current-size initial-size)
+          true
+          (if (< (System/currentTimeMillis) deadline)
+            (do
+              (Thread/sleep 200)
+              (recur))
+            false))))))
+
 (defn verify-action-in-log
   "Check if a card action appears in recent game log entries
-   Returns true if card name found, false otherwise
-   Waits up to max-wait-ms for the log entry to appear"
+   Returns true if card name found OR if log size increased, false otherwise
+   Waits up to max-wait-ms for the log entry to appear
+
+   NOTE: For Corp hidden cards, card names don't appear in log (shown as 'a card')
+         so we check for ANY new log entry as confirmation"
   [card-name max-wait-ms]
-  (let [deadline (+ (System/currentTimeMillis) max-wait-ms)
+  (let [initial-size (get-log-size)
+        deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-log (fn []
                    (let [state @ws/client-state
                          log (get-in state [:game-state :log])
-                         recent-log (take-last 5 log)]
-                     ;; Check if card name appears in any recent log entry
-                     (some #(when (string? (:text %))
-                             (clojure.string/includes? (:text %) card-name))
-                           recent-log)))]
+                         current-size (count log)]
+                     ;; Success if: log grew OR card name appears in recent entries
+                     (or (> current-size initial-size)
+                         (let [recent-log (take-last 5 log)]
+                           (some #(when (string? (:text %))
+                                   (clojure.string/includes? (:text %) card-name))
+                                 recent-log)))))]
     ;; Poll until we find it or timeout
     (loop []
       (if (check-log)
