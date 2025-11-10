@@ -115,6 +115,7 @@ ${GREEN}Prompts:${NC}
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   continue        - Continue/pass priority (for paid ability windows, run phases)
   jack-out        - Jack out of current run (end run unsuccessfully)
+  wait-for-diff [seconds] - Wait for game state change (opponent action, run phase, etc.)
 
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
@@ -447,6 +448,13 @@ case "$COMMAND" in
                      :args nil})
                   (Thread/sleep 1000)
                   (println "✅ Jacked out (run ended unsuccessfully)"))'
+        ;;
+
+    wait-for-diff)
+        ensure_connection
+        TIMEOUT="${1:-60}"
+        info "Waiting for game state change (timeout: ${TIMEOUT}s)..."
+        execute "(ai-actions/wait-for-diff $TIMEOUT)"
         ;;
 
     # Lobby

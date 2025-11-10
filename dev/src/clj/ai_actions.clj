@@ -1278,6 +1278,37 @@
         (println "⏱️  Timeout waiting for prompt")
         nil))))
 
+(defn wait-for-diff
+  "Wait for game state to change (any diff received)
+   Monitors game-state updates via WebSocket diffs
+   Useful for waiting for opponent actions, run phases, etc.
+
+   Usage: (wait-for-diff)       ;; default 60s timeout
+          (wait-for-diff 120)   ;; custom timeout seconds"
+  ([]
+   (wait-for-diff 60))
+  ([timeout-seconds]
+   (let [initial-state @ws/client-state
+         deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
+     (println (format "⏳ Waiting for game state change (timeout: %ds)..." timeout-seconds))
+     (loop [checks 0]
+       (Thread/sleep 500)  ;; Check twice per second
+       (let [current-state @ws/client-state
+             state-changed? (not= initial-state current-state)]
+         (cond
+           state-changed?
+           (do
+             (println "✅ Game state changed")
+             :state-changed)
+
+           (> (System/currentTimeMillis) deadline)
+           (do
+             (println "⏱️  Timeout waiting for state change")
+             :timeout)
+
+           :else
+           (recur (inc checks))))))))
+
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
   [max-seconds]
@@ -1441,6 +1472,8 @@
   (println "  (choose 0)                         - Choose first option")
   (println "  (wait-for-prompt 10)               - Wait for prompt")
   (println "  (wait-for-my-turn 30)              - Wait for my turn")
+  (println "  (wait-for-diff)                    - Wait for any state change")
+  (println "  (wait-for-diff 120)                - Wait with custom timeout")
   (println "\nWorkflows:")
   (println "  (simple-corp-turn)                 - 3x credit, end")
   (println "  (simple-runner-turn)               - 4x credit, end")
