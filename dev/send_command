@@ -269,6 +269,18 @@ case "$COMMAND" in
         execute '(ai-actions/end-turn!)'
         ;;
 
+    # Dev/Testing commands
+    change)
+        ensure_connection
+        KEY="${1:-}"
+        DELTA="${2:-}"
+        [[ -z "$KEY" ]] && error "Usage: send_command change <key> <delta>"
+        [[ -z "$DELTA" ]] && error "Usage: send_command change <key> <delta>"
+        [[ ! "$DELTA" =~ ^-?[0-9]+$ ]] && error "Delta must be a number"
+        info "Changing $KEY by $DELTA (dev backdoor)..."
+        execute "(ai-actions/change! :$KEY $DELTA)"
+        ;;
+
     # Mulligan
     keep-hand)
         ensure_connection

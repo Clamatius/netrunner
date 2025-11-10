@@ -728,6 +728,34 @@
   (end-turn!))
 
 ;; ============================================================================
+;; Dev/Testing Commands
+;; ============================================================================
+
+(defn change!
+  "Dev command to modify game state - changes key by delta
+   Example: (change! :credit 10) to add 10 credits
+   Example: (change! :click 2) to add 2 clicks
+
+   WARNING: This is a testing backdoor and will appear in game log!"
+  [key delta]
+  (let [state @ws/client-state
+        gameid (:gameid state)]
+    (println "🔧 Changing" key "by" delta)
+    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                (java.util.UUID/fromString gameid)
+                                gameid)
+                       :command "change"
+                       :args {:key key :delta delta}})
+    (Thread/sleep 500)
+    (println "✅ Change sent")))
+
+(defn change
+  "Alias for change! for backwards compatibility"
+  [key delta]
+  (change! key delta))
+
+;; ============================================================================
 ;; Prompts & Choices
 ;; ============================================================================
 
@@ -985,14 +1013,31 @@
             card-ref {:cid (:cid card)
                      :zone (:zone card)
                      :side (:side card)
-                     :type (:type card)}]
-        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
-                           :command "ability"
-                           :args {:card card-ref
-                                  :ability ability-index}})
+                     :type (:type card)}
+            ;; Check if this ability is dynamic (e.g., auto-pump, auto-pump-and-break)
+            abilities (:abilities card)
+            ability (when (and abilities (< ability-index (count abilities)))
+                     (nth abilities ability-index))
+            dynamic-type (:dynamic ability)]
+        (if dynamic-type
+          ;; Use dynamic-ability command for abilities with :dynamic field
+          (do
+            (println (str "🔧 Using dynamic ability '" dynamic-type "' on " (:title card)))
+            (ws/send-message! :game/action
+                              {:gameid (if (string? gameid)
+                                        (java.util.UUID/fromString gameid)
+                                        gameid)
+                               :command "dynamic-ability"
+                               :args {:card card-ref
+                                      :dynamic dynamic-type}}))
+          ;; Use regular ability command for normal abilities
+          (ws/send-message! :game/action
+                            {:gameid (if (string? gameid)
+                                      (java.util.UUID/fromString gameid)
+                                      gameid)
+                             :command "ability"
+                             :args {:card card-ref
+                                    :ability ability-index}}))
         (Thread/sleep 1500)
         (println (str "✅ Used ability " ability-index " on " (:title card))))
       (println (str "❌ Card not found installed: " card-name)))))
