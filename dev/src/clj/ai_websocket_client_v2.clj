@@ -558,7 +558,10 @@
         runner-clicks (get-in gs [:runner :click])
         corp-clicks (get-in gs [:corp :click])
         both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
-        my-turn (= my-side active-side)
+        ;; Compare case-insensitively since my-side is "Corp"/"Runner" but active-side is "corp"/"runner"
+        my-turn (and my-side active-side
+                     (= (clojure.string/lower-case my-side)
+                        (clojure.string/lower-case active-side)))
 
         ;; Determine status
         [emoji text can-act]
