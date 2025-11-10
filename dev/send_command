@@ -101,6 +101,7 @@ ${GREEN}Card Actions:${NC}
   trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
+  auto-pass       - Toggle auto-pass priority during runs (Corp only)
   advance <name>  - Advance installed card (Corp only: agendas, ICE, assets)
   score <name>    - Score agenda with sufficient advancement counters (Corp only)
 
@@ -366,6 +367,13 @@ case "$COMMAND" in
         [[ -z "$ICE_NAME" ]] && error "Usage: send_command let-subs-fire <ice-name>"
         info "Signaling intent to let subs fire on $ICE_NAME..."
         execute "(ai-actions/let-subs-fire! \"$ICE_NAME\")"
+        ;;
+
+    # Toggle auto-pass priority (Corp)
+    auto-pass)
+        ensure_connection
+        info "Toggling auto-pass priority..."
+        execute "(ai-actions/toggle-auto-no-action!)"
         ;;
 
     # Advance card

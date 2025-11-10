@@ -1089,6 +1089,28 @@
         (Thread/sleep 1000)
         (println (str "✅ Signaled intent to let subs fire on: " ice-name))))))
 
+(defn toggle-auto-no-action!
+  "Toggle auto-pass priority during runs (Corp only)
+   When enabled, automatically passes on all rez/paid ability windows
+   Prompt changes to 'Stop Auto-passing Priority' when active
+
+   Usage: (toggle-auto-no-action!)"
+  []
+  (let [state @ws/client-state
+        side (:side state)
+        gameid (:gameid state)]
+    (if (not (side= "Corp" side))
+      (println "❌ Only Corp can toggle auto-pass priority")
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "toggle-auto-no-action"
+                           :args nil})
+        (Thread/sleep 500)
+        (println "✅ Toggled auto-pass priority")))))
+
 (defn fire-unbroken-subs!
   "Fire unbroken subroutines on ICE (Corp only)
    Used during runs when Runner doesn't/can't break all subs
