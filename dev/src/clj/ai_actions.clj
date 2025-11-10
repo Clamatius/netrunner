@@ -1028,7 +1028,8 @@
   [card-name]
   (let [state @ws/client-state
         side (:side state)]
-    (if (not= "Corp" side)
+    ;; Use case-insensitive comparison since side is lowercase "corp"
+    (if (not= "corp" (clojure.string/lower-case (or side "")))
       (println "❌ Only Corp can rez cards")
       (let [card (find-installed-corp-card card-name)]
         (if card
