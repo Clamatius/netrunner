@@ -354,7 +354,6 @@
       ;; Sente expects double-wrapped messages: [[:event-type data]]
       (let [msg (pr-str [[event-type data]])]
         (ws/send-msg socket msg)
-        (println "📤 Sent:" event-type)
         true)
       (catch Exception e
         (println "❌ Send failed:" (.getMessage e))

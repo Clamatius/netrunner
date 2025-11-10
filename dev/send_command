@@ -8,6 +8,7 @@ set +H  # Disable history expansion to allow ! in function names
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
 TIMEOUT="${TIMEOUT:-20}"
+DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 
 # Color output
 RED='\033[0;31m'
@@ -22,11 +23,13 @@ error() {
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    [[ "$DEBUG" == "1" ]] && echo -e "${GREEN}✅ $1${NC}"
+    return 0
 }
 
 info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+    [[ "$DEBUG" == "1" ]] && echo -e "${BLUE}ℹ️  $1${NC}"
+    return 0
 }
 
 warn() {
@@ -456,8 +459,7 @@ case "$COMMAND" in
                                gameid)
                      :command "continue"
                      :args nil})
-                  (Thread/sleep 1000)
-                  (println "✅ Passed priority"))'
+                  (Thread/sleep 1000))'
         ;;
 
     jack-out)
@@ -471,8 +473,7 @@ case "$COMMAND" in
                                gameid)
                      :command "jack-out"
                      :args nil})
-                  (Thread/sleep 1000)
-                  (println "✅ Jacked out (run ended unsuccessfully)"))'
+                  (Thread/sleep 1000))'
         ;;
 
     wait-for-diff)

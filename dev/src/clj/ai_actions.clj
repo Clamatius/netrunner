@@ -32,15 +32,13 @@
   []
   (when (empty? @all-cards)
     (try
-      (println "📦 Fetching card database from server API...")
       (let [response (http/get "http://localhost:1042/data/cards"
                               {:as :json
                                :socket-timeout 10000
                                :connection-timeout 5000})
             cards (:body response)
             cards-map (into {} (map (juxt :title identity)) cards)]
-        (reset! all-cards cards-map)
-        (println "✅ Loaded" (count cards-map) "cards from API"))
+        (reset! all-cards cards-map))
       (catch Exception e
         (println "❌ Failed to load cards from API:" (.getMessage e))
         (println "   Make sure the game server is running on localhost:1042")))))
@@ -226,11 +224,8 @@
    (let [options (if (map? title-or-options)
                    title-or-options
                    {:title title-or-options :side "Any Side"})]
-     (println "Creating lobby...")
      (ws/create-lobby! options)
-     (Thread/sleep 2000)
-     (println "✅ Lobby creation request sent")
-     (println "Check lobby list with: (list-lobbies)"))))
+     (Thread/sleep 2000))))
 
 (defn list-lobbies
   "Request and display the list of available games"
@@ -250,7 +245,6 @@
           (connect-game! \"game-uuid\") ; defaults to Corp"
   ([gameid] (connect-game! gameid "Corp"))
   ([gameid side]
-   (println "Joining game" gameid "as" side "...")
    ;; Convert string UUID to java.util.UUID if needed
    (let [uuid (if (string? gameid)
                 (java.util.UUID/fromString gameid)
@@ -258,9 +252,7 @@
      (ws/join-game! {:gameid uuid :side side}))
    (Thread/sleep 2000)
    (if (ws/in-game?)
-     (do
-       (println "✅ Joined game successfully")
-       (ws/show-status))
+     (ws/show-status)
      (println "❌ Failed to join game"))))
 
 (defn resync-game!
@@ -270,9 +262,7 @@
   (ws/resync-game! gameid)
   (Thread/sleep 2000)
   (if (ws/in-game?)
-    (do
-      (println "✅ Game state resynced successfully")
-      (ws/show-status))
+    (ws/show-status)
     (println "❌ Failed to resync game state")))
 
 (defn send-chat!
@@ -282,13 +272,11 @@
   (let [state (ws/get-game-state)
         gameid (:gameid state)]
     (if gameid
-      (do
-        (ws/send-message! :game/say
-          {:gameid (if (string? gameid)
-                     (java.util.UUID/fromString gameid)
-                     gameid)
-           :msg message})
-        (println "💬 Sent chat message"))
+      (ws/send-message! :game/say
+        {:gameid (if (string? gameid)
+                   (java.util.UUID/fromString gameid)
+                   gameid)
+         :msg message})
       (println "❌ Not in a game"))))
 
 ;; ============================================================================
@@ -627,14 +615,7 @@
                        :command "start-turn"
                        :args nil})
     (Thread/sleep 2000)
-    (let [state @ws/client-state
-          side (:side state)
-          clicks (get-in state [:game-state (keyword side) :click])
-          credits (get-in state [:game-state (keyword side) :credit])]
-      (println "✅ Turn started!")
-      (println "   Clicks:" clicks)
-      (println "   Credits:" credits)
-      (show-turn-indicator))))
+    (show-turn-indicator)))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -646,8 +627,7 @@
                                 (java.util.UUID/fromString gameid)
                                 gameid)
                        :command "indicate-action"
-                       :args nil})
-    (println "✅ Indicated paid ability")))
+                       :args nil})))
 
 (defn take-credit!
   "Click for credit (shows before/after)"
@@ -701,12 +681,10 @@
         side (:side state)
         clicks (get-in state [:game-state (keyword side) :click])
         gameid (:gameid state)]
-    (if (> clicks 0)
-      (do
-        (println "⚠️  WARNING: You still have" clicks "click(s) remaining!")
-        (println "   This is wasteful. Use all clicks before ending turn.")
-        (println "   Proceeding anyway..."))
-      (println "✅ All clicks used"))
+    (when (> clicks 0)
+      (println "⚠️  WARNING: You still have" clicks "click(s) remaining!")
+      (println "   This is wasteful. Use all clicks before ending turn.")
+      (println "   Proceeding anyway..."))
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)
@@ -714,7 +692,6 @@
                        :command "end-turn"
                        :args nil})
     (Thread/sleep 2000)
-    (println "🏁 Turn ended")
     (show-turn-indicator)))
 
 ;; Keep old function names for backwards compatibility
@@ -740,15 +717,13 @@
   [key delta]
   (let [state @ws/client-state
         gameid (:gameid state)]
-    (println "🔧 Changing" key "by" delta)
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)
                                 gameid)
                        :command "change"
                        :args {:key key :delta delta}})
-    (Thread/sleep 500)
-    (println "✅ Change sent")))
+    (Thread/sleep 500)))
 
 (defn change
   "Alias for change! for backwards compatibility"
@@ -767,10 +742,8 @@
   (let [prompt (ws/get-prompt)]
     (if prompt
       (do
-        (println "Making choice:" choice)
         (ws/choose! choice)
-        (Thread/sleep 500)
-        (println "✅ Choice made"))
+        (Thread/sleep 500))
       (println "⚠️  No active prompt"))))
 
 (defn choose-option!
@@ -790,8 +763,7 @@
                                     gameid)
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
-        (Thread/sleep 2000)
-        (println (str "✅ Chose: " (:value choice))))
+        (Thread/sleep 2000))
       (println (str "❌ Invalid choice index: " index)))))
 
 (defn choose-by-value!
@@ -814,9 +786,7 @@
                              idx)))
                        choices))]
     (if matching-idx
-      (do
-        (println (str "🔍 Found match: \"" (:value (nth choices matching-idx)) "\" at index " matching-idx))
-        (choose-option! matching-idx))
+      (choose-option! matching-idx)
       (do
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")
@@ -870,11 +840,7 @@
                            :command "play"
                            :args {:card card-ref}})
         ;; Wait and verify action appeared in log
-        (if (verify-action-in-log card-title 3000)
-          (do
-            (println (str "✅ Played: " card-title))
-            (let [after-state (capture-state-snapshot)]
-              (show-state-diff before-state after-state false)))
+        (when (not (verify-action-in-log card-title 3000))
           (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
         (show-turn-indicator))
       (println (str "❌ Card not found in hand: " name-or-index)))))
@@ -915,13 +881,7 @@
                             :command "play"
                             :args args})
          ;; Wait and verify action appeared in log
-         (if (verify-action-in-log card-title 3000)
-           (do
-             (if server
-               (println (str "✅ Installed: " card-title " on " server))
-               (println (str "✅ Installed: " card-title)))
-             (let [after-state (capture-state-snapshot)]
-               (show-state-diff before-state after-state false)))
+         (when (not (verify-action-in-log card-title 3000))
            (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
          (show-turn-indicator))
        (println (str "❌ Card not found in hand: " name-or-index))))))
@@ -945,8 +905,7 @@
                                 gameid)
                        :command "run"
                        :args {:server server}})
-    (Thread/sleep 2000)
-    (println (str "🏃 Running on " server))))
+    (Thread/sleep 2000)))
 
 ;; ============================================================================
 ;; Card Abilities
@@ -1021,15 +980,13 @@
             dynamic-type (:dynamic ability)]
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
-          (do
-            (println (str "🔧 Using dynamic ability '" dynamic-type "' on " (:title card)))
-            (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
-                               :command "dynamic-ability"
-                               :args {:card card-ref
-                                      :dynamic dynamic-type}}))
+          (ws/send-message! :game/action
+                            {:gameid (if (string? gameid)
+                                      (java.util.UUID/fromString gameid)
+                                      gameid)
+                             :command "dynamic-ability"
+                             :args {:card card-ref
+                                    :dynamic dynamic-type}})
           ;; Use regular ability command for normal abilities
           (ws/send-message! :game/action
                             {:gameid (if (string? gameid)
@@ -1038,8 +995,7 @@
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
-        (Thread/sleep 1500)
-        (println (str "✅ Used ability " ability-index " on " (:title card))))
+        (Thread/sleep 1500))
       (println (str "❌ Card not found installed: " card-name)))))
 
 (defn use-runner-ability!
@@ -1067,8 +1023,7 @@
                            :command "runner-ability"
                            :args {:card card-ref
                                   :ability ability-index}})
-        (Thread/sleep 1500)
-        (println (str "✅ Used runner-ability " ability-index " on " (:title card))))
+        (Thread/sleep 1500))
       (println (str "❌ Card not found: " card-name)))))
 
 (defn find-installed-corp-card
@@ -1108,8 +1063,7 @@
                                     gameid)
                            :command "trash"
                            :args {:card card-ref}})
-        (Thread/sleep 1500)
-        (println (str "✅ Trashed: " (:title card))))
+        (Thread/sleep 1500))
       (println (str "❌ Card not found installed: " card-name)))))
 
 (defn rez-card!
@@ -1136,8 +1090,7 @@
                                :command "rez"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
-            (if (verify-action-in-log card-name 3000)
-              (println (str "✅ Rezzed: " card-name))
+            (when (not (verify-action-in-log card-name 3000))
               (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
@@ -1160,8 +1113,7 @@
                                     gameid)
                            :command "system-msg"
                            :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
-        (Thread/sleep 1000)
-        (println (str "✅ Signaled intent to let subs fire on: " ice-name))))))
+        (Thread/sleep 1000)))))
 
 (defn toggle-auto-no-action!
   "Toggle auto-pass priority during runs (Corp only)
@@ -1182,8 +1134,7 @@
                                     gameid)
                            :command "toggle-auto-no-action"
                            :args nil})
-        (Thread/sleep 500)
-        (println "✅ Toggled auto-pass priority")))))
+        (Thread/sleep 500)))))
 
 (defn fire-unbroken-subs!
   "Fire unbroken subroutines on ICE (Corp only)
@@ -1209,8 +1160,7 @@
                                         gameid)
                                :command "unbroken-subroutines"
                                :args {:card card-ref}})
-            (Thread/sleep 1500)
-            (println (str "✅ Fired unbroken subroutines on: " (:title card))))
+            (Thread/sleep 1500))
           (println (str "❌ ICE not found installed: " ice-name)))))))
 
 (defn advance-card!
@@ -1238,8 +1188,7 @@
                                :command "advance"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
-            (if (verify-action-in-log card-name 3000)
-              (println (str "✅ Advanced: " card-name))
+            (when (not (verify-action-in-log card-name 3000))
               (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
@@ -1269,8 +1218,7 @@
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
-              (if (verify-action-in-log card-name 3000)
-                (println (str "✅ Scored: " card-name))
+              (when (not (verify-action-in-log card-name 3000))
                 (println (str "⚠️  Sent score command for: " card-name " - but action not confirmed in game log (may have failed)"))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
           (println (str "❌ Card not found installed: " card-name)))))))
@@ -1286,8 +1234,7 @@
   (let [state @ws/client-state
         side (keyword (:side state))
         discarded (ws/handle-discard-prompt! side)]
-    (if (> discarded 0)
-      (println (str "✅ Discarded " discarded " card(s)"))
+    (when (= discarded 0)
       (println "No cards to discard"))))
 
 (defn discard-specific-cards!
@@ -1304,12 +1251,9 @@
              (seq indices))
       (let [cards-to-discard (map #(nth hand % nil) indices)
             valid-cards (filter some? cards-to-discard)]
-        (println (format "Discarding %d specific cards by index..." (count valid-cards)))
         (doseq [card valid-cards]
-          (println (format "  Discarding: %s" (:title card)))
           (ws/select-card! card (:eid prompt))
           (Thread/sleep 500))
-        (println (format "✅ Discarded %d card(s)" (count valid-cards)))
         (count valid-cards))
       (do
         (println "❌ No discard prompt active or no indices provided")
@@ -1318,17 +1262,13 @@
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
   []
-  (println "Waiting for mulligan prompt...")
   (loop [checks 0]
     (when (< checks 20)
       (Thread/sleep 1000)
       (let [prompt (ws/get-prompt)]
         (if (and prompt (= "button" (:prompt-type prompt)))
-          (do
-            (println "Mulligan prompt detected")
-            (keep-hand))
-          (recur (inc checks))))))
-  (println "Mulligan complete"))
+          (keep-hand)
+          (recur (inc checks)))))))
 
 ;; ============================================================================
 ;; Wait Helpers
@@ -1338,13 +1278,10 @@
   "Wait for a prompt to appear (up to max-seconds)
    Returns prompt or nil if timeout"
   [max-seconds]
-  (println (format "Waiting for prompt (max %d seconds)..." max-seconds))
   (loop [checks 0]
     (if (< checks max-seconds)
       (if-let [prompt (ws/get-prompt)]
-        (do
-          (println "✅ Prompt detected")
-          prompt)
+        prompt
         (do
           (Thread/sleep 1000)
           (recur (inc checks))))
@@ -1441,13 +1378,10 @@
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
   [max-seconds]
-  (println (format "Waiting for my turn (max %d seconds)..." max-seconds))
   (loop [checks 0]
     (if (< checks max-seconds)
       (if (ws/my-turn?)
-        (do
-          (println "✅ It's my turn!")
-          true)
+        true
         (do
           (Thread/sleep 1000)
           (recur (inc checks))))
