@@ -959,10 +959,14 @@
    Usage: (use-ability! \"Smartware Distributor\" 0)
           (use-ability! \"Sure Gamble\" 1)"
   [card-name ability-index]
-  (let [card (find-installed-card card-name)]
+  (let [state @ws/client-state
+        side (:side state)
+        ;; Find card in appropriate location based on side
+        card (if (= "corp" (clojure.string/lower-case (or side "")))
+               (find-installed-corp-card card-name)
+               (find-installed-card card-name))]
     (if card
-      (let [state @ws/client-state
-            gameid (:gameid state)
+      (let [gameid (:gameid state)
             ;; Create card reference matching wire format
             card-ref {:cid (:cid card)
                      :zone (:zone card)
@@ -977,7 +981,7 @@
                                   :ability ability-index}})
         (Thread/sleep 1500)
         (println (str "✅ Used ability " ability-index " on " (:title card))))
-      (println (str "❌ Card not found in rig: " card-name)))))
+      (println (str "❌ Card not found installed: " card-name)))))
 
 (defn find-installed-corp-card
   "Find an installed Corp card by title
