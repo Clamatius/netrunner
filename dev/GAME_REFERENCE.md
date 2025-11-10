@@ -347,7 +347,8 @@ Score agenda when it has sufficient advancement counters
 **Important Scoring Rules:**
 - ⚠️ **Corp turn only** - Cannot score on Runner's turn (prevents "bait and score" strategies)
 - ⚠️ **Does NOT cost a click** - Scoring happens at the end of a click action (e.g., after final advance)
-- This means Corp can install-advance-advance-score a 3-cost agenda in one turn (3 clicks)
+- A 2-cost agenda can be fast-advanced in one turn: install-advance-advance-score (3 clicks)
+- A 3-cost agenda requires 2 turns minimum (install + 3 advances) or operations that cheat advancement
 - Some agendas have scoring effects that trigger prompts (e.g., "Send a Message" offers optional ICE rez)
 
 ---
