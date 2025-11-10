@@ -1279,35 +1279,90 @@
         nil))))
 
 (defn wait-for-diff
-  "Wait for game state to change (any diff received)
+  "Wait for game state to change, return what changed
    Monitors game-state updates via WebSocket diffs
    Useful for waiting for opponent actions, run phases, etc.
 
-   Usage: (wait-for-diff)       ;; default 60s timeout
-          (wait-for-diff 120)   ;; custom timeout seconds"
+   Usage: (wait-for-diff)                    ;; default 60s timeout, verbose
+          (wait-for-diff 120)                ;; custom timeout seconds
+          (wait-for-diff {:verbose false})   ;; quiet mode"
   ([]
    (wait-for-diff 60))
-  ([timeout-seconds]
-   (let [initial-state @ws/client-state
+  ([timeout-or-opts]
+   (let [opts (if (number? timeout-or-opts)
+                {:timeout timeout-or-opts :verbose true}
+                (merge {:timeout 60 :verbose true} timeout-or-opts))
+         timeout-seconds (:timeout opts)
+         initial-state @ws/client-state
+         initial-log (get-in initial-state [:game-state :log])
+         initial-log-count (count initial-log)
          deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
+
      (println (format "⏳ Waiting for game state change (timeout: %ds)..." timeout-seconds))
+
      (loop [checks 0]
-       (Thread/sleep 500)  ;; Check twice per second
+       (Thread/sleep 500)
        (let [current-state @ws/client-state
+             current-log (get-in current-state [:game-state :log])
+             current-log-count (count current-log)
+             new-entries (drop initial-log-count current-log)
              state-changed? (not= initial-state current-state)]
+
          (cond
            state-changed?
            (do
-             (println "✅ Game state changed")
-             :state-changed)
+             (when (:verbose opts)
+               (println "✅ Game state changed - recent actions:")
+               (doseq [entry (take-last 3 new-entries)]
+                 (println (format "  • %s" (:text entry)))))
+             {:status :state-changed
+              :new-log-entries new-entries
+              :log-count {:before initial-log-count :after current-log-count}})
 
            (> (System/currentTimeMillis) deadline)
            (do
              (println "⏱️  Timeout waiting for state change")
-             :timeout)
+             {:status :timeout})
 
            :else
            (recur (inc checks))))))))
+
+(defn wait-for-log-past
+  "Wait until log has entries AFTER the given text marker
+   Useful for avoiding race conditions when opponent is mid-turn
+
+   Usage: (wait-for-log-past \"Clamatius makes his mandatory start of turn draw\")
+          (wait-for-log-past \"ending his turn\" 120)  ;; custom timeout"
+  [marker-text & [timeout]]
+  (let [timeout-seconds (or timeout 60)
+        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
+
+    (println (format "⏳ Waiting for log entries past marker: \"%s\"" (subs marker-text 0 (min 50 (count marker-text)))))
+
+    (loop []
+      (Thread/sleep 500)
+      (let [current-log (get-in @ws/client-state [:game-state :log])
+            marker-idx (first (keep-indexed
+                               #(when (clojure.string/includes? (:text %2) marker-text) %1)
+                               current-log))
+            entries-after (when marker-idx (drop (inc marker-idx) current-log))]
+
+        (cond
+          (and marker-idx (seq entries-after))
+          (do
+            (println (format "✅ Found %d new log entries:" (count entries-after)))
+            (doseq [entry (take 5 entries-after)]
+              (println (format "  • %s" (:text entry))))
+            {:status :new-entries
+             :entries entries-after})
+
+          (> (System/currentTimeMillis) deadline)
+          (do
+            (println "⏱️  Timeout")
+            {:status :timeout})
+
+          :else
+          (recur))))))
 
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
@@ -1472,8 +1527,9 @@
   (println "  (choose 0)                         - Choose first option")
   (println "  (wait-for-prompt 10)               - Wait for prompt")
   (println "  (wait-for-my-turn 30)              - Wait for my turn")
-  (println "  (wait-for-diff)                    - Wait for any state change")
+  (println "  (wait-for-diff)                    - Wait for any state change (shows recent log)")
   (println "  (wait-for-diff 120)                - Wait with custom timeout")
+  (println "  (wait-for-log-past \"marker text\")  - Wait for log entries after marker")
   (println "\nWorkflows:")
   (println "  (simple-corp-turn)                 - 3x credit, end")
   (println "  (simple-runner-turn)               - 4x credit, end")

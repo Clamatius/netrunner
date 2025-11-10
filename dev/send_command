@@ -115,7 +115,8 @@ ${GREEN}Prompts:${NC}
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   continue        - Continue/pass priority (for paid ability windows, run phases)
   jack-out        - Jack out of current run (end run unsuccessfully)
-  wait-for-diff [seconds] - Wait for game state change (opponent action, run phase, etc.)
+  wait-for-diff [seconds] - Wait for game state change (shows recent log)
+  wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
 
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
@@ -455,6 +456,18 @@ case "$COMMAND" in
         TIMEOUT="${1:-60}"
         info "Waiting for game state change (timeout: ${TIMEOUT}s)..."
         execute "(ai-actions/wait-for-diff $TIMEOUT)"
+        ;;
+
+    wait-for-log-past)
+        ensure_connection
+        if [ -z "$1" ]; then
+            error "Usage: wait-for-log-past <marker-text> [timeout]"
+            exit 1
+        fi
+        MARKER="$1"
+        TIMEOUT="${2:-60}"
+        info "Waiting for log entries past marker: \"${MARKER}\"..."
+        execute "(ai-actions/wait-for-log-past \"$MARKER\" $TIMEOUT)"
         ;;
 
     # Lobby

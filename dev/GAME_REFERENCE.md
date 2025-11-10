@@ -348,7 +348,7 @@ Score agenda when it has sufficient advancement counters
 - ⚠️ **Corp turn only** - Cannot score on Runner's turn (prevents "bait and score" strategies)
 - ⚠️ **Does NOT cost a click** - Scoring happens at the end of a click action (e.g., after final advance)
 - A 2-cost agenda can be fast-advanced in one turn: install-advance-advance-score (3 clicks)
-- A 3-cost agenda requires 2 turns minimum (install + 3 advances) or operations that cheat advancement
+- A 3-cost agenda requires 2 turns minimum (install + 3 advances) or effects (e.g. operations) that cheat advancement
 - Some agendas have scoring effects that trigger prompts (e.g., "Send a Message" offers optional ICE rez)
 
 ---
@@ -510,6 +510,7 @@ Legal jack-out windows:
 
 ### Damage Mechanics
 
+The Runner should consider their current handsize as akin to current health.
 The Runner can take three types of damage:
 
 **Net Damage:**
