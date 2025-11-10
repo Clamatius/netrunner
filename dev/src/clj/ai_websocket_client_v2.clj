@@ -712,28 +712,35 @@
         end-turn (get-in gs [:end-turn])
         prompt (get-prompt)
         prompt-type (:prompt-type prompt)
-        run-state (get-in gs [:run])]
-    (println "\n" (str/join "" (repeat 70 "=")))
+        run-state (get-in gs [:run])
+        runner-clicks (get-in gs [:runner :click])
+        corp-clicks (get-in gs [:corp :click])
+        both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
     (println "📊 GAME STATUS")
-    (println (str/join "" (repeat 70 "=")))
     (println "\nTurn:" (turn-number) "-" active-side)
 
     ;; Active player / waiting status
-    (let [runner-clicks (get-in gs [:runner :click])
-          corp-clicks (get-in gs [:corp :click])
-          both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
+    (let [runner-clicks runner-clicks
+          corp-clicks corp-clicks
+          both-zero-clicks both-zero-clicks]
       (cond
-        ;; Both players have 0 clicks - waiting to start turn
+        ;; End-turn was called, and it's my side's turn to start (opponent just finished)
+        (and end-turn (not= my-side active-side))
+        (do
+          (println "Status: 🟢 Waiting to start turn (use 'start-turn' command)")
+          (println "💡 Use 'start-turn' to begin your turn"))
+
+        ;; End-turn was called, waiting for opponent to start (I just finished)
+        (and end-turn (= my-side active-side))
+        (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to call 'start-turn'")
+
+        ;; Both players have 0 clicks but end-turn not called yet
         both-zero-clicks
         (println "Status: 🟢 Waiting to start turn (use 'start-turn' command)")
 
         ;; Waiting for opponent
         (not= my-side active-side)
         (println "Status: ⏳ Waiting for" active-side "to act")
-
-        ;; End of turn, need to start
-        end-turn
-        (println "Status: 🟢 Ready to start turn (use 'start-turn' command)")
 
         ;; Waiting prompt
         (= :waiting prompt-type)
@@ -753,12 +760,30 @@
 
     (println "\n--- RUNNER ---")
     (println "Credits:" (my-credits))
-    (println "Clicks:" (my-clicks))
-    (println "Hand:" (my-hand-count) "cards")
+    (let [clicks runner-clicks]
+      (if (and (= "runner" active-side) (zero? clicks) (not end-turn))
+        (do
+          (println "Clicks:" clicks "(End of Turn)")
+          (println "💡 Use 'end-turn' to finish your turn"))
+        (println "Clicks:" clicks)))
+    (let [hand-count (my-hand-count)
+          max-hand-size (get-in gs [:runner :hand-size-modification] 5)]
+      (println "Hand:" hand-count "cards")
+      (when (and (= "runner" my-side) (> hand-count max-hand-size))
+        (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
     (println "\n--- CORP ---")
     (println "Credits:" (corp-credits))
-    (println "Clicks:" (corp-clicks))
-    (println "Hand:" (corp-hand-count) "cards")
+    (let [clicks corp-clicks]
+      (if (and (= "corp" active-side) (zero? clicks) (not end-turn))
+        (do
+          (println "Clicks:" clicks "(End of Turn)")
+          (println "💡 Use 'end-turn' to finish your turn"))
+        (println "Clicks:" clicks)))
+    (let [hand-count (corp-hand-count)
+          max-hand-size (get-in gs [:corp :hand-size-modification] 5)]
+      (println "Hand:" hand-count "cards")
+      (when (and (= "corp" my-side) (> hand-count max-hand-size))
+        (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
     (when (and prompt (not= :waiting prompt-type))
       (println "\n🔔 Active Prompt:" (:msg prompt)))
 
@@ -770,7 +795,6 @@
           (doseq [entry recent-log]
             (println " " (:text entry))))))
 
-    (println (str/join "" (repeat 70 "=")))
     nil))
 
 (defn show-games
@@ -779,7 +803,6 @@
   (if-let [games (get-lobby-list)]
     (do
       (println "\n📋 Available Games:")
-      (println (str/join "" (repeat 70 "=")))
       (doseq [game games]
         (println "\n🎮" (:title game))
         (println "   ID:" (:gameid game))
@@ -789,7 +812,6 @@
             (println "     -" (:side player) ":" (get-in player [:user :username] "Waiting..."))))
         (when (:started game)
           (println "   ⚠️  Game already started")))
-      (println (str/join "" (repeat 70 "=")))
       (println "\nTo join a game, use: (join-game! {:gameid \"...\" :side \"Corp\"})")
       (println))
     (do
@@ -808,14 +830,12 @@
    (if-let [log (get-game-log)]
      (do
        (println "\n📜 GAME LOG (last" n "entries)")
-       (println (str/join "" (repeat 70 "=")))
        (doseq [entry (take-last n log)]
          (when (map? entry)
            (let [text (str/replace (:text entry "") "[hr]" "")
                  user (:user entry)
                  timestamp (:timestamp entry)]
              (println (str "  " text)))))
-       (println (str/join "" (repeat 70 "=")))
        nil)
      (println "No game log available"))))
 
