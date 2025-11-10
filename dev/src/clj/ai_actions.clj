@@ -9,6 +9,20 @@
 (declare find-installed-corp-card)
 
 ;; ============================================================================
+;; Utility Functions
+;; ============================================================================
+
+(defn side=
+  "Case-insensitive side comparison
+   Handles that client-state stores side as lowercase 'corp'/'runner'
+
+   Usage: (side= \"Corp\" side)
+          (side= \"Runner\" side)"
+  [expected-side actual-side]
+  (= (clojure.string/lower-case expected-side)
+     (clojure.string/lower-case (or actual-side ""))))
+
+;; ============================================================================
 ;; Card Database Management
 ;; ============================================================================
 
@@ -962,7 +976,7 @@
   (let [state @ws/client-state
         side (:side state)
         ;; Find card in appropriate location based on side
-        card (if (= "corp" (clojure.string/lower-case (or side "")))
+        card (if (side= "Corp" side)
                (find-installed-corp-card card-name)
                (find-installed-card card-name))]
     (if card
@@ -1032,8 +1046,7 @@
   [card-name]
   (let [state @ws/client-state
         side (:side state)]
-    ;; Use case-insensitive comparison since side is lowercase "corp"
-    (if (not= "corp" (clojure.string/lower-case (or side "")))
+    (if (not (side= "Corp" side))
       (println "❌ Only Corp can rez cards")
       (let [card (find-installed-corp-card card-name)]
         (if card
@@ -1064,7 +1077,7 @@
   (let [state @ws/client-state
         side (:side state)
         gameid (:gameid state)]
-    (if (not= "runner" (clojure.string/lower-case (or side "")))
+    (if (not (side= "Runner" side))
       (println "❌ Only Runner can let subroutines fire")
       (do
         (ws/send-message! :game/action
@@ -1085,8 +1098,7 @@
   [ice-name]
   (let [state @ws/client-state
         side (:side state)]
-    ;; Use case-insensitive comparison since side is lowercase "corp"
-    (if (not= "corp" (clojure.string/lower-case (or side "")))
+    (if (not (side= "Corp" side))
       (println "❌ Only Corp can fire ICE subroutines")
       (let [card (find-installed-corp-card ice-name)]
         (if card
@@ -1114,7 +1126,7 @@
   [card-name]
   (let [state @ws/client-state
         side (:side state)]
-    (if (not= "Corp" side)
+    (if (not (side= "Corp" side))
       (println "❌ Only Corp can advance cards")
       (let [card (find-installed-corp-card card-name)]
         (if card
@@ -1144,7 +1156,7 @@
   [card-name]
   (let [state @ws/client-state
         side (:side state)]
-    (if (not= "Corp" side)
+    (if (not (side= "Corp" side))
       (println "❌ Only Corp can score agendas")
       (let [card (find-installed-corp-card card-name)]
         (if card
