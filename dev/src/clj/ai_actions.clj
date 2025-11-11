@@ -520,7 +520,13 @@
             (println (str "    " idx ". " (format-choice choice)))))
         (when has-selectable
           (println "  Selectable cards:" (count (:selectable prompt))
-                   "- Use choose-card! to select by index"))
+                   "- Use choose-card! to select by index")
+          (doseq [[idx card] (map-indexed vector (:selectable prompt))]
+            (let [title (or (:title card) "Unknown")
+                  card-type (or (:type card) "?")
+                  zone (or (:zone card) [])]
+              (println (str "    " idx ". " title " [" card-type "]"
+                          (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")")))))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
           (println "  Action: Paid ability window")
@@ -1061,8 +1067,9 @@
 (defn keep-hand
   "Keep hand during mulligan"
   []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (choose-option! 0)
@@ -1071,8 +1078,9 @@
 (defn mulligan
   "Mulligan (redraw) hand"
   []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (choose-option! 1)
@@ -1581,6 +1589,40 @@
         (println "❌ No discard prompt active or no indices provided")
         0))))
 
+(defn discard-by-names!
+  "Discard specific cards by their names
+
+   Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
+          (discard-by-names! \"Sure Gamble\")  ; Single card"
+  [card-names]
+  (let [names-vec (if (vector? card-names) card-names [card-names])
+        state @ws/client-state
+        side (keyword (:side state))
+        gs (ws/get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])]
+    (if (and (= "select" (:prompt-type prompt))
+             (seq names-vec))
+      (let [;; Find cards in hand matching the requested names
+            cards-to-discard (filter (fn [card]
+                                       (some #(= (:title card) %) names-vec))
+                                    hand)
+            _ (when (seq cards-to-discard)
+                (println "Discarding:" (clojure.string/join ", " (map :title cards-to-discard))))]
+        (if (seq cards-to-discard)
+          (do
+            (doseq [card cards-to-discard]
+              (ws/select-card! card (:eid prompt))
+              (Thread/sleep 500))
+            (println "✅ Discarded" (count cards-to-discard) "card(s)")
+            (count cards-to-discard))
+          (do
+            (println "❌ No matching cards found in hand for:" (clojure.string/join ", " names-vec))
+            0)))
+      (do
+        (println "❌ No discard prompt active or no card names provided")
+        0))))
+
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
   []
@@ -1745,7 +1787,7 @@
 
             ;; Track accessed and stolen cards from log
             new-accessed (filter #(clojure.string/includes? (:text %) "accesses") new-entries)
-            new-stolen (filter #(clojure.string/includes? (:text %) "stole") new-entries)
+            new-stolen (filter #(clojure.string/includes? (:text %) "steal") new-entries)
             accessed-cards' (concat accessed-cards (map :text new-accessed))
             stolen-agendas' (concat stolen-agendas (map :text new-stolen))
 

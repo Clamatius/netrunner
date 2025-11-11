@@ -143,7 +143,9 @@ ${GREEN}Basic Actions:${NC}
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
   mulligan        - Mulligan (redraw) starting hand
-  discard         - Discard down to maximum hand size
+  discard         - Auto-discard down to maximum hand size
+  discard <name>... - Discard specific cards by name (e.g., discard "Sure Gamble" "Diesel")
+  discard <N>...  - Discard specific cards by index (e.g., discard 0 2 4)
 
 ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
@@ -190,6 +192,30 @@ ${GREEN}Connection:${NC}
 
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
+
+${YELLOW}Turn Timing Quick Reference:${NC}
+  ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+    • Discard happens before turn formally ends
+
+  ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
+    • No mandatory draw (unlike Corp)
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+
+  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter ice → movement → access/jack out
+    • Initiation: 'run <server>' then 'continue'
+    • Approach: Corp may rez ice, then 'continue'
+    • Encounter: Break subs with icebreakers, then 'continue'
+    • Movement: Can 'jack-out' here, otherwise 'continue' to next ice or server
+    • Access: 'choose-value steal/trash/"no action"' for each accessed card
+    • Use 'continue-run' for automated run handling (stops at decisions)
+
+  ${BLUE}Common Stuck States:${NC}
+    • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn
+    • Run stopped → Check 'prompt' to see what decision is needed
+    • Turn won't end → Check 'prompt' for blocking discard/ability prompts
 
 ${YELLOW}Examples:${NC}
   ./send_command status
@@ -376,19 +402,33 @@ case "$COMMAND" in
             info "Auto-discarding to hand size..."
             execute '(ai-actions/discard-to-hand-size!)'
         else
-            # Collect all numeric indices
-            INDICES=()
+            # Check if all args are numeric (indices) or text (card names)
+            ALL_NUMERIC=true
             for arg in "$@"; do
-                if [[ "$arg" =~ ^[0-9]+$ ]]; then
-                    INDICES+=("$arg")
-                else
-                    error "Invalid index: $arg (must be a number)"
+                if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
+                    ALL_NUMERIC=false
+                    break
                 fi
             done
-            info "Discarding specific cards at indices: ${INDICES[*]}"
-            # Build Clojure vector from indices
-            INDICES_VEC="[${INDICES[*]}]"
-            execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
+
+            if [[ "$ALL_NUMERIC" == "true" ]]; then
+                # Discard by index
+                INDICES=("$@")
+                info "Discarding cards at indices: ${INDICES[*]}"
+                INDICES_VEC="[${INDICES[*]}]"
+                execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
+            else
+                # Discard by card name
+                CARD_NAMES=("$@")
+                info "Discarding cards by name: ${CARD_NAMES[*]}"
+                # Build Clojure vector of card name strings
+                NAMES_VEC="["
+                for name in "${CARD_NAMES[@]}"; do
+                    NAMES_VEC+="\"$name\" "
+                done
+                NAMES_VEC+="]"
+                execute "(ai-actions/discard-by-names! $NAMES_VEC)"
+            fi
         fi
         ;;
 

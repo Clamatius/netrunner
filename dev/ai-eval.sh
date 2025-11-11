@@ -56,8 +56,7 @@ timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
     grep -v "Exit:" | \
     grep -v "Results:" | \
     grep -v "Bye for now" | \
-    sed 's/\[[0-9]*[A-Z]//g' | \
-    sed 's/\[[0-9]*[a-z]//g' | \
+    sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
     grep -v "^[[:space:]]*$"
 $EXPRESSION
 EOF
