@@ -958,7 +958,7 @@
       (loop []
         (let [log (get-in @ws/client-state [:game-state :log])
               new-entries (drop initial-log-size log)
-              run-entry (first (filter #(clojure.string/includes? (:text %) "makes a run on")
+              run-entry (first (filter #(clojure.string/includes? (:text %) "make a run on")
                                        new-entries))]
           (cond
             run-entry
