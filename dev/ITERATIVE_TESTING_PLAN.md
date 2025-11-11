@@ -60,6 +60,32 @@
 ./dev/ai-self-play.sh                # Automated: create + join + ready
 ```
 
+### Code Reload Workflow
+
+**After making server-side code changes:**
+```bash
+# Reload specific namespace and bounce clients
+./dev/ai-reload-all.sh game.core.turns
+
+# Reload and reconnect to existing game
+./dev/ai-reload-all.sh game.core.turns <game-id>
+
+# Manual server reload (if you prefer)
+lein repl :connect localhost:7888
+> (require 'game.core.turns :reload)
+```
+
+**Just bounce clients (no server reload):**
+```bash
+./dev/ai-bounce.sh                   # Restart clients fresh
+./dev/ai-bounce.sh <game-id>         # Restart + resync to game
+```
+
+**When to use which:**
+- Made server-side changes (src/clj/game/\*) → `ai-reload-all.sh`
+- Made client-side changes (dev/src/clj/\*) → `ai-bounce.sh`
+- Need fresh state but keep game → `ai-bounce.sh <game-id>`
+
 ---
 
 ## Debugging Stuck States
