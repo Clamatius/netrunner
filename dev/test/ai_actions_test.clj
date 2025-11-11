@@ -4,6 +4,7 @@
    These tests ensure the main AI action functions work correctly
    under normal conditions."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-actions]
             [ai-websocket-client-v2 :as ws]))
@@ -166,7 +167,8 @@
           :side "runner"
           :prompt (make-prompt
                    :msg "Keep hand?"
-                   :prompt-type "mulligan"))
+                   :prompt-type "mulligan"
+                   :choices 2))  ; Keep / Mulligan
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/mulligan)
           (is (= 1 (count @sent))))))))
@@ -179,7 +181,8 @@
           :side "runner"
           :prompt (make-prompt
                    :msg "Keep hand?"
-                   :prompt-type "mulligan"))
+                   :prompt-type "mulligan"
+                   :choices 2))  ; Keep / Mulligan
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/keep-hand)
           (is (= 1 (count @sent))))))))
