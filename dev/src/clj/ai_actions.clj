@@ -1517,35 +1517,58 @@
 
 (defn continue-run!
   "Smart run handler that auto-continues through boring parts of a run.
-   Handles paid ability windows for BOTH Runner and Corp, stops at real decisions.
+   Handles paid ability windows for BOTH Runner and Corp.
 
-   Stops when:
-   - Access prompt with choices appears (steal, trash, etc.)
-   - Run phase is :success (run complete)
-   - Max iterations reached (safety)
-   - Timeout
+   🛑 MUST PAUSE (requires decision):
+   - Access prompts (steal/trash/no-action)
+   - Multiple choice prompts
+   - Card selection required
+
+   ⚠️ WANT to PAUSE (important events):
+   - ICE rezzed (show cost and card)
+   - Abilities triggered during run
+   - Subroutines fired
+   - Tags/damage dealt
+   - Run redirected
+
+   ✅ AUTO-CONTINUE (boring):
+   - Empty paid ability windows
+   - Single-option prompts
+   - Quiet approach phases
 
    Options:
      :max-iterations - Maximum loops (default 30)
      :timeout-seconds - Maximum time (default 45)
 
-   Returns: {:status :access-prompt | :run-complete | :max-iterations | :timeout
-             :prompt {...}}
+   Returns: {:status :access-prompt | :ice-rezzed | :run-complete | ...
+             :event {...}}
 
-   Usage: (continue-run!)  ; Auto-handle entire unopposed run"
+   Usage: (continue-run!)  ; Auto-handle run, pause at important moments"
   [& {:keys [max-iterations timeout-seconds]
       :or {max-iterations 30 timeout-seconds 45}}]
   (let [state @ws/client-state
         gameid (:gameid state)
-        runner-side (keyword (:side state))
-        corp-side (if (= runner-side :runner) :corp :runner)
-        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
-    (println "🏃 Auto-handling run (continues both players)...")
-    (loop [iteration 0]
+        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
+        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
+    (println "🏃 Auto-handling run (pauses at important events)...")
+    (loop [iteration 0
+           last-log-size initial-log-size]
       (let [current-state @ws/client-state
             runner-prompt (get-in current-state [:game-state :runner :prompt-state])
             corp-prompt (get-in current-state [:game-state :corp :prompt-state])
             run-phase (get-in current-state [:game-state :run :phase])
+            log (get-in current-state [:game-state :log])
+            new-entries (drop last-log-size log)
+
+            ;; Check for important events in new log entries
+            rez-entry (first (filter #(clojure.string/includes? (:text %) "rez") new-entries))
+            ability-entry (first (filter #(or (clojure.string/includes? (:text %) "uses")
+                                              (clojure.string/includes? (:text %) "triggers"))
+                                        new-entries))
+            fired-entry (first (filter #(clojure.string/includes? (:text %) "fire") new-entries))
+            tag-entry (first (filter #(or (clojure.string/includes? (:text %) "tag")
+                                          (clojure.string/includes? (:text %) "damage"))
+                                    new-entries))
 
             ;; Check if Runner has paid ability window
             runner-paid-window? (and runner-prompt
@@ -1553,44 +1576,82 @@
                                     (empty? (:selectable runner-prompt))
                                     (= "run" (:prompt-type runner-prompt)))
 
-            ;; Check if Runner has access prompt with choices
-            runner-has-choice? (and runner-prompt
-                                   (seq (:choices runner-prompt)))]
+            ;; Check if Runner has real choices (2+ options or not just "No action")
+            runner-choices (:choices runner-prompt)
+            has-real-choice? (and (seq runner-choices)
+                                 (or (> (count runner-choices) 1)
+                                     (not (some #(= "No action" (:value %)) runner-choices))))]
 
         (cond
-          ;; Stop: Runner has real choice (access card)
-          runner-has-choice?
+          ;; 🛑 MUST PAUSE: Runner has real decision
+          has-real-choice?
           (do
-            (println "✅ Run ready - you have a decision to make")
-            (println (format "   Card: %s" (get-in runner-prompt [:card :title])))
-            (println (format "   Choices: %d options" (count (:choices runner-prompt))))
-            {:status :access-prompt :prompt runner-prompt})
+            (println "🛑 Run paused - decision required")
+            (println (format "   Prompt: %s" (:msg runner-prompt)))
+            (when-let [card-title (get-in runner-prompt [:card :title])]
+              (println (format "   Card: %s" card-title)))
+            (println (format "   Choices: %d options" (count runner-choices)))
+            (doseq [[idx choice] (map-indexed vector runner-choices)]
+              (println (format "     %d. %s" idx (:value choice))))
+            {:status :decision-required :prompt runner-prompt})
 
-          ;; Stop: Run complete (phase :success)
+          ;; ⚠️ WANT to PAUSE: ICE rezzed
+          rez-entry
+          (do
+            (println "⚠️  Run paused - ICE rezzed!")
+            (println (format "   %s" (:text rez-entry)))
+            (println "   → Use 'continue-run' again to proceed")
+            {:status :ice-rezzed :event rez-entry})
+
+          ;; ⚠️ WANT to PAUSE: Ability used during run
+          ability-entry
+          (do
+            (println "⚠️  Run paused - ability triggered!")
+            (println (format "   %s" (:text ability-entry)))
+            (println "   → Use 'continue-run' again to proceed")
+            {:status :ability-used :event ability-entry})
+
+          ;; ⚠️ WANT to PAUSE: Subroutines fired
+          fired-entry
+          (do
+            (println "⚠️  Run paused - subroutines fired!")
+            (println (format "   %s" (:text fired-entry)))
+            (println "   → Use 'continue-run' again to proceed")
+            {:status :subs-fired :event fired-entry})
+
+          ;; ⚠️ WANT to PAUSE: Tag/damage
+          tag-entry
+          (do
+            (println "⚠️  Run paused - tag or damage!")
+            (println (format "   %s" (:text tag-entry)))
+            (println "   → Use 'continue-run' again to proceed")
+            {:status :tag-or-damage :event tag-entry})
+
+          ;; ✅ Success: Run complete
           (= run-phase :success)
           (do
-            (println "✅ Run complete")
+            (println "✅ Run complete - successful breach")
             {:status :run-complete})
 
-          ;; Stop: No active run
+          ;; ❌ No active run
           (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) "run"))
           (do
             (println "⚠️  No active run detected")
             {:status :no-run})
 
-          ;; Stop: Max iterations
+          ;; Safety: Max iterations
           (>= iteration max-iterations)
           (do
             (println "⏱️  Continue-run: max iterations reached")
             {:status :max-iterations})
 
-          ;; Stop: Timeout
+          ;; Safety: Timeout
           (> (System/currentTimeMillis) deadline)
           (do
             (println "⏱️  Continue-run: timeout")
             {:status :timeout})
 
-          ;; Continue: Handle paid ability windows for both players
+          ;; ✅ AUTO-CONTINUE: Boring paid ability window
           runner-paid-window?
           (do
             ;; Runner continues
@@ -1612,7 +1673,7 @@
                                 :args nil})
               (Thread/sleep 300))
 
-            (recur (inc iteration)))
+            (recur (inc iteration) (count log)))
 
           ;; Fallback: unexpected state
           :else
@@ -1620,6 +1681,7 @@
             (println "⚠️  Unexpected run state")
             (println (format "   Runner prompt type: %s" (:prompt-type runner-prompt)))
             (println (format "   Run phase: %s" run-phase))
+            (println (format "   Choices: %d" (count runner-choices)))
             {:status :unexpected-state :prompt runner-prompt}))))))
 
 (defn wait-for-my-turn
