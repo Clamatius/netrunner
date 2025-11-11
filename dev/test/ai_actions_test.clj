@@ -115,7 +115,7 @@
   (testing "end-turn! sends end turn action"
     (let [sent (atom [])]
       (with-mock-state
-        (mock-client-state :side "runner")
+        (mock-client-state :side "runner" :clicks 0)  ; No clicks remaining
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/end-turn!)
           (is (= 1 (count @sent))))))))
@@ -197,7 +197,7 @@
       (with-mock-state
         (mock-client-state
           :side "corp"
-          :servers {:hq {:ice [{:cid 1 :title "Ice Wall" :rezzed false}]}})
+          :servers {:hq {:ices [{:cid 1 :title "Ice Wall" :rezzed false}]}})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/rez-card! "Ice Wall")
           (is (= 1 (count @sent))))))))
@@ -209,9 +209,9 @@
         (mock-client-state
           :side "corp"
           :clicks 3
-          :servers {:remote1 {:content [{:cid 1 :title "Agenda"}]}})
+          :servers {:remote1 {:content [{:cid 1 :title "Project Vitruvius"}]}})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/advance-card! 1)
+          (ai-actions/advance-card! "Project Vitruvius")
           (is (= 1 (count @sent))))))))
 
 ;; ============================================================================

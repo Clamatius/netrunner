@@ -23,11 +23,13 @@
    :game-state {:runner {:credit (if (= side "runner") credits 5)
                         :click (if (= side "runner") clicks 4)
                         :hand (if (= side "runner") hand [])
+                        :hand-count (if (= side "runner") (count hand) 0)
                         :rig installed
                         :prompt-state prompt}
                 :corp {:credit (if (= side "corp") credits 5)
                        :click (if (= side "corp") clicks 3)
                        :hand (if (= side "corp") hand [])
+                       :hand-count (if (= side "corp") (count hand) 0)
                        :servers servers
                        :prompt-state prompt}
                 :active-player active-player
