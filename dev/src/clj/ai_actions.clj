@@ -1086,26 +1086,69 @@
          (show-turn-indicator))
        (println (str "❌ Card not found in hand: " name-or-index))))))
 
+(defn normalize-server-name
+  "Normalize user-friendly server names to game-expected format.
+   Accepts common variants and typos, provides helpful feedback.
+
+   Examples:
+   - 'hq', 'HQ' → 'HQ'
+   - 'rd', 'r&d', 'R&D' → 'R&D'
+   - 'archives', 'Archives' → 'Archives'
+   - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
+
+   Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
+  [server-input]
+  (let [s (clojure.string/lower-case (clojure.string/trim server-input))
+        normalized (cond
+                     ;; Central servers
+                     (= s "hq") "HQ"
+                     (or (= s "rd") (= s "r&d")) "R&D"
+                     (= s "archives") "Archives"
+
+                     ;; Remote servers - handle various formats
+                     ;; remote1, remote 1, r1, server1, server 1 → Server 1
+                     (re-matches #"(?:remote|r|server)\s*(\d+)" s)
+                     (let [num (second (re-matches #"(?:remote|r|server)\s*(\d+)" s))]
+                       (str "Server " num))
+
+                     ;; Already correct format - pass through
+                     :else server-input)]
+    {:normalized normalized
+     :original server-input
+     :changed? (not= normalized server-input)}))
+
 (defn run!
   "Run on a server (Runner only)
-   Server names must match game format exactly:
-   - Central servers: \"HQ\", \"R&D\", \"Archives\"
-   - Remote servers: \"remote1\", \"remote2\", etc.
+   Accepts flexible server names and normalizes them automatically.
 
-   Usage: (run! \"HQ\")
-          (run! \"R&D\")
-          (run! \"Archives\")
-          (run! \"remote1\")"
+   Central servers (case-insensitive):
+   - hq, HQ → HQ
+   - rd, r&d, R&D → R&D
+   - archives → Archives
+
+   Remote servers (flexible formats):
+   - remote1, remote 1, r1, server1, server 1 → Server 1
+   - remote2, r2, server2 → Server 2
+
+   Usage: (run! \"hq\")      ; Normalized to HQ
+          (run! \"R&D\")     ; Already correct
+          (run! \"remote1\")  ; Normalized to Server 1
+          (run! \"r2\")      ; Normalized to Server 2"
   [server]
   (let [state @ws/client-state
         gameid (:gameid state)
-        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
+        initial-log-size (count (get-in @ws/client-state [:game-state :log]))
+        {:keys [normalized original changed?]} (normalize-server-name server)]
+    ;; Provide feedback if we normalized the input
+    (when changed?
+      (println (format "💡 Normalized '%s' → '%s'" original normalized)))
+
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)
                                 gameid)
                        :command "run"
-                       :args {:server server}})
+                       :args {:server normalized}})
     ;; Wait for "make a run on" log entry and echo it
     (let [deadline (+ (System/currentTimeMillis) 5000)]
       (loop []
@@ -1787,7 +1830,7 @@
             {:status :run-complete})
 
           ;; ❌ No active run
-          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) "run"))
+          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) :run))
           (do
             (println "⚠️  No active run detected")
             {:status :no-run})
