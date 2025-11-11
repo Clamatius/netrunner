@@ -175,6 +175,7 @@ ${GREEN}Prompts:${NC}
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
   start-game      - Start game (after creating and opponent joins)
+  auto-start      - Auto-start game if lobby is ready (validates 2 players with valid decks)
   leave-game      - Leave current game lobby
   list-lobbies    - List available games to join
   join <game-id> <side>  - Join game as Runner or Corp
@@ -630,6 +631,12 @@ case "$COMMAND" in
                          (Thread/sleep 2000)
                          (println "✅ Game start signal sent"))
                        (println "❌ Not in a game lobby"))))'
+        ;;
+
+    auto-start)
+        ensure_connection
+        info "Checking if lobby is ready to auto-start..."
+        execute '(ai-actions/auto-start-if-ready!)'
         ;;
 
     leave-game)

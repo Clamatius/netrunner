@@ -499,6 +499,20 @@
        (or (= "casual" (:format lobby))
            (validator/legal-deck? deck (:format lobby)))))
 
+(defn lobby-ready-to-start?
+  "Check if lobby has everything needed to safely start a game.
+   Guards against invalid game states (e.g., solo Corp with no Runner)."
+  [lobby]
+  (and (= 2 (count (:players lobby)))                    ; Exactly 2 players
+       (not (:started lobby))                             ; Not already started
+       (every? :side (:players lobby))                    ; Both have sides
+       (every? :deck (:players lobby))                    ; Both have decks
+       (every? #(get-in % [:deck :identity]) (:players lobby)) ; Both have identities
+       (every? #(valid-deck-for-lobby? lobby (:deck %)) (:players lobby)) ; Valid decks
+       (let [sides (set (map :side (:players lobby)))]
+         (and (contains? sides "Corp")                    ; One Corp
+              (contains? sides "Runner")))))              ; One Runner
+
 (defn update-deck-for-player-in-lobby [players uid deck]
   (mapv (fn [p] (if (= uid (:uid p))
                   (assoc p :deck deck)

@@ -265,6 +265,51 @@
     (ws/show-status)
     (println "❌ Failed to resync game state")))
 
+(defn lobby-ready-to-start?
+  "Check if the current lobby is ready to start a game.
+   Validates: 2 players, both have decks with identities, one Corp + one Runner."
+  []
+  (let [state @ws/client-state
+        lobby (:lobby-state state)]
+    (and lobby
+         (= 2 (count (:players lobby)))
+         (not (:started lobby))
+         (every? :side (:players lobby))
+         (every? :deck (:players lobby))
+         (every? #(get-in % [:deck :identity]) (:players lobby))
+         (let [sides (set (map :side (:players lobby)))]
+           (and (contains? sides "Corp")
+                (contains? sides "Runner"))))))
+
+(defn auto-start-if-ready!
+  "Check if lobby is ready and auto-start the game if safe.
+   Returns :started if game was started, :not-ready if not ready, :already-started if started."
+  []
+  (let [state @ws/client-state
+        lobby (:lobby-state state)
+        gameid (:gameid state)]
+    (cond
+      (not lobby)
+      (do (println "❌ Not in a lobby")
+          {:status :no-lobby})
+
+      (:started lobby)
+      (do (println "ℹ️  Game already started")
+          {:status :already-started})
+
+      (not (lobby-ready-to-start?))
+      (let [players (count (:players lobby))
+            with-decks (count (filter :deck (:players lobby)))]
+        (println (format "⏳ Lobby not ready: %d/2 players, %d with decks" players with-decks))
+        {:status :not-ready :players players :with-decks with-decks})
+
+      :else
+      (do
+        (println "✅ Lobby ready! Auto-starting game...")
+        (ws/send-message! :game/start {:gameid gameid})
+        (Thread/sleep 2000)
+        {:status :started}))))
+
 (defn send-chat!
   "Send a chat message to the game
    Usage: (send-chat! \"Hello, world!\")"

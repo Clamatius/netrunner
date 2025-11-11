@@ -55,12 +55,22 @@
                          (update-all-advancement-requirements state))
                        (effect-completed state side eid)))))
 
+(defn opponent-has-blocking-prompt?
+  "Check if opponent has an active prompt that should block turn start.
+   Prevents out-of-order actions like starting turn while opponent is discarding."
+  [state side]
+  (let [opponent (if (= side :corp) :runner :corp)
+        prompts (get-in @state [opponent :prompt])]
+    ;; Block if opponent has any non-waiting prompts
+    (some #(not= :waiting (:prompt-type %)) prompts)))
+
 (defn start-turn
   "Start turn."
   [state side _]
   ;; note that it's possible for the front-end to send the "start-turn" command twice,
   ;; before it can be updated with the fact that the turn has started.
-  (when-not (get-in @state [side :turn-started])
+  (when-not (or (get-in @state [side :turn-started])
+                (opponent-has-blocking-prompt? state side))
     ;; Don't clear :turn-events until the player clicks "Start Turn"
     ;; Fix for Hayley triggers
     (swap! state assoc :turn-events nil)

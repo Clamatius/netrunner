@@ -264,7 +264,7 @@
       (println "🎮 Lobby state update")
       (when data
         (when-let [gameid (:gameid data)]
-          (swap! client-state assoc :gameid gameid)
+          (swap! client-state assoc :gameid gameid :lobby-state data)
           (println "   GameID:" gameid))))
 
     :lobby/notification
@@ -767,20 +767,55 @@
 ;; ============================================================================
 
 (defn show-status
-  "Display current game status"
+  "Display current game status or lobby state"
   []
-  (let [gs (get-game-state)
-        my-side (:side @client-state)
-        active-side (active-player)
-        end-turn (get-in gs [:end-turn])
-        prompt (get-prompt)
-        prompt-type (:prompt-type prompt)
-        run-state (get-in gs [:run])
-        runner-clicks (get-in gs [:runner :click])
-        corp-clicks (get-in gs [:corp :click])
-        both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
-    (println "📊 GAME STATUS")
-    (println "\nTurn:" (turn-number) "-" active-side)
+  (let [lobby (:lobby-state @client-state)
+        gs (get-game-state)]
+    ;; Check if we're in a lobby but game hasn't started yet
+    (if (and lobby (not (:started lobby)))
+      ;; Show lobby status
+      (let [players (:players lobby)
+            player-count (count players)
+            players-with-decks (count (filter :deck players))
+            sides (set (map :side players))
+            ready? (and (= 2 player-count)
+                       (every? :deck players)
+                       (every? #(get-in % [:deck :identity]) players)
+                       (contains? sides "Corp")
+                       (contains? sides "Runner"))]
+        (println "📊 LOBBY STATUS")
+        (println "\nGame:" (:title lobby))
+        (println "Format:" (:format lobby))
+        (println "Players:" player-count "/2")
+        (doseq [player players]
+          (let [username (get-in player [:user :username])
+                side (:side player)
+                has-deck? (some? (:deck player))
+                deck-name (get-in player [:deck :name])]
+            (println (format "  • %s (%s) - %s"
+                           username
+                           side
+                           (if has-deck?
+                             (str "✅ " deck-name)
+                             "⏳ No deck selected")))))
+        (println "\nStatus:"
+               (cond
+                 ready? "✅ Ready to start! Use 'start-game' or 'auto-start'"
+                 (< player-count 2) (format "⏳ Waiting for players (%d/2)" player-count)
+                 (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
+                 :else "⏳ Waiting...")))
+      ;; Show game status (existing code)
+      (let [my-side (:side @client-state)
+            active-side (active-player)
+            end-turn (get-in gs [:end-turn])
+            prompt (get-prompt)
+            prompt-type (:prompt-type prompt)
+            run-state (get-in gs [:run])
+            runner-clicks (get-in gs [:runner :click])
+            corp-clicks (get-in gs [:corp :click])
+            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
+        (println "📊 GAME STATUS")
+        (println "\nTurn:" (turn-number) "-" active-side)
 
     ;; Active player / waiting status
     (let [runner-clicks runner-clicks
@@ -858,7 +893,7 @@
           (doseq [entry recent-log]
             (println " " (:text entry))))))
 
-    nil))
+        nil))))
 
 (defn show-games
   "Display available games in a readable format"
