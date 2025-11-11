@@ -650,7 +650,8 @@
           after-clicks (get-in state [:game-state (keyword side) :click])]
       (show-before-after "💰 Credits" before-credits after-credits)
       (show-before-after "⏱️  Clicks" before-clicks after-clicks)
-      (show-turn-indicator))))
+      (show-turn-indicator)
+      (check-auto-end-turn!))))
 
 (defn draw-card!
   "Draw a card (shows before/after)"
@@ -672,7 +673,8 @@
           after-hand (count (get-in state [:game-state (keyword side) :hand]))
           after-clicks (get-in state [:game-state (keyword side) :click])]
       (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
-      (show-before-after "⏱️  Clicks" before-clicks after-clicks))))
+      (show-before-after "⏱️  Clicks" before-clicks after-clicks)
+      (check-auto-end-turn!))))
 
 (defn end-turn!
   "End turn (validates all clicks used unless forced).
@@ -708,6 +710,33 @@
         (Thread/sleep 2000)
         (show-turn-indicator)
         {:status :success}))))
+
+(defn check-auto-end-turn!
+  "Proactively check if turn should auto-end after an action.
+   Called automatically after clicks-consuming actions.
+
+   Auto-ends when:
+   - 0 clicks remaining
+   - No active prompts
+   - Not already ended (checks recent log)
+
+   This prevents the 'forgot to end-turn' stuck state."
+  []
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        clicks (get-in state [:game-state side :click])
+        prompt (get-in state [:game-state side :prompt-state])
+        log (get-in state [:game-state :log])
+        recent-log (take 3 log)
+        already-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
+                            recent-log)]
+
+    (when (and (= clicks 0)
+               (nil? prompt)
+               (not already-ended?))
+      (println "")
+      (println "💡 Auto-ending turn (0 clicks, no prompts)")
+      (end-turn!))))
 
 (defn smart-end-turn!
   "Smart end-turn that checks if it's safe to end turn automatically.
