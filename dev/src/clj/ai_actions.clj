@@ -1589,6 +1589,40 @@
         (println "❌ No discard prompt active or no indices provided")
         0))))
 
+(defn discard-by-names!
+  "Discard specific cards by their names
+
+   Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
+          (discard-by-names! \"Sure Gamble\")  ; Single card"
+  [card-names]
+  (let [names-vec (if (vector? card-names) card-names [card-names])
+        state @ws/client-state
+        side (keyword (:side state))
+        gs (ws/get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])]
+    (if (and (= "select" (:prompt-type prompt))
+             (seq names-vec))
+      (let [;; Find cards in hand matching the requested names
+            cards-to-discard (filter (fn [card]
+                                       (some #(= (:title card) %) names-vec))
+                                    hand)
+            _ (when (seq cards-to-discard)
+                (println "Discarding:" (clojure.string/join ", " (map :title cards-to-discard))))]
+        (if (seq cards-to-discard)
+          (do
+            (doseq [card cards-to-discard]
+              (ws/select-card! card (:eid prompt))
+              (Thread/sleep 500))
+            (println "✅ Discarded" (count cards-to-discard) "card(s)")
+            (count cards-to-discard))
+          (do
+            (println "❌ No matching cards found in hand for:" (clojure.string/join ", " names-vec))
+            0)))
+      (do
+        (println "❌ No discard prompt active or no card names provided")
+        0))))
+
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
   []
