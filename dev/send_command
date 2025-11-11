@@ -1,6 +1,9 @@
 #!/bin/bash
 # send_command - Simplified AI player control interface
-# Usage: ./send_command <action> [args...]
+# Usage: ./send_command [client] <action> [args...]
+#   Single-client: ./send_command status
+#   Multi-client:  ./send_command runner status
+#                  ./send_command corp create-game "Test"
 
 set -euo pipefail
 set +H  # Disable history expansion to allow ! in function names
@@ -9,6 +12,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
 TIMEOUT="${TIMEOUT:-20}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
+
+# Multi-client support: detect if first arg is a client name
+# Valid client names: runner, corp, or any custom name
+# Port mapping: runner=7889 (default), corp=7890
+CLIENT_NAME=""
+CLIENT_PORT="7889"
+
+# Check if first argument looks like a client name (not a command)
+FIRST_ARG="${1:-help}"
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|continue|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
+    CLIENT_NAME="$1"
+    shift
+
+    # Map client name to port
+    case "$CLIENT_NAME" in
+        runner)
+            CLIENT_PORT="7889"
+            ;;
+        corp)
+            CLIENT_PORT="7890"
+            ;;
+        *)
+            # Custom client, try to find its port by checking what's running
+            # Default to 7889 if not specified
+            CLIENT_PORT="7889"
+            ;;
+    esac
+fi
 
 # Color output
 RED='\033[0;31m'
@@ -38,8 +69,12 @@ warn() {
 
 # Check if AI client is running
 check_client() {
-    if ! lsof -i :7889 > /dev/null 2>&1; then
-        error "AI Client REPL not running. Start with: ./dev/start-ai-client-repl.sh"
+    if ! lsof -i :$CLIENT_PORT > /dev/null 2>&1; then
+        if [[ -n "$CLIENT_NAME" ]]; then
+            error "AI Client REPL '$CLIENT_NAME' not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $CLIENT_PORT"
+        else
+            error "AI Client REPL not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh"
+        fi
     fi
 }
 
@@ -72,6 +107,17 @@ ensure_connection() {
 show_help() {
     cat << EOF
 ${BLUE}AI Player Command Interface${NC}
+
+${YELLOW}Multi-Client Usage:${NC}
+  ./send_command runner <action> [args...]  - Send command to Runner client (port 7889)
+  ./send_command corp <action> [args...]    - Send command to Corp client (port 7890)
+  ./send_command <action> [args...]         - Send to default client (backward compatible)
+
+${YELLOW}Examples:${NC}
+  ./send_command runner status              - Check Runner's game status
+  ./send_command corp create-game "Test"    - Corp creates a game
+  ./send_command runner keep-hand           - Runner keeps mulligan
+  ./send_command corp start-game            - Corp starts the game
 
 ${GREEN}Status Commands:${NC}
   status          - Show game state (turn, credits, clicks, hand size)
@@ -158,7 +204,13 @@ EOF
 # Execute command via ai-eval.sh
 execute() {
     local expr="$1"
-    TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr"
+    if [[ -n "$CLIENT_NAME" ]]; then
+        # Multi-client mode: pass client name and port
+        TIMEOUT="$TIMEOUT" "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" "$expr"
+    else
+        # Single-client mode: use default (backward compatible)
+        TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr"
+    fi
 }
 
 # Main command dispatcher
