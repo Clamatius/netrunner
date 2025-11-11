@@ -520,7 +520,13 @@
             (println (str "    " idx ". " (format-choice choice)))))
         (when has-selectable
           (println "  Selectable cards:" (count (:selectable prompt))
-                   "- Use choose-card! to select by index"))
+                   "- Use choose-card! to select by index")
+          (doseq [[idx card] (map-indexed vector (:selectable prompt))]
+            (let [title (or (:title card) "Unknown")
+                  card-type (or (:type card) "?")
+                  zone (or (:zone card) [])]
+              (println (str "    " idx ". " title " [" card-type "]"
+                          (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")")))))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
           (println "  Action: Paid ability window")
@@ -1061,8 +1067,9 @@
 (defn keep-hand
   "Keep hand during mulligan"
   []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (choose-option! 0)
@@ -1071,8 +1078,9 @@
 (defn mulligan
   "Mulligan (redraw) hand"
   []
-  (let [prompt (ws/get-prompt)]
-    (if (and prompt (= "mulligan" (:prompt-type prompt)))
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (choose-option! 1)
@@ -1745,7 +1753,7 @@
 
             ;; Track accessed and stolen cards from log
             new-accessed (filter #(clojure.string/includes? (:text %) "accesses") new-entries)
-            new-stolen (filter #(clojure.string/includes? (:text %) "stole") new-entries)
+            new-stolen (filter #(clojure.string/includes? (:text %) "steal") new-entries)
             accessed-cards' (concat accessed-cards (map :text new-accessed))
             stolen-agendas' (concat stolen-agendas (map :text new-stolen))
 

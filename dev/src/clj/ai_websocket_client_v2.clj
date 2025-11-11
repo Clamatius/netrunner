@@ -834,7 +834,7 @@
 
         ;; End-turn was called, waiting for opponent to start (I just finished)
         (and end-turn (= my-side active-side))
-        (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to call 'start-turn'")
+        (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to start turn")
 
         ;; Both players have 0 clicks but end-turn not called yet
         both-zero-clicks
@@ -873,6 +873,8 @@
       (println "Hand:" hand-count "cards")
       (when (and (= "runner" my-side) (> hand-count max-hand-size))
         (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
+    (let [agenda-points (get-in gs [:runner :agenda-point] 0)]
+      (println "Agenda Points:" agenda-points "/ 7"))
     (println "\n--- CORP ---")
     (println "Credits:" (corp-credits))
     (let [clicks corp-clicks]
@@ -886,6 +888,8 @@
       (println "Hand:" hand-count "cards")
       (when (and (= "corp" my-side) (> hand-count max-hand-size))
         (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
+    (let [agenda-points (get-in gs [:corp :agenda-point] 0)]
+      (println "Agenda Points:" agenda-points "/ 7"))
     (when (and prompt (not= :waiting prompt-type))
       (println "\n🔔 Active Prompt:" (:msg prompt)))
 
