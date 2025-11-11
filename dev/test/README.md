@@ -8,21 +8,42 @@ Comprehensive unit test suite for the Netrunner AI client, focusing on error han
 dev/test/
 ├── README.md                      ← You are here
 ├── TEST_PLAN.md                   ← Comprehensive testing strategy
+├── FAST_TESTING.md                ← Guide for persistent REPL testing
+├── IMPLEMENTATION_STATUS.md       ← Current status and roadmap
 ├── test_helpers.clj               ← Mock utilities and helpers
 ├── ai_actions_test.clj            ← Happy path tests (core functionality)
 ├── ai_actions_sad_path_test.clj   ← Sad path tests (error handling)
 ├── ai_websocket_diff_test.clj     ← WebSocket diff tests (existing)
 └── test_harness.clj               ← Integration tests (existing)
+
+dev/
+└── run-tests.sh                   ← **Fast test runner script** ⚡
 ```
 
 ## Quick Start
 
-### Running All Tests
+### **Recommended: Fast Testing** ⚡ (30x faster!)
+
+Use the persistent REPL test runner:
+
+```bash
+# From project root
+./dev/run-tests.sh                  # Run all tests (30s first time, <1s after)
+./dev/run-tests.sh test             # Run all tests with reload
+./dev/run-tests.sh test ai-actions-test  # Run specific namespace
+./dev/run-tests.sh run              # Run without reload (fastest!)
+```
+
+**Why it's fast:** Starts a REPL once and reuses it. No JVM startup overhead!
+
+See [`FAST_TESTING.md`](./FAST_TESTING.md) for details.
+
+### Traditional: lein kaocha (slow but simple)
 
 ```bash
 # From project root
 cd /home/user/netrunner
-lein kaocha
+lein kaocha        # ~30s startup every time
 ```
 
 ### Running Specific Test Suites
