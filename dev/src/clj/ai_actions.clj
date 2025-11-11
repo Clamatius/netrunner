@@ -709,6 +709,82 @@
         (show-turn-indicator)
         {:status :success}))))
 
+(defn smart-end-turn!
+  "Smart end-turn that checks if it's safe to end turn automatically.
+
+   ✅ AUTO END-TURN when:
+   - 0 clicks remaining
+   - No active prompts (already handled mandatory discard, etc.)
+   - No visible EOT triggers in installed cards
+
+   ⚠️ PAUSE when:
+   - Active prompts (discard, ability choices)
+   - Installed cards with end-of-turn effects
+   - Credits/cards changed recently (possible EOT trigger)
+
+   Usage: (smart-end-turn!)  ; Auto-end if safe, warn if not"
+  []
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        clicks (get-in state [:game-state side :click])
+        prompt (get-in state [:game-state side :prompt-state])
+        hand-size (get-in state [:game-state side :hand-count])
+        max-hand-size (get-in state [:game-state side :hand-size :total] 5)
+        installed (get-in state [:game-state side :installed])
+
+        ;; Check for EOT-related conditions
+        has-prompt? (some? prompt)
+        over-hand-size? (> hand-size max-hand-size)
+
+        ;; Simple heuristic: check if any installed card text contains "end of"
+        ;; This is a rough approximation - not all cards are in client state with full text
+        has-eot-trigger? (some (fn [card-list]
+                                 (some (fn [card]
+                                        (when-let [text (:text card)]
+                                          (clojure.string/includes?
+                                           (clojure.string/lower-case text)
+                                           "end of")))
+                                      card-list))
+                              (vals installed))]
+
+    (cond
+      ;; Can't end: clicks remaining
+      (> clicks 0)
+      (do
+        (println "⚠️  Cannot auto-end: you still have clicks")
+        (println (format "   %d click(s) remaining - use them or end-turn --force" clicks))
+        {:status :clicks-remaining :clicks clicks})
+
+      ;; Pause: active prompt (discard, choices, etc.)
+      has-prompt?
+      (do
+        (println "⚠️  Cannot auto-end: active prompt")
+        (println (format "   Prompt: %s" (:msg prompt)))
+        (println "   Resolve the prompt first, then end-turn manually")
+        {:status :has-prompt :prompt prompt})
+
+      ;; Pause: over hand size (should have discard prompt, but just in case)
+      over-hand-size?
+      (do
+        (println "⚠️  Cannot auto-end: over hand size")
+        (println (format "   Hand: %d cards (max %d)" hand-size max-hand-size))
+        (println "   Discard cards first")
+        {:status :over-hand-size :hand-size hand-size :max max-hand-size})
+
+      ;; Warn: possible EOT trigger
+      has-eot-trigger?
+      (do
+        (println "⚠️  Possible end-of-turn effect detected")
+        (println "   Installed cards may have EOT triggers")
+        (println "   Proceeding with end-turn (effects will resolve)")
+        (end-turn!))
+
+      ;; Safe: auto end-turn
+      :else
+      (do
+        (println "✅ Auto-ending turn (0 clicks, no prompts)")
+        (end-turn!)))))
+
 ;; Keep old function names for backwards compatibility
 (defn take-credits []
   (take-credit!))

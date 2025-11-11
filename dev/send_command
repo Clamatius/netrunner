@@ -138,6 +138,7 @@ ${GREEN}Basic Actions:${NC}
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
   end-turn [--force] - End your turn (requires --force if clicks remain)
+  smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
 
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
@@ -336,6 +337,12 @@ case "$COMMAND" in
         else
             execute '(ai-actions/end-turn!)'
         fi
+        ;;
+
+    smart-end-turn)
+        ensure_connection
+        info "Smart end-turn (auto-detects if safe)..."
+        execute '(ai-actions/smart-end-turn!)'
         ;;
 
     # Dev/Testing commands
