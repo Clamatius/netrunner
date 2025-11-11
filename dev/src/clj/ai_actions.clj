@@ -649,18 +649,79 @@
 ;; ============================================================================
 
 (defn start-turn!
-  "Start your turn (gains clicks, Corp draws mandatory card)"
+  "Start your turn (gains clicks, Corp draws mandatory card).
+   Validates that opponent has finished their turn to prevent desync.
+
+   Validates:
+   - Opponent has 0 clicks remaining
+   - Opponent's end-turn appears in recent log
+   - You don't already have clicks (prevents double-start)
+
+   Returns {:status :error} if validation fails, {:status :success} if successful."
   []
   (let [state @ws/client-state
-        gameid (:gameid state)]
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "start-turn"
-                       :args nil})
-    (Thread/sleep 2000)
-    (show-turn-indicator)))
+        gameid (:gameid state)
+        my-side (keyword (:side state))
+        opp-side (if (= my-side :runner) :corp :runner)
+        my-clicks (get-in state [:game-state my-side :click])
+        opp-clicks (get-in state [:game-state opp-side :click])
+        log (get-in state [:game-state :log])
+        recent-log (take-last 5 log)
+        opp-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
+                        recent-log)
+        ;; Turn 0 special case: no end-turn yet, both at 0 clicks
+        is-first-turn? (and (= my-clicks 0)
+                           (= opp-clicks 0)
+                           (not opp-ended?))]
+
+    (cond
+      ;; ALLOW: First turn (turn 0) - no prior end-turn exists
+      is-first-turn?
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "start-turn"
+                           :args nil})
+        (Thread/sleep 2000)
+        (show-turn-indicator)
+        {:status :success})
+
+      ;; ERROR: Already have clicks (turn already started)
+      (> my-clicks 0)
+      (do
+        (println (format "❌ ERROR: Turn already started (%d clicks remaining)" my-clicks))
+        (println "   Complete your turn before starting a new one")
+        {:status :error :reason :turn-already-started :clicks my-clicks})
+
+      ;; ERROR: Opponent hasn't ended turn yet
+      (> opp-clicks 0)
+      (do
+        (println (format "❌ ERROR: Opponent still has %d click(s)" opp-clicks))
+        (println (format "   Wait for %s to finish their turn first" (name opp-side)))
+        {:status :error :reason :opponent-has-clicks :opp-clicks opp-clicks})
+
+      ;; ERROR: Opponent end-turn not in recent log
+      (not opp-ended?)
+      (do
+        (println "❌ ERROR: Opponent hasn't ended their turn yet")
+        (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
+        (println "   Wait for opponent to complete their turn")
+        {:status :error :reason :opponent-not-ended})
+
+      ;; OK: All validations passed
+      :else
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "start-turn"
+                           :args nil})
+        (Thread/sleep 2000)
+        (show-turn-indicator)
+        {:status :success}))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
