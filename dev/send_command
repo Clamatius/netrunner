@@ -166,6 +166,7 @@ ${GREEN}Prompts:${NC}
   choose-card <N> - Choose card N from select prompt (for card-targeting effects)
   continue        - Continue/pass priority (for paid ability windows, run phases)
   auto-continue   - Auto-continue through paid ability windows until event occurs
+  continue-run    - Smart run handler (auto-continues both players, stops at decisions)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
@@ -540,6 +541,12 @@ case "$COMMAND" in
         ensure_connection
         info "Auto-continuing through paid ability windows..."
         execute '(ai-actions/auto-continue!)'
+        ;;
+
+    continue-run)
+        ensure_connection
+        info "Auto-handling run (both players)..."
+        execute '(ai-actions/continue-run!)'
         ;;
 
     jack-out)

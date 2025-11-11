@@ -953,8 +953,8 @@
                                 gameid)
                        :command "run"
                        :args {:server server}})
-    ;; Wait for "makes a run on" log entry and echo it
-    (let [deadline (+ (System/currentTimeMillis) 3000)]
+    ;; Wait for "make a run on" log entry and echo it
+    (let [deadline (+ (System/currentTimeMillis) 5000)]
       (loop []
         (let [log (get-in @ws/client-state [:game-state :log])
               new-entries (drop initial-log-size log)
@@ -1514,6 +1514,113 @@
                               :args nil})
             (Thread/sleep 500)
             (recur (inc iteration))))))))
+
+(defn continue-run!
+  "Smart run handler that auto-continues through boring parts of a run.
+   Handles paid ability windows for BOTH Runner and Corp, stops at real decisions.
+
+   Stops when:
+   - Access prompt with choices appears (steal, trash, etc.)
+   - Run phase is :success (run complete)
+   - Max iterations reached (safety)
+   - Timeout
+
+   Options:
+     :max-iterations - Maximum loops (default 30)
+     :timeout-seconds - Maximum time (default 45)
+
+   Returns: {:status :access-prompt | :run-complete | :max-iterations | :timeout
+             :prompt {...}}
+
+   Usage: (continue-run!)  ; Auto-handle entire unopposed run"
+  [& {:keys [max-iterations timeout-seconds]
+      :or {max-iterations 30 timeout-seconds 45}}]
+  (let [state @ws/client-state
+        gameid (:gameid state)
+        runner-side (keyword (:side state))
+        corp-side (if (= runner-side :runner) :corp :runner)
+        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
+    (println "🏃 Auto-handling run (continues both players)...")
+    (loop [iteration 0]
+      (let [current-state @ws/client-state
+            runner-prompt (get-in current-state [:game-state :runner :prompt-state])
+            corp-prompt (get-in current-state [:game-state :corp :prompt-state])
+            run-phase (get-in current-state [:game-state :run :phase])
+
+            ;; Check if Runner has paid ability window
+            runner-paid-window? (and runner-prompt
+                                    (empty? (:choices runner-prompt))
+                                    (empty? (:selectable runner-prompt))
+                                    (= "run" (:prompt-type runner-prompt)))
+
+            ;; Check if Runner has access prompt with choices
+            runner-has-choice? (and runner-prompt
+                                   (seq (:choices runner-prompt)))]
+
+        (cond
+          ;; Stop: Runner has real choice (access card)
+          runner-has-choice?
+          (do
+            (println "✅ Run ready - you have a decision to make")
+            (println (format "   Card: %s" (get-in runner-prompt [:card :title])))
+            (println (format "   Choices: %d options" (count (:choices runner-prompt))))
+            {:status :access-prompt :prompt runner-prompt})
+
+          ;; Stop: Run complete (phase :success)
+          (= run-phase :success)
+          (do
+            (println "✅ Run complete")
+            {:status :run-complete})
+
+          ;; Stop: No active run
+          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) "run"))
+          (do
+            (println "⚠️  No active run detected")
+            {:status :no-run})
+
+          ;; Stop: Max iterations
+          (>= iteration max-iterations)
+          (do
+            (println "⏱️  Continue-run: max iterations reached")
+            {:status :max-iterations})
+
+          ;; Stop: Timeout
+          (> (System/currentTimeMillis) deadline)
+          (do
+            (println "⏱️  Continue-run: timeout")
+            {:status :timeout})
+
+          ;; Continue: Handle paid ability windows for both players
+          runner-paid-window?
+          (do
+            ;; Runner continues
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "continue"
+                              :args nil})
+            (Thread/sleep 300)
+
+            ;; Corp continues (if they have a prompt)
+            (when corp-prompt
+              (ws/send-message! :game/action
+                               {:gameid (if (string? gameid)
+                                         (java.util.UUID/fromString gameid)
+                                         gameid)
+                                :command "continue"
+                                :args nil})
+              (Thread/sleep 300))
+
+            (recur (inc iteration)))
+
+          ;; Fallback: unexpected state
+          :else
+          (do
+            (println "⚠️  Unexpected run state")
+            (println (format "   Runner prompt type: %s" (:prompt-type runner-prompt)))
+            (println (format "   Run phase: %s" run-phase))
+            {:status :unexpected-state :prompt runner-prompt}))))))
 
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
