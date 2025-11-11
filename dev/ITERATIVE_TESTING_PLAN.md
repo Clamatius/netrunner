@@ -16,6 +16,40 @@
 
 ---
 
+## Commit Discipline for Concurrent Development
+
+**Philosophy:** Only commit when fixes are proven-good through testing.
+
+**Why:** With multiple Claudes potentially working concurrently (e.g., Web Claude with $1000 credits), we need clean, stable checkpoints to avoid breaking each other's work.
+
+**Dev Flow:**
+1. **Play till bug basket full** - Queue 3-5 issues without fixing immediately
+2. **Fix** - Implement solutions for queued bugs
+3. **Play till fixes verified** - Test that fixes work together in realistic scenarios
+4. **Commit** - Only after verification succeeds
+5. **Repeat** - Next iteration cycle
+
+**Commit Checklist:**
+- [ ] All fixes tested individually
+- [ ] All fixes tested together in realistic gameplay
+- [ ] No regressions introduced
+- [ ] Commit message documents what was fixed and verified
+- [ ] Branch is in clean, working state
+
+**Anti-Patterns:**
+- ❌ Committing untested code
+- ❌ Committing after fixing just one bug (test multiple fixes together)
+- ❌ Committing when something is "probably working"
+- ❌ Making commit messages vague or incomplete
+
+**Good Practice:**
+- ✅ Test multiple bug fixes together before committing
+- ✅ Document verification steps in commit message
+- ✅ Keep commits focused but complete (all related fixes in one commit)
+- ✅ Maintain stable checkpoints for concurrent development
+
+---
+
 ## Testing Commands Quick Reference
 
 ### Essential Diagnostic Commands
