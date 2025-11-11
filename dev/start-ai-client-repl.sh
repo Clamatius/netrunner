@@ -1,24 +1,32 @@
 #!/bin/bash
 # Start AI Client REPL
 # This maintains a persistent WebSocket connection to the game server
+#
+# Usage: ./start-ai-client-repl.sh [client_name] [port]
+# Example: ./start-ai-client-repl.sh runner 7889
 
-echo "Starting AI Client REPL on port 7889..."
+CLIENT_NAME=${1:-fixed-id}
+REPL_PORT=${2:-7889}
+
+echo "Starting AI Client REPL for '$CLIENT_NAME' on port $REPL_PORT..."
 echo "This REPL will maintain connection to the game server."
 echo ""
 echo "To connect to this REPL manually:"
-echo "  lein repl :connect localhost:7889"
+echo "  lein repl :connect localhost:$REPL_PORT"
 echo ""
 echo "To send commands from scripts:"
-echo "  ./dev/ai-eval.sh '<expression>'"
+echo "  ./dev/ai-eval.sh '$CLIENT_NAME' $REPL_PORT '<expression>'"
 echo ""
 
-# Start REPL on port 7889 without loading user.clj
+# Start REPL on specified port without loading user.clj
 # Use 'with-profile base' to avoid the dev profile which loads user.clj
 # This prevents the port 7888 nREPL server from starting
 # Use nohup and redirect to keep it running in background
+# Pass client name via environment variable (simpler than JVM prop through lein)
+export AI_CLIENT_NAME=$CLIENT_NAME
 nohup lein with-profile base run -m nrepl.cmdline \
-  --port 7889 \
-  > /tmp/ai-client-repl.log 2>&1 &
+  --port $REPL_PORT \
+  > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &
 
 REPL_PID=$!
 
@@ -28,37 +36,37 @@ echo "Waiting for nREPL server to be ready..."
 # Wait for nREPL to actually be listening
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
-    if lsof -i:7889 > /dev/null 2>&1; then
-        echo "✅ nREPL server is listening on port 7889"
+    if lsof -i:$REPL_PORT > /dev/null 2>&1; then
+        echo "✅ nREPL server is listening on port $REPL_PORT"
         break
     fi
     if [ $i -eq $MAX_WAIT ]; then
         echo "❌ nREPL server failed to start after ${MAX_WAIT}s"
         echo "Last 20 lines of log:"
-        tail -20 /tmp/ai-client-repl.log
+        tail -20 /tmp/ai-client-${CLIENT_NAME}.log
         exit 1
     fi
     sleep 1
 done
 
-# Find the actual Java process PID listening on port 7889
-JAVA_PID=$(lsof -ti:7889)
+# Find the actual Java process PID listening on the specified port
+JAVA_PID=$(lsof -ti:$REPL_PORT)
 if [ -n "$JAVA_PID" ]; then
-    echo $JAVA_PID > /tmp/ai-client-repl.pid
+    echo $JAVA_PID > /tmp/ai-client-${CLIENT_NAME}.pid
     echo "Saved Java process PID: $JAVA_PID"
 else
     echo "⚠️  Warning: Could not find Java process PID"
-    echo $REPL_PID > /tmp/ai-client-repl.pid
+    echo $REPL_PID > /tmp/ai-client-${CLIENT_NAME}.pid
 fi
 
 # Now load the initialization code via nREPL
 echo "Loading AI client initialization..."
-TIMEOUT=15 ./dev/ai-eval.sh '(load-file "dev/src/clj/ai_client_init.clj")'
+TIMEOUT=15 ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file "dev/src/clj/ai_client_init.clj")'
 
 echo ""
-echo "✅ AI Client REPL ready!"
+echo "✅ AI Client REPL ready for '$CLIENT_NAME'!"
 echo ""
-echo "To stop: ./dev/stop-ai-client.sh"
-echo "To view logs: tail -f /tmp/ai-client-repl.log"
-echo "To send commands: ./dev/ai-eval.sh '<expression>'"
+echo "To stop: ./dev/stop-ai-client.sh $CLIENT_NAME"
+echo "To view logs: tail -f /tmp/ai-client-${CLIENT_NAME}.log"
+echo "To send commands: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
 echo ""

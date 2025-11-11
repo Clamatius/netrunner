@@ -65,12 +65,13 @@
           ;; Create a fake user for client-ids that start with "ai-client-"
           client-id (:client-id params)
           ai-user (when (and client-id (str/starts-with? (str client-id) "ai-client-"))
-                    {:username (str "AI-" (subs (str client-id) 10))
-                     :emailhash "ai"
-                     :_id "ai-player"
-                     :special true
-                     :options {:default-format "standard" :pronouns "none"}
-                     :stats {:games-started 0 :games-completed 0}})
+                    (let [client-suffix (subs (str client-id) 10)]
+                      {:username (str "AI-" client-suffix)
+                       :emailhash "ai"
+                       :_id (str "ai-player-" client-suffix)
+                       :special true
+                       :options {:default-format "standard" :pronouns "none"}
+                       :stats {:games-started 0 :games-completed 0}}))
           final-user (or user ai-user)]
       (if (or (active-user? final-user) ai-user)
         (handler (-> req

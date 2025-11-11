@@ -2,12 +2,18 @@
 
 ## Overview
 
-The AI player uses a **two-REPL architecture** to maintain a persistent WebSocket connection while allowing single-shot command execution:
+The AI player supports both **double-REPL** and **triple-REPL** architectures:
 
+### Double-REPL Mode (Single AI Client)
 1. **Game Server REPL** (port 7888) - The main Jinteki server
 2. **AI Client REPL** (port 7889) - Maintains WebSocket connection to server
 
-This allows sending individual commands via `send_command`, which connect to the persistent client REPL that maintains game state.
+### Triple-REPL Mode (Multi-Client / Self-Play)
+1. **Game Server REPL** (port 7888) - The main Jinteki server
+2. **Runner AI Client REPL** (port 7889) - Controls Runner side
+3. **Corp AI Client REPL** (port 7890) - Controls Corp side
+
+The triple-REPL setup enables AI self-play, automated testing, and controlling both sides of a game simultaneously.
 
 ---
 
@@ -60,6 +66,128 @@ Loading AI client initialization...
 
 ---
 
+## Triple-REPL Setup (Self-Play Mode)
+
+### Start Both AI Clients
+
+```bash
+# Start both Runner and Corp clients at once
+./dev/start-ai-both.sh
+```
+
+This will:
+1. Start Runner client on port 7889 (username: AI-runner)
+2. Start Corp client on port 7890 (username: AI-corp)
+3. Both connect to game server WebSocket
+4. Each maintains independent game state
+
+**Output:**
+```
+Starting Runner client on port 7889...
+✅ AI Client REPL ready for 'runner'!
+
+Starting Corp client on port 7890...
+✅ AI Client REPL ready for 'corp'!
+
+✅ Both AI Clients ready!
+```
+
+### Run Self-Play Automation
+
+```bash
+# Automated game setup: create lobby + both join
+./dev/ai-self-play.sh
+```
+
+This will:
+1. Corp creates a game lobby
+2. Runner joins the game
+3. Game auto-starts when both players are ready
+4. Provides commands for continuing play
+
+### Stop Both AI Clients
+
+```bash
+./dev/stop-ai-both.sh
+```
+
+### Manual Triple-REPL Usage
+
+**Start clients individually:**
+```bash
+./dev/start-ai-client-repl.sh runner 7889
+./dev/start-ai-client-repl.sh corp 7890
+```
+
+**Send commands to specific clients:**
+```bash
+# Runner commands
+./dev/ai-eval.sh runner 7889 '(ai-actions/status)'
+./dev/ai-eval.sh runner 7889 '(ai-actions/hand)'
+
+# Corp commands
+./dev/ai-eval.sh corp 7890 '(ai-actions/status)'
+./dev/ai-eval.sh corp 7890 '(ai-actions/show-board)'
+```
+
+**Stop clients individually:**
+```bash
+./dev/stop-ai-client.sh runner
+./dev/stop-ai-client.sh corp
+```
+
+### Multi-Client Game Flow
+
+```bash
+# 1. Start both clients
+./dev/start-ai-both.sh
+
+# 2. Corp creates game
+./dev/ai-eval.sh corp 7890 '(ai-actions/create-lobby! "Test Game")'
+
+# 3. Get game ID from Corp
+GAME_ID=$(./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-websocket-client-v2/client-state))' | tail -1)
+
+# 4. Runner joins
+./dev/ai-eval.sh runner 7889 "(ai-actions/connect-game! \"$GAME_ID\" \"Runner\")"
+
+# 5. Keep hands (or mulligan)
+./dev/ai-eval.sh runner 7889 '(ai-actions/keep-hand)'
+./dev/ai-eval.sh corp 7890 '(ai-actions/keep-hand)'
+
+# 6. Play the game with both clients...
+```
+
+### Shared Game Log HUD
+
+When running multiple clients, they share a single `CLAUDE.local.md` file with sections for each client:
+
+```markdown
+# Game Log HUD
+
+## Game Status (runner)
+Game starting...
+GameID: abc-123
+
+## Game Log (runner)
+Last 30 entries:
+- Runner drew 5 cards
+- Corp drew 5 cards
+
+## Game Status (corp)
+Game starting...
+GameID: abc-123
+
+## Game Log (corp)
+Last 30 entries:
+- Runner drew 5 cards
+- Corp drew 5 cards
+```
+
+File locking ensures no conflicts when both clients write simultaneously.
+
+---
+
 ## Basic Usage
 
 ### View Available Commands
@@ -109,16 +237,20 @@ Loading AI client initialization...
 
 ```
 dev/
-├── send_command                    # Main command interface
-├── start-ai-client-repl.sh        # Start AI client
-├── stop-ai-client.sh              # Stop AI client
-├── ai-eval.sh                     # Low-level REPL eval (used by send_command)
+├── send_command                    # Main command interface (legacy)
+├── start-ai-client-repl.sh        # Start AI client (parameterized for multi-client)
+├── stop-ai-client.sh              # Stop AI client (supports client name)
+├── ai-eval.sh                     # Low-level REPL eval (supports multi-client)
+│
+├── start-ai-both.sh               # Start both Runner + Corp clients
+├── stop-ai-both.sh                # Stop both clients
+├── ai-self-play.sh                # Automated self-play setup
 │
 ├── src/clj/
 │   ├── nrepl-eval.sh              # nREPL communication script
-│   ├── ai_websocket_client_v2.clj # WebSocket client
+│   ├── ai_websocket_client_v2.clj # WebSocket client (multi-client safe)
 │   ├── ai_actions.clj             # High-level game actions
-│   ├── ai_client_init.clj         # Initialization code
+│   ├── ai_client_init.clj         # Initialization code (reads client name)
 │   ├── card_loader.clj            # Card database loader
 │   └── user.clj                   # User namespace (for main server REPL)
 │
@@ -127,11 +259,20 @@ dev/
 
 ### How It Works
 
+**Single Client Mode:**
 1. **start-ai-client-repl.sh** launches nREPL server on port 7889
 2. **ai_client_init.clj** loads on startup, connecting WebSocket to game server
 3. **send_command** sends Clojure expressions via **ai-eval.sh** to the AI client REPL
 4. **ai_websocket_client_v2.clj** maintains WebSocket connection and game state
 5. **ai_actions.clj** provides high-level action functions
+
+**Multi-Client Mode:**
+1. Each client gets unique name (e.g., "runner", "corp")
+2. Clients run on different ports (7889, 7890, etc.)
+3. Each has unique MongoDB user ID (`ai-player-runner`, `ai-player-corp`)
+4. Separate PID/log files prevent conflicts
+5. Shared HUD file uses sections with file locking
+6. Commands target specific client: `./dev/ai-eval.sh <client-name> <port> '<code>'`
 
 ### State Management
 
@@ -153,9 +294,14 @@ Contains:
 **Problem:** `start-ai-client-repl.sh` times out
 
 **Solutions:**
-1. Check port 7889 is free: `lsof -i:7889`
-2. Kill existing process: `./dev/stop-ai-client.sh`
-3. Check logs: `tail -f /tmp/ai-client-repl.log`
+1. Check port is free: `lsof -i:7889` (or 7890 for corp)
+2. Kill existing process: `./dev/stop-ai-client.sh runner` (or corp)
+3. Check logs: `tail -f /tmp/ai-client-runner.log` (or corp)
+
+**Multi-Client Issues:**
+- Port conflict: Each client needs unique port (7889, 7890, etc.)
+- Name conflict: Each client needs unique name (runner, corp, etc.)
+- Check both clients: `lsof -i:7889 && lsof -i:7890`
 
 ### Connection Fails
 

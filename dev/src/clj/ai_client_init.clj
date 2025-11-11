@@ -16,9 +16,12 @@
 (require '[ai-actions :as ai])
 (in-ns 'ai-client-init)
 
-;; Set a fixed client-id for consistent identity
+;; Set client-id from environment variable or use default
 ;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation in web.auth
-(swap! ai-websocket-client-v2/client-state assoc :client-id "ai-client-fixed-id")
+(let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")
+      client-id (str "ai-client-" client-name)]
+  (println (str "Client name: " client-name))
+  (swap! ai-websocket-client-v2/client-state assoc :client-id client-id))
 
 ;; Get CSRF token from the main page
 (println "\nGetting CSRF token...")

@@ -8,6 +8,8 @@
    [differ.core :as differ]
    [gniazdo.core :as ws])
   (:import [java.net URLEncoder]
+           [java.nio.channels FileChannel FileLock]
+           [java.nio.file Files Paths StandardOpenOption]
            [org.eclipse.jetty.websocket.client WebSocketClient]
            [org.eclipse.jetty.util.ssl SslContextFactory]))
 
@@ -85,6 +87,66 @@
       (println "   Detected side:" side))))
 
 ;; ============================================================================
+;; HUD File Management (Multi-Client Safe)
+;; ============================================================================
+
+(defn with-file-lock
+  "Execute body with an exclusive file lock. Returns result of body."
+  [file-path f]
+  (let [path (Paths/get file-path (into-array String []))
+        lock-path (Paths/get (str file-path ".lock") (into-array String []))]
+    (with-open [channel (FileChannel/open lock-path
+                                          (into-array StandardOpenOption
+                                                      [StandardOpenOption/CREATE
+                                                       StandardOpenOption/WRITE]))]
+      (let [lock (.lock channel)]
+        (try
+          (f)
+          (finally
+            (.release lock)))))))
+
+(defn update-hud-section
+  "Update a specific section in the shared HUD file with file locking.
+   Reads entire file, updates the section for this client, writes back atomically."
+  [section-name content]
+  (let [hud-path "CLAUDE.local.md"
+        client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")]
+    (with-file-lock hud-path
+      (fn []
+        ;; Read existing content
+        (let [existing (try (slurp hud-path)
+                           (catch Exception _ "# Game Log HUD\n\n"))
+              section-marker (str "## " section-name " (" client-name ")")
+              section-end-marker "## "
+              ;; Find or insert section
+              lines (str/split-lines existing)
+              section-start-idx (or (->> lines
+                                         (map-indexed vector)
+                                         (filter (fn [[_ line]] (= line section-marker)))
+                                         first
+                                         first)
+                                   -1)
+              ;; Build new content
+              new-section (str section-marker "\n\n" content "\n")
+              updated-content
+              (if (>= section-start-idx 0)
+                ;; Replace existing section
+                (let [before (str/join "\n" (take section-start-idx lines))
+                      after-start (drop (inc section-start-idx) lines)
+                      next-section-idx (or (->> after-start
+                                               (map-indexed vector)
+                                               (filter (fn [[_ line]]
+                                                        (str/starts-with? line section-end-marker)))
+                                               first
+                                               first)
+                                          (count after-start))
+                      after (str/join "\n" (drop next-section-idx after-start))]
+                  (str/join "\n" [before new-section after]))
+                ;; Append new section
+                (str existing "\n" new-section))]
+          (spit hud-path updated-content))))))
+
+;; ============================================================================
 ;; Message Handling
 ;; ============================================================================
 
@@ -152,8 +214,9 @@
                   data)]
       (println "\n🎮 GAME STARTING!")
       (println "  GameID:" (:gameid state))
-      ;; Clear game log HUD for fresh game
-      (spit "CLAUDE.local.md" "# Game Log HUD\n\nWaiting for game to start...\n")
+      ;; Initialize this client's section in shared HUD
+      (update-hud-section "Game Status"
+                         (str "Game starting...\nGameID: " (:gameid state)))
       (set-full-state! state)
       (swap! client-state assoc :gameid (:gameid state)))
 
@@ -864,23 +927,21 @@
                               " (" subtitle ")")))))))))))
 
 (defn write-game-log-to-hud
-  "Write game log to CLAUDE.local.md for HUD visibility"
+  "Write game log to CLAUDE.local.md for HUD visibility (multi-client safe)"
   ([] (write-game-log-to-hud 30))
   ([n]
    (if-let [log (get-game-log)]
-     (let [hud-path "CLAUDE.local.md"
-           log-entries (take-last n log)
+     (let [log-entries (take-last n log)
            log-text (str/join "\n"
                               (for [entry log-entries]
                                 (when (map? entry)
                                   (str "- " (str/replace (:text entry "") "[hr]" "")))))]
-       (spit hud-path
-             (str "# Game Log HUD\n\n"
-                  "Last " n " game log entries (auto-updated):\n\n"
-                  log-text
-                  "\n\n---\n\n"
-                  "Updated: " (java.time.Instant/now) "\n"))
-       (println "✅ Game log written to" hud-path))
+       (update-hud-section "Game Log"
+                          (str "Last " n " entries:\n\n"
+                               log-text
+                               "\n\n---\n"
+                               "Updated: " (java.time.Instant/now)))
+       (println "✅ Game log written to CLAUDE.local.md"))
      (println "No game log available"))))
 
 ;; ============================================================================
