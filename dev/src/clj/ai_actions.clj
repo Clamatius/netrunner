@@ -1713,11 +1713,10 @@
 
 (defn continue-run!
   "Smart run handler that auto-continues through boring parts of a run.
-   Handles paid ability windows for BOTH Runner and Corp.
+   Handles paid ability windows AND single-choice prompts for BOTH Runner and Corp.
 
    🛑 MUST PAUSE (requires decision):
-   - Access prompts (steal/trash/no-action)
-   - Multiple choice prompts
+   - Multiple choice prompts (2+ options = real decision)
    - Card selection required
 
    ⚠️ WANT to PAUSE (important events):
@@ -1729,17 +1728,17 @@
 
    ✅ AUTO-CONTINUE (boring):
    - Empty paid ability windows
-   - Single-option prompts
+   - Single-choice prompts (mandatory steals, cannot-trash accesses)
    - Quiet approach phases
 
    Options:
      :max-iterations - Maximum loops (default 30)
      :timeout-seconds - Maximum time (default 45)
 
-   Returns: {:status :access-prompt | :ice-rezzed | :run-complete | ...
-             :event {...}}
+   Returns: {:status :run-complete | :decision-required | ...
+             :accessed [...] :stolen [...]}
 
-   Usage: (continue-run!)  ; Auto-handle run, pause at important moments"
+   Usage: (continue-run!)  ; Auto-handle run, pause at real decisions"
   [& {:keys [max-iterations timeout-seconds]
       :or {max-iterations 30 timeout-seconds 45}}]
   (let [state @ws/client-state
@@ -1748,13 +1747,21 @@
         initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
     (println "🏃 Auto-handling run (pauses at important events)...")
     (loop [iteration 0
-           last-log-size initial-log-size]
+           last-log-size initial-log-size
+           accessed-cards []
+           stolen-agendas []]
       (let [current-state @ws/client-state
             runner-prompt (get-in current-state [:game-state :runner :prompt-state])
             corp-prompt (get-in current-state [:game-state :corp :prompt-state])
             run-phase (get-in current-state [:game-state :run :phase])
             log (get-in current-state [:game-state :log])
             new-entries (drop last-log-size log)
+
+            ;; Track accessed and stolen cards from log
+            new-accessed (filter #(clojure.string/includes? (:text %) "accesses") new-entries)
+            new-stolen (filter #(clojure.string/includes? (:text %) "stole") new-entries)
+            accessed-cards' (concat accessed-cards (map :text new-accessed))
+            stolen-agendas' (concat stolen-agendas (map :text new-stolen))
 
             ;; Check for important events in new log entries
             rez-entry (first (filter #(clojure.string/includes? (:text %) "rez") new-entries))
@@ -1772,14 +1779,17 @@
                                     (empty? (:selectable runner-prompt))
                                     (= "run" (:prompt-type runner-prompt)))
 
-            ;; Check if Runner has real choices (2+ options or not just "No action")
+            ;; Check if Runner has real choices (2+ options = real decision)
             runner-choices (:choices runner-prompt)
             has-real-choice? (and (seq runner-choices)
-                                 (or (> (count runner-choices) 1)
-                                     (not (some #(= "No action" (:value %)) runner-choices))))]
+                                 (> (count runner-choices) 1))
+
+            ;; Check if Runner has single choice (auto-handle these)
+            has-single-choice? (and (seq runner-choices)
+                                   (= (count runner-choices) 1))]
 
         (cond
-          ;; 🛑 MUST PAUSE: Runner has real decision
+          ;; 🛑 MUST PAUSE: Runner has real decision (2+ choices)
           has-real-choice?
           (do
             (println "🛑 Run paused - decision required")
@@ -1789,7 +1799,10 @@
             (println (format "   Choices: %d options" (count runner-choices)))
             (doseq [[idx choice] (map-indexed vector runner-choices)]
               (println (format "     %d. %s" idx (:value choice))))
-            {:status :decision-required :prompt runner-prompt})
+            {:status :decision-required
+             :prompt runner-prompt
+             :accessed accessed-cards'
+             :stolen stolen-agendas'})
 
           ;; ⚠️ WANT to PAUSE: ICE rezzed
           rez-entry
@@ -1823,17 +1836,48 @@
             (println "   → Use 'continue-run' again to proceed")
             {:status :tag-or-damage :event tag-entry})
 
-          ;; ✅ Success: Run complete
-          (= run-phase :success)
+          ;; ✅ AUTO-HANDLE: Single choice (mandatory action)
+          has-single-choice?
           (do
-            (println "✅ Run complete - successful breach")
-            {:status :run-complete})
+            (let [choice (first runner-choices)
+                  choice-uuid (:uuid choice)]
+              (println (format "   Auto-choosing: %s" (:value choice)))
+              (ws/send-message! :game/action
+                               {:gameid (if (string? gameid)
+                                         (java.util.UUID/fromString gameid)
+                                         gameid)
+                                :command "choice"
+                                :args {:choice {:uuid choice-uuid}}})
+              (Thread/sleep 500)
+              (recur (inc iteration) (count log) accessed-cards' stolen-agendas')))
+
+          ;; ✅ Success: Run complete (no more prompts, not in run phase)
+          (and (nil? runner-prompt) (not= run-phase :approach) (not= run-phase :encounter))
+          (do
+            (when (seq accessed-cards')
+              (println "✅ Run successful!")
+              (println (format "   Accessed: %s" (clojure.string/join ", " accessed-cards')))
+              (when (seq stolen-agendas')
+                (println (format "   Stole: %s" (clojure.string/join ", " stolen-agendas')))))
+            (when (and (empty? accessed-cards') (empty? stolen-agendas'))
+              (println "✅ Run complete"))
+            {:status :run-complete
+             :accessed accessed-cards'
+             :stolen stolen-agendas'})
 
           ;; ❌ No active run
-          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) :run))
+          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) "run") (not has-single-choice?))
           (do
-            (println "⚠️  No active run detected")
-            {:status :no-run})
+            (when (seq accessed-cards')
+              (println "✅ Run complete")
+              (println (format "   Accessed: %s" (clojure.string/join ", " accessed-cards')))
+              (when (seq stolen-agendas')
+                (println (format "   Stole: %s" (clojure.string/join ", " stolen-agendas')))))
+            (when (and (empty? accessed-cards') (empty? stolen-agendas'))
+              (println "⚠️  No active run detected"))
+            {:status :no-run
+             :accessed accessed-cards'
+             :stolen stolen-agendas'})
 
           ;; Safety: Max iterations
           (>= iteration max-iterations)
@@ -1869,7 +1913,7 @@
                                 :args nil})
               (Thread/sleep 300))
 
-            (recur (inc iteration) (count log)))
+            (recur (inc iteration) (count log) accessed-cards' stolen-agendas'))
 
           ;; Fallback: unexpected state
           :else
