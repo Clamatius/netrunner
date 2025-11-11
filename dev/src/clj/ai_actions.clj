@@ -649,18 +649,79 @@
 ;; ============================================================================
 
 (defn start-turn!
-  "Start your turn (gains clicks, Corp draws mandatory card)"
+  "Start your turn (gains clicks, Corp draws mandatory card).
+   Validates that opponent has finished their turn to prevent desync.
+
+   Validates:
+   - Opponent has 0 clicks remaining
+   - Opponent's end-turn appears in recent log
+   - You don't already have clicks (prevents double-start)
+
+   Returns {:status :error} if validation fails, {:status :success} if successful."
   []
   (let [state @ws/client-state
-        gameid (:gameid state)]
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "start-turn"
-                       :args nil})
-    (Thread/sleep 2000)
-    (show-turn-indicator)))
+        gameid (:gameid state)
+        my-side (keyword (:side state))
+        opp-side (if (= my-side :runner) :corp :runner)
+        my-clicks (get-in state [:game-state my-side :click])
+        opp-clicks (get-in state [:game-state opp-side :click])
+        log (get-in state [:game-state :log])
+        recent-log (take-last 5 log)
+        opp-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
+                        recent-log)
+        ;; Turn 0 special case: no end-turn yet, both at 0 clicks
+        is-first-turn? (and (= my-clicks 0)
+                           (= opp-clicks 0)
+                           (not opp-ended?))]
+
+    (cond
+      ;; ALLOW: First turn (turn 0) - no prior end-turn exists
+      is-first-turn?
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "start-turn"
+                           :args nil})
+        (Thread/sleep 2000)
+        (show-turn-indicator)
+        {:status :success})
+
+      ;; ERROR: Already have clicks (turn already started)
+      (> my-clicks 0)
+      (do
+        (println (format "❌ ERROR: Turn already started (%d clicks remaining)" my-clicks))
+        (println "   Complete your turn before starting a new one")
+        {:status :error :reason :turn-already-started :clicks my-clicks})
+
+      ;; ERROR: Opponent hasn't ended turn yet
+      (> opp-clicks 0)
+      (do
+        (println (format "❌ ERROR: Opponent still has %d click(s)" opp-clicks))
+        (println (format "   Wait for %s to finish their turn first" (name opp-side)))
+        {:status :error :reason :opponent-has-clicks :opp-clicks opp-clicks})
+
+      ;; ERROR: Opponent end-turn not in recent log
+      (not opp-ended?)
+      (do
+        (println "❌ ERROR: Opponent hasn't ended their turn yet")
+        (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
+        (println "   Wait for opponent to complete their turn")
+        {:status :error :reason :opponent-not-ended})
+
+      ;; OK: All validations passed
+      :else
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "start-turn"
+                           :args nil})
+        (Thread/sleep 2000)
+        (show-turn-indicator)
+        {:status :success}))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -1635,81 +1696,6 @@
 
           :else
           (recur))))))
-
-(defn auto-continue!
-  "Auto-continue through paid ability windows until something interesting happens.
-   Stops when: rez occurs, ability is used, prompt changes to non-paid-window, or timeout.
-
-   Options:
-     :max-iterations - Maximum number of continue loops (default 20)
-     :timeout-seconds - Maximum time in seconds (default 30)
-
-   Returns: {:status :stopped-for-event | :completed | :max-iterations | :timeout
-             :new-entries [...]}
-
-   Usage: (auto-continue!)
-          (auto-continue! :max-iterations 10 :timeout-seconds 15)"
-  [& {:keys [max-iterations timeout-seconds]
-      :or {max-iterations 20 timeout-seconds 30}}]
-  (let [state @ws/client-state
-        gameid (:gameid state)
-        side (keyword (:side state))
-        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
-        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
-    (loop [iteration 0]
-      (let [current-state @ws/client-state
-            prompt (get-in current-state [:game-state side :prompt-state])
-            log (get-in current-state [:game-state :log])
-            new-entries (drop initial-log-size log)
-            ;; Check for interesting events in new log entries
-            has-rez (some #(clojure.string/includes? (:text %) "rez") new-entries)
-            has-ability (some #(or (clojure.string/includes? (:text %) "uses")
-                                   (clojure.string/includes? (:text %) "triggers"))
-                             new-entries)
-            ;; Paid ability window has no choices and no selectable cards
-            is-paid-window (and prompt
-                               (nil? (:choices prompt))
-                               (nil? (:selectable prompt))
-                               (= "run" (:prompt-type prompt)))]
-
-        (cond
-          ;; Stop: interesting event detected
-          (or has-rez has-ability)
-          (do
-            (println "🛑 Auto-continue stopped: interesting event detected")
-            (doseq [entry (take 3 new-entries)]
-              (println "   " (:text entry)))
-            {:status :stopped-for-event :new-entries new-entries})
-
-          ;; Complete: no longer in paid ability window
-          (not is-paid-window)
-          (do
-            (println "✅ Auto-continue complete")
-            {:status :completed})
-
-          ;; Stop: max iterations reached
-          (>= iteration max-iterations)
-          (do
-            (println "⏱️  Auto-continue: max iterations reached")
-            {:status :max-iterations})
-
-          ;; Stop: timeout
-          (> (System/currentTimeMillis) deadline)
-          (do
-            (println "⏱️  Auto-continue: timeout")
-            {:status :timeout})
-
-          ;; Continue looping
-          :else
-          (do
-            (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "continue"
-                              :args nil})
-            (Thread/sleep 500)
-            (recur (inc iteration))))))))
 
 (defn continue-run!
   "Smart run handler that auto-continues through boring parts of a run.

@@ -166,7 +166,6 @@ ${GREEN}Prompts:${NC}
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   choose-card <N> - Choose card N from select prompt (for card-targeting effects)
   continue        - Continue/pass priority (for paid ability windows, run phases)
-  auto-continue   - Auto-continue through paid ability windows until event occurs
   continue-run    - Smart run handler (auto-continues both players, stops at decisions)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
@@ -543,12 +542,6 @@ case "$COMMAND" in
                      :command "continue"
                      :args nil})
                   (Thread/sleep 1000))'
-        ;;
-
-    auto-continue)
-        ensure_connection
-        info "Auto-continuing through paid ability windows..."
-        execute '(ai-actions/auto-continue!)'
         ;;
 
     continue-run)
