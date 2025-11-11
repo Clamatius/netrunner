@@ -13,39 +13,40 @@
 ;; ============================================================================
 
 (deftest test-show-hand
-  (testing "show-hand returns current hand cards"
+  (testing "show-hand prints current hand cards"
     (with-mock-state
       (mock-client-state
-        :hand [{:cid 1 :title "Sure Gamble"}
-               {:cid 2 :title "Diesel"}])
-      (let [result (ai-actions/show-hand)]
-        (is (= 2 (count result)))
-        (is (= "Sure Gamble" (:title (first result))))))))
+        :hand [{:cid 1 :title "Sure Gamble" :type "Event"}
+               {:cid 2 :title "Diesel" :type "Event"}])
+      (let [output (with-out-str (ai-actions/show-hand))]
+        (is (str/includes? output "Sure Gamble"))
+        (is (str/includes? output "Diesel"))))))
 
 (deftest test-show-credits
-  (testing "show-credits returns current credit count"
+  (testing "show-credits prints current credit count"
     (with-mock-state
       (mock-client-state :side "runner" :credits 10)
-      (is (= 10 (ai-actions/show-credits))))))
+      (let [output (with-out-str (ai-actions/show-credits))]
+        (is (str/includes? output "10"))))))
 
 (deftest test-show-clicks
-  (testing "show-clicks returns current click count"
+  (testing "show-clicks prints current click count"
     (with-mock-state
       (mock-client-state :side "runner" :clicks 3)
-      (is (= 3 (ai-actions/show-clicks))))))
+      (let [output (with-out-str (ai-actions/show-clicks))]
+        (is (str/includes? output "3"))))))
 
 (deftest test-status
-  (testing "status returns comprehensive game state info"
+  (testing "status prints comprehensive game state info"
     (with-mock-state
       (mock-client-state
         :side "runner"
         :credits 5
         :clicks 4
         :hand [{:cid 1 :title "Sure Gamble"}])
-      (let [status (ai-actions/status)]
-        (is (map? status))
-        (is (contains? status :connected))
-        (is (contains? status :side))))))
+      (let [output (with-out-str (ai-actions/status))]
+        (is (str/includes? output "GAME STATUS"))
+        (is (str/includes? output "runner"))))))
 
 ;; ============================================================================
 ;; Card Operations Tests
@@ -152,8 +153,7 @@
         (mock-client-state
           :prompt (make-prompt
                    :msg "Choose option"
-                   :choices [{:value "Option 1" :idx 0}
-                            {:value "Option 2" :idx 1}]))
+                   :choices 2))  ; 2 choices
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/choose 0)
           (is (= 1 (count @sent))))))))

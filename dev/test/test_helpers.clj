@@ -17,8 +17,8 @@
   [& {:keys [side credits clicks hand installed prompt servers active-player]
       :or {side "runner" credits 5 clicks 4 hand [] installed {} servers {} active-player "runner"}}]
   {:connected true
-   :uid "test-user"
-   :gameid "test-game-id"
+   :uid "12345678-1234-1234-1234-123456789012"  ; Valid UUID format
+   :gameid "12345678-1234-1234-1234-123456789abc"  ; Valid UUID format
    :side side
    :game-state {:runner {:credit (if (= side "runner") credits 5)
                         :click (if (= side "runner") clicks 4)
@@ -30,7 +30,8 @@
                        :hand (if (= side "corp") hand [])
                        :servers servers
                        :prompt-state prompt}
-                :active-player active-player}})
+                :active-player active-player
+                :turn 1}})
 
 ;; ============================================================================
 ;; State Manipulation Macros
@@ -148,14 +149,26 @@
   "Create a prompt state for testing
 
    Usage:
-     (make-prompt :msg \"Choose a card\" :choices [\"Option 1\" \"Option 2\"])
-     (make-prompt :prompt-type \"select\" :choices [{:cid 1} {:cid 2}])"
+     (make-prompt :msg \"Choose a card\" :choices 2)  ; 2 options
+     (make-prompt :prompt-type \"select\" :choices [{:uuid \"123\" :value \"Option 1\"}])"
   [& {:keys [msg choices prompt-type card]
       :or {msg "Choose" choices [] prompt-type "select"}}]
-  {:msg msg
-   :choices choices
-   :prompt-type prompt-type
-   :card card})
+  (let [choice-list (if (number? choices)
+                      ;; Generate N choices with UUIDs
+                      (vec (for [i (range choices)]
+                             {:uuid (str "choice-uuid-" i)
+                              :value (str "Option " (inc i))}))
+                      ;; Use provided choices, ensuring they have UUIDs
+                      (vec (map-indexed
+                            (fn [idx c]
+                              (if (map? c)
+                                (merge {:uuid (str "choice-uuid-" idx)} c)
+                                {:uuid (str "choice-uuid-" idx) :value c}))
+                            choices)))]
+    {:msg msg
+     :choices choice-list
+     :prompt-type prompt-type
+     :card card}))
 
 ;; ============================================================================
 ;; Test Data Fixtures
