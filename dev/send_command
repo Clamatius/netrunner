@@ -137,7 +137,7 @@ ${GREEN}Basic Actions:${NC}
   indicate-action - Signal you want to use paid ability (pauses game)
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
-  end-turn        - End your turn (validates all clicks used)
+  end-turn [--force] - End your turn (requires --force if clicks remain)
 
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
@@ -163,7 +163,9 @@ ${GREEN}Runner Actions:${NC}
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
+  choose-card <N> - Choose card N from select prompt (for card-targeting effects)
   continue        - Continue/pass priority (for paid ability windows, run phases)
+  auto-continue   - Auto-continue through paid ability windows until event occurs
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
@@ -320,8 +322,19 @@ case "$COMMAND" in
 
     end-turn)
         ensure_connection
-        info "Ending turn..."
-        execute '(ai-actions/end-turn!)'
+        FORCE=false
+        # Check for --force flag
+        if [[ "${1:-}" == "--force" ]]; then
+            FORCE=true
+            info "Ending turn (FORCED - clicks will be wasted)..."
+        else
+            info "Ending turn..."
+        fi
+        if [[ "$FORCE" == "true" ]]; then
+            execute '(ai-actions/end-turn! :force true)'
+        else
+            execute '(ai-actions/end-turn!)'
+        fi
         ;;
 
     # Dev/Testing commands
@@ -500,6 +513,15 @@ case "$COMMAND" in
         execute "(ai-actions/choose-by-value! \"$VALUE\")"
         ;;
 
+    choose-card)
+        ensure_connection
+        INDEX="${1:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index>"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        info "Choosing card at index $INDEX..."
+        execute "(ai-actions/choose-card! $INDEX)"
+        ;;
+
     continue)
         ensure_connection
         info "Passing priority (continue)..."
@@ -512,6 +534,12 @@ case "$COMMAND" in
                      :command "continue"
                      :args nil})
                   (Thread/sleep 1000))'
+        ;;
+
+    auto-continue)
+        ensure_connection
+        info "Auto-continuing through paid ability windows..."
+        execute '(ai-actions/auto-continue!)'
         ;;
 
     jack-out)

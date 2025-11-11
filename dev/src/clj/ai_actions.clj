@@ -675,24 +675,39 @@
       (show-before-after "⏱️  Clicks" before-clicks after-clicks))))
 
 (defn end-turn!
-  "End turn (validates all clicks used)"
-  []
+  "End turn (validates all clicks used unless forced).
+   Prevents accidental game state corruption from ending turn with clicks remaining.
+
+   Options:
+     :force - If true, allows ending turn with clicks remaining
+
+   Usage: (end-turn!)              ; Normal - errors if clicks remain
+          (end-turn! :force true)  ; Forced - allows clicks remaining"
+  [& {:keys [force] :or {force false}}]
   (let [state @ws/client-state
         side (:side state)
         clicks (get-in state [:game-state (keyword side) :click])
         gameid (:gameid state)]
-    (when (> clicks 0)
-      (println "⚠️  WARNING: You still have" clicks "click(s) remaining!")
-      (println "   This is wasteful. Use all clicks before ending turn.")
-      (println "   Proceeding anyway..."))
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "end-turn"
-                       :args nil})
-    (Thread/sleep 2000)
-    (show-turn-indicator)))
+    (if (and (> clicks 0) (not force))
+      ;; ERROR: clicks remaining and not forced
+      (do
+        (println (format "❌ ERROR: You still have %d click(s) remaining!" clicks))
+        (println "   Use all clicks before ending turn, or use --force flag")
+        (println "   Example: send_command end-turn --force")
+        {:status :error :clicks-remaining clicks})
+      ;; OK: either no clicks or forced
+      (do
+        (when (and (> clicks 0) force)
+          (println (format "⚠️  FORCED: Ending turn with %d click(s) remaining" clicks)))
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "end-turn"
+                           :args nil})
+        (Thread/sleep 2000)
+        (show-turn-indicator)
+        {:status :success}))))
 
 ;; Keep old function names for backwards compatibility
 (defn take-credits []
@@ -792,6 +807,38 @@
         (println "Available choices:")
         (doseq [[idx choice] (map-indexed vector choices)]
           (println (str "  " idx ". " (format-choice choice))))))))
+
+(defn choose-card!
+  "Choose a card from selectable cards in current prompt by index.
+   Used for select prompts like 'Send a Message' (choose card to trash).
+
+   Usage: (choose-card! 0)  ; Select first selectable card
+          (choose-card! 2)  ; Select third selectable card"
+  [index]
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        prompt (get-in state [:game-state side :prompt-state])
+        selectable (:selectable prompt)
+        eid (:eid prompt)]
+    (cond
+      (not= "select" (:prompt-type prompt))
+      (do
+        (println "❌ No select prompt active")
+        (when prompt
+          (println (format "   Current prompt type: %s" (:prompt-type prompt)))))
+
+      (empty? selectable)
+      (println "❌ No selectable cards in current prompt")
+
+      (not (< -1 index (count selectable)))
+      (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
+                      index (count selectable) (dec (count selectable))))
+
+      :else
+      (let [card (nth selectable index)]
+        (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
+        (ws/select-card! card eid)
+        (Thread/sleep 1000)))))
 
 ;; ============================================================================
 ;; Mulligan
@@ -898,14 +945,32 @@
           (run! \"remote1\")"
   [server]
   (let [state @ws/client-state
-        gameid (:gameid state)]
+        gameid (:gameid state)
+        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)
                                 gameid)
                        :command "run"
                        :args {:server server}})
-    (Thread/sleep 2000)))
+    ;; Wait for "makes a run on" log entry and echo it
+    (let [deadline (+ (System/currentTimeMillis) 3000)]
+      (loop []
+        (let [log (get-in @ws/client-state [:game-state :log])
+              new-entries (drop initial-log-size log)
+              run-entry (first (filter #(clojure.string/includes? (:text %) "makes a run on")
+                                       new-entries))]
+          (cond
+            run-entry
+            (println "🏃" (:text run-entry))
+
+            (< (System/currentTimeMillis) deadline)
+            (do
+              (Thread/sleep 200)
+              (recur))
+
+            :else
+            (println "⚠️  Run command sent but no log confirmation (may have failed)")))))))
 
 ;; ============================================================================
 ;; Card Abilities
@@ -1374,6 +1439,81 @@
 
           :else
           (recur))))))
+
+(defn auto-continue!
+  "Auto-continue through paid ability windows until something interesting happens.
+   Stops when: rez occurs, ability is used, prompt changes to non-paid-window, or timeout.
+
+   Options:
+     :max-iterations - Maximum number of continue loops (default 20)
+     :timeout-seconds - Maximum time in seconds (default 30)
+
+   Returns: {:status :stopped-for-event | :completed | :max-iterations | :timeout
+             :new-entries [...]}
+
+   Usage: (auto-continue!)
+          (auto-continue! :max-iterations 10 :timeout-seconds 15)"
+  [& {:keys [max-iterations timeout-seconds]
+      :or {max-iterations 20 timeout-seconds 30}}]
+  (let [state @ws/client-state
+        gameid (:gameid state)
+        side (keyword (:side state))
+        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
+        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
+    (loop [iteration 0]
+      (let [current-state @ws/client-state
+            prompt (get-in current-state [:game-state side :prompt-state])
+            log (get-in current-state [:game-state :log])
+            new-entries (drop initial-log-size log)
+            ;; Check for interesting events in new log entries
+            has-rez (some #(clojure.string/includes? (:text %) "rez") new-entries)
+            has-ability (some #(or (clojure.string/includes? (:text %) "uses")
+                                   (clojure.string/includes? (:text %) "triggers"))
+                             new-entries)
+            ;; Paid ability window has no choices and no selectable cards
+            is-paid-window (and prompt
+                               (nil? (:choices prompt))
+                               (nil? (:selectable prompt))
+                               (= "run" (:prompt-type prompt)))]
+
+        (cond
+          ;; Stop: interesting event detected
+          (or has-rez has-ability)
+          (do
+            (println "🛑 Auto-continue stopped: interesting event detected")
+            (doseq [entry (take 3 new-entries)]
+              (println "   " (:text entry)))
+            {:status :stopped-for-event :new-entries new-entries})
+
+          ;; Complete: no longer in paid ability window
+          (not is-paid-window)
+          (do
+            (println "✅ Auto-continue complete")
+            {:status :completed})
+
+          ;; Stop: max iterations reached
+          (>= iteration max-iterations)
+          (do
+            (println "⏱️  Auto-continue: max iterations reached")
+            {:status :max-iterations})
+
+          ;; Stop: timeout
+          (> (System/currentTimeMillis) deadline)
+          (do
+            (println "⏱️  Auto-continue: timeout")
+            {:status :timeout})
+
+          ;; Continue looping
+          :else
+          (do
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "continue"
+                              :args nil})
+            (Thread/sleep 500)
+            (recur (inc iteration))))))))
 
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
