@@ -83,6 +83,8 @@
            :game-state state
            :last-state state
            :side side)
+    ;; Clear lobby-state when game state is set (game has started)
+    (swap! client-state dissoc :lobby-state)
     (when side
       (println "   Detected side:" side))))
 
@@ -236,6 +238,8 @@
                                               (take 5 diff)
                                               diff)))
         (update-game-state! diff)
+        ;; Clear lobby-state once game has started (receiving diffs means game is active)
+        (swap! client-state dissoc :lobby-state)
         ;; Announce newly revealed cards in Archives
         ;; TODO: Move announce-revealed-archives function before handle-message
         ;; (announce-revealed-archives diff)
