@@ -193,6 +193,30 @@ ${GREEN}Connection:${NC}
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
 
+${YELLOW}Turn Timing Quick Reference:${NC}
+  ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+    • Discard happens before turn formally ends
+
+  ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
+    • No mandatory draw (unlike Corp)
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+
+  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter ice → movement → access/jack out
+    • Initiation: 'run <server>' then 'continue'
+    • Approach: Corp may rez ice, then 'continue'
+    • Encounter: Break subs with icebreakers, then 'continue'
+    • Movement: Can 'jack-out' here, otherwise 'continue' to next ice or server
+    • Access: 'choose-value steal/trash/"no action"' for each accessed card
+    • Use 'continue-run' for automated run handling (stops at decisions)
+
+  ${BLUE}Common Stuck States:${NC}
+    • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn
+    • Run stopped → Check 'prompt' to see what decision is needed
+    • Turn won't end → Check 'prompt' for blocking discard/ability prompts
+
 ${YELLOW}Examples:${NC}
   ./send_command status
   ./send_command list-lobbies

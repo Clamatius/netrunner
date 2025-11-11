@@ -63,8 +63,15 @@
 
 **Before any action:**
 ```bash
-./dev/send_command help              # Full command reference
+./dev/send_command help              # Full command reference + timing guide
 ```
+
+**Turn timing quick reference available in help:**
+- Corp turn sequence: gain clicks → draw → actions → discard
+- Runner turn sequence: gain clicks → actions → discard
+- Run sequence: initiation → approach → encounter → movement → access
+- See `./dev/send_command help` "Turn Timing Quick Reference" section
+- See `GAME_REFERENCE.md` Appendix for detailed official timing rules (sections 5.6, 5.7, 6.9)
 
 ### Multi-Client Testing
 
