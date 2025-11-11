@@ -629,6 +629,9 @@
                        :command "indicate-action"
                        :args nil})))
 
+;; Forward declaration for function used in take-credit! and draw-card!
+(declare check-auto-end-turn!)
+
 (defn take-credit!
   "Click for credit (shows before/after)"
   []
