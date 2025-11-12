@@ -153,10 +153,18 @@
      (make-prompt :prompt-type \"select\" :choices [{:cid 1} {:cid 2}])"
   [& {:keys [msg choices prompt-type card]
       :or {msg "Choose" choices [] prompt-type "select"}}]
-  {:msg msg
-   :choices choices
-   :prompt-type prompt-type
-   :card card})
+  (let [choices-with-uuid (mapv (fn [idx choice]
+                                   (if (map? choice)
+                                     (if (:uuid choice)
+                                       choice  ; Already has UUID
+                                       (assoc choice :uuid (str "choice-uuid-" idx)))
+                                     {:value choice :uuid (str "choice-uuid-" idx)}))
+                                 (range)
+                                 choices)]
+    {:msg msg
+     :choices choices-with-uuid
+     :prompt-type prompt-type
+     :card card}))
 
 ;; ============================================================================
 ;; Test Data Fixtures

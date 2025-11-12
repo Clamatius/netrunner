@@ -1202,7 +1202,8 @@
    - 'archives', 'Archives' → 'Archives'
    - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
 
-   Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
+   Returns: {:normalized <game-name> :original <input> :changed? <bool>}
+   Returns normalized=nil for invalid server names"
   [server-input]
   (let [s (clojure.string/lower-case (clojure.string/trim server-input))
         normalized (cond
@@ -1217,8 +1218,16 @@
                      (let [num (second (re-matches #"(?:remote|r|server)\s*(\d+)" s))]
                        (str "Server " num))
 
-                     ;; Already correct format - pass through
-                     :else server-input)]
+                     ;; Already correct format for centrals
+                     (or (= server-input "HQ") (= server-input "R&D") (= server-input "Archives"))
+                     server-input
+
+                     ;; Already correct format for remotes (Server N)
+                     (re-matches #"Server \d+" server-input)
+                     server-input
+
+                     ;; Invalid server name
+                     :else nil)]
     {:normalized normalized
      :original server-input
      :changed? (not= normalized server-input)}))
