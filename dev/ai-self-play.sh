@@ -51,8 +51,14 @@ echo "🏃 Runner joining game..."
 TIMEOUT=10 ./dev/ai-eval.sh runner 7889 "(ai-actions/connect-game! \"$GAME_ID\" \"Runner\")"
 sleep 3
 
+# Step 4: Start the game
 echo ""
-echo "✅ Both players joined! Game should auto-start."
+echo "🎮 Starting game..."
+./dev/send_command corp start-game
+sleep 2
+
+echo ""
+echo "✅ Game started!"
 echo ""
 echo "Game ID: $GAME_ID"
 echo ""

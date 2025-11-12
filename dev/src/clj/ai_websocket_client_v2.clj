@@ -807,9 +807,10 @@
                  ready? "✅ Ready to start! Use 'start-game' or 'auto-start'"
                  (< player-count 2) (format "⏳ Waiting for players (%d/2)" player-count)
                  (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
-                 :else "⏳ Waiting...")))
+                 :else "⏳ Waiting...")))) ;; Extra ) closes the lobby-status let
       ;; Show game status (existing code)
       (let [my-side (:side @client-state)
+            game-id (:gameid @client-state)
             active-side (active-player)
             end-turn (get-in gs [:end-turn])
             prompt (get-prompt)
@@ -817,9 +818,29 @@
             run-state (get-in gs [:run])
             runner-clicks (get-in gs [:runner :click])
             corp-clicks (get-in gs [:corp :click])
-            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))]
-        (println "📊 GAME STATUS")
-        (println "\nTurn:" (turn-number) "-" active-side)
+            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
+            ;; Detect if a player has left (game state exists but player data is nil)
+            runner-missing? (and gs (nil? (get-in gs [:runner :user])))
+            corp-missing? (and gs (nil? (get-in gs [:corp :user])))]
+
+        ;; If a player has left, show recovery message instead of confusing nils
+        (if (or runner-missing? corp-missing?)
+          (do
+            (println "📊 GAME STATUS")
+            (println "\n⚠️  PLAYER DISCONNECTED")
+            (when runner-missing?
+              (println "\n❌ Runner has left the game"))
+            (when corp-missing?
+              (println "\n❌ Corp has left the game"))
+            (println "\n💡 To reconnect:")
+            (println "   ./dev/send_command" (clojure.string/lower-case my-side) "join" game-id my-side)
+            (println "\nOr use ai-bounce.sh to restart both clients:")
+            (println "   ./dev/ai-bounce.sh" game-id))
+
+          ;; Normal game status display
+          (do
+            (println "📊 GAME STATUS")
+            (println "\nTurn:" (turn-number) "-" active-side)
 
     ;; Active player / waiting status
     (let [runner-clicks runner-clicks
@@ -901,7 +922,7 @@
           (doseq [entry recent-log]
             (println " " (:text entry))))))
 
-        nil))))
+        nil)))))  ;; Closes: normal-status do, if, outer let, defn
 
 (defn show-games
   "Display available games in a readable format"
