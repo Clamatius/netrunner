@@ -1740,6 +1740,121 @@
           :else
           (recur))))))
 
+;; ============================================================================
+;; Continue-Run Helper Functions (Bug #12 Fix)
+;; ============================================================================
+
+(defn other-side
+  "Return the opposite side"
+  [side]
+  (if (= side "runner") "corp" "runner"))
+
+(defn get-current-ice
+  "Get the ICE being approached/encountered from game state"
+  [state]
+  (let [run (get-in state [:game-state :run])
+        server (:server run)
+        position (:position run)
+        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])]
+    (when (and ice-list (>= position 0) (< position (count ice-list)))
+      (nth ice-list position))))
+
+(defn get-rez-event
+  "Find first rez event in log entries, or nil if none"
+  [log-entries]
+  (first (filter #(clojure.string/includes? (:text %) "rez") log-entries)))
+
+(defn has-real-decision?
+  "True if prompt has 2+ meaningful choices (not just Done/Continue)"
+  [prompt]
+  (when prompt
+    (let [choices (:choices prompt)
+          non-trivial (remove (fn [choice]
+                               (let [value (clojure.string/lower-case (:value choice ""))]
+                                 (or (= value "continue")
+                                     (= value "done")
+                                     (= value "ok")
+                                     (= value ""))))
+                             choices)]
+      (>= (count non-trivial) 2))))
+
+(defn corp-has-rez-opportunity?
+  "True if corp is at a rez decision point (approach-ice with unrezzed ice)"
+  [state]
+  (let [run-phase (get-in state [:game-state :run :phase])
+        corp-prompt (get-in state [:game-state :corp :prompt-state])
+        current-ice (get-current-ice state)]
+
+    (or
+      ;; Approaching unrezzed ICE - ALWAYS a rez opportunity
+      (and (= run-phase :approach-ice)
+           current-ice
+           (not (:rezzed current-ice))
+           corp-prompt)
+
+      ;; Corp has explicit rez choices (upgrade/asset rez)
+      (when corp-prompt
+        (let [choices (:choices corp-prompt)]
+          (some #(clojure.string/includes? (:value % "") "Rez") choices))))))
+
+(defn waiting-for-opponent?
+  "True if my side is waiting for opponent to make a decision"
+  [state side]
+  (let [run-phase (get-in state [:game-state :run :phase])
+        my-prompt (get-in state [:game-state (keyword side) :prompt-state])
+        opp-side (other-side side)
+        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])]
+
+    (cond
+      ;; Runner waiting for corp rez decision
+      (and (= side "runner")
+           (= run-phase :approach-ice)
+           (not my-prompt)  ; Runner has no prompt
+           (corp-has-rez-opportunity? state))
+      true
+
+      ;; Corp waiting for runner break decision
+      (and (= side "corp")
+           (= run-phase :encounter-ice)
+           (not my-prompt)
+           (has-real-decision? opp-prompt))
+      true
+
+      ;; Generally waiting if opponent has real decision and I don't
+      (and opp-prompt
+           (has-real-decision? opp-prompt)
+           (not my-prompt))
+      true
+
+      :else
+      false)))
+
+(defn waiting-reason
+  "Returns human-readable reason for waiting"
+  [state side]
+  (let [run-phase (get-in state [:game-state :run :phase])
+        current-ice (get-current-ice state)]
+
+    (cond
+      (and (= side "runner") (= run-phase :approach-ice) current-ice)
+      (str "Corp must decide: rez " (:title current-ice) " or continue")
+
+      (and (= side "corp") (= run-phase :encounter-ice))
+      "Runner must decide: break subroutines or take effects"
+
+      :else
+      "Waiting for opponent action")))
+
+(defn can-auto-continue?
+  "True if can safely auto-continue (empty paid ability window, no decisions)"
+  [prompt run-phase]
+  (and prompt
+       (= (:prompt-type prompt) "run")
+       (empty? (:choices prompt))
+       (empty? (:selectable prompt))
+       ;; Not a special phase that needs attention
+       (not (contains? #{:approach-ice :encounter-ice} run-phase))))
+
 (defn continue-run!
   "Smart run handler that auto-continues through boring parts of a run.
    Handles paid ability windows AND single-choice prompts for BOTH Runner and Corp.
