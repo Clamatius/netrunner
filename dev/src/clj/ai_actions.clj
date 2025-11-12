@@ -1878,217 +1878,182 @@
        (not (contains? #{:approach-ice :encounter-ice} run-phase))))
 
 (defn continue-run!
-  "Smart run handler that auto-continues through boring parts of a run.
-   Handles paid ability windows AND single-choice prompts for BOTH Runner and Corp.
+  "Stateless run handler - examines current state, takes ONE action, returns.
+   Call repeatedly until run completes or decision required.
+
+   STATELESS DESIGN: No recursion, no local state. Uses game state as source of truth.
+   Each call examines current state and either:
+   - Sends ONE continue command and returns :action-taken
+   - Returns :waiting-for-opponent (pause, wait for opp)
+   - Returns :decision-required (pause, user must decide)
+   - Returns :run-complete (all done)
 
    🛑 MUST PAUSE (requires decision):
-   - Multiple choice prompts (2+ options = real decision)
-   - Card selection required
+   - Opponent pressed WAIT/indicate-action
+   - Corp has rez opportunity (approach-ice with unrezzed ICE)
+   - Runner has 2+ real choices (not just Continue/Done)
+   - Waiting for opponent's decision during run
 
    ⚠️ WANT to PAUSE (important events):
    - ICE rezzed (show cost and card)
    - Abilities triggered during run
    - Subroutines fired
    - Tags/damage dealt
-   - Run redirected
 
    ✅ AUTO-CONTINUE (boring):
-   - Empty paid ability windows
-   - Single-choice prompts (mandatory steals, cannot-trash accesses)
-   - Quiet approach phases
+   - Empty paid ability windows (no choices, no selectables)
+   - Not in special phases (approach-ice, encounter-ice)
 
-   Options:
-     :max-iterations - Maximum loops (default 30)
-     :timeout-seconds - Maximum time (default 45)
+   Returns:
+     {:status :action-taken :action :sent-continue}  - Sent continue, call again
+     {:status :waiting-for-opponent :message ...}     - Paused, wait for opp
+     {:status :decision-required :prompt ...}         - Paused, user must decide
+     {:status :ice-rezzed :event ...}                 - Paused, show rez event
+     {:status :ability-used :event ...}               - Paused, show ability
+     {:status :subs-fired :event ...}                 - Paused, show subs
+     {:status :tag-or-damage :event ...}              - Paused, show tag/damage
+     {:status :run-complete}                          - Run finished
+     {:status :no-run}                                - No active run
 
-   Returns: {:status :run-complete | :decision-required | ...
-             :accessed [...] :stolen [...]}
-
-   Usage: (continue-run!)  ; Auto-handle run, pause at real decisions"
-  [& {:keys [max-iterations timeout-seconds]
-      :or {max-iterations 30 timeout-seconds 45}}]
+   Usage:
+     (continue-run!)  ; Take one step
+     ; Check status, if :action-taken, call again
+     ; If :waiting-for-opponent, wait for game diff, then call again"
+  []
   (let [state @ws/client-state
+        side (:side state)
         gameid (:gameid state)
-        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
-        initial-log-size (count (get-in @ws/client-state [:game-state :log]))]
-    (println "🏃 Auto-handling run (pauses at important events)...")
-    (loop [iteration 0
-           last-log-size initial-log-size
-           accessed-cards []
-           stolen-agendas []]
-      (let [current-state @ws/client-state
-            runner-prompt (get-in current-state [:game-state :runner :prompt-state])
-            corp-prompt (get-in current-state [:game-state :corp :prompt-state])
-            run-phase (get-in current-state [:game-state :run :phase])
-            log (get-in current-state [:game-state :log])
-            new-entries (drop last-log-size log)
+        run-phase (get-in state [:game-state :run :phase])
+        my-prompt (get-in state [:game-state (keyword side) :prompt-state])
+        opp-side (other-side side)
+        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])
+        log (get-in state [:game-state :log])
 
-            ;; Track accessed and stolen cards from log
-            new-accessed (filter #(clojure.string/includes? (:text %) "accesses") new-entries)
-            new-stolen (filter #(clojure.string/includes? (:text %) "steal") new-entries)
-            accessed-cards' (concat accessed-cards (map :text new-accessed))
-            stolen-agendas' (concat stolen-agendas (map :text new-stolen))
+        ;; Check for new events in recent log (last 3 entries)
+        recent-log (take 3 log)
+        rez-event (get-rez-event recent-log)
+        ability-event (first (filter #(or (clojure.string/includes? (:text %) "uses")
+                                          (clojure.string/includes? (:text %) "triggers"))
+                                    recent-log))
+        fired-event (first (filter #(clojure.string/includes? (:text %) "fire") recent-log))
+        tag-damage-event (first (filter #(or (clojure.string/includes? (:text %) "tag")
+                                             (clojure.string/includes? (:text %) "damage"))
+                                       recent-log))]
 
-            ;; Check for important events in new log entries
-            rez-entry (first (filter #(clojure.string/includes? (:text %) "rez") new-entries))
-            ability-entry (first (filter #(or (clojure.string/includes? (:text %) "uses")
-                                              (clojure.string/includes? (:text %) "triggers"))
-                                        new-entries))
-            fired-entry (first (filter #(clojure.string/includes? (:text %) "fire") new-entries))
-            tag-entry (first (filter #(or (clojure.string/includes? (:text %) "tag")
-                                          (clojure.string/includes? (:text %) "damage"))
-                                    new-entries))
+    (cond
+      ;; Priority 1: Opponent pressed WAIT button (indicate-action)
+      (opponent-indicated-action? state side)
+      (do
+        (println "⏸️  PAUSED - Opponent pressed WAIT button")
+        {:status :waiting-for-opponent
+         :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")})
 
-            ;; Check if Runner has paid ability window
-            runner-paid-window? (and runner-prompt
-                                    (empty? (:choices runner-prompt))
-                                    (empty? (:selectable runner-prompt))
-                                    (= "run" (:prompt-type runner-prompt)))
+      ;; Priority 2: Waiting for opponent to make a decision
+      (waiting-for-opponent? state side)
+      (let [reason (waiting-reason state side)]
+        (println (format "⏸️  Waiting for opponent: %s" reason))
+        {:status :waiting-for-opponent
+         :message reason})
 
-            ;; Check if Runner has real choices (2+ options = real decision)
-            runner-choices (:choices runner-prompt)
-            has-real-choice? (and (seq runner-choices)
-                                 (> (count runner-choices) 1))
+      ;; Priority 3: I have a real decision to make
+      (has-real-decision? my-prompt)
+      (do
+        (println "🛑 Run paused - decision required")
+        (println (format "   Prompt: %s" (:msg my-prompt)))
+        (when-let [card-title (get-in my-prompt [:card :title])]
+          (println (format "   Card: %s" card-title)))
+        (let [choices (:choices my-prompt)]
+          (println (format "   Choices: %d options" (count choices)))
+          (doseq [[idx choice] (map-indexed vector choices)]
+            (println (format "     %d. %s" idx (:value choice)))))
+        {:status :decision-required
+         :prompt my-prompt})
 
-            ;; Check if Runner has single choice (auto-handle these)
-            has-single-choice? (and (seq runner-choices)
-                                   (= (count runner-choices) 1))]
+      ;; Priority 4: Pause for important events (rez, abilities, subs, damage)
+      rez-event
+      (do
+        (println "⚠️  Run paused - ICE rezzed!")
+        (println (format "   %s" (:text rez-event)))
+        (println "   → Use 'continue-run' again to proceed")
+        {:status :ice-rezzed :event rez-event})
 
-        (cond
-          ;; 🛑 MUST PAUSE: Runner has real decision (2+ choices)
-          has-real-choice?
-          (do
-            (println "🛑 Run paused - decision required")
-            (println (format "   Prompt: %s" (:msg runner-prompt)))
-            (when-let [card-title (get-in runner-prompt [:card :title])]
-              (println (format "   Card: %s" card-title)))
-            (println (format "   Choices: %d options" (count runner-choices)))
-            (doseq [[idx choice] (map-indexed vector runner-choices)]
-              (println (format "     %d. %s" idx (:value choice))))
-            {:status :decision-required
-             :prompt runner-prompt
-             :accessed accessed-cards'
-             :stolen stolen-agendas'})
+      ability-event
+      (do
+        (println "⚠️  Run paused - ability triggered!")
+        (println (format "   %s" (:text ability-event)))
+        (println "   → Use 'continue-run' again to proceed")
+        {:status :ability-used :event ability-event})
 
-          ;; ⚠️ WANT to PAUSE: ICE rezzed
-          rez-entry
-          (do
-            (println "⚠️  Run paused - ICE rezzed!")
-            (println (format "   %s" (:text rez-entry)))
-            (println "   → Use 'continue-run' again to proceed")
-            {:status :ice-rezzed :event rez-entry})
+      fired-event
+      (do
+        (println "⚠️  Run paused - subroutines fired!")
+        (println (format "   %s" (:text fired-event)))
+        (println "   → Use 'continue-run' again to proceed")
+        {:status :subs-fired :event fired-event})
 
-          ;; ⚠️ WANT to PAUSE: Ability used during run
-          ability-entry
-          (do
-            (println "⚠️  Run paused - ability triggered!")
-            (println (format "   %s" (:text ability-entry)))
-            (println "   → Use 'continue-run' again to proceed")
-            {:status :ability-used :event ability-entry})
+      tag-damage-event
+      (do
+        (println "⚠️  Run paused - tag or damage!")
+        (println (format "   %s" (:text tag-damage-event)))
+        (println "   → Use 'continue-run' again to proceed")
+        {:status :tag-or-damage :event tag-damage-event})
 
-          ;; ⚠️ WANT to PAUSE: Subroutines fired
-          fired-entry
-          (do
-            (println "⚠️  Run paused - subroutines fired!")
-            (println (format "   %s" (:text fired-entry)))
-            (println "   → Use 'continue-run' again to proceed")
-            {:status :subs-fired :event fired-entry})
+      ;; Priority 5: Auto-handle single mandatory choice
+      (and my-prompt
+           (seq (:choices my-prompt))
+           (= 1 (count (:choices my-prompt))))
+      (let [choice (first (:choices my-prompt))
+            choice-uuid (:uuid choice)]
+        (println (format "   Auto-choosing: %s" (:value choice)))
+        (ws/send-message! :game/action
+                         {:gameid (if (string? gameid)
+                                   (java.util.UUID/fromString gameid)
+                                   gameid)
+                          :command "choice"
+                          :args {:choice {:uuid choice-uuid}}})
+        {:status :action-taken
+         :action :auto-choice
+         :choice (:value choice)})
 
-          ;; ⚠️ WANT to PAUSE: Tag/damage
-          tag-entry
-          (do
-            (println "⚠️  Run paused - tag or damage!")
-            (println (format "   %s" (:text tag-entry)))
-            (println "   → Use 'continue-run' again to proceed")
-            {:status :tag-or-damage :event tag-entry})
+      ;; Priority 6: Auto-continue through boring paid ability windows
+      (can-auto-continue? my-prompt run-phase)
+      (do
+        (println "   → Auto-continuing through paid ability window")
+        (ws/send-message! :game/action
+                         {:gameid (if (string? gameid)
+                                   (java.util.UUID/fromString gameid)
+                                   gameid)
+                          :command "continue"
+                          :args nil})
+        {:status :action-taken
+         :action :sent-continue})
 
-          ;; ✅ AUTO-HANDLE: Single choice (mandatory action)
-          has-single-choice?
-          (do
-            (let [choice (first runner-choices)
-                  choice-uuid (:uuid choice)]
-              (println (format "   Auto-choosing: %s" (:value choice)))
-              (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
-                                :command "choice"
-                                :args {:choice {:uuid choice-uuid}}})
-              (Thread/sleep 500)
-              (recur (inc iteration) (count log) accessed-cards' stolen-agendas')))
+      ;; Priority 7: Run complete (no run phase, no prompt)
+      (and (nil? run-phase) (nil? my-prompt))
+      (do
+        (println "✅ Run complete")
+        {:status :run-complete})
 
-          ;; ✅ Success: Run complete (no more prompts, not in run phase)
-          (and (nil? runner-prompt) (not= run-phase :approach) (not= run-phase :encounter))
-          (do
-            (when (seq accessed-cards')
-              (println "✅ Run successful!")
-              (println (format "   Accessed: %s" (clojure.string/join ", " accessed-cards')))
-              (when (seq stolen-agendas')
-                (println (format "   Stole: %s" (clojure.string/join ", " stolen-agendas')))))
-            (when (and (empty? accessed-cards') (empty? stolen-agendas'))
-              (println "✅ Run complete"))
-            {:status :run-complete
-             :accessed accessed-cards'
-             :stolen stolen-agendas'})
+      ;; Priority 8: No active run
+      (and (nil? run-phase)
+           (or (nil? my-prompt)
+               (not= (:prompt-type my-prompt) "run")))
+      (do
+        (println "⚠️  No active run detected")
+        {:status :no-run})
 
-          ;; ❌ No active run
-          (and (not runner-paid-window?) (not= (:prompt-type runner-prompt) "run") (not has-single-choice?))
-          (do
-            (when (seq accessed-cards')
-              (println "✅ Run complete")
-              (println (format "   Accessed: %s" (clojure.string/join ", " accessed-cards')))
-              (when (seq stolen-agendas')
-                (println (format "   Stole: %s" (clojure.string/join ", " stolen-agendas')))))
-            (when (and (empty? accessed-cards') (empty? stolen-agendas'))
-              (println "⚠️  No active run detected"))
-            {:status :no-run
-             :accessed accessed-cards'
-             :stolen stolen-agendas'})
-
-          ;; Safety: Max iterations
-          (>= iteration max-iterations)
-          (do
-            (println "⏱️  Continue-run: max iterations reached")
-            {:status :max-iterations})
-
-          ;; Safety: Timeout
-          (> (System/currentTimeMillis) deadline)
-          (do
-            (println "⏱️  Continue-run: timeout")
-            {:status :timeout})
-
-          ;; ✅ AUTO-CONTINUE: Boring paid ability window
-          runner-paid-window?
-          (do
-            ;; Runner continues
-            (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "continue"
-                              :args nil})
-            (Thread/sleep 300)
-
-            ;; Corp continues (if they have a prompt)
-            (when corp-prompt
-              (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
-                                :command "continue"
-                                :args nil})
-              (Thread/sleep 300))
-
-            (recur (inc iteration) (count log) accessed-cards' stolen-agendas'))
-
-          ;; Fallback: unexpected state
-          :else
-          (do
-            (println "⚠️  Unexpected run state")
-            (println (format "   Runner prompt type: %s" (:prompt-type runner-prompt)))
-            (println (format "   Run phase: %s" run-phase))
-            (println (format "   Choices: %d" (count runner-choices)))
-            {:status :unexpected-state :prompt runner-prompt}))))))
+      ;; Fallback: Unknown state
+      :else
+      (do
+        (println "⚠️  Unexpected run state")
+        (println (format "   Side: %s" side))
+        (println (format "   Run phase: %s" run-phase))
+        (println (format "   My prompt type: %s" (:prompt-type my-prompt)))
+        (println (format "   My choices: %d" (count (:choices my-prompt))))
+        (println (format "   Opp has prompt: %s" (some? opp-prompt)))
+        {:status :unexpected-state
+         :prompt my-prompt
+         :run-phase run-phase}))))
 
 (defn wait-for-my-turn
   "Wait for it to be my turn (up to max-seconds)"
