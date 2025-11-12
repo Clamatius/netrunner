@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
 TIMEOUT="${TIMEOUT:-20}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
+SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
 
 # Multi-client support: detect if first arg is a client name
 # Valid client names: runner, corp, or any custom name
@@ -243,6 +244,15 @@ execute() {
     fi
 }
 
+# Show last log entry if SHOW_LAST_LOG is enabled
+show_last_log_if_enabled() {
+    if [[ "$SHOW_LAST_LOG" == "1" ]]; then
+        echo ""
+        echo -e "${BLUE}--- Last Log Entry ---${NC}"
+        execute "(ai-actions/show-log 1)"
+    fi
+}
+
 # Main command dispatcher
 COMMAND="${1:-help}"
 shift || true
@@ -328,6 +338,7 @@ case "$COMMAND" in
         ensure_connection
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
+        show_last_log_if_enabled
         ;;
 
     indicate-action)
@@ -439,6 +450,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command play <card-name>"
         info "Playing card: $CARD_NAME"
         execute "(ai-actions/play-card! \"$CARD_NAME\")"
+        show_last_log_if_enabled
         ;;
 
     play-index)
@@ -448,6 +460,7 @@ case "$COMMAND" in
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
         info "Playing card at index $INDEX"
         execute "(ai-actions/play-card! $INDEX)"
+        show_last_log_if_enabled
         ;;
 
     # Running
@@ -457,6 +470,7 @@ case "$COMMAND" in
         [[ -z "$SERVER" ]] && error "Usage: send_command run <server>"
         info "Running on $SERVER..."
         execute "(ai-actions/run! \"$SERVER\")"
+        show_last_log_if_enabled
         ;;
 
     # Card abilities
@@ -582,12 +596,14 @@ case "$COMMAND" in
                      :command "continue"
                      :args nil})
                   (Thread/sleep 1000))'
+        show_last_log_if_enabled
         ;;
 
     continue-run)
         ensure_connection
         info "Auto-handling run (both players)..."
         execute '(ai-actions/continue-run!)'
+        show_last_log_if_enabled
         ;;
 
     jack-out)
@@ -738,6 +754,7 @@ case "$COMMAND" in
             info "Installing card: $CARD_NAME"
             execute "(ai-actions/install-card! \"$CARD_NAME\")"
         fi
+        show_last_log_if_enabled
         ;;
 
     install-index)
@@ -753,6 +770,7 @@ case "$COMMAND" in
             info "Installing card at index $INDEX"
             execute "(ai-actions/install-card! $INDEX)"
         fi
+        show_last_log_if_enabled
         ;;
 
     # Advanced
