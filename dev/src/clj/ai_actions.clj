@@ -1764,6 +1764,16 @@
   [log-entries]
   (first (filter #(clojure.string/includes? (:text %) "rez") log-entries)))
 
+(defn opponent-indicated-action?
+  "Check if opponent pressed indicate-action (WAIT button) in recent log"
+  [state side]
+  (let [log (get-in state [:game-state :log])
+        opp-side (other-side side)
+        opp-name (clojure.string/capitalize opp-side)
+        ;; Look for "[!] Please pause, {Opponent} is acting."
+        indicate-pattern (str "[!] Please pause, " opp-name " is acting.")]
+    (some #(= (:text %) indicate-pattern) (take 5 log))))
+
 (defn has-real-decision?
   "True if prompt has 2+ meaningful choices (not just Done/Continue)"
   [prompt]
@@ -1803,9 +1813,14 @@
   (let [run-phase (get-in state [:game-state :run :phase])
         my-prompt (get-in state [:game-state (keyword side) :prompt-state])
         opp-side (other-side side)
-        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])]
+        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])
+        during-run? (some? run-phase)]
 
     (cond
+      ;; CRITICAL: Opponent pressed WAIT button - ALWAYS pause
+      (opponent-indicated-action? state side)
+      true
+
       ;; Runner waiting for corp rez decision
       (and (= side "runner")
            (= run-phase :approach-ice)
@@ -1818,6 +1833,13 @@
            (= run-phase :encounter-ice)
            (not my-prompt)
            (has-real-decision? opp-prompt))
+      true
+
+      ;; CRITICAL: During run, if opponent has ANY prompt, pause and wait
+      ;; Opponent may have indicated action or may have paid ability they want to use
+      (and during-run?
+           opp-prompt
+           (not my-prompt))
       true
 
       ;; Generally waiting if opponent has real decision and I don't
