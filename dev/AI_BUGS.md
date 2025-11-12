@@ -27,7 +27,7 @@ Bugs found during AI player development and iteration testing.
 **Impact**: Medium - Breaks basic turn order rules, causes game state desync
 
 **Related Code**:
-- `dev/src/clj/ai_game_actions.clj` - `start-turn!` function needs validation
+- `dev/src/clj/ai_actions.clj` - `start-turn!` function needs validation
 - Should check `(get-in @client-state [:game-state :active-player])` against `:side`
 
 ---
@@ -59,11 +59,13 @@ Bugs found during AI player development and iteration testing.
 **Impact**: CRITICAL - Makes ICE completely useless, breaks core game mechanic
 
 **Related Code**:
-- `dev/src/clj/ai_game_actions.clj` - `continue-run!` function
-- Likely needs to detect prompt types and pause for:
-  - Rez prompts (`:prompt-type "select"` with rez choices)
-  - Choice prompts during runs
-  - Encounter phases
+- `dev/src/clj/ai_actions.clj` - `continue-run!` function (lines 1743-1954)
+- Current bug: Lines 1924-1945 auto-continue for BOTH runner AND corp at paid ability windows
+- This bypasses corp rez decisions - sends "continue" to corp without checking for rez opportunity
+- Needs to detect run phase and pause when:
+  - `run-phase = :approach-ice` AND corp has rez opportunity
+  - `run-phase = :encounter-ice` AND runner has break decisions
+  - Runner/corp is waiting for opponent's decision (no own prompt but opponent has decision)
 
 **Game State**:
 - Game ID: 57f1fce5-6c45-423c-b6d4-d6aebff410ce
