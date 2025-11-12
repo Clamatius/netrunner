@@ -435,14 +435,11 @@
   [command args]
   (let [gameid (:gameid @client-state)]
     (if gameid
-      ;; Convert gameid string to UUID object for server
-      (let [gameid-uuid (if (string? gameid)
-                          (java.util.UUID/fromString gameid)
-                          gameid)]
-        (send-message! :game/action
-                       {:gameid gameid-uuid
-                        :command command
-                        :args args}))
+      ;; Pass gameid as-is - conversion handled elsewhere if needed
+      (send-message! :game/action
+                     {:gameid gameid
+                      :command command
+                      :args args})
       (println "❌ No active game"))))
 
 ;; ============================================================================
