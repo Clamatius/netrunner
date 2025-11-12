@@ -34,7 +34,7 @@ Bugs found during AI player development and iteration testing.
 
 ## Bug #12: continue-run bypasses ICE completely - no rez prompt
 
-**Status**: Found 2025-11-11
+**Status**: FIXED 2025-11-11
 
 **Description**: The `continue-run` command auto-continues through the entire run sequence, including bypassing ALL ICE without giving corp a rez prompt. This defeats the purpose of `continue-run` which should pause at important decision points like ICE rez opportunities.
 
@@ -71,5 +71,76 @@ Bugs found during AI player development and iteration testing.
 - Game ID: 57f1fce5-6c45-423c-b6d4-d6aebff410ce
 - HQ had unrezzed Tithe (ICE #0)
 - Runner ran HQ, continue-run bypassed Tithe, accessed Nico Campaign from hand
+
+**Iteration Test Results** (2025-11-11):
+- Created new game (ID: c35aa533-fc24-4047-a4a1-8736e9a3c57d)
+- Installed Tithe (unrezzed) on HQ
+- Runner initiated run on HQ
+- Runner called continue-run 4x
+- Log shows: "AI-runner approaches ice protecting HQ at position 0." → "AI-runner passes ice protecting HQ at position 0."
+- **Result**: Runner bypassed ICE without corp getting rez decision
+- **Status**: Bug still present after initial refactor attempt
+
+**Fix Implementation** (2025-11-11):
+- Root cause: Runner's view of ICE data is minimal (placeholder with only `:cid`, `:new`, `:side`, `:zone`)
+- When unrezzed: `:rezzed` field doesn't exist in game state (not `false`, completely absent)
+- When rezzed: `:rezzed` field exists and equals `true`
+- Solution: Detect unrezzed ICE by checking `(not (:rezzed current-ice))` which returns `true` for unrezzed ICE
+- Implementation in `dev/src/clj/ai_actions.clj` lines 1956-1992
+- Detection: Check if at `:approach-ice` phase AND ICE exists at position AND ICE not rezzed
+
+**Verification Test** (2025-11-11):
+- Game ID: 3d48da8a-7118-4a5f-ab3d-cbc70a56b8c3
+- Setup: Whitespace (cost 2, unrezzed) on HQ, corp has 7 credits
+- Test sequence:
+  1. Runner ran HQ, called `continue-run` at approach-ice
+  2. ✅ Auto-continued through runner's paid ability window
+  3. ✅ Paused, waiting for corp rez decision (did NOT bypass)
+  4. Corp sent `continue` (declined to rez)
+  5. Runner called `continue-run` again
+  6. ✅ Bypassed unrezzed ICE, proceeded to movement phase
+  7. Log shows: "AI-runner approaches ice" → "AI-corp has no further action" → "AI-runner passes ice"
+- **Result**: continue-run correctly pauses at corp rez decision, does NOT bypass unrezzed ICE
+- **Status**: BUG FIXED ✅
+
+---
+
+## Enhancement Requests
+
+### Enhancement #1: Command error handling - exit with error on failure
+
+**Status**: Suggested 2025-11-11
+
+**Description**: When using Unix chaining (&&) to send multiple commands at once, if a command dies (e.g., sent something out of sequence), the command should RETURN 1 (exit with error code) so the chain pauses instead of continuing to execute subsequent commands.
+
+**Example**:
+```bash
+# If start-turn fails (wrong turn), this should stop, not continue
+./dev/send_command runner start-turn && ./dev/send_command runner run HQ
+```
+
+**Current Behavior**: Commands may fail silently, allowing subsequent commands to execute on broken game state
+
+**Desired Behavior**: Failed commands return non-zero exit code, stopping && chains
+
+**Impact**: Prevents cascading errors from executing multiple commands on broken state
+
+---
+
+### Enhancement #2: Real-time game log visibility for AI
+
+**Status**: Suggested 2025-11-11
+
+**Description**: Claude Code needs continuous feed of game log to understand what's happening (or not happening) during game execution. Without this visibility, it's difficult to debug command sequences and understand game state progression.
+
+**Proposed Solutions**:
+1. Echo game log in every send-command response
+2. Write game log into a hook pickup file that Claude can monitor
+3. Add optional --show-log flag to send_command
+4. Auto-append last N log lines to status output
+
+**Example Issue**: When using --force to end turn prematurely, Claude didn't realize game state was broken until multiple commands later because it had no visibility into the log showing errors.
+
+**Impact**: Improves debugging efficiency, helps Claude understand game flow
 
 ---

@@ -1750,14 +1750,19 @@
   (if (= side "runner") "corp" "runner"))
 
 (defn get-current-ice
-  "Get the ICE being approached/encountered from game state"
+  "Get the ICE being approached/encountered from game state.
+   Position counts from server outward (1 = outermost ICE).
+   ICE list is indexed from innermost (0) to outermost.
+   So ice-index = (count - position)."
   [state]
   (let [run (get-in state [:game-state :run])
         server (:server run)
         position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])]
-    (when (and ice-list (>= position 0) (< position (count ice-list)))
-      (nth ice-list position))))
+        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+        ice-count (count ice-list)
+        ice-index (- ice-count position)]  ; Convert position to array index
+    (when (and ice-list (> position 0) (<= position ice-count))
+      (nth ice-list ice-index))))
 
 (defn get-rez-event
   "Find first rez event in log entries, or nil if none"
@@ -1948,7 +1953,45 @@
         {:status :waiting-for-opponent
          :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")})
 
-      ;; Priority 2: Waiting for opponent to make a decision
+      ;; Priority 2: CRITICAL BUG FIX #12 - Pause at approach-ice with unrezzed ICE
+      ;; Runner's prompt says "Continue to Movement" but that would bypass corp's rez decision!
+      ;; Must check game state directly, not trust the prompt text.
+      ;; Detection: Check if ICE placeholder exists at position and is not rezzed.
+      ;; Note: Runner sees minimal ICE data (placeholder), so we count ICE positions rather than
+      ;;       relying on full card data. The :rezzed field only exists when ICE IS rezzed.
+      (and (= side "runner")
+           (= run-phase :approach-ice)
+           (let [run (get-in state [:game-state :run])
+                 server (:server run)
+                 position (:position run)
+                 ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+                 ice-count (count ice-list)
+                 ice-index (- ice-count position)
+                 current-ice (when (and ice-list (> position 0) (<= position ice-count))
+                               (nth ice-list ice-index nil))]
+             ;; ICE exists at position and is NOT rezzed
+             ;; (:rezzed current-ice) is nil when unrezzed, true when rezzed
+             (and current-ice (not (:rezzed current-ice)))))
+      (let [run (get-in state [:game-state :run])
+            server (:server run)
+            position (:position run)
+            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+            ice-count (count ice-list)
+            ice-index (- ice-count position)
+            current-ice (when (and ice-list (> position 0) (<= position ice-count))
+                          (nth ice-list ice-index nil))
+            ice-title (:title current-ice "ICE")]
+        (println "⏸️  PAUSED at approach-ice - Waiting for corp rez decision")
+        (println (format "   ICE position: %d/%d (unrezzed)" position ice-count))
+        (println (format "   ICE: %s" ice-title))
+        (println "   ⚠️  Runner prompt says 'Continue to Movement' but that would bypass corp rez!")
+        (println "   → Waiting for corp to rez or continue")
+        {:status :waiting-for-corp-rez
+         :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
+         :ice ice-title
+         :position position})
+
+      ;; Priority 3: Waiting for opponent to make a decision
       (waiting-for-opponent? state side)
       (let [reason (waiting-reason state side)]
         (println (format "⏸️  Waiting for opponent: %s" reason))
