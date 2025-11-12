@@ -22,6 +22,47 @@
   (= (clojure.string/lower-case expected-side)
      (clojure.string/lower-case (or actual-side ""))))
 
+(defn safe-uuid
+  "Safely convert gameid to UUID, returning as-is if not a valid UUID string
+   Used for testing where gameid might be a simple string"
+  [gameid]
+  (if (and (string? gameid)
+           (re-matches #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" gameid))
+    (java.util.UUID/fromString gameid)
+    gameid))
+
+(defn check-connected
+  "Check if client is connected, returns true if connected, prints error and returns false if not"
+  []
+  (let [state @ws/client-state]
+    (if (:connected state)
+      true
+      (do
+        (println "❌ Error: not connected to server")
+        false))))
+
+(defn check-game-state
+  "Check if game state exists, returns true if exists, prints error and returns false if not"
+  []
+  (let [state @ws/client-state]
+    (if (:game-state state)
+      true
+      (do
+        (println "❌ Error: no active game state")
+        false))))
+
+(defn check-side!
+  "Validate current side matches expected, THROWS EXCEPTION if not
+   Usage: (check-side! \"Corp\")"
+  [expected-side]
+  (let [state @ws/client-state
+        actual-side (:side state)]
+    (when-not (side= expected-side actual-side)
+      (throw (ex-info (str "Only " expected-side " can perform this action")
+                     {:error :wrong-side
+                      :expected expected-side
+                      :actual actual-side})))))
+
 ;; ============================================================================
 ;; Card Database Management
 ;; ============================================================================
@@ -246,9 +287,7 @@
   ([gameid] (connect-game! gameid "Corp"))
   ([gameid side]
    ;; Convert string UUID to java.util.UUID if needed
-   (let [uuid (if (string? gameid)
-                (java.util.UUID/fromString gameid)
-                gameid)]
+   (let [uuid (safe-uuid gameid)]
      (ws/join-game! {:gameid uuid :side side}))
    (Thread/sleep 2000)
    (if (ws/in-game?)
@@ -318,9 +357,7 @@
         gameid (:gameid state)]
     (if gameid
       (ws/send-message! :game/say
-        {:gameid (if (string? gameid)
-                   (java.util.UUID/fromString gameid)
-                   gameid)
+        {:gameid (safe-uuid gameid)
          :msg message})
       (println "❌ Not in a game"))))
 
@@ -329,9 +366,15 @@
 ;; ============================================================================
 
 (defn status
-  "Show current game status"
+  "Show current game status and return status map"
   []
-  (ws/show-status))
+  (ws/show-status)  ; Print the status
+  ;; Return a status map for testing
+  (let [state @ws/client-state]
+    {:connected (:connected state)
+     :side (:side state)
+     :gameid (:gameid state)
+     :game-state (:game-state state)}))
 
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
@@ -686,9 +729,7 @@
       is-first-turn?
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "start-turn"
                            :args nil})
         (Thread/sleep 2000)
@@ -721,9 +762,7 @@
       :else
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "start-turn"
                            :args nil})
         (Thread/sleep 2000)
@@ -736,9 +775,7 @@
   (let [state @ws/client-state
         gameid (:gameid state)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid (safe-uuid gameid)
                        :command "indicate-action"
                        :args nil})))
 
@@ -754,9 +791,7 @@
         before-clicks (get-in state [:game-state (keyword side) :click])
         gameid (:gameid state)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid (safe-uuid gameid)
                        :command "credit"
                        :args nil})
     (Thread/sleep 1500)
@@ -778,9 +813,7 @@
         before-clicks (get-in state [:game-state (keyword side) :click])
         gameid (:gameid state)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid (safe-uuid gameid)
                        :command "draw"
                        :args nil})
     (Thread/sleep 1500)
@@ -818,9 +851,7 @@
         (when (and (> clicks 0) force)
           (println (format "⚠️  FORCED: Ending turn with %d click(s) remaining" clicks)))
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "end-turn"
                            :args nil})
         (Thread/sleep 2000)
@@ -954,9 +985,7 @@
   (let [state @ws/client-state
         gameid (:gameid state)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid (safe-uuid gameid)
                        :command "change"
                        :args {:key key :delta delta}})
     (Thread/sleep 500)))
@@ -994,9 +1023,7 @@
     (if choice-uuid
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
         (Thread/sleep 2000))
@@ -1096,24 +1123,35 @@
    Usage: (play-card! \"Sure Gamble\")
           (play-card! 0)"
   [name-or-index]
-  (let [card (find-card-in-hand name-or-index)]
-    (if card
-      (let [before-state (capture-state-snapshot)
-            state @ws/client-state
-            gameid (:gameid state)
-            card-ref (create-card-ref card)
-            card-title (:title card)]
-        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
-                           :command "play"
-                           :args {:card card-ref}})
-        ;; Wait and verify action appeared in log
-        (when (not (verify-action-in-log card-title 3000))
-          (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
-        (show-turn-indicator))
-      (println (str "❌ Card not found in hand: " name-or-index)))))
+  ;; Validate preconditions
+  (when (and (check-connected) (check-game-state))
+    ;; Check for nil/invalid input
+    (if (nil? name-or-index)
+      (println "❌ Error: invalid input - cannot play nil card")
+
+      (let [state @ws/client-state
+            side (:side state)
+            hand (get-in state [:game-state (keyword side) :hand])]
+        ;; Check if hand is empty
+        (if (empty? hand)
+          (println "❌ Cannot play card: hand is empty")
+
+          (let [card (find-card-in-hand name-or-index)]
+            (if card
+              (let [before-state (capture-state-snapshot)
+                    state @ws/client-state
+                    gameid (:gameid state)
+                    card-ref (create-card-ref card)
+                    card-title (:title card)]
+                (ws/send-message! :game/action
+                                  {:gameid (safe-uuid gameid)
+                                   :command "play"
+                                   :args {:card card-ref}})
+                ;; Wait and verify action appeared in log
+                (when (not (verify-action-in-log card-title 3000))
+                  (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
+                (show-turn-indicator))
+              (println (str "❌ Card not found in hand: " name-or-index)))))))))
 
 (defn install-card!
   "Install a card from hand by name or index
@@ -1145,9 +1183,7 @@
                    {:card card-ref :server server}
                    {:card card-ref})]
          (ws/send-message! :game/action
-                           {:gameid (if (string? gameid)
-                                     (java.util.UUID/fromString gameid)
-                                     gameid)
+                           {:gameid (safe-uuid gameid)
                             :command "play"
                             :args args})
          ;; Wait and verify action appeared in log
@@ -1205,18 +1241,30 @@
           (run! \"remote1\")  ; Normalized to Server 1
           (run! \"r2\")      ; Normalized to Server 2"
   [server]
+  ;; Validate side (throws exception if wrong side)
+  (check-side! "Runner")
+
+  ;; Validate server input
+  (when (or (nil? server) (and (string? server) (clojure.string/blank? server)))
+    (println "❌ Invalid server: server name cannot be empty")
+    nil)
+
   (let [state @ws/client-state
         gameid (:gameid state)
         initial-log-size (count (get-in @ws/client-state [:game-state :log]))
         {:keys [normalized original changed?]} (normalize-server-name server)]
+
+    ;; Check if normalization failed (invalid server)
+    (when (nil? normalized)
+      (println (str "❌ Error: invalid server name: " server))
+      nil)
+
     ;; Provide feedback if we normalized the input
     (when changed?
       (println (format "💡 Normalized '%s' → '%s'" original normalized)))
 
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid (safe-uuid gameid)
                        :command "run"
                        :args {:server normalized}})
     ;; Wait for "make a run on" log entry and echo it
@@ -1312,17 +1360,13 @@
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
           (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
+                            {:gameid (safe-uuid gameid)
                              :command "dynamic-ability"
                              :args {:card card-ref
                                     :dynamic dynamic-type}})
           ;; Use regular ability command for normal abilities
           (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
+                            {:gameid (safe-uuid gameid)
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
@@ -1348,9 +1392,7 @@
                      :side (:side card)
                      :type (:type card)}]
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "runner-ability"
                            :args {:card card-ref
                                   :ability ability-index}})
@@ -1389,9 +1431,7 @@
                      :side (:side card)
                      :type (:type card)}]
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "trash"
                            :args {:card card-ref}})
         (Thread/sleep 1500))
@@ -1403,27 +1443,25 @@
    Usage: (rez-card! \"Prisec\")
           (rez-card! \"IP Block\")"
   [card-name]
+  ;; Validate side (throws exception if wrong side)
+  (check-side! "Corp")
+
   (let [state @ws/client-state
-        side (:side state)]
-    (if (not (side= "Corp" side))
-      (println "❌ Only Corp can rez cards")
-      (let [card (find-installed-corp-card card-name)]
-        (if card
-          (let [gameid (:gameid state)
-                card-ref {:cid (:cid card)
-                         :zone (:zone card)
-                         :side (:side card)
-                         :type (:type card)}]
-            (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
-                               :command "rez"
-                               :args {:card card-ref}})
-            ;; Wait and verify action appeared in log
-            (when (not (verify-action-in-log card-name 3000))
-              (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
-          (println (str "❌ Card not found installed: " card-name)))))))
+        card (find-installed-corp-card card-name)]
+    (if card
+      (let [gameid (:gameid state)
+            card-ref {:cid (:cid card)
+                     :zone (:zone card)
+                     :side (:side card)
+                     :type (:type card)}]
+        (ws/send-message! :game/action
+                          {:gameid (safe-uuid gameid)
+                           :command "rez"
+                           :args {:card card-ref}})
+        ;; Wait and verify action appeared in log
+        (when (not (verify-action-in-log card-name 3000))
+          (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
+      (println (str "❌ Card not found installed: " card-name)))))
 
 (defn let-subs-fire!
   "Signal intent to let unbroken subroutines fire (Runner only)
@@ -1439,9 +1477,7 @@
       (println "❌ Only Runner can let subroutines fire")
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "system-msg"
                            :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
         (Thread/sleep 1000)))))
@@ -1460,9 +1496,7 @@
       (println "❌ Only Corp can toggle auto-pass priority")
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid (safe-uuid gameid)
                            :command "toggle-auto-no-action"
                            :args nil})
         (Thread/sleep 500)))))
@@ -1486,9 +1520,7 @@
                          :side (:side card)
                          :type (:type card)}]
             (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
+                              {:gameid (safe-uuid gameid)
                                :command "unbroken-subroutines"
                                :args {:card card-ref}})
             (Thread/sleep 1500))
@@ -1513,9 +1545,7 @@
                          :side (:side card)
                          :type (:type card)}]
             (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
+                              {:gameid (safe-uuid gameid)
                                :command "advance"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
@@ -1543,9 +1573,7 @@
                            :side (:side card)
                            :type (:type card)}]
               (ws/send-message! :game/action
-                                {:gameid (if (string? gameid)
-                                          (java.util.UUID/fromString gameid)
-                                          gameid)
+                                {:gameid (safe-uuid gameid)
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
@@ -1872,9 +1900,7 @@
                   choice-uuid (:uuid choice)]
               (println (format "   Auto-choosing: %s" (:value choice)))
               (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
+                               {:gameid (safe-uuid gameid)
                                 :command "choice"
                                 :args {:choice {:uuid choice-uuid}}})
               (Thread/sleep 500)
@@ -1925,9 +1951,7 @@
           (do
             ;; Runner continues
             (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
+                             {:gameid (safe-uuid gameid)
                               :command "continue"
                               :args nil})
             (Thread/sleep 300)
@@ -1935,9 +1959,7 @@
             ;; Corp continues (if they have a prompt)
             (when corp-prompt
               (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
+                               {:gameid (safe-uuid gameid)
                                 :command "continue"
                                 :args nil})
               (Thread/sleep 300))
