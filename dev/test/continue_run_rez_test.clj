@@ -27,12 +27,12 @@
         :corp {:prompt-state {:msg "Rez Tithe?"
                              :prompt-type "run"
                              :choices []  ; Empty choices = paid ability window
-                             :selectable [{:cid 123 :title "Tithe" :rezzed false}]}}
-        :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}}})
+                             :selectable [{:cid 123 :title "Tithe" :rezzed false}]}
+               :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}})
 
       ;; This is the BUG: current code will auto-continue through this
       ;; Expected: detect corp has rez opportunity and PAUSE
-      (let [result (ai/continue-run! :max-iterations 1)]
+      (let [result (ai/continue-run!)]
         (is (= :waiting-for-opponent (:status result))
             "Should pause when waiting for corp rez decision")
         (is (= "Corp must decide: rez Tithe or continue" (:message result))
@@ -49,8 +49,8 @@
                   :corp {:prompt-state {:msg "Rez Tithe?"
                                        :prompt-type "run"
                                        :choices []
-                                       :selectable [{:cid 123 :title "Tithe" :rezzed false}]}}
-                  :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}}})]
+                                       :selectable [{:cid 123 :title "Tithe" :rezzed false}]}
+                         :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}})]
 
       ;; Helper function we need to implement
       (is (ai/corp-has-rez-opportunity? state)
@@ -66,8 +66,8 @@
                         :server [:hq]}
                   :corp {:prompt-state {:msg "Paid ability window"
                                        :prompt-type "run"
-                                       :choices []}}
-                  :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed true}]}}}}})]
+                                       :choices []}
+                         :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed true}]}}}})]
 
       (is (not (ai/corp-has-rez-opportunity? state))
           "Should NOT detect rez opportunity when ICE already rezzed"))))
@@ -83,8 +83,8 @@
                   :corp {:prompt-state {:msg "Rez Tithe?"
                                        :prompt-type "run"
                                        :choices []
-                                       :selectable [{:cid 123 :title "Tithe" :rezzed false}]}}
-                  :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}}})]
+                                       :selectable [{:cid 123 :title "Tithe" :rezzed false}]}
+                         :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}})]
 
       (is (not (ai/corp-has-rez-opportunity? state))
           "Should NOT detect rez opportunity in encounter-ice phase"))))
@@ -106,8 +106,8 @@
                          :prompt-state {:msg "Rez Archer?"
                                        :prompt-type "run"
                                        :choices []
-                                       :selectable [{:cid 456 :title "Archer" :cost 4 :rezzed false}]}}
-                  :board {:corp {:servers {:rd {:ices [{:cid 456 :title "Archer" :cost 4 :rezzed false}]}}}}})]
+                                       :selectable [{:cid 456 :title "Archer" :cost 4 :rezzed false}]}
+                         :servers {:rd {:ices [{:cid 456 :title "Archer" :cost 4 :rezzed false}]}}}})]
 
       ;; CRITICAL: Must still pause even though corp can't afford
       ;; Otherwise runner learns "corp is broke" for free
@@ -156,14 +156,14 @@
         :corp {:prompt-state {:msg "Rez Tithe?"
                              :prompt-type "run"
                              :choices []
-                             :selectable [{:cid 123 :title "Tithe" :rezzed false}]}}
-        :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]
-                                     :hand [{:cid 789 :title "Nico Campaign"}]}}}}}
+                             :selectable [{:cid 123 :title "Tithe" :rezzed false}]}
+               :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]
+                             :hand [{:cid 789 :title "Nico Campaign"}]}}}}
        :log [])
 
       ;; The bug: this currently auto-continues through corp's rez decision
       ;; and accesses HQ without encountering Tithe
-      (let [result (ai/continue-run! :max-iterations 1)]
+      (let [result (ai/continue-run!)]
 
         ;; Expected behavior: PAUSE at rez decision
         (is (not= :run-complete (:status result))
@@ -174,7 +174,7 @@
             "Should pause with waiting-for-opponent or rez-decision-required status")
 
         ;; Should NOT have accessed cards
-        (is (empty? (:accessed result))
+        (is (nil? (:accessed result))
             "Should not have accessed any cards without corp making rez decision")))))
 
 (deftest test-continue-after-corp-chooses-not-to-rez
@@ -187,16 +187,14 @@
               :position 0
               :server [:hq]}
         :runner {:prompt-state {:msg "Paid ability window" :prompt-type "run" :choices []}}
-        :corp {:prompt-state nil}
-        :board {:corp {:servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]  ; Still unrezzed
-                                     :hand [{:cid 789 :title "Hedge Fund"}]}}}}}
+        :corp {:prompt-state nil
+               :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]  ; Still unrezzed
+                             :hand [{:cid 789 :title "Hedge Fund"}]}}}}
        :log [{:text "Corp does not rez Tithe"}])
 
       ;; Now continue-run should proceed
       ;; We're in movement phase (past the unrezzed ice)
-      ;; Should auto-continue to access
-      ;; (This test won't fully work with mocks - needs integration test)
-      (let [result (ai/continue-run! :max-iterations 5)]
-        (is (or (= :run-complete (:status result))
-                (= :decision-required (:status result)))  ; Access decision
-            "Should proceed past unrezzed ICE after corp declined to rez")))))
+      ;; Should auto-continue through paid ability window
+      (let [result (ai/continue-run!)]
+        (is (= :action-taken (:status result))
+            "Should auto-continue through paid ability window after corp declined to rez")))))
