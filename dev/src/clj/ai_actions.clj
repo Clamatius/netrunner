@@ -433,33 +433,34 @@
     hand))
 
 (defn show-hand
-  "Show hand using side-aware state access"
+  "Show hand using side-aware state access. Returns the hand."
   []
   (let [state @ws/client-state
         side (:side state)
         hand (get-in state [:game-state (keyword side) :hand])]
-    (if hand
-      (do
-        (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
-        (doseq [[idx card] (map-indexed vector hand)]
-          (println (str "  " idx ". " (:title card) " [" (:type card) "]"))))
-      (println "No hand data available"))))
+    (when hand
+      (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
+      (doseq [[idx card] (map-indexed vector hand)]
+        (println (str "  " idx ". " (:title card) " [" (:type card) "]"))))
+    (or hand [])))
 
 (defn show-credits
-  "Show current credits (side-aware)"
+  "Show current credits (side-aware). Returns credits value."
   []
   (let [state @ws/client-state
         side (:side state)
         credits (get-in state [:game-state (keyword side) :credit])]
-    (println "💰 Credits:" credits)))
+    (println "💰 Credits:" credits)
+    credits))
 
 (defn show-clicks
-  "Show remaining clicks (side-aware)"
+  "Show remaining clicks (side-aware). Returns clicks value."
   []
   (let [state @ws/client-state
         side (:side state)
         clicks (get-in state [:game-state (keyword side) :click])]
-    (println "⏱️  Clicks:" clicks)))
+    (println "⏱️  Clicks:" clicks)
+    clicks))
 
 (defn show-archives
   "Show Corp's Archives (discard pile) with faceup/facedown counts"

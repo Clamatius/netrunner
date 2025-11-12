@@ -1,7 +1,8 @@
 (ns test-helpers
   "Mock utilities and test helpers for AI client unit tests"
   (:require [clojure.test :refer :all]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
 ;; Mock Client State Creation
@@ -43,12 +44,12 @@
      (with-mock-state (mock-client-state :credits 10)
        (is (= 10 (show-credits))))"
   [state-map & body]
-  `(let [original-state# @ai-websocket-client-v2/client-state]
+  `(let [original-state# @ws/client-state]
      (try
-       (reset! ai-websocket-client-v2/client-state ~state-map)
+       (reset! ws/client-state ~state-map)
        ~@body
        (finally
-         (reset! ai-websocket-client-v2/client-state original-state#)))))
+         (reset! ws/client-state original-state#)))))
 
 ;; ============================================================================
 ;; Assertion Helpers

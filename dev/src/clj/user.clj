@@ -31,5 +31,11 @@
    run])
 
 (require '[nrepl.server :as nrepl])
-(defonce nrepl-server (nrepl/start-server :port 7888))
-(println "nREPL server started on port 7888")
+(defonce nrepl-server
+  (try
+    (let [server (nrepl/start-server :port 7888)]
+      (println "nREPL server started on port 7888")
+      server)
+    (catch java.net.BindException _
+      (println "nREPL port 7888 already in use, skipping startup")
+      nil)))

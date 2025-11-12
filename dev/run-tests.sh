@@ -35,8 +35,10 @@ is_repl_running() {
 start_test_repl() {
     echo -e "${YELLOW}Starting test REPL on port $TEST_REPL_PORT...${NC}"
 
-    # Start REPL in background
-    nohup lein repl :start :port "$TEST_REPL_PORT" > "$LOGFILE" 2>&1 &
+    # Start REPL in background with +dev profile for test paths
+    # user.clj handles port 7888 conflicts gracefully with try/catch
+    # Use 'run -m nrepl.cmdline' instead of 'repl :start' to properly load dev profile
+    nohup lein with-profile +dev run -m nrepl.cmdline --port "$TEST_REPL_PORT" > "$LOGFILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PIDFILE"
 

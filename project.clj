@@ -84,7 +84,7 @@
                    :eftest {:report eftest.report.pretty/report
                             :fail-fast? false}
                    :source-paths ["src/clj" "src/cljs" "src/cljc" "src/css"
-                                  "dev/src/clj" "dev/src/cljs"
+                                  "dev/src/clj" "dev/src/cljs" "dev/test"
                                   "test/clj" "test/cljc" "test/cljs"]
                    :resource-paths ["target"]
                    :clean-targets ^{:protect false} ["target"]
@@ -92,6 +92,9 @@
                               "-XX:+UnlockDiagnosticVMOptions"
                               "-XX:-OmitStackTraceInFastThrow"
                               "-XX:+DebugNonSafepoints"]}
+             :repl {:source-paths ["src/clj" "src/cljs" "src/cljc" "src/css"
+                                    "dev/src/clj" "dev/src/cljs" "dev/test"
+                                    "test/clj" "test/cljc" "test/cljs"]}
              :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}}
 
   :aliases {"fetch" ^{:doc "Fetch card data and images from github"} ["run" "-m" "tasks.fetch/command"]
