@@ -166,7 +166,8 @@
           :side "runner"
           :prompt (make-prompt
                    :msg "Keep hand?"
-                   :prompt-type "mulligan"))
+                   :prompt-type "mulligan"
+                   :choices [{:value "Keep"} {:value "Mulligan"}]))
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/mulligan)
           (is (= 1 (count @sent))))))))
@@ -179,7 +180,8 @@
           :side "runner"
           :prompt (make-prompt
                    :msg "Keep hand?"
-                   :prompt-type "mulligan"))
+                   :prompt-type "mulligan"
+                   :choices [{:value "Keep"} {:value "Mulligan"}]))
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ai-actions/keep-hand)
           (is (= 1 (count @sent))))))))

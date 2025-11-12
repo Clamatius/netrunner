@@ -1006,9 +1006,19 @@
   [choice]
   (let [prompt (ws/get-prompt)]
     (if prompt
-      (do
-        (ws/choose! choice)
-        (Thread/sleep 500))
+      (if (number? choice)
+        ;; Validate index is in range
+        (let [choices (:choices prompt)
+              num-choices (count choices)]
+          (if (and (>= choice 0) (< choice num-choices))
+            (do
+              (ws/choose! choice)
+              (Thread/sleep 500))
+            (println (str "❌ invalid choice index: " choice " (valid range: 0-" (dec num-choices) ")"))))
+        ;; UUID choice - pass through
+        (do
+          (ws/choose! choice)
+          (Thread/sleep 500)))
       (println "⚠️  No active prompt"))))
 
 (defn choose-option!
