@@ -61,12 +61,23 @@ fi
 
 # Now load the initialization code via nREPL
 echo "Loading AI client initialization..."
-TIMEOUT=15 ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file "dev/src/clj/ai_client_init.clj")'
-
-echo ""
-echo "✅ AI Client REPL ready for '$CLIENT_NAME'!"
-echo ""
-echo "To stop: ./dev/stop-ai-client.sh $CLIENT_NAME"
-echo "To view logs: tail -f /tmp/ai-client-${CLIENT_NAME}.log"
-echo "To send commands: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
-echo ""
+if TIMEOUT=15 ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file "dev/src/clj/ai_client_init.clj")'; then
+    echo ""
+    echo "✅ AI Client REPL ready for '$CLIENT_NAME'!"
+    echo ""
+    echo "To stop: ./dev/stop-ai-client.sh $CLIENT_NAME"
+    echo "To view logs: tail -f /tmp/ai-client-${CLIENT_NAME}.log"
+    echo "To send commands: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
+    echo ""
+else
+    echo ""
+    echo "❌ Failed to load initialization code!"
+    echo "REPL is running but AI client code is not loaded."
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. Check REPL log: tail -20 /tmp/ai-client-${CLIENT_NAME}.log"
+    echo "  2. Manually load init: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file \"dev/src/clj/ai_client_init.clj\")'"
+    echo "  3. Stop and restart: ./dev/stop-ai-client.sh $CLIENT_NAME && ./dev/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
+    echo ""
+    exit 1
+fi

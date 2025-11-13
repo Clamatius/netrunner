@@ -40,23 +40,47 @@ else
     echo "   Attempting connection anyway..."
 fi
 
-# Run expression via lein repl :connect to AI client on specified port
-timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
-    grep -v "^user=>" | \
-    grep -v "find-doc" | \
-    grep -v "^  #_=>" | \
-    grep -v "Welcome back!" | \
-    grep -v "Connecting to nREPL" | \
-    grep -v "REPL-y" | \
-    grep -v "Clojure" | \
-    grep -v "OpenJDK" | \
-    grep -v "Docs:" | \
-    grep -v "Source:" | \
-    grep -v "Javadoc:" | \
-    grep -v "Exit:" | \
-    grep -v "Results:" | \
-    grep -v "Bye for now" | \
-    sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
-    grep -v "^[[:space:]]*$"
+# Use Babashka if available (much faster), otherwise fall back to lein
+if command -v bb &> /dev/null; then
+    # Babashka nREPL client - fast and designed for scripting
+    # Use environment variable to avoid escaping issues with multi-line expressions
+    NREPL_EXPR="$EXPRESSION" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+          (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
+            (let [in (java.io.PushbackInputStream. (io/input-stream sock))
+                  out (io/output-stream sock)
+                  bytes->str #(when % (String. (bytes %)))]
+              (b/write-bencode out {\"op\" \"eval\" \"code\" (System/getenv \"NREPL_EXPR\")})
+              (.flush out)
+              (loop []
+                (when-let [response (b/read-bencode in)]
+                  (when-let [val (get response \"value\")]
+                    (print (bytes->str val)))
+                  (when-let [out-msg (get response \"out\")]
+                    (print (bytes->str out-msg)))
+                  (when-let [err (get response \"err\")]
+                    (binding [*out* *err*]
+                      (print (bytes->str err))))
+                  (when-not (get response \"status\")
+                    (recur))))))"
+else
+    # Fallback to lein repl :connect (slower, for compatibility)
+    timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
+        grep -v "^user=>" | \
+        grep -v "find-doc" | \
+        grep -v "^  #_=>" | \
+        grep -v "Welcome back!" | \
+        grep -v "Connecting to nREPL" | \
+        grep -v "REPL-y" | \
+        grep -v "Clojure" | \
+        grep -v "OpenJDK" | \
+        grep -v "Docs:" | \
+        grep -v "Source:" | \
+        grep -v "Javadoc:" | \
+        grep -v "Exit:" | \
+        grep -v "Results:" | \
+        grep -v "Bye for now" | \
+        sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
+        grep -v "^[[:space:]]*$"
 $EXPRESSION
 EOF
+fi
