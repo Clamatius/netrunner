@@ -660,6 +660,7 @@
    Validates that opponent has finished their turn to prevent desync.
 
    Validates:
+   - It's actually your turn (checks :active-player)
    - Opponent has 0 clicks remaining
    - Opponent's end-turn appears in recent log
    - You don't already have clicks (prevents double-start)
@@ -676,12 +677,21 @@
         recent-log (take-last 5 log)
         opp-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
                         recent-log)
-        ;; Turn 0 special case: no end-turn yet, both at 0 clicks
-        is-first-turn? (and (= my-clicks 0)
-                           (= opp-clicks 0)
+        ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
+        is-first-turn? (and (or (nil? my-clicks) (= my-clicks 0))
+                           (or (nil? opp-clicks) (= opp-clicks 0))
                            (not opp-ended?))]
 
     (cond
+      ;; ERROR: Bug #11 fix - Runner trying to start first turn (Corp always goes first)
+      (and is-first-turn?
+           (= my-side :runner))
+      (do
+        (println "❌ ERROR: It's not your turn")
+        (println "   Corp always goes first in turn 1")
+        (println "   Wait for Corp to start and complete their turn")
+        {:status :error :reason :not-your-turn :expected-side "corp"})
+
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?
       (do
@@ -1959,26 +1969,32 @@
       ;; Detection: Check if ICE placeholder exists at position and is not rezzed.
       ;; Note: Runner sees minimal ICE data (placeholder), so we count ICE positions rather than
       ;;       relying on full card data. The :rezzed field only exists when ICE IS rezzed.
+      ;; REFINEMENT: Check :run :no-action field - when it's "corp", corp already declined to rez
+      ;;             This is more reliable than log parsing since some continues are silent!
       (and (= side "runner")
-           (= run-phase :approach-ice)
+           (= run-phase "approach-ice")
            (let [run (get-in state [:game-state :run])
                  server (:server run)
                  position (:position run)
                  ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
                  ice-count (count ice-list)
                  ice-index (- ice-count position)
-                 current-ice (when (and ice-list (> position 0) (<= position ice-count))
-                               (nth ice-list ice-index nil))]
-             ;; ICE exists at position and is NOT rezzed
+                 current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                               (nth ice-list ice-index nil))
+                 ;; Check if corp already declined to rez by checking :run :no-action field
+                 ;; When :no-action is "corp", Corp has already passed the rez window
+                 no-action (:no-action run)
+                 corp-already-declined? (= no-action "corp")]
+             ;; ICE exists at position and is NOT rezzed AND corp hasn't already declined
              ;; (:rezzed current-ice) is nil when unrezzed, true when rezzed
-             (and current-ice (not (:rezzed current-ice)))))
+             (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))))
       (let [run (get-in state [:game-state :run])
             server (:server run)
             position (:position run)
             ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
             ice-count (count ice-list)
             ice-index (- ice-count position)
-            current-ice (when (and ice-list (> position 0) (<= position ice-count))
+            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                           (nth ice-list ice-index nil))
             ice-title (:title current-ice "ICE")]
         (println "⏸️  PAUSED at approach-ice - Waiting for corp rez decision")
