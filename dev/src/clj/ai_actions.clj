@@ -101,8 +101,35 @@
             (recur))
           false)))))
 
+(defn parse-card-reference
+  "Parse card name with optional [N] index suffix
+   Examples:
+     \"Palisade\" -> {:title \"Palisade\" :index 0}
+     \"Palisade [1]\" -> {:title \"Palisade\" :index 1}
+   Returns map with :title and :index (0-based)"
+  [card-name]
+  (if-let [[_ title idx] (re-matches #"(.+?)\s*\[(\d+)\]" card-name)]
+    {:title title :index (Integer/parseInt idx)}
+    {:title card-name :index 0}))
+
+(defn format-card-name-with-index
+  "Format card name with [N] suffix if duplicates exist in collection
+   Uses 0-based indexing: first copy is [0], second is [1], etc.
+   Examples:
+     Single card: \"Palisade\" -> \"Palisade\"
+     2+ copies: \"Palisade\" -> \"Palisade [0]\", \"Palisade [1]\""
+  [card all-cards]
+  (let [card-title (:title card)
+        same-name-cards (filter #(= (:title %) card-title) all-cards)
+        card-count (count same-name-cards)]
+    (if (> card-count 1)
+      (let [index (.indexOf (vec same-name-cards) card)]
+        (str card-title " [" index "]"))
+      card-title)))
+
 (defn find-card-in-hand
   "Find card in hand by name or index
+   Supports [N] suffix for duplicate cards: \"Sure Gamble [1]\"
    Returns card object or nil if not found"
   [name-or-index]
   (let [state @ws/client-state
@@ -113,7 +140,9 @@
       (nth hand name-or-index nil)
 
       (string? name-or-index)
-      (first (filter #(= name-or-index (:title %)) hand))
+      (let [{:keys [title index]} (parse-card-reference name-or-index)
+            matches (filter #(= title (:title %)) hand)]
+        (nth (vec matches) index nil))
 
       :else nil)))
 
@@ -361,7 +390,7 @@
           (if (seq ice-list)
             (doseq [[idx ice] (map-indexed vector ice-list)]
               (let [rezzed (:rezzed ice)
-                    title (:title ice)
+                    title (if rezzed (format-card-name-with-index ice ice-list) (:title ice))
                     subtype (or (first (clojure.string/split (or (:subtype ice) "") #" - ")) "?")
                     status-icon (if rezzed "🔴" "⚪")]
                 (println (str "  ICE #" idx ": " status-icon " "
@@ -374,7 +403,8 @@
             (let [rezzed-content (filter :rezzed content-list)
                   unrezzed-count (- (count content-list) (count rezzed-content))]
               (doseq [card rezzed-content]
-                (println (str "  Content: 🔴 " (:title card) " (" (:type card) ")")))
+                (let [card-name (format-card-name-with-index card content-list)]
+                  (println (str "  Content: 🔴 " card-name " (" (:type card) ")"))))
               (when (> unrezzed-count 0)
                 (println (str "  Content: " unrezzed-count " unrezzed card(s)"))))))))
 
@@ -387,22 +417,25 @@
         (do
           (println "\n💾 Programs:")
           (doseq [prog programs]
-            (println (str "  • " (:title prog)
-                         (when-let [strength (:current-strength prog)] (str " (str: " strength ")"))))))
+            (let [prog-name (format-card-name-with-index prog programs)]
+              (println (str "  • " prog-name
+                           (when-let [strength (:current-strength prog)] (str " (str: " strength ")")))))))
         (println "\n💾 Programs: (none)"))
 
       (if (seq hardware)
         (do
           (println "\n🔧 Hardware:")
           (doseq [hw hardware]
-            (println (str "  • " (:title hw)))))
+            (let [hw-name (format-card-name-with-index hw hardware)]
+              (println (str "  • " hw-name)))))
         (println "🔧 Hardware: (none)"))
 
       (if (seq resources)
         (do
           (println "\n📦 Resources:")
           (doseq [res resources]
-            (println (str "  • " (:title res)))))
+            (let [res-name (format-card-name-with-index res resources)]
+              (println (str "  • " res-name)))))
         (println "📦 Resources: (none)")))
 
     ;; Deck/Discard counts
@@ -441,7 +474,8 @@
     (when hand
       (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
       (doseq [[idx card] (map-indexed vector hand)]
-        (println (str "  " idx ". " (:title card) " [" (:type card) "]"))))
+        (let [card-name (format-card-name-with-index card hand)]
+          (println (str "  " idx ". " card-name " [" (:type card) "]")))))
     (or hand [])))
 
 (defn show-credits
@@ -522,12 +556,13 @@
         (when has-selectable
           (println "  Selectable cards:" (count (:selectable prompt))
                    "- Use choose-card! to select by index")
-          (doseq [[idx card] (map-indexed vector (:selectable prompt))]
-            (let [title (or (:title card) "Unknown")
-                  card-type (or (:type card) "?")
-                  zone (or (:zone card) [])]
-              (println (str "    " idx ". " title " [" card-type "]"
-                          (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")")))))))
+          (let [selectable (:selectable prompt)]
+            (doseq [[idx card] (map-indexed vector selectable)]
+              (let [title (format-card-name-with-index card selectable)
+                    card-type (or (:type card) "?")
+                    zone (or (:zone card) [])]
+                (println (str "    " idx ". " title " [" card-type "]"
+                            (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")"))))))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
           (println "  Action: Paid ability window")
@@ -1254,12 +1289,15 @@
 
 (defn find-installed-card
   "Find an installed card by title in the rig
+   Supports [N] suffix for duplicate cards: \"Corroder [1]\"
    Searches programs, hardware, and resources"
   [card-name]
   (let [state @ws/client-state
         rig (get-in state [:game-state :runner :rig])
-        all-installed (concat (:program rig) (:hardware rig) (:resource rig))]
-    (first (filter #(= card-name (:title %)) all-installed))))
+        all-installed (concat (:program rig) (:hardware rig) (:resource rig))
+        {:keys [title index]} (parse-card-reference card-name)
+        matches (filter #(= title (:title %)) all-installed)]
+    (nth (vec matches) index nil)))
 
 (defn show-card-abilities
   "Show available abilities for an installed card by name
@@ -1369,6 +1407,7 @@
 
 (defn find-installed-corp-card
   "Find an installed Corp card by title
+   Supports [N] suffix for duplicate cards: \"Palisade [1]\"
    Searches all servers for ICE, assets, and upgrades"
   [card-name]
   (let [state @ws/client-state
@@ -1377,8 +1416,10 @@
         all-ice (mapcat :ices (vals servers))
         ;; Get all content (assets/upgrades) from all servers
         all-content (mapcat :content (vals servers))
-        all-installed (concat all-ice all-content)]
-    (first (filter #(= card-name (:title %)) all-installed))))
+        all-installed (concat all-ice all-content)
+        {:keys [title index]} (parse-card-reference card-name)
+        matches (filter #(= title (:title %)) all-installed)]
+    (nth (vec matches) index nil)))
 
 (defn trash-installed!
   "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)
@@ -1410,8 +1451,10 @@
 (defn rez-card!
   "Rez an installed Corp card (ICE, asset, or upgrade)
 
+   Supports [N] suffix for multiple copies: \"Palisade [1]\"
+
    Usage: (rez-card! \"Prisec\")
-          (rez-card! \"IP Block\")"
+          (rez-card! \"Palisade [1]\")"
   [card-name]
   (let [state @ws/client-state
         side (:side state)]
@@ -1602,9 +1645,10 @@
 
 (defn discard-by-names!
   "Discard specific cards by their names
+   Supports [N] suffix for duplicates: \"Sure Gamble [1]\"
 
    Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
-          (discard-by-names! \"Sure Gamble\")  ; Single card"
+          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy"
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
         state @ws/client-state
@@ -1614,10 +1658,12 @@
         hand (get-in gs [side :hand])]
     (if (and (= "select" (:prompt-type prompt))
              (seq names-vec))
-      (let [;; Find cards in hand matching the requested names
-            cards-to-discard (filter (fn [card]
-                                       (some #(= (:title card) %) names-vec))
-                                    hand)
+      (let [;; Find cards in hand matching the requested names with [N] support
+            cards-to-discard (remove nil?
+                               (for [card-ref names-vec]
+                                 (let [{:keys [title index]} (parse-card-reference card-ref)
+                                       matches (filter #(= (:title %) title) hand)]
+                                   (nth (vec matches) index nil))))
             _ (when (seq cards-to-discard)
                 (println "Discarding:" (clojure.string/join ", " (map :title cards-to-discard))))]
         (if (seq cards-to-discard)
@@ -2200,10 +2246,11 @@
       (when (seq playable-cards)
         (println "\n📋 Hand Cards:")
         (doseq [card playable-cards]
-          (println (format "  - %s (%s, %d credits)"
-                          (:title card)
-                          (:type card)
-                          (:cost card))))))
+          (let [card-name (format-card-name-with-index card hand)]
+            (println (format "  - %s (%s, %d credits)"
+                            card-name
+                            (:type card)
+                            (:cost card)))))))
 
     ;; Playable installed abilities
     (let [all-installed (concat
@@ -2213,15 +2260,16 @@
           playable-abilities (for [card all-installed
                                   [idx ability] (map-indexed vector (:abilities card))
                                   :when (:playable ability)]
-                              {:card (:title card)
+                              {:card card
+                               :card-name (format-card-name-with-index card all-installed)
                                :idx idx
                                :label (:label ability)
                                :cost (:cost-label ability)})]
       (when (seq playable-abilities)
         (println "\n⚙️  Installed Abilities:")
-        (doseq [{:keys [card idx label cost]} playable-abilities]
+        (doseq [{:keys [card-name idx label cost]} playable-abilities]
           (println (format "  - %s: Ability %d - %s%s"
-                          card
+                          card-name
                           idx
                           label
                           (if cost (str " (" cost ")") ""))))))
