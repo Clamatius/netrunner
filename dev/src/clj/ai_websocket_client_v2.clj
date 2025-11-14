@@ -78,7 +78,10 @@
   "Set initial game state and detect which side we are"
   [state]
   (let [our-uid (:uid @client-state)
-        side (detect-side state our-uid)]
+        existing-side (:side @client-state)
+        ;; Only detect side if not already set, otherwise preserve it
+        ;; This prevents re-detection on resync when server strips opponent user info
+        side (or existing-side (detect-side state our-uid))]
     (swap! client-state assoc
            :game-state state
            :last-state state
