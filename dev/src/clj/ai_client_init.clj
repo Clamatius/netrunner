@@ -5,10 +5,23 @@
 (println "Loading WebSocket client...")
 
 ;; Load the websocket client
-(load-file "dev/src/clj/ai_websocket_client_v2.clj")
+(try
+  (load-file "dev/src/clj/ai_websocket_client_v2.clj")
+  (catch Exception e
+    (println "❌ FATAL ERROR loading ai_websocket_client_v2.clj:")
+    (println (.getMessage e))
+    (.printStackTrace e)
+    (throw e)))
 
+(println "Loading actions")
 ;; Load high-level actions
-(load-file "dev/src/clj/ai_actions.clj")
+(try
+  (load-file "dev/src/clj/ai_actions.clj")
+  (catch Exception e
+    (println "❌ FATAL ERROR loading ai_actions.clj:")
+    (println (.getMessage e))
+    (.printStackTrace e)
+    (throw e)))
 
 ;; Also make these available in user namespace for easier access
 (in-ns 'user)
@@ -16,6 +29,7 @@
 (require '[ai-actions :as ai])
 (in-ns 'ai-client-init)
 
+(println "Setting client id")
 ;; Set client-id from environment variable or use default
 ;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation in web.auth
 (let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")

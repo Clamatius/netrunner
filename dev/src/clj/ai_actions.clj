@@ -1308,6 +1308,37 @@
         (show-turn-indicator))
       (println (str "❌ Card not found in hand: " name-or-index)))))
 
+(defn normalize-server-name
+  "Normalize user-friendly server names to game-expected format.
+   Accepts common variants and typos, provides helpful feedback.
+
+   Examples:
+   - 'hq', 'HQ' → 'HQ'
+   - 'rd', 'r&d', 'R&D' → 'R&D'
+   - 'archives', 'Archives' → 'Archives'
+   - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
+
+   Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
+  [server-input]
+  (let [s (clojure.string/lower-case (clojure.string/trim server-input))
+        normalized (cond
+                     ;; Central servers
+                     (= s "hq") "HQ"
+                     (or (= s "rd") (= s "r&d")) "R&D"
+                     (= s "archives") "Archives"
+
+                     ;; Remote servers - handle various formats
+                     ;; remote1, remote 1, r1, server1, server 1 → Server 1
+                     (re-matches #"(?:remote|r|server)\s*(\d+)" s)
+                     (let [num (second (re-matches #"(?:remote|r|server)\s*(\d+)" s))]
+                       (str "Server " num))
+
+                     ;; Already correct format - pass through
+                     :else server-input)]
+    {:normalized normalized
+     :original server-input
+     :changed? (not= normalized server-input)}))
+
 (defn install-card!
   "Install a card from hand by name or index
    For Corp: must specify server location
@@ -1351,37 +1382,6 @@
            (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
          (show-turn-indicator))
        (println (str "❌ Card not found in hand: " name-or-index))))))
-
-(defn normalize-server-name
-  "Normalize user-friendly server names to game-expected format.
-   Accepts common variants and typos, provides helpful feedback.
-
-   Examples:
-   - 'hq', 'HQ' → 'HQ'
-   - 'rd', 'r&d', 'R&D' → 'R&D'
-   - 'archives', 'Archives' → 'Archives'
-   - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
-
-   Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
-  [server-input]
-  (let [s (clojure.string/lower-case (clojure.string/trim server-input))
-        normalized (cond
-                     ;; Central servers
-                     (= s "hq") "HQ"
-                     (or (= s "rd") (= s "r&d")) "R&D"
-                     (= s "archives") "Archives"
-
-                     ;; Remote servers - handle various formats
-                     ;; remote1, remote 1, r1, server1, server 1 → Server 1
-                     (re-matches #"(?:remote|r|server)\s*(\d+)" s)
-                     (let [num (second (re-matches #"(?:remote|r|server)\s*(\d+)" s))]
-                       (str "Server " num))
-
-                     ;; Already correct format - pass through
-                     :else server-input)]
-    {:normalized normalized
-     :original server-input
-     :changed? (not= normalized server-input)}))
 
 (defn run!
   "Run on a server (Runner only)
