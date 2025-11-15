@@ -28,6 +28,7 @@
         opp-side (if (= my-side :runner) :corp :runner)
         my-clicks (get-in state [:game-state my-side :click])
         opp-clicks (get-in state [:game-state opp-side :click])
+        active-player (get-in state [:game-state :active-player])
         log (get-in state [:game-state :log])
         recent-log (take-last 5 log)
         opp-ended? (some #(clojure.string/includes? (:text %) "is ending")
@@ -38,6 +39,15 @@
                            (not opp-ended?))]
 
     (cond
+      ;; ERROR: Not the active player according to server (prevents turn stealing)
+      (and active-player
+           (not= (name my-side) active-player))
+      (do
+        (println "❌ ERROR: It's not your turn")
+        (println (format "   Active player: %s (you are %s)" active-player (name my-side)))
+        (println "   Wait for opponent to complete their turn")
+        {:status :error :reason :not-active-player :active-player active-player})
+
       ;; ERROR: Bug #11 fix - Runner trying to start first turn (Corp always goes first)
       (and is-first-turn?
            (= my-side :runner))
