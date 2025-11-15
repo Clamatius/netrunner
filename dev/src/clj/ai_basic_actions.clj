@@ -31,7 +31,11 @@
         active-player (get-in state [:game-state :active-player])
         log (get-in state [:game-state :log])
         recent-log (take-last 5 log)
-        opp-ended? (some #(clojure.string/includes? (:text %) "is ending")
+        ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
+        ;; This prevents Corp from ending and immediately starting again
+        my-uid (:uid state)
+        opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
+                               (not (clojure.string/includes? (:text %) my-uid)))
                         recent-log)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         is-first-turn? (and (or (nil? my-clicks) (= my-clicks 0))
@@ -83,17 +87,10 @@
         (println "   Wait for opponent to complete their turn")
         {:status :error :reason :opponent-not-ended})
 
-      ;; ERROR: Not the active player (prevents turn stealing)
-      ;; Note: This check comes AFTER first-turn checks to allow Corp's first turn
-      (and active-player
-           (not= (name my-side) active-player))
-      (do
-        (println "❌ ERROR: It's not your turn")
-        (println (format "   Active player: %s (you are %s)" active-player (name my-side)))
-        (println "   Wait for opponent to complete their turn")
-        {:status :error :reason :not-active-player :active-player active-player})
-
       ;; OK: All validations passed
+      ;; Note: We don't check active-player because it doesn't switch until start-turn succeeds.
+      ;; After opponent's end-turn, active-player is still opponent (Netrunner priority system).
+      ;; The other checks (opp-clicks, opp-ended, my-clicks) are sufficient to prevent turn stealing.
       :else
       (do
         (ws/send-message! :game/action
