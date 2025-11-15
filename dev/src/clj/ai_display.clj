@@ -2,6 +2,7 @@
   "Read-only display functions for game status, board state, and information"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
+            [ai-basic-actions :as actions]
             [jinteki.cards :refer [all-cards]]))
 
 ;; ============================================================================
@@ -528,9 +529,7 @@
   []
   (println "\n=== SIMPLE CORP TURN ===")
   (dotimes [i 3]
-    (require '[ai-basic-actions :as actions])
     (actions/take-credits))
-  (require '[ai-basic-actions :as actions])
   (actions/end-turn)
   (println "=== TURN COMPLETE ===\n"))
 
@@ -539,9 +538,7 @@
   []
   (println "\n=== SIMPLE RUNNER TURN ===")
   (dotimes [i 4]
-    (require '[ai-basic-actions :as actions])
     (actions/take-credits))
-  (require '[ai-basic-actions :as actions])
   (actions/end-turn)
   (println "=== TURN COMPLETE ===\n"))
 

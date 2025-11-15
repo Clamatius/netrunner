@@ -18,13 +18,14 @@
 (try
   ;; First load ai-core (no dependencies except websocket client)
   (load-file "dev/src/clj/ai_core.clj")
-  ;; Then load modules that depend on ai-core
+  ;; Then load modules that depend only on ai-core
   (load-file "dev/src/clj/ai_connection.clj")
-  (load-file "dev/src/clj/ai_display.clj")
   (load-file "dev/src/clj/ai_basic_actions.clj")
   (load-file "dev/src/clj/ai_prompts.clj")
   (load-file "dev/src/clj/ai_card_actions.clj")
   (load-file "dev/src/clj/ai_runs.clj")
+  ;; Load ai_display last (depends on ai-basic-actions)
+  (load-file "dev/src/clj/ai_display.clj")
   ;; Finally load the facade that re-exports everything
   (load-file "dev/src/clj/ai_actions.clj")
   (catch Exception e
