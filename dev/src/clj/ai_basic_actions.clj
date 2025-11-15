@@ -30,7 +30,7 @@
         opp-clicks (get-in state [:game-state opp-side :click])
         log (get-in state [:game-state :log])
         recent-log (take-last 5 log)
-        opp-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
+        opp-ended? (some #(clojure.string/includes? (:text %) "is ending")
                         recent-log)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         is-first-turn? (and (or (nil? my-clicks) (= my-clicks 0))
