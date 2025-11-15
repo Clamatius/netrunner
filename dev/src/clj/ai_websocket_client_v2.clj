@@ -6,7 +6,8 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [differ.core :as differ]
-   [gniazdo.core :as ws])
+   [gniazdo.core :as ws]
+   [jinteki.cards :refer [all-cards]])
   (:import [java.net URLEncoder]
            [java.nio.channels FileChannel FileLock]
            [java.nio.file Files Paths StandardOpenOption]
@@ -659,19 +660,85 @@
      :status-emoji emoji
      :status-text text}))
 
+;; ============================================================================
+;; Enhanced Access Prompt Display
+;; ============================================================================
+
+(defn- access-prompt?
+  "Detect if prompt is an access prompt by checking for 'steal' or 'trash' keywords"
+  [prompt]
+  (when-let [choices (:choices prompt)]
+    (let [choice-values (map :value choices)
+          choice-text (clojure.string/lower-case (clojure.string/join " " choice-values))]
+      (or (clojure.string/includes? choice-text "steal")
+          (clojure.string/includes? choice-text "trash")))))
+
+(defn- extract-card-name
+  "Extract card name from access prompt message
+   Format: 'You accessed Regolith Mining License'"
+  [msg]
+  (when msg
+    (let [msg-lower (clojure.string/lower-case msg)]
+      (when (clojure.string/includes? msg-lower "you accessed")
+        ;; Extract everything after "you accessed " until end or period
+        (when-let [match (re-find #"(?i)you accessed\s+(.+?)(?:\.|$)" msg)]
+          (second match))))))
+
+(defn- show-access-prompt
+  "Display access prompt with enhanced card metadata"
+  [prompt]
+  (let [msg (:msg prompt)
+        card-name (extract-card-name msg)
+        card-data (when card-name (get @all-cards card-name))
+        choices (:choices prompt)
+        has-steal? (some #(clojure.string/includes?
+                           (clojure.string/lower-case (str (:value %)))
+                           "steal")
+                        choices)]
+
+    ;; Display header with card metadata
+    (if card-data
+      (let [card-type (or (:type card-data) "unknown")
+            trash-cost (:cost card-data)  ; trash cost is in :cost field
+            points (:agendapoints card-data)  ; agenda points
+            metadata (cond
+                       points (str "[" card-type ", points=" points "]")
+                       trash-cost (str "[" card-type ", trash=" trash-cost "]")
+                       :else (str "[" card-type "]"))]
+        (println (str "\n❓ You accessed: " card-name " " metadata)))
+      ;; Fallback if card not found in DB
+      (println (str "\n❓ " msg)))
+
+    ;; Show full card text ONLY when "steal" keyword present (nasty effects)
+    (when (and has-steal? card-data (:text card-data))
+      (println "⚠️  SPECIAL STEAL CONDITION:")
+      (println (str "   " (:text card-data))))
+
+    ;; Display choices
+    (when choices
+      (doseq [[idx choice] (map-indexed vector choices)]
+        (println (str "  [" idx "] " (:value choice)))))
+
+    prompt))
+
 (defn show-prompt
-  "Display current prompt in readable format"
+  "Display current prompt in readable format.
+   Detects access prompts and shows enhanced card metadata."
   []
   (if-let [prompt (get-prompt)]
-    (do
-      (println "\n🔔 PROMPT")
-      (println "Message:" (:msg prompt))
-      (println "Type:" (:prompt-type prompt))
-      (when-let [choices (:choices prompt)]
-        (println "Choices:")
-        (doseq [[idx choice] (map-indexed vector choices)]
-          (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
-      prompt)
+    (if (access-prompt? prompt)
+      ;; Enhanced display for access prompts
+      (show-access-prompt prompt)
+      ;; Standard display for other prompts
+      (do
+        (println "\n🔔 PROMPT")
+        (println "Message:" (:msg prompt))
+        (println "Type:" (:prompt-type prompt))
+        (when-let [choices (:choices prompt)]
+          (println "Choices:")
+          (doseq [[idx choice] (map-indexed vector choices)]
+            (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
+        prompt))
     (println "No active prompt")))
 
 ;; ============================================================================
