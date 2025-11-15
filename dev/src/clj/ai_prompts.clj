@@ -1,0 +1,228 @@
+(ns ai-prompts
+  "Prompt handling, choices, mulligan, and discard management"
+  (:require [ai-websocket-client-v2 :as ws]
+            [ai-core :as core]))
+
+;; ============================================================================
+;; Prompts & Choices
+;; ============================================================================
+
+(defn- format-choice
+  "Format a choice for display, handling different prompt formats"
+  [choice]
+  (cond
+    ;; Map with :value key (most common)
+    (and (map? choice) (:value choice))
+    (:value choice)
+
+    ;; Map without :value - try :label or show keys
+    (map? choice)
+    (or (:label choice)
+        (:title choice)
+        (str "Option with keys: " (keys choice)))
+
+    ;; String or number - show as-is
+    :else
+    (str choice)))
+
+(defn choose
+  "Make a choice from current prompt
+   Usage: (choose 0) ; choose first option
+          (choose \"uuid\") ; choose by UUID"
+  [choice]
+  (let [prompt (ws/get-prompt)]
+    (if prompt
+      (do
+        (ws/choose! choice)
+        (Thread/sleep 500))
+      (println "⚠️  No active prompt"))))
+
+(defn choose-option!
+  "Choose from prompt by index (side-aware)"
+  [index]
+  (let [state @ws/client-state
+        side (:side state)
+        gameid (:gameid state)
+        prompt (get-in state [:game-state (keyword side) :prompt-state])
+        choice (nth (:choices prompt) index nil)
+        choice-uuid (:uuid choice)]
+    (if choice-uuid
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                    (java.util.UUID/fromString gameid)
+                                    gameid)
+                           :command "choice"
+                           :args {:choice {:uuid choice-uuid}}})
+        (Thread/sleep 2000))
+      (println (str "❌ Invalid choice index: " index)))))
+
+(defn choose-by-value!
+  "Choose from prompt by matching value/label text (case-insensitive substring match).
+   Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")"
+  [value-text]
+  (let [state @ws/client-state
+        side (:side state)
+        prompt (get-in state [:game-state (keyword side) :prompt-state])
+        choices (:choices prompt)
+        value-lower (clojure.string/lower-case (str value-text))
+        ;; Find first choice whose value contains the search text
+        matching-idx (first
+                      (keep-indexed
+                       (fn [idx choice]
+                         (let [choice-val (or (:value choice) (:label choice) "")]
+                           (when (clojure.string/includes?
+                                  (clojure.string/lower-case (str choice-val))
+                                  value-lower)
+                             idx)))
+                       choices))]
+    (if matching-idx
+      (choose-option! matching-idx)
+      (do
+        (println (str "❌ No choice matching \"" value-text "\" found"))
+        (println "Available choices:")
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (println (str "  " idx ". " (format-choice choice))))))))
+
+(defn choose-card!
+  "Choose a card from selectable cards in current prompt by index.
+   Used for select prompts like 'Send a Message' (choose card to trash).
+
+   Usage: (choose-card! 0)  ; Select first selectable card
+          (choose-card! 2)  ; Select third selectable card"
+  [index]
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        prompt (get-in state [:game-state side :prompt-state])
+        selectable (:selectable prompt)
+        eid (:eid prompt)]
+    (cond
+      (not= "select" (:prompt-type prompt))
+      (do
+        (println "❌ No select prompt active")
+        (when prompt
+          (println (format "   Current prompt type: %s" (:prompt-type prompt)))))
+
+      (empty? selectable)
+      (println "❌ No selectable cards in current prompt")
+
+      (not (< -1 index (count selectable)))
+      (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
+                      index (count selectable) (dec (count selectable))))
+
+      :else
+      (let [card (nth selectable index)]
+        (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
+        (ws/select-card! card eid)
+        (Thread/sleep 1000)))))
+
+;; ============================================================================
+;; Mulligan
+;; ============================================================================
+
+(defn keep-hand
+  "Keep hand during mulligan"
+  []
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
+      ;; Mulligan prompts are just normal choice prompts
+      ;; Option 0 is always "Keep", option 1 is always "Mulligan"
+      (choose-option! 0)
+      (println "⚠️  No mulligan prompt active"))))
+
+(defn mulligan
+  "Mulligan (redraw) hand"
+  []
+  (let [prompt (ws/get-prompt)
+        prompt-type (:prompt-type prompt)]
+    (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
+      ;; Mulligan prompts are just normal choice prompts
+      ;; Option 0 is always "Keep", option 1 is always "Mulligan"
+      (choose-option! 1)
+      (println "⚠️  No mulligan prompt active"))))
+
+(defn auto-keep-mulligan
+  "Automatically handle mulligan by keeping hand"
+  []
+  (loop [checks 0]
+    (when (< checks 20)
+      (Thread/sleep 1000)
+      (let [prompt (ws/get-prompt)
+            prompt-type (:prompt-type prompt)]
+        (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
+          (keep-hand)
+          (recur (inc checks)))))))
+
+;; ============================================================================
+;; Discard Handling
+;; ============================================================================
+
+(defn discard-to-hand-size!
+  "Discard cards down to maximum hand size
+   Auto-detects side and discards until at or below max hand size"
+  []
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        discarded (ws/handle-discard-prompt! side)]
+    (when (= discarded 0)
+      (println "No cards to discard"))))
+
+(defn discard-specific-cards!
+  "Discard specific cards by index positions
+
+   Usage: (discard-specific-cards! [0 2 4])  ; Discard cards at indices 0, 2, 4"
+  [indices]
+  (let [state @ws/client-state
+        side (keyword (:side state))
+        gs (ws/get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])]
+    (if (and (= "select" (:prompt-type prompt))
+             (seq indices))
+      (let [cards-to-discard (map #(nth hand % nil) indices)
+            valid-cards (filter some? cards-to-discard)]
+        (doseq [card valid-cards]
+          (ws/select-card! card (:eid prompt))
+          (Thread/sleep 500))
+        (count valid-cards))
+      (do
+        (println "❌ No discard prompt active or no indices provided")
+        0))))
+
+(defn discard-by-names!
+  "Discard specific cards by their names
+   Supports [N] suffix for duplicates: \"Sure Gamble [1]\"
+
+   Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
+          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy"
+  [card-names]
+  (let [names-vec (if (vector? card-names) card-names [card-names])
+        state @ws/client-state
+        side (keyword (:side state))
+        gs (ws/get-game-state)
+        prompt (get-in gs [side :prompt-state])
+        hand (get-in gs [side :hand])]
+    (if (and (= "select" (:prompt-type prompt))
+             (seq names-vec))
+      (let [;; Find cards in hand matching the requested names with [N] support
+            cards-to-discard (remove nil?
+                               (for [card-ref names-vec]
+                                 (let [{:keys [title index]} (core/parse-card-reference card-ref)
+                                       matches (filter #(= (:title %) title) hand)]
+                                   (nth (vec matches) index nil))))
+            _ (when (seq cards-to-discard)
+                (println "Discarding:" (clojure.string/join ", " (map :title cards-to-discard))))]
+        (if (seq cards-to-discard)
+          (do
+            (doseq [card cards-to-discard]
+              (ws/select-card! card (:eid prompt))
+              (Thread/sleep 500))
+            (println "✅ Discarded" (count cards-to-discard) "card(s)")
+            (count cards-to-discard))
+          (do
+            (println "❌ No matching cards found in hand for:" (clojure.string/join ", " names-vec))
+            0)))
+      (do
+        (println "❌ No discard prompt active or no card names provided")
+        0))))
