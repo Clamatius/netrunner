@@ -166,30 +166,47 @@
       (check-auto-end-turn!))))
 
 (defn end-turn!
-  "End turn (validates all clicks used unless forced).
-   Prevents accidental game state corruption from ending turn with clicks remaining.
+  "End turn (validates all clicks used and hand size unless forced).
+   Prevents accidental game state corruption from ending turn with clicks remaining
+   or hand over maximum size.
 
    Options:
-     :force - If true, allows ending turn with clicks remaining
+     :force - If true, allows ending turn with clicks remaining or oversized hand
 
-   Usage: (end-turn!)              ; Normal - errors if clicks remain
-          (end-turn! :force true)  ; Forced - allows clicks remaining"
+   Usage: (end-turn!)              ; Normal - errors if clicks remain or hand oversized
+          (end-turn! :force true)  ; Forced - allows clicks remaining and oversized hand"
   [& {:keys [force] :or {force false}}]
   (let [state @ws/client-state
         side (:side state)
-        clicks (get-in state [:game-state (keyword side) :click])
+        side-kw (keyword side)
+        clicks (get-in state [:game-state side-kw :click])
+        hand-size (count (get-in state [:game-state side-kw :hand]))
+        max-hand-size (get-in state [:game-state side-kw :hand-size :total] 5)
         gameid (:gameid state)]
-    (if (and (> clicks 0) (not force))
+    (cond
       ;; ERROR: clicks remaining and not forced
+      (and (> clicks 0) (not force))
       (do
         (println (format "❌ ERROR: You still have %d click(s) remaining!" clicks))
         (println "   Use all clicks before ending turn, or use --force flag")
         (println "   Example: send_command end-turn --force")
         {:status :error :clicks-remaining clicks})
-      ;; OK: either no clicks or forced
+
+      ;; ERROR: hand oversized and not forced
+      (and (> hand-size max-hand-size) (not force))
+      (do
+        (println (format "❌ ERROR: Hand size %d exceeds maximum %d!" hand-size max-hand-size))
+        (println "   Use 'discard' command to reduce hand size before ending turn")
+        (println "   Example: send_command discard")
+        {:status :error :hand-oversized true :hand-size hand-size :max max-hand-size})
+
+      ;; OK: all validations passed or forced
+      :else
       (do
         (when (and (> clicks 0) force)
           (println (format "⚠️  FORCED: Ending turn with %d click(s) remaining" clicks)))
+        (when (and (> hand-size max-hand-size) force)
+          (println (format "⚠️  FORCED: Ending turn with oversized hand (%d/%d)" hand-size max-hand-size)))
         (ws/send-message! :game/action
                           {:gameid (if (string? gameid)
                                     (java.util.UUID/fromString gameid)
@@ -207,6 +224,7 @@
    Auto-ends when:
    - 0 clicks remaining
    - No active prompts
+   - Hand size within maximum
    - Not already ended (checks recent log)
 
    This prevents the 'forgot to end-turn' stuck state."
@@ -215,17 +233,33 @@
         side (keyword (:side state))
         clicks (get-in state [:game-state side :click])
         prompt (get-in state [:game-state side :prompt-state])
+        hand-size (count (get-in state [:game-state side :hand]))
+        max-hand-size (get-in state [:game-state side :hand-size :total] 5)
         log (get-in state [:game-state :log])
         recent-log (take 3 log)
         already-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
                             recent-log)]
 
-    (when (and (= clicks 0)
-               (nil? prompt)
-               (not already-ended?))
-      (println "")
-      (println "💡 Auto-ending turn (0 clicks, no prompts)")
-      (end-turn!))))
+    (cond
+      ;; Can't auto-end: hand oversized
+      (and (= clicks 0)
+           (nil? prompt)
+           (not already-ended?)
+           (> hand-size max-hand-size))
+      (do
+        (println "")
+        (println (format "⚠️  Cannot auto-end: hand size %d exceeds maximum %d" hand-size max-hand-size))
+        (println "   Use 'discard' command to reduce hand size, then end-turn"))
+
+      ;; Safe to auto-end
+      (and (= clicks 0)
+           (nil? prompt)
+           (not already-ended?)
+           (<= hand-size max-hand-size))
+      (do
+        (println "")
+        (println "💡 Auto-ending turn (0 clicks, no prompts)")
+        (end-turn!)))))
 
 (defn smart-end-turn!
   "Smart end-turn that checks if it's safe to end turn automatically.
