@@ -13,12 +13,22 @@
     (.printStackTrace e)
     (throw e)))
 
-(println "Loading actions")
-;; Load high-level actions
+(println "Loading actions modules...")
+;; Load the 7 action modules in dependency order
 (try
+  ;; First load ai-core (no dependencies except websocket client)
+  (load-file "dev/src/clj/ai_core.clj")
+  ;; Then load modules that depend on ai-core
+  (load-file "dev/src/clj/ai_connection.clj")
+  (load-file "dev/src/clj/ai_display.clj")
+  (load-file "dev/src/clj/ai_basic_actions.clj")
+  (load-file "dev/src/clj/ai_prompts.clj")
+  (load-file "dev/src/clj/ai_card_actions.clj")
+  (load-file "dev/src/clj/ai_runs.clj")
+  ;; Finally load the facade that re-exports everything
   (load-file "dev/src/clj/ai_actions.clj")
   (catch Exception e
-    (println "❌ FATAL ERROR loading ai_actions.clj:")
+    (println "❌ FATAL ERROR loading ai action modules:")
     (println (.getMessage e))
     (.printStackTrace e)
     (throw e)))
