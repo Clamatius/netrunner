@@ -280,8 +280,16 @@ case "$COMMAND" in
         execute '(ai-actions/status)'
         ;;
 
+    status-compact)
+        execute '(ai-actions/status-compact)'
+        ;;
+
     board)
         execute '(ai-actions/show-board)'
+        ;;
+
+    board-compact)
+        execute '(ai-actions/board-compact)'
         ;;
 
     hand)
@@ -308,6 +316,12 @@ case "$COMMAND" in
         N="${1:-20}"
         [[ ! "$N" =~ ^[0-9]+$ ]] && N=20
         execute "(ai-actions/show-log $N)"
+        ;;
+
+    log-compact)
+        N="${1:-5}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=5
+        execute "(ai-actions/show-log-compact $N)"
         ;;
 
     card-text)
@@ -339,6 +353,18 @@ case "$COMMAND" in
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
         show_last_log_if_enabled
+        ;;
+
+    wait-my-turn)
+        ensure_connection
+        info "Waiting for my turn..."
+        execute '(ai-actions/wait-for-my-turn)'
+        ;;
+
+    wait-run)
+        ensure_connection
+        info "Waiting for run (Corp only)..."
+        execute '(ai-actions/wait-for-run)'
         ;;
 
     indicate-action)

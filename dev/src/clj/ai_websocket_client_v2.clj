@@ -969,6 +969,66 @@
        nil)
      (println "No game log available"))))
 
+(defn show-status-compact
+  "Display ultra-compact game status (1-2 lines, no decorations)"
+  []
+  (let [lobby (:lobby-state @client-state)
+        gs (get-game-state)]
+    (if (and lobby (not (:started lobby)))
+      ;; Lobby compact status
+      (let [players (:players lobby)
+            player-count (count players)
+            ready? (and (= 2 player-count) (every? :deck players))]
+        (println (format "Lobby: %d/2 players%s"
+                        player-count
+                        (if ready? " [READY]" ""))))
+      ;; Game compact status
+      (let [my-side (:side @client-state)
+            active-side (active-player)
+            turn (turn-number)
+            prompt (get-prompt)
+            run-state (get-in gs [:run])
+
+            ;; Runner state
+            runner-credits (get-in gs [:runner :credit] 0)
+            runner-clicks (get-in gs [:runner :click] 0)
+            runner-hand (get-in gs [:runner :hand] [])
+            runner-ap (get-in gs [:runner :agenda-point] 0)
+
+            ;; Corp state
+            corp-credits (get-in gs [:corp :credit] 0)
+            corp-clicks (get-in gs [:corp :click] 0)
+            corp-hand (get-in gs [:corp :hand] [])
+            corp-ap (get-in gs [:corp :agenda-point] 0)
+
+            ;; Compact format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
+            my-stats (if (= my-side "runner")
+                      (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap)
+                      (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap))
+            opp-stats (if (= my-side "runner")
+                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap)
+                       (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap))
+            my-label (if (= my-side "runner") "R" "C")
+            opp-label (if (= my-side "runner") "C" "R")
+
+            prompt-str (cond
+                        run-state (format "Run:%s" (:server run-state))
+                        prompt (let [msg (:msg prompt)]
+                                (if (> (count msg) 30)
+                                  (str (subs msg 0 27) "...")
+                                  msg))
+                        :else "-")]
+
+        (println (format "T%d-%s | Me(%s):%s | Opp(%s):%s | %s"
+                        turn
+                        active-side
+                        my-label
+                        my-stats
+                        opp-label
+                        opp-stats
+                        prompt-str))
+        nil))))
+
 (defn announce-revealed-archives
   "Announce newly revealed cards in Archives from diff"
   [diff]

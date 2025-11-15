@@ -446,10 +446,158 @@
     (println (clojure.string/join "" (repeat 70 "=")))
     nil))
 
+(defn show-board-compact
+  "Display ultra-compact board state (2-5 lines, no decorations)"
+  []
+  (let [state @ws/client-state
+        gs (:game-state state)
+        corp-servers (:servers (:corp gs))
+        runner-rig (get-in gs [:runner :rig])]
+
+    ;; Corp servers - one line per server with activity
+    (print "Corp:")
+    (doseq [[server-key server] (sort-by first corp-servers)]
+      (let [server-name (name server-key)
+            ice-list (:ices server)
+            content-list (:content server)
+            rezzed-ice (filter :rezzed ice-list)
+            unrezzed-ice-count (- (count ice-list) (count rezzed-ice))
+            rezzed-content (filter :rezzed content-list)
+            unrezzed-content-count (- (count content-list) (count rezzed-content))]
+        (when (or (seq ice-list) (seq content-list))
+          (print (str " " (clojure.string/upper-case server-name) "["))
+          ;; ICE summary
+          (when (seq rezzed-ice)
+            (print (clojure.string/join "," (map #(format-card-name-with-index % ice-list) rezzed-ice))))
+          (when (> unrezzed-ice-count 0)
+            (print (if (seq rezzed-ice) "," ""))
+            (print (str unrezzed-ice-count "?ice")))
+          (print "|")
+          ;; Content summary
+          (when (seq rezzed-content)
+            (print (clojure.string/join "," (map #(format-card-name-with-index % content-list) rezzed-content))))
+          (when (> unrezzed-content-count 0)
+            (print (if (seq rezzed-content) "," ""))
+            (print (str unrezzed-content-count "?")))
+          (print "]"))))
+    (println)
+
+    ;; Runner rig - one line
+    (let [programs (:program runner-rig)
+          hardware (:hardware runner-rig)
+          resources (:resource runner-rig)]
+      (println (format "Rig: Prog[%d] HW[%d] Res[%d]%s"
+                      (count programs)
+                      (count hardware)
+                      (count resources)
+                      (if (seq programs)
+                        (str " - " (clojure.string/join "," (map #(format-card-name-with-index % programs) programs)))
+                        ""))))
+    nil))
+
 (defn show-log
   "Display game log (natural language event history)"
   ([] (ws/show-game-log 20))
   ([n] (ws/show-game-log n)))
+
+(defn show-log-compact
+  "Display ultra-compact game log (recent N entries, one line each, no decorations)"
+  ([] (show-log-compact 5))
+  ([n]
+   (let [state @ws/client-state
+         log (get-in state [:game-state :log])
+         recent (take-last n log)]
+     (doseq [entry recent]
+       (when (map? entry)
+         (let [text (clojure.string/replace (:text entry "") "[hr]" "")]
+           (println text))))
+     nil)))
+
+(defn status-compact
+  "Show ultra-compact game status (1 line)"
+  []
+  (ws/show-status-compact))
+
+(defn board-compact
+  "Show ultra-compact board state (2-3 lines)"
+  []
+  (show-board-compact))
+
+;; ============================================================================
+;; Snooze / Wait Commands (Token Optimization)
+;; ============================================================================
+
+(defn wait-for-my-turn
+  "Wait until it's my turn to act. Polls every 2s and returns when active.
+
+   Returns: {:status :ready :turn N :side \"Corp\"}
+
+   Usage: (wait-for-my-turn)"
+  []
+  (let [my-side (:side @ws/client-state)]
+    (println (str "💤 Waiting for my turn (" my-side ")..."))
+    (loop [checks 0]
+      (let [state (ws/get-game-state)
+            active-player (ws/active-player)
+            end-turn (get-in state [:end-turn])
+            clicks (get-in state [(keyword my-side) :click])]
+        (cond
+          ;; My turn and I have clicks
+          (and (= my-side active-player) (> clicks 0))
+          (do
+            (println (str "✅ Your turn! (" my-side " - " clicks " clicks remaining)"))
+            {:status :ready :turn (ws/turn-number) :side my-side :clicks clicks})
+
+          ;; End turn called, waiting for me to start
+          (and end-turn (not= my-side active-player))
+          (do
+            (println (str "✅ Ready to start turn! (use 'start-turn')"))
+            {:status :ready-to-start :turn (ws/turn-number) :side my-side})
+
+          ;; Both at 0 clicks
+          (and (= 0 (get-in state [:runner :click]))
+               (= 0 (get-in state [:corp :click])))
+          (do
+            (println (str "✅ Ready to start turn! (use 'start-turn')"))
+            {:status :ready-to-start :turn (ws/turn-number) :side my-side})
+
+          ;; Still waiting
+          :else
+          (do
+            (when (= 0 (mod checks 5))
+              (println (str "  ...waiting (opponent's turn: " active-player ")")))
+            (Thread/sleep 2000)
+            (recur (inc checks))))))))
+
+(defn wait-for-run
+  "Wait until Runner initiates a run, then return run details.
+   Corp-only command. Polls every 1s.
+
+   Returns: {:status :run-active :server \"HQ\" :phase \"approach-ice\"}
+
+   Usage: (wait-for-run)"
+  []
+  (let [my-side (:side @ws/client-state)]
+    (when (not= my-side "corp")
+      (println "❌ wait-for-run is Corp-only (use wait-for-my-turn as Runner)")
+      (throw (Exception. "wait-for-run is Corp-only")))
+
+    (println "💤 Waiting for Runner to initiate run...")
+    (loop [checks 0]
+      (let [state (ws/get-game-state)
+            run-state (get-in state [:run])]
+        (if run-state
+          (do
+            (println (str "🏃 Run started on " (:server run-state) " (phase: " (:phase run-state) ")"))
+            {:status :run-active
+             :server (:server run-state)
+             :phase (:phase run-state)
+             :position (:position run-state)})
+          (do
+            (when (= 0 (mod checks 10))
+              (println "  ...waiting for run"))
+            (Thread/sleep 1000)
+            (recur (inc checks))))))))
 
 (defn show-prompt
   "Display current prompt"
