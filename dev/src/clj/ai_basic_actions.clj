@@ -29,6 +29,7 @@
         my-clicks (get-in state [:game-state my-side :click])
         opp-clicks (get-in state [:game-state opp-side :click])
         active-player (get-in state [:game-state :active-player])
+        turn-number (get-in state [:game-state :turn] 0)
         log (get-in state [:game-state :log])
         recent-log (take-last 5 log)
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
@@ -38,7 +39,9 @@
                                (not (clojure.string/includes? (:text %) my-uid)))
                         recent-log)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
-        is-first-turn? (and (or (nil? my-clicks) (= my-clicks 0))
+        ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
+        is-first-turn? (and (= turn-number 0)
+                           (or (nil? my-clicks) (= my-clicks 0))
                            (or (nil? opp-clicks) (= opp-clicks 0))
                            (not opp-ended?))]
 
