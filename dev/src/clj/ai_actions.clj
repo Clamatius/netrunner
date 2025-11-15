@@ -1184,10 +1184,13 @@
              gameid (:gameid state)
              card-ref (create-card-ref card)
              card-title (:title card)
+             ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
+             normalized-server (when server
+                                (:normalized (normalize-server-name server)))
              ;; Both Corp and Runner use "play" command
              ;; Corp requires :server, Runner installs without :server arg
-             args (if server
-                   {:card card-ref :server server}
+             args (if normalized-server
+                   {:card card-ref :server normalized-server}
                    {:card card-ref})]
          (ws/send-message! :game/action
                            {:gameid (if (string? gameid)

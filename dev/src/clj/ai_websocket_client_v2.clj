@@ -476,7 +476,7 @@
          gateway-type "Beginner"
          room "casual"
          allow-spectator true
-         spectatorhands false
+         spectatorhands true  ; Default true for AI testing/debugging
          save-replay true}
     :as options}]
   (if-not title
