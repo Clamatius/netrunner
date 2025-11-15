@@ -1,38 +1,42 @@
 (ns ai-card-actions
   "Card manipulation - play, install, use abilities, rez, trash, advance, score"
   (:require [ai-websocket-client-v2 :as ws]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [ai-basic-actions :as basic]))
 
 ;; ============================================================================
 ;; Card Actions
 ;; ============================================================================
 
 (defn play-card!
-  "Play a card from hand by name or index
+  "Play a card from hand by name or index.
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
    Usage: (play-card! \"Sure Gamble\")
           (play-card! 0)"
   [name-or-index]
-  (let [card (core/find-card-in-hand name-or-index)]
-    (if card
-      (let [before-state (core/capture-state-snapshot)
-            state @ws/client-state
-            gameid (:gameid state)
-            card-ref (core/create-card-ref card)
-            card-title (:title card)]
-        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
-                           :command "play"
-                           :args {:card card-ref}})
-        ;; Wait and verify action appeared in log
-        (when (not (core/verify-action-in-log card-title 3000))
-          (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
-        (core/show-turn-indicator))
-      (println (str "❌ Card not found in hand: " name-or-index)))))
+  (when (basic/ensure-turn-started!)
+    (let [card (core/find-card-in-hand name-or-index)]
+      (if card
+        (let [before-state (core/capture-state-snapshot)
+              state @ws/client-state
+              gameid (:gameid state)
+              card-ref (core/create-card-ref card)
+              card-title (:title card)]
+          (ws/send-message! :game/action
+                            {:gameid (if (string? gameid)
+                                      (java.util.UUID/fromString gameid)
+                                      gameid)
+                             :command "play"
+                             :args {:card card-ref}})
+          ;; Wait and verify action appeared in log
+          (when (not (core/verify-action-in-log card-title 3000))
+            (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
+          (core/show-turn-indicator))
+        (println (str "❌ Card not found in hand: " name-or-index))))))
 
 (defn install-card!
-  "Install a card from hand by name or index
+  "Install a card from hand by name or index.
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
    For Corp: must specify server location
    For Runner: server is optional (auto-installs to appropriate location)
 
@@ -48,32 +52,33 @@
   ([name-or-index]
    (install-card! name-or-index nil))
   ([name-or-index server]
-   (let [card (core/find-card-in-hand name-or-index)]
-     (if card
-       (let [before-state (core/capture-state-snapshot)
-             state @ws/client-state
-             gameid (:gameid state)
-             card-ref (core/create-card-ref card)
-             card-title (:title card)
-             ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
-             normalized-server (when server
-                                (:normalized (core/normalize-server-name server)))
-             ;; Both Corp and Runner use "play" command
-             ;; Corp requires :server, Runner installs without :server arg
-             args (if normalized-server
-                   {:card card-ref :server normalized-server}
-                   {:card card-ref})]
-         (ws/send-message! :game/action
-                           {:gameid (if (string? gameid)
-                                     (java.util.UUID/fromString gameid)
-                                     gameid)
-                            :command "play"
-                            :args args})
-         ;; Wait and verify action appeared in log
-         (when (not (core/verify-action-in-log card-title 3000))
-           (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
-         (core/show-turn-indicator))
-       (println (str "❌ Card not found in hand: " name-or-index))))))
+   (when (basic/ensure-turn-started!)
+     (let [card (core/find-card-in-hand name-or-index)]
+       (if card
+         (let [before-state (core/capture-state-snapshot)
+               state @ws/client-state
+               gameid (:gameid state)
+               card-ref (core/create-card-ref card)
+               card-title (:title card)
+               ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
+               normalized-server (when server
+                                  (:normalized (core/normalize-server-name server)))
+               ;; Both Corp and Runner use "play" command
+               ;; Corp requires :server, Runner installs without :server arg
+               args (if normalized-server
+                     {:card card-ref :server normalized-server}
+                     {:card card-ref})]
+           (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "play"
+                              :args args})
+           ;; Wait and verify action appeared in log
+           (when (not (core/verify-action-in-log card-title 3000))
+             (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
+           (core/show-turn-indicator))
+         (println (str "❌ Card not found in hand: " name-or-index)))))))
 
 ;; ============================================================================
 ;; Card Abilities
@@ -278,33 +283,35 @@
           (println (str "❌ ICE not found installed: " ice-name)))))))
 
 (defn advance-card!
-  "Advance an installed Corp card (agenda, ICE, or asset)
+  "Advance an installed Corp card (agenda, ICE, or asset).
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
    Costs 1 click and 1 credit per advancement counter
 
    Usage: (advance-card! \"Project Vitruvius\")
           (advance-card! \"Oaktown Renovation\")"
   [card-name]
-  (let [state @ws/client-state
-        side (:side state)]
-    (if (not (core/side= "Corp" side))
-      (println "❌ Only Corp can advance cards")
-      (let [card (core/find-installed-corp-card card-name)]
-        (if card
-          (let [gameid (:gameid state)
-                card-ref {:cid (:cid card)
-                         :zone (:zone card)
-                         :side (:side card)
-                         :type (:type card)}]
-            (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
-                               :command "advance"
-                               :args {:card card-ref}})
-            ;; Wait and verify action appeared in log
-            (when (not (core/verify-action-in-log card-name 3000))
-              (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
-          (println (str "❌ Card not found installed: " card-name)))))))
+  (when (basic/ensure-turn-started!)
+    (let [state @ws/client-state
+          side (:side state)]
+      (if (not (core/side= "Corp" side))
+        (println "❌ Only Corp can advance cards")
+        (let [card (core/find-installed-corp-card card-name)]
+          (if card
+            (let [gameid (:gameid state)
+                  card-ref {:cid (:cid card)
+                           :zone (:zone card)
+                           :side (:side card)
+                           :type (:type card)}]
+              (ws/send-message! :game/action
+                                {:gameid (if (string? gameid)
+                                          (java.util.UUID/fromString gameid)
+                                          gameid)
+                                 :command "advance"
+                                 :args {:card card-ref}})
+              ;; Wait and verify action appeared in log
+              (when (not (core/verify-action-in-log card-name 3000))
+                (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
+            (println (str "❌ Card not found installed: " card-name))))))))
 
 (defn score-agenda!
   "Score an installed agenda (Corp only)

@@ -5,6 +5,120 @@
 
 ;; Forward declaration for function used in take-credit! and draw-card!
 (declare check-auto-end-turn!)
+(declare start-turn!)
+
+;; ============================================================================
+;; Auto-Start Turn Helpers
+;; ============================================================================
+
+(defn can-start-turn?
+  "Check if we CAN legally start our turn right now.
+
+   Returns map with:
+   - :can-start (boolean) - whether we can start turn
+   - :reason (keyword) - why we can/can't start
+
+   Reasons:
+   - :turn-already-started - we already have clicks
+   - :not-first-player - Runner trying to start first turn (Corp goes first)
+   - :first-turn - Corp can start first turn
+   - :opponent-has-clicks - opponent still has clicks remaining
+   - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
+   - :ready - all checks passed, can start turn"
+  []
+  (let [state @ws/client-state
+        my-side (keyword (:side state))
+        opp-side (if (= my-side :runner) :corp :runner)
+        my-clicks (get-in state [:game-state my-side :click])
+        opp-clicks (get-in state [:game-state opp-side :click])
+        turn-number (get-in state [:game-state :turn] 0)
+        log (get-in state [:game-state :log])
+        recent-log (take-last 5 log)
+        my-uid (:uid state)
+        opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
+                               (not (clojure.string/includes? (:text %) my-uid)))
+                        recent-log)
+        is-first-turn? (and (= turn-number 0)
+                           (or (nil? my-clicks) (= my-clicks 0))
+                           (or (nil? opp-clicks) (= opp-clicks 0))
+                           (not opp-ended?))]
+    (cond
+      ;; Already have clicks - turn already started
+      (and my-clicks (> my-clicks 0))
+      {:can-start false :reason :turn-already-started}
+
+      ;; First turn for Runner - can't start (Corp goes first)
+      (and is-first-turn? (= my-side :runner))
+      {:can-start false :reason :not-first-player}
+
+      ;; First turn for Corp - can start
+      is-first-turn?
+      {:can-start true :reason :first-turn}
+
+      ;; Opponent still has clicks
+      (and opp-clicks (> opp-clicks 0))
+      {:can-start false :reason :opponent-has-clicks}
+
+      ;; Opponent hasn't ended
+      (not opp-ended?)
+      {:can-start false :reason :opponent-not-ended}
+
+      ;; All checks passed
+      :else
+      {:can-start true :reason :ready})))
+
+(defn ensure-turn-started!
+  "Check if turn is started, and if not but we CAN start, auto-start it.
+
+   This implements auto-start-turn behavior:
+   - If turn already started (we have clicks), returns true
+   - If turn not started but we CAN start (opponent ended), auto-starts and returns true
+   - If turn not started and we CAN'T start, prints error and returns false
+
+   Returns:
+   - true if ready to proceed with action (turn is started)
+   - false if cannot proceed (turn not started and can't auto-start)"
+  []
+  (let [state @ws/client-state
+        my-side (keyword (:side state))
+        my-clicks (get-in state [:game-state my-side :click] 0)
+        can-start-result (can-start-turn?)]
+    (cond
+      ;; Already have clicks - turn started, ready to go
+      (> my-clicks 0)
+      true
+
+      ;; Can start turn - auto-start it
+      (:can-start can-start-result)
+      (do
+        (println "")
+        (println "💡 Auto-starting turn (opponent has ended, you haven't started yet)")
+        (let [result (start-turn!)]
+          (if (= (:status result) :success)
+            (do
+              (println "✅ Turn started successfully")
+              true)
+            (do
+              (println "❌ Auto-start failed")
+              false))))
+
+      ;; Cannot start turn - show specific error
+      :else
+      (do
+        (println "")
+        (case (:reason can-start-result)
+          :opponent-has-clicks
+          (println "❌ Cannot perform action: Opponent still has clicks remaining\n   Wait for their turn to end first")
+
+          :opponent-not-ended
+          (println "❌ Cannot perform action: Opponent hasn't ended their turn yet\n   Wait for opponent to complete their turn")
+
+          :not-first-player
+          (println "❌ Cannot perform action: Corp goes first\n   Wait for Corp to start and complete their turn")
+
+          ;; Default
+          (println "❌ Cannot perform action: Turn not ready"))
+        false))))
 
 ;; ============================================================================
 ;; Basic Actions
@@ -119,62 +233,65 @@
                        :args nil})))
 
 (defn take-credit!
-  "Click for credit (shows before/after)"
+  "Click for credit (shows before/after).
+   Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
-  (let [state @ws/client-state
-        side (:side state)
-        before-credits (get-in state [:game-state (keyword side) :credit])
-        before-clicks (get-in state [:game-state (keyword side) :click])
-        gameid (:gameid state)]
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "credit"
-                       :args nil})
-    (Thread/sleep 1500)
+  (when (ensure-turn-started!)
     (let [state @ws/client-state
           side (:side state)
-          after-credits (get-in state [:game-state (keyword side) :credit])
-          after-clicks (get-in state [:game-state (keyword side) :click])]
-      (core/show-before-after "💰 Credits" before-credits after-credits)
-      (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-      (core/show-turn-indicator)
-      (check-auto-end-turn!))))
+          before-credits (get-in state [:game-state (keyword side) :credit])
+          before-clicks (get-in state [:game-state (keyword side) :click])
+          gameid (:gameid state)]
+      (ws/send-message! :game/action
+                        {:gameid (if (string? gameid)
+                                  (java.util.UUID/fromString gameid)
+                                  gameid)
+                         :command "credit"
+                         :args nil})
+      (Thread/sleep 1500)
+      (let [state @ws/client-state
+            side (:side state)
+            after-credits (get-in state [:game-state (keyword side) :credit])
+            after-clicks (get-in state [:game-state (keyword side) :click])]
+        (core/show-before-after "💰 Credits" before-credits after-credits)
+        (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+        (core/show-turn-indicator)
+        (check-auto-end-turn!)))))
 
 (defn draw-card!
-  "Draw a card (shows before/after)"
+  "Draw a card (shows before/after).
+   Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
-  (let [state @ws/client-state
-        side (:side state)
-        before-hand (count (get-in state [:game-state (keyword side) :hand]))
-        before-clicks (get-in state [:game-state (keyword side) :click])
-        gameid (:gameid state)]
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "draw"
-                       :args nil})
-    (Thread/sleep 1500)
+  (when (ensure-turn-started!)
     (let [state @ws/client-state
           side (:side state)
-          after-hand (count (get-in state [:game-state (keyword side) :hand]))
-          after-clicks (get-in state [:game-state (keyword side) :click])]
-      (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
-      (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-      (check-auto-end-turn!))))
+          before-hand (count (get-in state [:game-state (keyword side) :hand]))
+          before-clicks (get-in state [:game-state (keyword side) :click])
+          gameid (:gameid state)]
+      (ws/send-message! :game/action
+                        {:gameid (if (string? gameid)
+                                  (java.util.UUID/fromString gameid)
+                                  gameid)
+                         :command "draw"
+                         :args nil})
+      (Thread/sleep 1500)
+      (let [state @ws/client-state
+            side (:side state)
+            after-hand (count (get-in state [:game-state (keyword side) :hand]))
+            after-clicks (get-in state [:game-state (keyword side) :click])]
+        (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
+        (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+        (check-auto-end-turn!)))))
 
 (defn end-turn!
-  "End turn (validates all clicks used and hand size unless forced).
-   Prevents accidental game state corruption from ending turn with clicks remaining
-   or hand over maximum size.
+  "End turn (validates all clicks used unless forced).
+   The game engine handles oversized hand by prompting for discard during end-turn.
 
    Options:
-     :force - If true, allows ending turn with clicks remaining or oversized hand
+     :force - If true, allows ending turn with clicks remaining
 
-   Usage: (end-turn!)              ; Normal - errors if clicks remain or hand oversized
-          (end-turn! :force true)  ; Forced - allows clicks remaining and oversized hand"
+   Usage: (end-turn!)              ; Normal - errors if clicks remain
+          (end-turn! :force true)  ; Forced - allows clicks remaining"
   [& {:keys [force] :or {force false}}]
   (let [state @ws/client-state
         side (:side state)
@@ -192,21 +309,13 @@
         (println "   Example: send_command end-turn --force")
         {:status :error :clicks-remaining clicks})
 
-      ;; ERROR: hand oversized and not forced
-      (and (> hand-size max-hand-size) (not force))
-      (do
-        (println (format "❌ ERROR: Hand size %d exceeds maximum %d!" hand-size max-hand-size))
-        (println "   Use 'discard' command to reduce hand size before ending turn")
-        (println "   Example: send_command discard")
-        {:status :error :hand-oversized true :hand-size hand-size :max max-hand-size})
-
       ;; OK: all validations passed or forced
       :else
       (do
         (when (and (> clicks 0) force)
           (println (format "⚠️  FORCED: Ending turn with %d click(s) remaining" clicks)))
-        (when (and (> hand-size max-hand-size) force)
-          (println (format "⚠️  FORCED: Ending turn with oversized hand (%d/%d)" hand-size max-hand-size)))
+        (when (> hand-size max-hand-size)
+          (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
         (ws/send-message! :game/action
                           {:gameid (if (string? gameid)
                                     (java.util.UUID/fromString gameid)
@@ -224,9 +333,9 @@
    Auto-ends when:
    - 0 clicks remaining
    - No active prompts
-   - Hand size within maximum
    - Not already ended (checks recent log)
 
+   Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
    This prevents the 'forgot to end-turn' stuck state."
   []
   (let [state @ws/client-state
@@ -241,23 +350,14 @@
                             recent-log)]
 
     (cond
-      ;; Can't auto-end: hand oversized
-      (and (= clicks 0)
-           (nil? prompt)
-           (not already-ended?)
-           (> hand-size max-hand-size))
-      (do
-        (println "")
-        (println (format "⚠️  Cannot auto-end: hand size %d exceeds maximum %d" hand-size max-hand-size))
-        (println "   Use 'discard' command to reduce hand size, then end-turn"))
-
       ;; Safe to auto-end
       (and (= clicks 0)
            (nil? prompt)
-           (not already-ended?)
-           (<= hand-size max-hand-size))
+           (not already-ended?))
       (do
         (println "")
+        (when (> hand-size max-hand-size)
+          (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
         (println "💡 Auto-ending turn (0 clicks, no prompts)")
         (end-turn!)))))
 

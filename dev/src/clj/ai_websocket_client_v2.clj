@@ -632,12 +632,20 @@
         my-turn (and my-side active-side
                      (= (clojure.string/lower-case my-side)
                         (clojure.string/lower-case active-side)))
+        ;; When both have 0 clicks, determine who should go next
+        ;; At turn 0: Corp goes first
+        ;; Otherwise: opposite of whoever is currently active
+        next-player (cond
+                     (= turn-num 0) "corp"
+                     (= active-side "corp") "runner"
+                     (= active-side "runner") "corp"
+                     :else "unknown")
 
         ;; Determine status
         [emoji text can-act]
         (cond
           both-zero-clicks
-          ["🟢" "Waiting to start turn" false]
+          ["🟢" (str "Waiting to start " next-player " turn") false]
 
           (not my-turn)
           ["⏳" (str "Waiting for " active-side) false]
@@ -882,6 +890,7 @@
       (let [my-side (:side @client-state)
             game-id (:gameid @client-state)
             active-side (active-player)
+            turn-num (turn-number)
             end-turn (get-in gs [:end-turn])
             prompt (get-prompt)
             prompt-type (:prompt-type prompt)
@@ -889,6 +898,12 @@
             runner-clicks (get-in gs [:runner :click])
             corp-clicks (get-in gs [:corp :click])
             both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
+            ;; Calculate who should go next when both have 0 clicks
+            next-player (cond
+                         (= turn-num 0) "corp"
+                         (= active-side "corp") "runner"
+                         (= active-side "runner") "corp"
+                         :else "unknown")
             ;; Detect if a player has left (game state exists but player data is nil)
             runner-missing? (and gs (nil? (get-in gs [:runner :user])))
             corp-missing? (and gs (nil? (get-in gs [:corp :user])))]
@@ -920,7 +935,7 @@
         ;; End-turn was called, and it's my side's turn to start (opponent just finished)
         (and end-turn (not= my-side active-side))
         (do
-          (println "Status: 🟢 Waiting to start turn (use 'start-turn' command)")
+          (println "Status: 🟢 Waiting to start" my-side "turn (use 'start-turn' command)")
           (println "💡 Use 'start-turn' to begin your turn"))
 
         ;; End-turn was called, waiting for opponent to start (I just finished)
@@ -929,7 +944,7 @@
 
         ;; Both players have 0 clicks but end-turn not called yet
         both-zero-clicks
-        (println "Status: 🟢 Waiting to start turn (use 'start-turn' command)")
+        (println "Status: 🟢 Waiting to start" next-player "turn (use 'start-turn' command)")
 
         ;; Waiting for opponent
         (not= my-side active-side)

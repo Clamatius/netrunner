@@ -2,14 +2,16 @@
   "Run mechanics - initiation, automation, and state management"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
-            [ai-prompts :as prompts]))
+            [ai-prompts :as prompts]
+            [ai-basic-actions :as basic]))
 
 ;; ============================================================================
 ;; Run Initiation
 ;; ============================================================================
 
 (defn run!
-  "Run on a server (Runner only)
+  "Run on a server (Runner only).
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
    Accepts flexible server names and normalizes them automatically.
 
    Central servers (case-insensitive):
@@ -26,38 +28,39 @@
           (run! \"remote1\")  ; Normalized to Server 1
           (run! \"r2\")      ; Normalized to Server 2"
   [server]
-  (let [state @ws/client-state
-        gameid (:gameid state)
-        initial-log-size (count (get-in @ws/client-state [:game-state :log]))
-        {:keys [normalized original changed?]} (core/normalize-server-name server)]
-    ;; Provide feedback if we normalized the input
-    (when changed?
-      (println (format "💡 Normalized '%s' → '%s'" original normalized)))
+  (when (basic/ensure-turn-started!)
+    (let [state @ws/client-state
+          gameid (:gameid state)
+          initial-log-size (count (get-in @ws/client-state [:game-state :log]))
+          {:keys [normalized original changed?]} (core/normalize-server-name server)]
+      ;; Provide feedback if we normalized the input
+      (when changed?
+        (println (format "💡 Normalized '%s' → '%s'" original normalized)))
 
-    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
-                       :command "run"
-                       :args {:server normalized}})
-    ;; Wait for "make a run on" log entry and echo it
-    (let [deadline (+ (System/currentTimeMillis) 5000)]
-      (loop []
-        (let [log (get-in @ws/client-state [:game-state :log])
-              new-entries (drop initial-log-size log)
-              run-entry (first (filter #(clojure.string/includes? (:text %) "make a run on")
-                                       new-entries))]
-          (cond
-            run-entry
-            (println "🏃" (:text run-entry))
+      (ws/send-message! :game/action
+                        {:gameid (if (string? gameid)
+                                  (java.util.UUID/fromString gameid)
+                                  gameid)
+                         :command "run"
+                         :args {:server normalized}})
+      ;; Wait for "make a run on" log entry and echo it
+      (let [deadline (+ (System/currentTimeMillis) 5000)]
+        (loop []
+          (let [log (get-in @ws/client-state [:game-state :log])
+                new-entries (drop initial-log-size log)
+                run-entry (first (filter #(clojure.string/includes? (:text %) "make a run on")
+                                         new-entries))]
+            (cond
+              run-entry
+              (println "🏃" (:text run-entry))
 
-            (< (System/currentTimeMillis) deadline)
-            (do
-              (Thread/sleep 200)
-              (recur))
+              (< (System/currentTimeMillis) deadline)
+              (do
+                (Thread/sleep 200)
+                (recur))
 
-            :else
-            (println "⚠️  Run command sent but no log confirmation (may have failed)")))))))
+              :else
+              (println "⚠️  Run command sent but no log confirmation (may have failed)"))))))))
 
 ;; ============================================================================
 ;; Continue-Run Helper Functions (Bug #12 Fix)
