@@ -39,15 +39,6 @@
                            (not opp-ended?))]
 
     (cond
-      ;; ERROR: Not the active player according to server (prevents turn stealing)
-      (and active-player
-           (not= (name my-side) active-player))
-      (do
-        (println "❌ ERROR: It's not your turn")
-        (println (format "   Active player: %s (you are %s)" active-player (name my-side)))
-        (println "   Wait for opponent to complete their turn")
-        {:status :error :reason :not-active-player :active-player active-player})
-
       ;; ERROR: Bug #11 fix - Runner trying to start first turn (Corp always goes first)
       (and is-first-turn?
            (= my-side :runner))
@@ -91,6 +82,16 @@
         (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
         (println "   Wait for opponent to complete their turn")
         {:status :error :reason :opponent-not-ended})
+
+      ;; ERROR: Not the active player (prevents turn stealing)
+      ;; Note: This check comes AFTER first-turn checks to allow Corp's first turn
+      (and active-player
+           (not= (name my-side) active-player))
+      (do
+        (println "❌ ERROR: It's not your turn")
+        (println (format "   Active player: %s (you are %s)" active-player (name my-side)))
+        (println "   Wait for opponent to complete their turn")
+        {:status :error :reason :not-active-player :active-player active-player})
 
       ;; OK: All validations passed
       :else
