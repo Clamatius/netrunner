@@ -14,7 +14,7 @@
    Usage: (play-card! \"Sure Gamble\")
           (play-card! 0)"
   [name-or-index]
-  (when (basic/ensure-turn-started!)
+  (if (basic/ensure-turn-started!)
     (let [card (core/find-card-in-hand name-or-index)]
       (if card
         (let [before-state (core/capture-state-snapshot)
@@ -29,10 +29,22 @@
                              :command "play"
                              :args {:card card-ref}})
           ;; Wait and verify action appeared in log
-          (when (not (core/verify-action-in-log card-title 3000))
-            (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)")))
-          (core/show-turn-indicator))
-        (println (str "❌ Card not found in hand: " name-or-index))))))
+          (if (core/verify-action-in-log card-title 3000)
+            (do
+              (core/show-turn-indicator)
+              {:status :success
+               :data {:card-title card-title}})
+            (do
+              (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)"))
+              (core/show-turn-indicator)
+              {:status :error
+               :reason (str "Play command for " card-title " not confirmed in game log")})))
+        (do
+          (println (str "❌ Card not found in hand: " name-or-index))
+          {:status :error
+           :reason (str "Card not found in hand: " name-or-index)})))
+    {:status :error
+     :reason "Failed to start turn"}))
 
 (defn install-card!
   "Install a card from hand by name or index.
@@ -52,7 +64,7 @@
   ([name-or-index]
    (install-card! name-or-index nil))
   ([name-or-index server]
-   (when (basic/ensure-turn-started!)
+   (if (basic/ensure-turn-started!)
      (let [card (core/find-card-in-hand name-or-index)]
        (if card
          (let [before-state (core/capture-state-snapshot)
@@ -75,10 +87,22 @@
                               :command "play"
                               :args args})
            ;; Wait and verify action appeared in log
-           (when (not (core/verify-action-in-log card-title 3000))
-             (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)")))
-           (core/show-turn-indicator))
-         (println (str "❌ Card not found in hand: " name-or-index)))))))
+           (if (core/verify-action-in-log card-title 3000)
+             (do
+               (core/show-turn-indicator)
+               {:status :success
+                :data {:card-title card-title :server normalized-server}})
+             (do
+               (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)"))
+               (core/show-turn-indicator)
+               {:status :error
+                :reason (str "Install command for " card-title " not confirmed in game log")})))
+         (do
+           (println (str "❌ Card not found in hand: " name-or-index))
+           {:status :error
+            :reason (str "Card not found in hand: " name-or-index)})))
+     {:status :error
+      :reason "Failed to start turn"})))
 
 ;; ============================================================================
 ;; Card Abilities

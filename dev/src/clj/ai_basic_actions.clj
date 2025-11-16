@@ -236,7 +236,7 @@
   "Click for credit (shows before/after).
    Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
-  (when (ensure-turn-started!)
+  (if (ensure-turn-started!)
     (let [state @ws/client-state
           side (:side state)
           before-credits (get-in state [:game-state (keyword side) :credit])
@@ -256,13 +256,20 @@
         (core/show-before-after "💰 Credits" before-credits after-credits)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (core/show-turn-indicator)
-        (check-auto-end-turn!)))))
+        (check-auto-end-turn!)
+        {:status :success
+         :data {:before-credits before-credits
+                :after-credits after-credits
+                :before-clicks before-clicks
+                :after-clicks after-clicks}}))
+    {:status :error
+     :reason "Failed to start turn"}))
 
 (defn draw-card!
   "Draw a card (shows before/after).
    Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
-  (when (ensure-turn-started!)
+  (if (ensure-turn-started!)
     (let [state @ws/client-state
           side (:side state)
           before-hand (count (get-in state [:game-state (keyword side) :hand]))
@@ -281,7 +288,14 @@
             after-clicks (get-in state [:game-state (keyword side) :click])]
         (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-        (check-auto-end-turn!)))))
+        (check-auto-end-turn!)
+        {:status :success
+         :data {:before-hand before-hand
+                :after-hand after-hand
+                :before-clicks before-clicks
+                :after-clicks after-clicks}}))
+    {:status :error
+     :reason "Failed to start turn"}))
 
 (defn end-turn!
   "End turn (validates all clicks used unless forced).

@@ -28,7 +28,7 @@
           (run! \"remote1\")  ; Normalized to Server 1
           (run! \"r2\")      ; Normalized to Server 2"
   [server]
-  (when (basic/ensure-turn-started!)
+  (if (basic/ensure-turn-started!)
     (let [state @ws/client-state
           gameid (:gameid state)
           initial-log-size (count (get-in @ws/client-state [:game-state :log]))
@@ -52,7 +52,10 @@
                                          new-entries))]
             (cond
               run-entry
-              (println "🏃" (:text run-entry))
+              (do
+                (println "🏃" (:text run-entry))
+                {:status :success
+                 :data {:server normalized :log-entry (:text run-entry)}})
 
               (< (System/currentTimeMillis) deadline)
               (do
@@ -60,7 +63,12 @@
                 (recur))
 
               :else
-              (println "⚠️  Run command sent but no log confirmation (may have failed)"))))))))
+              (do
+                (println "⚠️  Run command sent but no log confirmation (may have failed)")
+                {:status :error
+                 :reason "Run command sent but no log confirmation"}))))))
+    {:status :error
+     :reason "Failed to start turn"}))
 
 ;; ============================================================================
 ;; Continue-Run Helper Functions (Bug #12 Fix)

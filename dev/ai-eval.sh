@@ -48,20 +48,30 @@ if command -v bb &> /dev/null; then
           (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
             (let [in (java.io.PushbackInputStream. (io/input-stream sock))
                   out (io/output-stream sock)
-                  bytes->str #(when % (String. (bytes %)))]
+                  bytes->str #(when % (String. (bytes %)))
+                  result-value (atom nil)]
               (b/write-bencode out {\"op\" \"eval\" \"code\" (System/getenv \"NREPL_EXPR\")})
               (.flush out)
               (loop []
                 (when-let [response (b/read-bencode in)]
                   (when-let [val (get response \"value\")]
-                    (print (bytes->str val)))
+                    (let [val-str (bytes->str val)]
+                      (print val-str)
+                      (reset! result-value val-str)))
                   (when-let [out-msg (get response \"out\")]
                     (print (bytes->str out-msg)))
                   (when-let [err (get response \"err\")]
                     (binding [*out* *err*]
                       (print (bytes->str err))))
                   (when-not (get response \"status\")
-                    (recur))))))"
+                    (recur))))
+              ;; Check if result has :status :error and exit with code 1
+              (when @result-value
+                (try
+                  (let [result (read-string @result-value)]
+                    (when (and (map? result) (= :error (:status result)))
+                      (System/exit 1)))
+                  (catch Exception _ nil)))))"
 else
     # Fallback to lein repl :connect (slower, for compatibility)
     timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
