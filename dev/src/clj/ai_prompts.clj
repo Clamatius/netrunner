@@ -128,8 +128,14 @@
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
-      (choose-option! 0)
-      (println "⚠️  No mulligan prompt active"))))
+      (do
+        (choose-option! 0)
+        {:status :success
+         :data {:action :keep-hand}})
+      (do
+        (println "⚠️  No mulligan prompt active")
+        {:status :error
+         :reason "No mulligan prompt active"}))))
 
 (defn mulligan
   "Mulligan (redraw) hand"
@@ -139,8 +145,14 @@
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
-      (choose-option! 1)
-      (println "⚠️  No mulligan prompt active"))))
+      (do
+        (choose-option! 1)
+        {:status :success
+         :data {:action :mulligan}})
+      (do
+        (println "⚠️  No mulligan prompt active")
+        {:status :error
+         :reason "No mulligan prompt active"}))))
 
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
