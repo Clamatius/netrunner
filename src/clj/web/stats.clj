@@ -2,7 +2,7 @@
   (:require
    [cheshire.core :as json]
    [cljc.java-time.instant :as inst]
-   [clojure.string :refer [lower-case]]
+   [clojure.string :as str :refer [lower-case]]
    [game.utils :refer [dissoc-in]]
    [jinteki.cards :refer [all-cards]]
    [monger.collection :as mc]
@@ -44,7 +44,9 @@
 (defn stats-for-user
   "Get statistics for a given user id"
   [db user-id]
-  (mc/find-one-as-map db :users {:_id (->object-id user-id)} ["stats"]))
+  ;; Skip stats queries for AI players (their IDs are strings like "ai-player-corp")
+  (when-not (and (string? user-id) (str/starts-with? user-id "ai-player-"))
+    (mc/find-one-as-map db :users {:_id (->object-id user-id)} ["stats"])))
 
 (defn build-stats-kw
   "Take a stats prefix and add a side to it"
@@ -86,7 +88,9 @@
 (defn inc-game-stats
   "Update user's game stats for a given counter"
   [db user-id record]
-  (mc/update db :users {:_id (->object-id user-id)} {$inc record}))
+  ;; Skip stats updates for AI players (their IDs are strings like "ai-player-corp")
+  (when-not (and (string? user-id) (str/starts-with? user-id "ai-player-"))
+    (mc/update db :users {:_id (->object-id user-id)} {$inc record})))
 
 (defn game-record-start
   [p]
