@@ -572,21 +572,24 @@
 (defn runner-state [] (get-in @client-state [:game-state :runner]))
 (defn corp-state [] (get-in @client-state [:game-state :corp]))
 
+;; Core game state accessors - single source of truth
+(defn credits-for-side [side] (get-in @client-state [:game-state side :credit]))
+(defn clicks-for-side [side] (get-in @client-state [:game-state side :click]))
+(defn hand-count-for-side [side] (get-in @client-state [:game-state side :hand-count]))
+
+;; Context-aware helpers (based on current client's side)
 (defn my-credits []
-  (let [side (keyword (:side @client-state))]
-    (get-in @client-state [:game-state side :credit])))
+  (credits-for-side (keyword (:side @client-state))))
 
 (defn my-clicks []
-  (let [side (keyword (:side @client-state))]
-    (get-in @client-state [:game-state side :click])))
+  (clicks-for-side (keyword (:side @client-state))))
 
 (defn my-hand []
   (let [side (keyword (:side @client-state))]
     (get-in @client-state [:game-state side :hand])))
 
 (defn my-hand-count []
-  (let [side (keyword (:side @client-state))]
-    (get-in @client-state [:game-state side :hand-count])))
+  (hand-count-for-side (keyword (:side @client-state))))
 
 (defn my-installed []
   (let [side (keyword (:side @client-state))]
@@ -595,9 +598,14 @@
       ;; Corp doesn't have a "rig", return nil or servers
       nil)))
 
-(defn corp-credits [] (get-in @client-state [:game-state :corp :credit]))
-(defn corp-clicks [] (get-in @client-state [:game-state :corp :click]))
-(defn corp-hand-count [] (get-in @client-state [:game-state :corp :hand-count]))
+;; Absolute side helpers (always return specific side's data)
+(defn runner-credits [] (credits-for-side :runner))
+(defn runner-clicks [] (clicks-for-side :runner))
+(defn runner-hand-count [] (hand-count-for-side :runner))
+
+(defn corp-credits [] (credits-for-side :corp))
+(defn corp-clicks [] (clicks-for-side :corp))
+(defn corp-hand-count [] (hand-count-for-side :corp))
 
 (defn get-prompt
   "Get current prompt for our side, if any"
@@ -967,7 +975,7 @@
         (println "  Position:" pos)))
 
     (println "\n--- RUNNER ---")
-    (println "Credits:" (my-credits))
+    (println "Credits:" (runner-credits))
     (let [clicks runner-clicks]
       (if (and (= "runner" active-side) (zero? clicks) (not end-turn))
         (do

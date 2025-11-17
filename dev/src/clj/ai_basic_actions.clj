@@ -359,8 +359,11 @@
         hand-size (count (get-in state [:game-state side :hand]))
         max-hand-size (get-in state [:game-state side :hand-size :total] 5)
         log (get-in state [:game-state :log])
-        recent-log (take 3 log)
-        already-ended? (some #(clojure.string/includes? (:text %) "is ending their turn")
+        recent-log (take-last 3 log)
+        my-uid (:uid state)
+        ;; Check if WE already ended (not opponent) - prevents double auto-end
+        already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
+                                   (clojure.string/includes? (:text %) my-uid))
                             recent-log)]
 
     (cond
