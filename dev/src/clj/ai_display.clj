@@ -9,6 +9,20 @@
 ;; Status & Information
 ;; ============================================================================
 
+(defn- format-counters
+  "Format counters on a card for display. Returns string like '[3adv][2virus]' or empty string if no counters."
+  [card]
+  (let [adv (:advance-counter card 0)
+        counters (:counter card {})
+        parts (cond-> []
+                (pos? adv) (conj (str adv "adv"))
+                (:power counters) (conj (str (:power counters) "power"))
+                (:virus counters) (conj (str (:virus counters) "virus"))
+                (:credit counters) (conj (str (:credit counters) "credits")))]
+    (if (seq parts)
+      (str " [" (clojure.string/join "][" parts) "]")
+      "")))
+
 (defn status
   "Show current game status"
   []
@@ -21,9 +35,9 @@
         gs (:game-state state)
         corp-servers (:servers (:corp gs))
         runner-rig (get-in gs [:runner :rig])
-        corp-deck (get-in gs [:corp :deck])
+        corp-deck-count (get-in gs [:corp :deck-count])
         corp-discard (get-in gs [:corp :discard])
-        runner-deck (get-in gs [:runner :deck])
+        runner-deck-count (get-in gs [:runner :deck-count])
         runner-discard (get-in gs [:runner :discard])]
     (println "\n" (clojure.string/join "" (repeat 70 "=")))
     (println "🎮 GAME BOARD")
@@ -44,21 +58,24 @@
               (let [rezzed (:rezzed ice)
                     title (if rezzed (core/format-card-name-with-index ice ice-list) (:title ice))
                     subtype (or (first (clojure.string/split (or (:subtype ice) "") #" - ")) "?")
+                    strength (:current-strength ice)
                     status-icon (if rezzed "🔴" "⚪")]
                 (println (str "  ICE #" idx ": " status-icon " "
                              (if rezzed title "Unrezzed ICE")
-                             (when rezzed (str " (" subtype ")"))))))
+                             (when rezzed (str " (" subtype ")"))
+                             (when (and rezzed strength) (str " (str: " strength ")"))
+                             (format-counters ice)))))
             (println "  (No ICE)"))
 
           ;; Show Content (assets/agendas)
           (when (seq content-list)
             (let [rezzed-content (filter :rezzed content-list)
-                  unrezzed-count (- (count content-list) (count rezzed-content))]
+                  unrezzed-content (filter (complement :rezzed) content-list)]
               (doseq [card rezzed-content]
                 (let [card-name (core/format-card-name-with-index card content-list)]
-                  (println (str "  Content: 🔴 " card-name " (" (:type card) ")"))))
-              (when (> unrezzed-count 0)
-                (println (str "  Content: " unrezzed-count " unrezzed card(s)"))))))))
+                  (println (str "  Content: 🔴 " card-name " (" (:type card) ")" (format-counters card)))))
+              (doseq [card unrezzed-content]
+                (println (str "  Content: ⚪ Unrezzed card" (format-counters card))))))
 
     ;; Runner Rig
     (println "\n--- RUNNER RIG ---")
@@ -71,7 +88,8 @@
           (doseq [prog programs]
             (let [prog-name (core/format-card-name-with-index prog programs)]
               (println (str "  • " prog-name
-                           (when-let [strength (:current-strength prog)] (str " (str: " strength ")")))))))
+                           (when-let [strength (:current-strength prog)] (str " (str: " strength ")"))
+                           (format-counters prog))))))
         (println "\n💾 Programs: (none)"))
 
       (if (seq hardware)
@@ -79,7 +97,7 @@
           (println "\n🔧 Hardware:")
           (doseq [hw hardware]
             (let [hw-name (core/format-card-name-with-index hw hardware)]
-              (println (str "  • " hw-name)))))
+              (println (str "  • " hw-name (format-counters hw))))))
         (println "🔧 Hardware: (none)"))
 
       (if (seq resources)
@@ -87,16 +105,16 @@
           (println "\n📦 Resources:")
           (doseq [res resources]
             (let [res-name (core/format-card-name-with-index res resources)]
-              (println (str "  • " res-name)))))
+              (println (str "  • " res-name (format-counters res))))))
         (println "📦 Resources: (none)")))
 
     ;; Deck/Discard counts
     (println "\n--- DECK STATUS ---")
-    (println (str "Corp Deck: " (count corp-deck) " | Discard: " (count corp-discard)))
-    (println (str "Runner Deck: " (count runner-deck) " | Discard: " (count runner-discard)))
+    (println (str "Corp Deck: " corp-deck-count " | Discard: " (count corp-discard)))
+    (println (str "Runner Deck: " runner-deck-count " | Discard: " (count runner-discard)))
 
     (println (clojure.string/join "" (repeat 70 "=")))
-    nil))
+    nil)))
 
 (defn show-board-compact
   "Display ultra-compact board state (2-5 lines, no decorations)"
@@ -672,7 +690,7 @@
                       (if (and clicks (pos? clicks)) (if (= side :corp) "4" "2") "0")))
       {:playable-cards card-count
        :playable-abilities ability-count
-       :clicks clicks})))
+       :clicks clicks}))))
 
 (defn help
   "Show available commands"
@@ -710,4 +728,4 @@
   (println "\nDebugging:")
   (println "  (inspect-state)                    - Show raw state")
   (println "  (inspect-prompt)                   - Show raw prompt")
-  (println "  (help)                             - This help\n"))
+  (println "  (help)                             - This help\n")))
