@@ -35,9 +35,8 @@ if [ -f /tmp/ai-client-${CLIENT_NAME}.pid ]; then
         exit 1
     fi
 else
-    echo "⚠️  Warning: AI Client REPL '$CLIENT_NAME' may not be running"
-    echo "   Start it with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
-    echo "   Attempting connection anyway..."
+    # Silently continue - PID file may not exist but client could still be running
+    : # no-op
 fi
 
 # Use Babashka if available (much faster), otherwise fall back to lein
