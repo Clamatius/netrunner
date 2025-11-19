@@ -530,6 +530,41 @@
              :action :auto-declined-rez
              :ice ice-title})))
 
+      ;; Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs during encounter
+      (and (= side "corp")
+           (= run-phase "encounter-ice")
+           my-prompt
+           (:fire-unbroken strategy))
+      (let [run (get-in state [:game-state :run])
+            server (:server run)
+            position (:position run)
+            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+            ice-count (count ice-list)
+            ice-index (- ice-count position)
+            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                          (nth ice-list ice-index nil))
+            ice-title (:title current-ice "ICE")]
+        (if current-ice
+          (do
+            (println (format "🤖 Strategy: --fire-unbroken, firing subs on %s" ice-title))
+            (let [card-ref {:cid (:cid current-ice)
+                           :zone (:zone current-ice)
+                           :side (:side current-ice)
+                           :type (:type current-ice)}]
+              (ws/send-message! :game/action
+                               {:gameid (if (string? gameid)
+                                         (java.util.UUID/fromString gameid)
+                                         gameid)
+                                :command "unbroken-subroutines"
+                                :args {:card card-ref}})
+              {:status :action-taken
+               :action :auto-fired-subs
+               :ice ice-title}))
+          (do
+            (println "⚠️  Could not find ICE for fire-unbroken")
+            {:status :decision-required
+             :prompt my-prompt})))
+
       ;; Priority 2: CRITICAL BUG FIX #12 - Pause at approach-ice with unrezzed ICE
       ;; Runner's prompt says "Continue to Movement" but that would bypass corp's rez decision!
       ;; Must check game state directly, not trust the prompt text.
