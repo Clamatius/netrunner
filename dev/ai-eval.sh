@@ -62,9 +62,19 @@ if command -v bb &> /dev/null; then
                   (when-let [err (get response \"err\")]
                     (binding [*out* *err*]
                       (print (bytes->str err))))
+                  (when-let [ex (get response \"ex\")]
+                    (binding [*out* *err*]
+                      (println (str \"Exception: \" (bytes->str ex))))
+                    (reset! result-value :error))
+                  (when-let [root-ex (get response \"root-ex\")]
+                    (binding [*out* *err*]
+                      (println (str \"Root Exception: \" (bytes->str root-ex))))
+                    (reset! result-value :error))
                   (when-not (get response \"status\")
                     (recur))))
-              ;; Check if result has :status :error and exit with code 1
+              ;; Check if result indicates error and exit with code 1
+              (when (= @result-value :error)
+                (System/exit 1))
               (when @result-value
                 (try
                   (let [result (read-string @result-value)]

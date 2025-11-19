@@ -235,22 +235,52 @@ EOF
 # Execute command via ai-eval.sh
 execute() {
     local expr="$1"
+    local wrapped=false
+    
+    # Wrap expression in with-out-str to capture stdout if it's a display command
+    # This is a heuristic: if it starts with (ai-actions/show- or (ai-actions/list-, wrap it
+    if [[ "$expr" == *"(ai-actions/show-"* ]] || [[ "$expr" == *"(ai-actions/list-"* ]] || [[ "$expr" == *"(ai-actions/hand"* ]] || [[ "$expr" == *"(ai-actions/status"* ]] || [[ "$expr" == *"(ai-actions/board"* ]]; then
+        # echo "DEBUG: Wrapping display command: $expr" >&2
+        expr="(with-out-str $expr)"
+        wrapped=true
+    fi
+
     if [[ -n "$CLIENT_NAME" ]]; then
         # Multi-client mode: pass client name and port
-        TIMEOUT="$TIMEOUT" "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" "$expr"
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" "$expr")
     else
         # Single-client mode: use default (backward compatible)
-        TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr"
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr")
     fi
+    RET=$?
+    
+    # If we wrapped it, the result is a string literal like "output\n". We need to unquote it.
+    # If it wasn't wrapped, just print the result as is.
+    if [[ "$wrapped" == "true" ]]; then
+        # Remove surrounding quotes and interpret escapes
+        # Check if result is at least 2 chars (quoted)
+        if [[ ${#RESULT} -ge 2 ]]; then
+            LEN=$((${#RESULT}-2))
+            echo -e "${RESULT:1:$LEN}"
+        else
+            echo "$RESULT"
+        fi
+    else
+        echo "$RESULT"
+    fi
+    
+    return $RET
 }
 
 # Show last log entry if SHOW_LAST_LOG is enabled
 show_last_log_if_enabled() {
+    local RET=$?
     if [[ "$SHOW_LAST_LOG" == "1" ]]; then
         echo ""
         echo -e "${BLUE}--- Last Log Entry ---${NC}"
         execute "(ai-actions/show-log 1)"
     fi
+    return $RET
 }
 
 # Main command dispatcher
@@ -808,6 +838,6 @@ case "$COMMAND" in
 
     # Unknown command
     *)
-        error "Unknown command: $COMMAND\nRun './send_command help' for usage"
+        error "Unknown command: $COMMAND"
         ;;
 esac
