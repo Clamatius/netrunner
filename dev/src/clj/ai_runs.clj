@@ -6,13 +6,125 @@
             [ai-basic-actions :as basic]))
 
 ;; ============================================================================
+;; Run Strategy State
+;; ============================================================================
+
+;; Atom holding current run strategy flags.
+;; Reset when new run starts, inherited by continue-run calls.
+;;
+;; Structure:
+;; {:full-break true/false      ; Runner: auto-break all ICE
+;;  :no-rez true/false          ; Corp: don't rez anything
+;;  :rez #{\"Ice Wall\" ...}    ; Corp: only rez these ICE names
+;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
+;;  :force true/false}          ; Bypass all smart checks
+(defonce run-strategy (atom {}))
+
+(defn reset-strategy!
+  "Clear run strategy (call when run ends)"
+  []
+  (reset! run-strategy {}))
+
+(defn set-strategy!
+  "Merge new strategy flags into current strategy"
+  [flags]
+  (swap! run-strategy merge flags))
+
+(defn get-strategy
+  "Get current run strategy"
+  []
+  @run-strategy)
+
+;; ============================================================================
+;; Flag Parsing
+;; ============================================================================
+
+(defn parse-run-flags
+  "Parse command-line style flags from arguments.
+   Returns {:server \"HQ\" :flags {:full-break true :no-continue false ...}}
+
+   Supported flags:
+   --full-break      : Runner auto-breaks all ICE
+   --no-rez          : Corp doesn't rez anything
+   --rez <ice-name>  : Corp only rezzes specified ICE
+   --fire-unbroken   : Corp auto-fires unbroken subs
+   --no-continue     : Don't auto-continue after run start
+   --force           : Bypass all smart checks (for continue-run)
+
+   Usage:
+   (parse-run-flags [\"hq\" \"--full-break\"])
+   => {:server \"hq\" :flags {:full-break true}}
+
+   (parse-run-flags [\"remote1\" \"--rez\" \"Ice Wall\" \"--fire-unbroken\"])
+   => {:server \"remote1\" :flags {:rez #{\"Ice Wall\"} :fire-unbroken true}}"
+  [args]
+  (loop [remaining args
+         server nil
+         flags {}]
+    (if (empty? remaining)
+      {:server server :flags flags}
+      (let [arg (first remaining)
+            rest-args (rest remaining)]
+        (cond
+          ;; Server name (first non-flag arg)
+          (and (nil? server) (not (clojure.string/starts-with? arg "--")))
+          (recur rest-args arg flags)
+
+          ;; Boolean flags
+          (= arg "--full-break")
+          (recur rest-args server (assoc flags :full-break true))
+
+          (= arg "--no-rez")
+          (recur rest-args server (assoc flags :no-rez true))
+
+          (= arg "--fire-unbroken")
+          (recur rest-args server (assoc flags :fire-unbroken true))
+
+          (= arg "--no-continue")
+          (recur rest-args server (assoc flags :no-continue true))
+
+          (= arg "--force")
+          (recur rest-args server (assoc flags :force true))
+
+          ;; --rez <ice-name> (takes argument)
+          (= arg "--rez")
+          (if (empty? rest-args)
+            (do
+              (println "⚠️  --rez requires ICE name argument")
+              (recur rest-args server flags))
+            (let [ice-name (first rest-args)
+                  current-rez-set (get flags :rez #{})]
+              (recur (rest rest-args)
+                     server
+                     (assoc flags :rez (conj current-rez-set ice-name)))))
+
+          ;; Unknown flag
+          (clojure.string/starts-with? arg "--")
+          (do
+            (println (format "⚠️  Unknown flag: %s" arg))
+            (recur rest-args server flags))
+
+          ;; Extra positional arg (error)
+          :else
+          (do
+            (println (format "⚠️  Unexpected argument: %s (server already set to %s)" arg server))
+            (recur rest-args server flags)))))))
+
+;; ============================================================================
+;; Forward Declarations
+;; ============================================================================
+
+(declare continue-run!)
+
+;; ============================================================================
 ;; Run Initiation
 ;; ============================================================================
 
 (defn run!
-  "Run on a server (Runner only).
+  "Run on a server with optional strategy flags (Runner only).
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
    Accepts flexible server names and normalizes them automatically.
+   By default, auto-continues run until a decision is needed.
 
    Central servers (case-insensitive):
    - hq, HQ → HQ
@@ -23,19 +135,45 @@
    - remote1, remote 1, r1, server1, server 1 → Server 1
    - remote2, r2, server2 → Server 2
 
-   Usage: (run! \"hq\")      ; Normalized to HQ
-          (run! \"R&D\")     ; Already correct
-          (run! \"remote1\")  ; Normalized to Server 1
-          (run! \"r2\")      ; Normalized to Server 2"
-  [server]
+   Strategy flags:
+   --full-break      : Runner auto-breaks all ICE (no pauses for break decisions)
+   --no-rez          : Corp doesn't rez anything (auto-declines all rez opportunities)
+   --rez <ice-name>  : Corp only rezzes specified ICE, declines others
+   --fire-unbroken   : Corp auto-fires all unbroken subroutines
+   --no-continue     : Don't auto-continue after run initiation (stop at first decision)
+
+   Usage:
+   (run! \"hq\")                        ; Auto-continues till decision needed
+   (run! \"remote1\" \"--full-break\")   ; Auto-breaks all ICE
+   (run! \"hq\" \"--no-continue\")       ; Stop after initiation (rare)
+   (run! \"remote1\" \"--rez\" \"Ice Wall\") ; Corp only rezzes Ice Wall"
+  [& args]
   (if (basic/ensure-turn-started!)
-    (let [state @ws/client-state
+    (let [{:keys [server flags]} (parse-run-flags args)
+          _ (when (nil? server)
+              (throw (ex-info "No server specified" {:args args})))
+          state @ws/client-state
           gameid (:gameid state)
           initial-log-size (count (get-in @ws/client-state [:game-state :log]))
           {:keys [normalized original changed?]} (core/normalize-server-name server)]
+
+      ;; Reset and set strategy for this run
+      (reset-strategy!)
+      (set-strategy! (dissoc flags :no-continue))  ; Store all except :no-continue
+
       ;; Provide feedback if we normalized the input
       (when changed?
         (println (format "💡 Normalized '%s' → '%s'" original normalized)))
+
+      ;; Show active strategy flags
+      (when (seq (dissoc flags :no-continue))
+        (println (format "🎯 Strategy: %s"
+                        (clojure.string/join ", "
+                                           (map (fn [[k v]]
+                                                  (if (set? v)
+                                                    (str (name k) " " (clojure.string/join "," v))
+                                                    (name k)))
+                                                (dissoc flags :no-continue))))))
 
       (ws/send-message! :game/action
                         {:gameid (if (string? gameid)
@@ -43,6 +181,7 @@
                                   gameid)
                          :command "run"
                          :args {:server normalized}})
+
       ;; Wait for "make a run on" log entry and echo it
       (let [deadline (+ (System/currentTimeMillis) 5000)]
         (loop []
@@ -54,8 +193,13 @@
               run-entry
               (do
                 (println "🏃" (:text run-entry))
+                ;; Auto-continue unless --no-continue flag set
+                (when-not (:no-continue flags)
+                  (println "⏩ Auto-continuing...")
+                  (Thread/sleep 500)  ; Brief pause for state sync
+                  (continue-run!))
                 {:status :success
-                 :data {:server normalized :log-entry (:text run-entry)}})
+                 :data {:server normalized :log-entry (:text run-entry) :flags flags}})
 
               (< (System/currentTimeMillis) deadline)
               (do
@@ -210,6 +354,7 @@
 (defn continue-run!
   "Stateless run handler - examines current state, takes ONE action, returns.
    Call repeatedly until run completes or decision required.
+   Now supports strategy flags via run strategy state.
 
    STATELESS DESIGN: No recursion, no local state. Uses game state as source of truth.
    Each call examines current state and either:
@@ -218,10 +363,17 @@
    - Returns :decision-required (pause, user must decide)
    - Returns :run-complete (all done)
 
+   Strategy flags (from run! or passed directly):
+   --full-break      : Runner auto-breaks all ICE
+   --no-rez          : Corp auto-declines all rez opportunities
+   --rez <ice-name>  : Corp only rezzes specified ICE
+   --fire-unbroken   : Corp auto-fires unbroken subs
+   --force           : Bypass ALL smart checks, just send continue
+
    🛑 MUST PAUSE (requires decision):
    - Opponent pressed WAIT/indicate-action
-   - Corp has rez opportunity (approach-ice with unrezzed ICE)
-   - Runner has 2+ real choices (not just Continue/Done)
+   - Corp has rez opportunity (approach-ice with unrezzed ICE) [unless --no-rez/--rez]
+   - Runner has 2+ real choices (not just Continue/Done) [unless --full-break]
    - Waiting for opponent's decision during run
 
    ⚠️ WANT to PAUSE (important events):
@@ -247,10 +399,14 @@
 
    Usage:
      (continue-run!)  ; Take one step
-     ; Check status, if :action-taken, call again
-     ; If :waiting-for-opponent, wait for game diff, then call again"
-  []
-  (let [state @ws/client-state
+     (continue-run! \"--force\")  ; Bypass all checks (old continue behavior)
+     (continue-run! \"--no-rez\")  ; Auto-decline all rez"
+  [& args]
+  (let [;; Parse flags if provided, merge with run strategy
+        {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
+        strategy (merge (get-strategy) flags)
+
+        state @ws/client-state
         side (:side state)
         gameid (:gameid state)
         run-phase (get-in state [:game-state :run :phase])
@@ -271,12 +427,108 @@
                                        recent-log))]
 
     (cond
+      ;; Priority 0: --force flag bypasses ALL checks
+      (:force strategy)
+      (do
+        (println "⚡ FORCE mode - bypassing all checks, sending continue")
+        (ws/send-message! :game/action
+                         {:gameid (if (string? gameid)
+                                   (java.util.UUID/fromString gameid)
+                                   gameid)
+                          :command "continue"
+                          :args nil})
+        {:status :action-taken
+         :action :forced-continue})
       ;; Priority 1: Opponent pressed WAIT button (indicate-action)
       (opponent-indicated-action? state side)
       (do
         (println "⏸️  PAUSED - Opponent pressed WAIT button")
         {:status :waiting-for-opponent
          :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")})
+
+      ;; Priority 1.5: Corp rez strategy - auto-handle rez decisions
+      (and (= side "corp")
+           (= run-phase "approach-ice")
+           my-prompt
+           (or (:no-rez strategy) (:rez strategy)))
+      (let [run (get-in state [:game-state :run])
+            server (:server run)
+            position (:position run)
+            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+            ice-count (count ice-list)
+            ice-index (- ice-count position)
+            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                          (nth ice-list ice-index nil))
+            ice-title (:title current-ice "ICE")
+            ice-rezzed? (:rezzed current-ice)
+            should-rez? (and (not (:no-rez strategy))
+                            (:rez strategy)
+                            (contains? (:rez strategy) ice-title)
+                            (not ice-rezzed?))]  ;; Only rez if not already rezzed
+        (cond
+          ;; --no-rez: always decline
+          (:no-rez strategy)
+          (do
+            (println (format "🤖 Strategy: --no-rez, declining %s" ice-title))
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "continue"
+                              :args nil})
+            {:status :action-taken
+             :action :auto-declined-rez
+             :ice ice-title})
+
+          ;; --rez <ice-name>: rez if in set, decline otherwise
+          should-rez?
+          (do
+            (println (format "🤖 Strategy: --rez, rezzing %s" ice-title))
+            (if current-ice
+              (let [card-ref {:cid (:cid current-ice)
+                             :zone (:zone current-ice)
+                             :side (:side current-ice)
+                             :type (:type current-ice)}]
+                (ws/send-message! :game/action
+                                 {:gameid (if (string? gameid)
+                                           (java.util.UUID/fromString gameid)
+                                           gameid)
+                                  :command "rez"
+                                  :args {:card card-ref}})
+                {:status :action-taken
+                 :action :auto-rezzed
+                 :ice ice-title})
+              (do
+                (println (format "⚠️  Could not find ICE to rez: %s" ice-title))
+                {:status :decision-required
+                 :prompt my-prompt})))
+
+          ;; --rez set exists but this ICE is already rezzed: just continue
+          (and (:rez strategy) ice-rezzed?)
+          (do
+            (println (format "   → ICE %s already rezzed, continuing" ice-title))
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "continue"
+                              :args nil})
+            {:status :action-taken
+             :action :sent-continue})
+
+          ;; --rez set exists but this ICE not in it: decline
+          :else
+          (do
+            (println (format "🤖 Strategy: --rez (not %s), declining" ice-title))
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "continue"
+                              :args nil})
+            {:status :action-taken
+             :action :auto-declined-rez
+             :ice ice-title})))
 
       ;; Priority 2: CRITICAL BUG FIX #12 - Pause at approach-ice with unrezzed ICE
       ;; Runner's prompt says "Continue to Movement" but that would bypass corp's rez decision!
@@ -428,3 +680,20 @@
         {:status :unexpected-state
          :prompt my-prompt
          :run-phase run-phase}))))
+
+;; ============================================================================
+;; Convenience Wrapper
+;; ============================================================================
+
+(defn continue!
+  "Alias for continue-run with --force flag.
+   Bypasses all smart checks and just sends continue command.
+   Use for manual control when you know what you're doing.
+
+   This is the old 'continue' primitive behavior - passes priority immediately
+   without checking for decisions, opponent actions, or important events.
+
+   Usage:
+     (continue!)  ; Just send continue, no checks"
+  []
+  (continue-run! "--force"))

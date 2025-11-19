@@ -523,9 +523,18 @@ case "$COMMAND" in
     run)
         ensure_connection
         SERVER="${1:-}"
-        [[ -z "$SERVER" ]] && error "Usage: send_command run <server>"
+        shift
+        [[ -z "$SERVER" ]] && error "Usage: send_command run <server> [--flags...]"
+
+        # Build flag arguments for varargs call
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+
         info "Running on $SERVER..."
-        execute "(ai-actions/run! \"$SERVER\")"
+        execute "(ai-actions/run! \"$SERVER\"$FLAGS_ARGS)"
         show_last_log_if_enabled
         ;;
 
@@ -657,8 +666,15 @@ case "$COMMAND" in
 
     continue-run)
         ensure_connection
+        # Build flag arguments for varargs call
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+
         info "Auto-handling run (both players)..."
-        execute '(ai-actions/continue-run!)'
+        execute "(ai-actions/continue-run!$FLAGS_ARGS)"
         show_last_log_if_enabled
         ;;
 

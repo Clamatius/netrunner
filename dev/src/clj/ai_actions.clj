@@ -149,3 +149,4 @@
 (def waiting-reason runs/waiting-reason)
 (def can-auto-continue? runs/can-auto-continue?)
 (def continue-run! runs/continue-run!)
+(def continue! runs/continue!)

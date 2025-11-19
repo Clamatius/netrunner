@@ -366,7 +366,8 @@
   []
   (let [state @ws/client-state
         side (:side state)
-        prompt (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state])]
+        prompt (when side
+                 (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
     (if prompt
       (let [has-choices (seq (:choices prompt))
             has-selectable (seq (:selectable prompt))]
