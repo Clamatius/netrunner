@@ -27,6 +27,26 @@
   (ws/show-games))
 
 ;; ============================================================================
+;; Helpers
+;; ============================================================================
+
+(defn- wait-for-condition
+  "Wait up to timeout-ms for predicate to return true"
+  [pred timeout-ms label]
+  (print (str "⏳ Waiting for " label "..."))
+  (flush)
+  (loop [waited 0]
+    (if (pred)
+      (do (println " Done!") true)
+      (if (>= waited timeout-ms)
+        (do (println (str "\n❌ Timed out waiting for: " label))
+            false)
+        (do (print ".")
+            (flush)
+            (Thread/sleep 200)
+            (recur (+ waited 200)))))))
+
+;; ============================================================================
 ;; Game Connection
 ;; ============================================================================
 
@@ -41,8 +61,8 @@
                 (java.util.UUID/fromString gameid)
                 gameid)]
      (ws/join-game! {:gameid uuid :side side}))
-   (Thread/sleep 2000)
-   (if (ws/in-game?)
+   
+   (if (wait-for-condition ws/in-game? 5000 "game join")
      (ws/show-status)
      (println "❌ Failed to join game"))))
 
@@ -51,10 +71,9 @@
    Usage: (resync-game! \"game-uuid\")"
   [gameid]
   (ws/resync-game! gameid)
-  (Thread/sleep 2000)
-  (if (ws/in-game?)
-    (ws/show-status)
-    (println "❌ Failed to resync game state")))
+  (if (wait-for-condition ws/in-game? 5000 "state resync")
+     (ws/show-status)
+     (println "❌ Failed to resync game state")))
 
 (defn lobby-ready-to-start?
   "Check if the current lobby is ready to start a game.

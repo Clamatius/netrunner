@@ -76,6 +76,7 @@
                   (println (str "  Content: 🔴 " card-name " (" (:type card) ")" (format-counters card)))))
               (doseq [card unrezzed-content]
                 (println (str "  Content: ⚪ Unrezzed card" (format-counters card))))))
+          )))
 
     ;; Runner Rig
     (println "\n--- RUNNER RIG ---")
@@ -114,7 +115,7 @@
     (println (str "Runner Deck: " runner-deck-count " | Discard: " (count runner-discard)))
 
     (println (clojure.string/join "" (repeat 70 "=")))
-    nil)))
+    nil))
 
 (defn show-board-compact
   "Display ultra-compact board state (2-5 lines, no decorations)"
@@ -288,7 +289,7 @@
   []
   (let [state @ws/client-state
         side (:side state)
-        hand (get-in state [:game-state (keyword side) :hand])]
+        hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
     (when hand
       (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
       (doseq [[idx card] (map-indexed vector hand)]
@@ -308,7 +309,7 @@
   []
   (let [state @ws/client-state
         side (:side state)
-        credits (get-in state [:game-state (keyword side) :credit])]
+        credits (get-in state [:game-state (keyword (clojure.string/lower-case side)) :credit])]
     (println "💰 Credits:" credits)
     credits))
 
@@ -317,7 +318,7 @@
   []
   (let [state @ws/client-state
         side (:side state)
-        clicks (get-in state [:game-state (keyword side) :click])]
+        clicks (get-in state [:game-state (keyword (clojure.string/lower-case side)) :click])]
     (println "⏱️  Clicks:" clicks)
     clicks))
 
@@ -365,7 +366,7 @@
   []
   (let [state @ws/client-state
         side (:side state)
-        prompt (get-in state [:game-state (keyword side) :prompt-state])]
+        prompt (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state])]
     (if prompt
       (let [has-choices (seq (:choices prompt))
             has-selectable (seq (:selectable prompt))]
@@ -590,7 +591,7 @@
    Useful for AI decision-making - shows exactly what can be done right now"
   []
   (let [state @ws/client-state
-        side (keyword (:side state))
+        side (keyword (clojure.string/lower-case (:side state)))
         gs (:game-state state)
         my-state (get gs side)
         clicks (:click my-state)
@@ -690,7 +691,7 @@
                       (if (and clicks (pos? clicks)) (if (= side :corp) "4" "2") "0")))
       {:playable-cards card-count
        :playable-abilities ability-count
-       :clicks clicks}))))
+       :clicks clicks})))
 
 (defn help
   "Show available commands"
@@ -728,4 +729,4 @@
   (println "\nDebugging:")
   (println "  (inspect-state)                    - Show raw state")
   (println "  (inspect-prompt)                   - Show raw prompt")
-  (println "  (help)                             - This help\n")))
+  (println "  (help)                             - This help\n"))
