@@ -987,8 +987,53 @@
       (println "Hand:" hand-count "cards")
       (when (and (= "runner" my-side) (> hand-count max-hand-size))
         (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
-    (let [agenda-points (get-in gs [:runner :agenda-point] 0)]
-      (println "Agenda Points:" agenda-points "/ 7"))
+    (let [agenda-points (get-in gs [:runner :agenda-point] 0)
+          ;; Calculate agenda tracking for Runner only
+          corp-scored (get-in gs [:corp :agenda-point] 0)
+          runner-stolen agenda-points
+          ;; Determine total agenda points from deck size
+          hq-size (get-in gs [:corp :hand-count] 0)
+          rd-size (get-in gs [:corp :deck-count] 0)
+          discard-size (count (get-in gs [:corp :discard] []))
+          initial-deck-size (+ rd-size hq-size discard-size
+                             (* corp-scored 1))
+          total-agendas (cond
+                         (<= initial-deck-size 44) 18
+                         (<= initial-deck-size 49) 20
+                         (<= initial-deck-size 54) 22
+                         :else (+ 22 (* 2 (quot (- initial-deck-size 50) 5))))
+          accounted (+ corp-scored runner-stolen)
+          missing (- total-agendas accounted)
+          ;; Calculate expected agendas drawn
+          turn-num (turn-number)
+          ;; Conservative estimate: mandatory draws only (1 per turn after turn 0)
+          cards-drawn (max 0 turn-num)
+          agenda-density (if (pos? initial-deck-size)
+                          (/ (float total-agendas) initial-deck-size)
+                          0)
+          expected-drawn (int (* cards-drawn agenda-density))
+          ;; Count remote servers - only unrezzed cards in roots (exclude ice, rezzed assets/upgrades)
+          servers (get-in gs [:corp :servers] {})
+          remotes (filter #(and (string? (key %))
+                              (re-matches #"remote\d+" (key %)))
+                        servers)
+          ;; Filter to unrezzed cards only in remote roots
+          unrezzed-remotes (filter (fn [[_ server]]
+                                    (let [content (get-in server [:content])]
+                                      (some #(not (:rezzed %)) content)))
+                                  remotes)
+          unrezzed-count (count unrezzed-remotes)
+          ;; Count cards with advancement counters (among unrezzed cards)
+          advanced-count (count (filter (fn [[_ server]]
+                                         (let [content (get-in server [:content])]
+                                           (some #(and (not (:rezzed %))
+                                                      (pos? (get-in % [:advance-counter] 0)))
+                                                content)))
+                                       remotes))]
+      (if (= "runner" my-side)
+        (println (format "Agenda Points: %d / 7  │  Missing: %d (Drawn: ~%d, HQ: %d, R&D: %d, Remotes: %d/%d)"
+                        agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count))
+        (println "Agenda Points:" agenda-points "/ 7")))
     (println "\n--- CORP ---")
     (println "Credits:" (corp-credits))
     (let [clicks corp-clicks]
