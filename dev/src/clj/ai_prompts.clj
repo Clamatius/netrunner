@@ -48,6 +48,7 @@
         choice-uuid (:uuid choice)]
     (if choice-uuid
       (do
+        (println (str "✅ Chose: " (:value choice)))
         (ws/send-message! :game/action
                           {:gameid (if (string? gameid)
                                     (java.util.UUID/fromString gameid)
@@ -77,7 +78,9 @@
                              idx)))
                        choices))]
     (if matching-idx
-      (choose-option! matching-idx)
+      (let [choice (nth choices matching-idx)]
+        (println (str "✅ Chose: " (:value choice)))
+        (choose-option! matching-idx))
       (do
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")
@@ -124,11 +127,15 @@
   "Keep hand during mulligan"
   []
   (let [prompt (ws/get-prompt)
-        prompt-type (:prompt-type prompt)]
+        prompt-type (:prompt-type prompt)
+        state @ws/client-state
+        side (keyword (:side state))
+        hand-size (count (get-in state [:game-state side :hand]))]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (do
+        (println (str "✅ Kept starting hand (" hand-size " cards)"))
         (choose-option! 0)
         {:status :success
          :data {:action :keep-hand}})
@@ -141,11 +148,15 @@
   "Mulligan (redraw) hand"
   []
   (let [prompt (ws/get-prompt)
-        prompt-type (:prompt-type prompt)]
+        prompt-type (:prompt-type prompt)
+        state @ws/client-state
+        side (keyword (:side state))
+        hand-size (count (get-in state [:game-state side :hand]))]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (do
+        (println (str "🔄 Mulligan - redrawing " hand-size " cards"))
         (choose-option! 1)
         {:status :success
          :data {:action :mulligan}})

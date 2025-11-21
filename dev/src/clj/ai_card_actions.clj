@@ -19,6 +19,9 @@
       (if card
         (let [before-state (core/capture-state-snapshot)
               state @ws/client-state
+              side (keyword (:side state))
+              before-credits (get-in state [:game-state side :credit])
+              before-clicks (get-in state [:game-state side :click])
               gameid (:gameid state)
               card-ref (core/create-card-ref card)
               card-title (:title card)]
@@ -30,7 +33,15 @@
                              :args {:card card-ref}})
           ;; Wait and verify action appeared in log
           (if (core/verify-action-in-log card-title 3000)
-            (do
+            (let [after-state @ws/client-state
+                  after-credits (get-in after-state [:game-state side :credit])
+                  after-clicks (get-in after-state [:game-state side :click])
+                  credit-delta (- after-credits before-credits)]
+              (println (str "🃏 Played: " card-title))
+              (when (not= credit-delta 0)
+                (println (str "   💰 Credits: " before-credits " → " after-credits
+                             " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
+              (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
               (core/show-turn-indicator)
               {:status :success
                :data {:card-title card-title}})
@@ -69,9 +80,12 @@
        (if card
          (let [before-state (core/capture-state-snapshot)
                state @ws/client-state
+               side (keyword (:side state))
+               before-clicks (get-in state [:game-state side :click])
                gameid (:gameid state)
                card-ref (core/create-card-ref card)
                card-title (:title card)
+               card-type (:type card)
                ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
                normalized-server (when server
                                   (:normalized (core/normalize-server-name server)))
@@ -88,7 +102,12 @@
                               :args args})
            ;; Wait and verify action appeared in log
            (if (core/verify-action-in-log card-title 3000)
-             (do
+             (let [after-state @ws/client-state
+                   after-clicks (get-in after-state [:game-state side :click])]
+               (if normalized-server
+                 (println (str "📥 Installed: " card-title " on " normalized-server))
+                 (println (str "📥 Installed: " card-title " (" card-type ")")))
+               (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                (core/show-turn-indicator)
                {:status :success
                 :data {:card-title card-title :server normalized-server}})
@@ -149,7 +168,13 @@
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
-        (Thread/sleep 1500))
+        (Thread/sleep 1500)
+        (let [ability-label (when abilities
+                             (let [ab (nth abilities ability-index nil)]
+                               (:label ab)))]
+          (if ability-label
+            (println (str "⚡ Used ability: " card-name " - " ability-label))
+            (println (str "⚡ Used ability #" ability-index " on " card-name)))))
       (println (str "❌ Card not found installed: " card-name)))))
 
 (defn use-runner-ability!
@@ -197,14 +222,17 @@
             card-ref {:cid (:cid card)
                      :zone (:zone card)
                      :side (:side card)
-                     :type (:type card)}]
+                     :type (:type card)}
+            card-type (:type card)
+            card-zone (:zone card)]
         (ws/send-message! :game/action
                           {:gameid (if (string? gameid)
                                     (java.util.UUID/fromString gameid)
                                     gameid)
                            :command "trash"
                            :args {:card card-ref}})
-        (Thread/sleep 1500))
+        (Thread/sleep 1500)
+        (println (str "🗑️  Trashed: " card-name " (" card-type ")")))
       (println (str "❌ Card not found installed: " card-name)))))
 
 (defn rez-card!
@@ -216,7 +244,8 @@
           (rez-card! \"Palisade [1]\")"
   [card-name]
   (let [state @ws/client-state
-        side (:side state)]
+        side (:side state)
+        before-credits (get-in state [:game-state :corp :credit])]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can rez cards")
       (let [card (core/find-installed-corp-card card-name)]
@@ -225,7 +254,8 @@
                 card-ref {:cid (:cid card)
                          :zone (:zone card)
                          :side (:side card)
-                         :type (:type card)}]
+                         :type (:type card)}
+                rez-cost (:cost card)]
             (ws/send-message! :game/action
                               {:gameid (if (string? gameid)
                                         (java.util.UUID/fromString gameid)
@@ -233,7 +263,12 @@
                                :command "rez"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
-            (when (not (core/verify-action-in-log card-name 3000))
+            (if (core/verify-action-in-log card-name 3000)
+              (let [after-state @ws/client-state
+                    after-credits (get-in after-state [:game-state :corp :credit])]
+                (println (str "🔴 Rezzed: " card-name))
+                (when rez-cost
+                  (println (str "   💰 Cost: " rez-cost "₵ (remaining: " after-credits "₵)"))))
               (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
@@ -319,7 +354,11 @@
           side (:side state)]
       (if (not (core/side= "Corp" side))
         (println "❌ Only Corp can advance cards")
-        (let [card (core/find-installed-corp-card card-name)]
+        (let [card (core/find-installed-corp-card card-name)
+              before-counters (or (:advance-counter card) 0)
+              before-credits (get-in state [:game-state :corp :credit])
+              before-clicks (get-in state [:game-state :corp :click])
+              advancement-requirement (:advancementcost card)]
           (if card
             (let [gameid (:gameid state)
                   card-ref {:cid (:cid card)
@@ -333,7 +372,17 @@
                                  :command "advance"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log
-              (when (not (core/verify-action-in-log card-name 3000))
+              (if (core/verify-action-in-log card-name 3000)
+                (let [after-state @ws/client-state
+                      updated-card (core/find-installed-corp-card card-name)
+                      after-counters (or (:advance-counter updated-card) 0)
+                      after-credits (get-in after-state [:game-state :corp :credit])
+                      after-clicks (get-in after-state [:game-state :corp :click])]
+                  (println (str "⏫ Advanced: " card-name " (" after-counters
+                               (when advancement-requirement (str "/" advancement-requirement))
+                               " counters)"))
+                  (core/show-before-after "💰 Credits" before-credits after-credits)
+                  (core/show-before-after "⏱️  Clicks" before-clicks after-clicks))
                 (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
             (println (str "❌ Card not found installed: " card-name))))))))
 
@@ -345,7 +394,8 @@
           (score-agenda! \"Send a Message\")"
   [card-name]
   (let [state @ws/client-state
-        side (:side state)]
+        side (:side state)
+        before-score (get-in state [:game-state :corp :agenda-point])]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can score agendas")
       (let [card (core/find-installed-corp-card card-name)]
@@ -355,7 +405,8 @@
                   card-ref {:cid (:cid card)
                            :zone (:zone card)
                            :side (:side card)
-                           :type (:type card)}]
+                           :type (:type card)}
+                  agenda-points (:agendapoints card)]
               (ws/send-message! :game/action
                                 {:gameid (if (string? gameid)
                                           (java.util.UUID/fromString gameid)
@@ -363,7 +414,13 @@
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
-              (when (not (core/verify-action-in-log card-name 3000))
+              (if (core/verify-action-in-log card-name 3000)
+                (let [after-state @ws/client-state
+                      after-score (get-in after-state [:game-state :corp :agenda-point])
+                      runner-score (get-in after-state [:game-state :runner :agenda-point])]
+                  (println (str "🎯 Scored: " card-name
+                               (when agenda-points (str " (+" agenda-points " points)"))))
+                  (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner")))
                 (println (str "⚠️  Sent score command for: " card-name " - but action not confirmed in game log (may have failed)"))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
           (println (str "❌ Card not found installed: " card-name)))))))
