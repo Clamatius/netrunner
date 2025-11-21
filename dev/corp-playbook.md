@@ -36,14 +36,14 @@
 
 ### Always Be Jamming (ABJ)
 
-**Core strategy:** Install cards in remotes constantly. Make Runner check everything.
+**Core strategy:** Install cards in defended remotes constantly. Make Runner check everything and pay a tax to do so.
 
 **Why this works:**
 - Runner can't tell agendas from assets from traps
 - Every check costs Runner tempo (clicks, credits, damage)
 - Forces Runner into difficult decisions
 - Some checks will be too expensive → you score
-- Single remote has highest tax but e.g. dual allows drip and scoring
+- Single remote has highest tax but e.g. dual allows separate drip and scoring remotes
 
 ---
 

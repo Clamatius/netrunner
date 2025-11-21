@@ -396,6 +396,21 @@ Maintain hand size > 3 (flatline prevention)
 
 ## Economic Warfare
 
+### Credit Types and Payment
+
+**Temporary credit effects:**
+- Provide credits for current run/action only
+- Automatically offered in payment prompts during runs
+- Game uses temporary credits first, then normal pool
+- Check card text for phrases like "gain X credits to spend during this run"
+
+**Hosted credits (on installed cards):**
+- Credits stored on the card itself (shown as counters on the card)
+- Must manually use card ability to transfer to your credit pool
+- NOT automatically offered in payment prompts
+- Check card text for the transfer ability (usually requires a click)
+- **Use ability BEFORE running** if you need those credits for break/trash costs
+
 **Credit planning before runs:**
 ```
 Target: Remote with 2 ICE (Palisade + Brân 1.0)
