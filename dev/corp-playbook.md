@@ -34,33 +34,46 @@
 - 1 click → install ICE protecting key server = **EXCELLENT**
 - 1 click → advance agenda toward scoring = **EXCELLENT**
 
-### Always Be Jamming (ABJ)
+### Key Corp Deck Type Strats (often hybrids of these concepts)
 
-**Core strategy:** Install cards in defended remotes constantly. Make Runner check everything and pay a tax to do so.
+#### Always Be Jamming (ABJ)
 
-**Why this works:**
+- Install cards in defended remotes constantly. Make Runner check everything and pay a tax to do so
 - Runner can't tell agendas from assets from traps
 - Every check costs Runner tempo (clicks, credits, damage)
 - Forces Runner into difficult decisions
 - Some checks will be too expensive → you score
 - Single remote has highest tax but e.g. dual allows separate drip and scoring remotes
 
----
+#### Kill
+- Winning with agendas is the backup plan
+- Typically requires significant density of kill combo in deck so it's obvious if your deck is of this kind
+- Examples: tag-into-meat damage, a Weyland speciality. Net damage, from Jinteki. Rarely, brain damage combos from Haas-Bioroid.
+- Sometimes tries to fork runner - let corp score or flatline
+
+#### Spam
+ - Generate many, typically undefended remotes with annoying trash costs or effects
+ - Decks usually constrain runner actions somehow (e.g. net damage on trashing things)
+
+#### Glacier
+
+ - Build a giant remote and accept early agenda losses
+ - Usually has some kind of ETR upgrades so that simple icebreakers will not work
 
 ## ICE Placement Strategy
 
-**Priority order for ICE:**
+**Rule of thumb priority order for ICE:**
 
 1. **R&D first** (most attacked server, protects future draws)
 2. **HQ second** (prevents agenda sniping from hand)
 3. **Scoring remote third** (when ready to score)
 4. **Archives last** (usually undefended unless running recursion)
 
-Note install cost + 1 per existing ICE.
+Note install cost + 1 per existing ICE. Final choice here depends on deck and what runner is doing.
 
 **ICE sequencing (outermost to innermost):**
 
-Try to ETR on inner ice and annoyance outside it. Don't assume ice will actually fire, it's a tax.
+Ideally, try to ETR on inner ice and annoyance outside it. Don't assume ice will actually fire, it's a tax.
 
 **Installation cost:** Installing ICE costs 1 credit per ICE already protecting that server.
 - First ICE on server: 0 credits
@@ -78,8 +91,8 @@ Try to ETR on inner ice and annoyance outside it. Don't assume ice will actually
 
 **Don't rez when:**
 - You can't afford it (need credits for other priorities)
-- Runner has no breaker for that type (they'll just let subs fire and continue)
-- Run is on low-value server (let them access trash, save money)
+- Runner has breaker for that ice that's very cheap to use in the matchup
+- Run is on low-value server that you think it will be a mistake to access anyway
 
 ---
 
@@ -96,7 +109,7 @@ Action: Install agenda in remote, advance, score before they rebuild economy
 ### 2. Runner Missing Breaker Type
 ```
 Check Runner's rig (visible in board state)
-No X type breaker? Put agenda behind X ICE
+No X type breaker - (note some AI breakers break all ice)? Put agenda behind X ICE
 They can't contest without that breaker type if it ETRs
 ```
 
@@ -107,12 +120,6 @@ If you have damage ICE/traps:
 - If they run: Damage ICE can flatline them
 - If they don't run: You score
 Win-win situation
-```
-
-### 4. Late in Runner Turn / Runner at 0 Clicks
-```
-They can't contest until next turn
-Action: Install and advance now, score next turn before they draw/rebuild
 ```
 
 ### Fast Advance
@@ -339,37 +346,17 @@ Corp draws from empty stack = instant win for runner.
 
 ---
 
-## Quick Reference
-
-**Status interpretation:**
-```
-Clicks: 3, Credits: 8    → Can rez medium ICE, advance agenda
-Clicks: 0, Credits: 15   → End turn (well positioned for next turn)
-Hand: 4 cards (2 agendas) → Install agendas, don't draw more
-Runner hand: 2 cards     → OPPORTUNITY: Damage ICE can flatline
-Runner missing Sentry    → Install agenda behind Sentry ICE
-```
-
-**Decision flowchart:**
-```
-Start of turn:
-├─ R&D unprotected? → Install ICE on R&D (highest priority)
-├─ HQ has 2+ agendas? → Install in remotes, don't draw
-├─ Runner poor/incomplete rig? → SCORING WINDOW: Install, advance, score
-├─ Runner rich + complete rig? → Fast advance or trap defense
-└─ Default → Build economy, install ICE, jam remotes
-```
-
 **Scoring priority:**
 ```
 Higher value = fewer scoring windows needed to win
-But: Lower cost = faster to score. 5/3 needs multiple fast-advances on one turn even if installed.
+But: Lower cost = faster to score. 5/3 needs multiple fast-advances on one turn even if installed
+Note that scoring is a big tempo hit for you unless the agenda does something very good on score - don't forget economy
 Balance: Score what you can when windows appear
 ```
 
 **Emergency situations:**
 ```
-Runner at game point → They need 1 score to win, defend ALL servers
+Runner at game point → They need 1 score to win, defend ALL servers that could have agendas
 HQ flooded (3+ agendas) → Install all, ICE HQ, score fastest
 Poor (< 3 credits) → Play economy cards, click for credits, can't rez ICE
 R&D naked + Runner has rig → ICE R&D immediately or lose to pressure
