@@ -1005,7 +1005,7 @@
           accounted (+ corp-scored runner-stolen)
           missing (- total-agendas accounted)
           ;; Calculate expected agendas drawn
-          turn-num (turn-number)
+          turn-num (or (turn-number) 0)
           ;; Conservative estimate: mandatory draws only (1 per turn after turn 0)
           cards-drawn (max 0 turn-num)
           agenda-density (if (pos? initial-deck-size)

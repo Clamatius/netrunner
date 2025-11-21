@@ -210,15 +210,25 @@
       ;; The other checks (opp-clicks, opp-ended, my-clicks) are sufficient to prevent turn stealing.
       :else
       (do
-        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
-                           :command "start-turn"
-                           :args nil})
-        (Thread/sleep 2000)
-        (core/show-turn-indicator)
-        {:status :success}))))
+        (let [before-hand (count (get-in state [:game-state my-side :hand]))]
+          (ws/send-message! :game/action
+                            {:gameid (if (string? gameid)
+                                      (java.util.UUID/fromString gameid)
+                                      gameid)
+                             :command "start-turn"
+                             :args nil})
+          (Thread/sleep 2000)
+          (core/show-turn-indicator)
+          ;; For Corp, show what was drawn (mandatory draw)
+          (when (= my-side :corp)
+            (let [after-state @ws/client-state
+                  hand (get-in after-state [:game-state :corp :hand])
+                  after-hand (count hand)
+                  new-card (last hand)
+                  card-title (get new-card :title "Unknown")]
+              (when (> after-hand before-hand)
+                (println (str "🃏 Drew: " card-title)))))
+          {:status :success})))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -284,16 +294,17 @@
       (Thread/sleep 1500)
       (let [state @ws/client-state
             side (:side state)
-            after-hand (count (get-in state [:game-state (keyword side) :hand]))
-            after-clicks (get-in state [:game-state (keyword side) :click])]
+            hand (get-in state [:game-state (keyword side) :hand])
+            after-hand (count hand)
+            after-clicks (get-in state [:game-state (keyword side) :click])
+            ;; Get the newly drawn card (last card in hand)
+            new-card (last hand)
+            card-title (get new-card :title "Unknown")]
         (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
+        (println (str "   Drew: " card-title))
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (check-auto-end-turn!)
-        {:status :success
-         :data {:before-hand before-hand
-                :after-hand after-hand
-                :before-clicks before-clicks
-                :after-clicks after-clicks}}))
+        nil))
     {:status :error
      :reason "Failed to start turn"}))
 
