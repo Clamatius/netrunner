@@ -359,6 +359,7 @@
    - 0 clicks remaining
    - No active prompts
    - Not already ended (checks recent log)
+   - No scorable agendas (Corp only)
 
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
    This prevents the 'forgot to end-turn' stuck state."
@@ -375,9 +376,24 @@
         ;; Check if WE already ended (not opponent) - prevents double auto-end
         already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
                                    (clojure.string/includes? (:text %) my-uid))
-                            recent-log)]
+                            recent-log)
+        ;; Check for scorable agendas (Corp only)
+        scorable-agendas (core/find-scorable-agendas)]
 
     (cond
+      ;; Have scorable agendas - DON'T auto-end!
+      (seq scorable-agendas)
+      (do
+        (println "")
+        (println "⚠️  Cannot auto-end turn: Agenda(s) may be scorable!")
+        (doseq [agenda scorable-agendas]
+          (println (format "   🎯 %s (%d/%d counters - SCORABLE!)"
+                          (:title agenda)
+                          (:counters agenda)
+                          (:requirement agenda))))
+        (println "💡 Review agendas and score if able, then manually end turn")
+        (flush))
+
       ;; Safe to auto-end
       (and (= clicks 0)
            (nil? prompt)
@@ -387,6 +403,7 @@
         (when (> hand-size max-hand-size)
           (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
         (println "💡 Auto-ending turn (0 clicks, no prompts)")
+        (flush)
         (end-turn!)))))
 
 (defn smart-end-turn!

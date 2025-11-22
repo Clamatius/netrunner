@@ -70,33 +70,73 @@
 
 (defn verify-action-in-log
   "Check if a card action appears in recent game log entries
-   Returns true if card name found OR if log size increased, false otherwise
-   Waits up to max-wait-ms for the log entry to appear
+   Returns status map with:
+   - :status - :success (action completed), :waiting-input (prompt created), :error (failed)
+   - :prompt - the prompt that was created (if :waiting-input)
+   - :card-name - the card name being verified
 
-   NOTE: For Corp hidden cards, card names don't appear in log (shown as 'a card')
-         so we check for ANY new log entry as confirmation"
-  [card-name max-wait-ms]
+   Distinguishes between:
+   - Action completed: Card moved zones, log entry added, state changed
+   - Action waiting for input: Only prompt created, card still in hand
+   - Action failed: Nothing happened
+
+   Waits up to max-wait-ms for the log entry to appear"
+  [card-name card-initial-zone max-wait-ms]
   (let [initial-size (get-log-size)
+        initial-prompt (ws/get-prompt)
         deadline (+ (System/currentTimeMillis) max-wait-ms)
-        check-log (fn []
-                   (let [state @ws/client-state
-                         log (get-in state [:game-state :log])
-                         current-size (count log)]
-                     ;; Success if: log grew OR card name appears in recent entries
-                     (or (> current-size initial-size)
-                         (let [recent-log (take-last 5 log)]
-                           (some #(when (string? (:text %))
-                                   (clojure.string/includes? (:text %) card-name))
-                                 recent-log)))))]
-    ;; Poll until we find it or timeout
+        check-result (fn []
+                      (let [state @ws/client-state
+                            log (get-in state [:game-state :log])
+                            current-size (count log)
+                            current-prompt (ws/get-prompt)
+                            ;; Check if card is still in original zone (hand)
+                            side (keyword (:side state))
+                            hand (get-in state [:game-state side :hand])
+                            card-still-in-hand (some #(and (= (:title %) card-name)
+                                                           (= (:zone %) card-initial-zone))
+                                                    hand)
+                            ;; Check if new prompt was created
+                            new-prompt-created (and current-prompt
+                                                   (not= current-prompt initial-prompt))
+                            ;; Check if log entry mentions the card
+                            card-in-log (let [recent-log (take-last 5 log)]
+                                         (some #(when (string? (:text %))
+                                                 (clojure.string/includes? (:text %) card-name))
+                                              recent-log))]
+
+                        (cond
+                          ;; If card moved from hand AND log grew, it's a success
+                          (and (not card-still-in-hand)
+                               (or (> current-size initial-size)
+                                   card-in-log))
+                          {:status :success}
+
+                          ;; If card is STILL in hand but new prompt created, it's waiting for input
+                          (and card-still-in-hand new-prompt-created)
+                          {:status :waiting-input
+                           :prompt current-prompt
+                           :card-name card-name}
+
+                          ;; If log grew or card appears in log (even without zone change), might be success
+                          ;; (for Corp hidden cards where card name doesn't show)
+                          (or (> current-size initial-size) card-in-log)
+                          {:status :success}
+
+                          ;; Otherwise, no change yet
+                          :else
+                          nil)))]
+    ;; Poll until we get a result or timeout
     (loop []
-      (if (check-log)
-        true
+      (if-let [result (check-result)]
+        result
         (if (< (System/currentTimeMillis) deadline)
           (do
             (Thread/sleep 200)
             (recur))
-          false)))))
+          {:status :error
+           :reason "Action not confirmed in game log (timeout)"
+           :card-name card-name})))))
 
 ;; ============================================================================
 ;; Card Name Parsing and Formatting
@@ -127,6 +167,42 @@
       (let [index (.indexOf (vec same-name-cards) card)]
         (str card-title " [" index "]"))
       card-title)))
+
+;; ============================================================================
+;; Agenda Helpers
+;; ============================================================================
+
+(defn find-scorable-agendas
+  "Find all installed Corp agendas that have enough advancement counters to score.
+   Returns sequence of maps with :card, :title, :counters, :requirement
+
+   Note: This does a simple counter check (counters >= requirement).
+   It does NOT detect effects like 'cannot score this turn' or similar restrictions.
+   Therefore, use conservatively - if this returns agendas, assume they MIGHT be scorable."
+  []
+  (let [state @ws/client-state
+        side (:side state)]
+    (if (side= "Corp" side)
+      (let [servers (get-in state [:game-state :corp :servers])
+            ;; Get all content (assets/upgrades/agendas) from all servers
+            all-content (mapcat :content (vals servers))
+            ;; Filter for agendas only
+            agendas (filter #(= "Agenda" (:type %)) all-content)
+            ;; Check which are scorable (counters >= requirement)
+            scorable (filter (fn [agenda]
+                              (let [counters (or (:advance-counter agenda) 0)
+                                    requirement (:advancementcost agenda)]
+                                (and requirement (>= counters requirement))))
+                            agendas)]
+        ;; Return useful info about each scorable agenda
+        (map (fn [agenda]
+               {:card agenda
+                :title (:title agenda)
+                :counters (or (:advance-counter agenda) 0)
+                :requirement (:advancementcost agenda)})
+            scorable))
+      ;; Not Corp, return empty
+      [])))
 
 ;; ============================================================================
 ;; Card Lookup Helpers

@@ -503,9 +503,17 @@ case "$COMMAND" in
     play)
         ensure_connection
         CARD_NAME="${1:-}"
+        SERVER="${2:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command play <card-name>"
-        info "Playing card: $CARD_NAME"
-        execute "(ai-actions/play-card! \"$CARD_NAME\")"
+
+        # Auto-upgrade to install if server argument provided
+        if [[ -n "$SERVER" ]]; then
+            info "Auto-upgrading 'play' to 'install' (server argument provided: $SERVER)"
+            execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+        else
+            info "Playing card: $CARD_NAME"
+            execute "(ai-actions/play-card! \"$CARD_NAME\")"
+        fi
         show_last_log_if_enabled
         ;;
 
@@ -786,6 +794,19 @@ case "$COMMAND" in
                    (ws/request-lobby-list!)
                    (Thread/sleep 1000)
                    (ws/show-games))'
+        ;;
+
+    list-game-ids)
+        ensure_connection
+        # Return just game IDs (one per line) for script parsing
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (ws/request-lobby-list!)
+                   (Thread/sleep 1000)
+                   (let [ids (ws/list-active-game-ids)]
+                     (if (seq ids)
+                       (doseq [id ids] (println id))
+                       (println "NO_GAMES"))))'
         ;;
 
     join)

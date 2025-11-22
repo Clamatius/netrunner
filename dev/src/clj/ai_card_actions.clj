@@ -14,48 +14,81 @@
    Usage: (play-card! \"Sure Gamble\")
           (play-card! 0)"
   [name-or-index]
-  (if (basic/ensure-turn-started!)
-    (let [card (core/find-card-in-hand name-or-index)]
-      (if card
-        (let [before-state (core/capture-state-snapshot)
-              state @ws/client-state
-              side (keyword (:side state))
-              before-credits (get-in state [:game-state side :credit])
-              before-clicks (get-in state [:game-state side :click])
-              gameid (:gameid state)
-              card-ref (core/create-card-ref card)
-              card-title (:title card)]
-          (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
-                             :command "play"
-                             :args {:card card-ref}})
-          ;; Wait and verify action appeared in log
-          (if (core/verify-action-in-log card-title 3000)
-            (let [after-state @ws/client-state
-                  after-credits (get-in after-state [:game-state side :credit])
-                  after-clicks (get-in after-state [:game-state side :click])
-                  credit-delta (- after-credits before-credits)]
-              (println (str "🃏 Played: " card-title))
-              (when (not= credit-delta 0)
-                (println (str "   💰 Credits: " before-credits " → " after-credits
-                             " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
-              (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-              (core/show-turn-indicator)
-              {:status :success
-               :data {:card-title card-title}})
+  ;; Check for pre-existing blocking prompt before attempting action
+  (let [existing-prompt (ws/get-prompt)]
+    (if (and existing-prompt
+             (not= :waiting (:prompt-type existing-prompt)))
+      (do
+        (println (str "❌ Cannot play card: Active prompt must be answered first"))
+        (println (str "   Prompt: " (:msg existing-prompt)))
+        (flush)
+        {:status :error
+         :reason "Active prompt must be answered first"
+         :prompt existing-prompt})
+      (if (basic/ensure-turn-started!)
+        (let [card (core/find-card-in-hand name-or-index)]
+          (if card
+            (let [before-state (core/capture-state-snapshot)
+                  state @ws/client-state
+                  side (keyword (:side state))
+                  before-credits (get-in state [:game-state side :credit])
+                  before-clicks (get-in state [:game-state side :click])
+                  gameid (:gameid state)
+                  card-ref (core/create-card-ref card)
+                  card-title (:title card)
+                  card-zone (:zone card)]
+              (ws/send-message! :game/action
+                                {:gameid (if (string? gameid)
+                                          (java.util.UUID/fromString gameid)
+                                          gameid)
+                                 :command "play"
+                                 :args {:card card-ref}})
+              ;; Wait and verify action - now returns status map
+              (let [result (core/verify-action-in-log card-title card-zone 3000)]
+                (case (:status result)
+                  :success
+                  (let [after-state @ws/client-state
+                        after-credits (get-in after-state [:game-state side :credit])
+                        after-clicks (get-in after-state [:game-state side :click])
+                        credit-delta (- after-credits before-credits)]
+                    (println (str "🃏 Played: " card-title))
+                    (when (not= credit-delta 0)
+                      (println (str "   💰 Credits: " before-credits " → " after-credits
+                                   " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
+                    (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+                    (core/show-turn-indicator)
+                    (flush)
+                    ;; Auto-end turn if no clicks remaining
+                    (basic/check-auto-end-turn!)
+                    {:status :success
+                     :data {:card-title card-title}})
+
+                  :waiting-input
+                  (let [prompt (:prompt result)]
+                    (println (str "⏸️  Played: " card-title " - waiting for input"))
+                    (println (str "   Prompt: " (:msg prompt)))
+                    (core/show-turn-indicator)
+                    (flush)
+                    {:status :waiting-input
+                     :card-title card-title
+                     :prompt prompt})
+
+                  :error
+                  (do
+                    (println (str "❌ Failed to play: " card-title))
+                    (println (str "   Reason: " (:reason result)))
+                    (core/show-turn-indicator)
+                    (flush)
+                    result))))
             (do
-              (println (str "⚠️  Sent play command for: " card-title " - but action not confirmed in game log (may have failed)"))
-              (core/show-turn-indicator)
+              (println (str "❌ Card not found in hand: " name-or-index))
+              (flush)
               {:status :error
-               :reason (str "Play command for " card-title " not confirmed in game log")})))
+               :reason (str "Card not found in hand: " name-or-index)})))
         (do
-          (println (str "❌ Card not found in hand: " name-or-index))
+          (flush)
           {:status :error
-           :reason (str "Card not found in hand: " name-or-index)})))
-    {:status :error
-     :reason "Failed to start turn"}))
+           :reason "Failed to start turn"}))))) ; close defn
 
 (defn install-card!
   "Install a card from hand by name or index.
@@ -75,53 +108,86 @@
   ([name-or-index]
    (install-card! name-or-index nil))
   ([name-or-index server]
-   (if (basic/ensure-turn-started!)
-     (let [card (core/find-card-in-hand name-or-index)]
-       (if card
-         (let [before-state (core/capture-state-snapshot)
-               state @ws/client-state
-               side (keyword (:side state))
-               before-clicks (get-in state [:game-state side :click])
-               gameid (:gameid state)
-               card-ref (core/create-card-ref card)
-               card-title (:title card)
-               card-type (:type card)
-               ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
-               normalized-server (when server
-                                  (:normalized (core/normalize-server-name server)))
-               ;; Both Corp and Runner use "play" command
-               ;; Corp requires :server, Runner installs without :server arg
-               args (if normalized-server
-                     {:card card-ref :server normalized-server}
-                     {:card card-ref})]
-           (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "play"
-                              :args args})
-           ;; Wait and verify action appeared in log
-           (if (core/verify-action-in-log card-title 3000)
-             (let [after-state @ws/client-state
-                   after-clicks (get-in after-state [:game-state side :click])]
-               (if normalized-server
-                 (println (str "📥 Installed: " card-title " on " normalized-server))
-                 (println (str "📥 Installed: " card-title " (" card-type ")")))
-               (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-               (core/show-turn-indicator)
-               {:status :success
-                :data {:card-title card-title :server normalized-server}})
+   ;; Check for pre-existing blocking prompt before attempting action
+   (let [existing-prompt (ws/get-prompt)]
+     (if (and existing-prompt
+              (not= :waiting (:prompt-type existing-prompt)))
+       (do
+         (println (str "❌ Cannot install card: Active prompt must be answered first"))
+         (println (str "   Prompt: " (:msg existing-prompt)))
+         (flush)
+         {:status :error
+          :reason "Active prompt must be answered first"
+          :prompt existing-prompt})
+       (if (basic/ensure-turn-started!)
+         (let [card (core/find-card-in-hand name-or-index)]
+           (if card
+             (let [before-state (core/capture-state-snapshot)
+                   state @ws/client-state
+                   side (keyword (:side state))
+                   before-clicks (get-in state [:game-state side :click])
+                   gameid (:gameid state)
+                   card-ref (core/create-card-ref card)
+                   card-title (:title card)
+                   card-type (:type card)
+                   card-zone (:zone card)
+                   ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
+                   normalized-server (when server
+                                      (:normalized (core/normalize-server-name server)))
+                   ;; Both Corp and Runner use "play" command
+                   ;; Corp requires :server, Runner installs without :server arg
+                   args (if normalized-server
+                         {:card card-ref :server normalized-server}
+                         {:card card-ref})]
+               (ws/send-message! :game/action
+                                 {:gameid (if (string? gameid)
+                                           (java.util.UUID/fromString gameid)
+                                           gameid)
+                                  :command "play"
+                                  :args args})
+               ;; Wait and verify action - now returns status map
+               (let [result (core/verify-action-in-log card-title card-zone 3000)]
+                 (case (:status result)
+                   :success
+                   (let [after-state @ws/client-state
+                         after-clicks (get-in after-state [:game-state side :click])]
+                     (if normalized-server
+                       (println (str "📥 Installed: " card-title " on " normalized-server))
+                       (println (str "📥 Installed: " card-title " (" card-type ")")))
+                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+                     (core/show-turn-indicator)
+                     (flush)
+                     ;; Auto-end turn if no clicks remaining
+                     (basic/check-auto-end-turn!)
+                     {:status :success
+                      :data {:card-title card-title :server normalized-server}})
+
+                   :waiting-input
+                   (let [prompt (:prompt result)]
+                     (println (str "⏸️  Installed: " card-title " - waiting for server selection"))
+                     (println (str "   Prompt: " (:msg prompt)))
+                     (core/show-turn-indicator)
+                     (flush)
+                     {:status :waiting-input
+                      :card-title card-title
+                      :prompt prompt})
+
+                   :error
+                   (do
+                     (println (str "❌ Failed to install: " card-title))
+                     (println (str "   Reason: " (:reason result)))
+                     (core/show-turn-indicator)
+                     (flush)
+                     result))))
              (do
-               (println (str "⚠️  Sent install command for: " card-title " - but action not confirmed in game log (may have failed)"))
-               (core/show-turn-indicator)
+               (println (str "❌ Card not found in hand: " name-or-index))
+               (flush)
                {:status :error
-                :reason (str "Install command for " card-title " not confirmed in game log")})))
+                :reason (str "Card not found in hand: " name-or-index)})))
          (do
-           (println (str "❌ Card not found in hand: " name-or-index))
+           (flush)
            {:status :error
-            :reason (str "Card not found in hand: " name-or-index)})))
-     {:status :error
-      :reason "Failed to start turn"})))
+            :reason "Failed to start turn"})))))) ; close defn arities
 
 ;; ============================================================================
 ;; Card Abilities
@@ -372,18 +438,35 @@
                                  :command "advance"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log
-              (if (core/verify-action-in-log card-name 3000)
-                (let [after-state @ws/client-state
-                      updated-card (core/find-installed-corp-card card-name)
-                      after-counters (or (:advance-counter updated-card) 0)
-                      after-credits (get-in after-state [:game-state :corp :credit])
-                      after-clicks (get-in after-state [:game-state :corp :click])]
-                  (println (str "⏫ Advanced: " card-name " (" after-counters
-                               (when advancement-requirement (str "/" advancement-requirement))
-                               " counters)"))
-                  (core/show-before-after "💰 Credits" before-credits after-credits)
-                  (core/show-before-after "⏱️  Clicks" before-clicks after-clicks))
-                (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))))
+              ;; Note: Card doesn't change zones, so we pass its current zone
+              (let [result (core/verify-action-in-log card-name (:zone card) 3000)]
+                (if (= :success (:status result))
+                  (let [after-state @ws/client-state
+                        updated-card (core/find-installed-corp-card card-name)
+                        after-counters (or (:advance-counter updated-card) 0)
+                        after-credits (get-in after-state [:game-state :corp :credit])
+                        after-clicks (get-in after-state [:game-state :corp :click])
+                        ;; Check if agenda is now scorable
+                        is-agenda (= "Agenda" (:type card))
+                        is-scorable (and is-agenda
+                                        advancement-requirement
+                                        (>= after-counters advancement-requirement))]
+                    (println (str "⏫ Advanced: " card-name " (" after-counters
+                                 (when advancement-requirement (str "/" advancement-requirement))
+                                 " counters)"))
+                    ;; Show scorable indicator if applicable
+                    (when is-scorable
+                      (println (str "   🎯 " card-name " is now SCORABLE!"))
+                      (println (format "   💡 Use: score \"%s\"" card-name)))
+                    (core/show-before-after "💰 Credits" before-credits after-credits)
+                    (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+                    (flush)
+                    ;; Auto-end turn if no clicks remaining
+                    ;; (will be blocked if agenda is scorable)
+                    (basic/check-auto-end-turn!))
+                  (do
+                    (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))
+                    (flush)))))
             (println (str "❌ Card not found installed: " card-name))))))))
 
 (defn score-agenda!

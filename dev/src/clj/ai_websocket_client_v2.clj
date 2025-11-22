@@ -1062,6 +1062,14 @@
 
         nil)))))  ;; Closes: normal-status do, if, outer let, defn
 
+(defn list-active-game-ids
+  "Return list of active game IDs (parseable format for scripts)
+   Returns vector of game ID strings, or empty vector if none"
+  []
+  (if-let [games (get-lobby-list)]
+    (vec (map :gameid games))
+    []))
+
 (defn show-games
   "Display available games in a readable format"
   []

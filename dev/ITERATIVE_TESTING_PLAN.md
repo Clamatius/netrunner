@@ -71,7 +71,7 @@
 - Runner turn sequence: gain clicks → actions → discard
 - Run sequence: initiation → approach → encounter → movement → access
 - See `./dev/send_command help` "Turn Timing Quick Reference" section
-- See `GAME_REFERENCE.md` Appendix for detailed official timing rules (sections 5.6, 5.7, 6.9)
+- See mechanics docs and full rulebook for progressively more detail
 
 ### Multi-Client Testing
 
@@ -150,7 +150,7 @@ lein repl :connect localhost:7888
    ```
 
 3. **Compare expected vs actual:**
-   - What should have happened? (check GAME_REFERENCE.md)
+   - What should have happened? (check game mechanics docs / playbooks)
    - What actually happened? (check log)
    - Who is waiting on whom? (check prompts)
 
@@ -449,7 +449,7 @@ After each iteration:
 
 1. Update bug queue
 2. Commit fixes with clear messages
-3. Update GAME_REFERENCE.md if gameplay behavior changed
+3. Update playbooks if gameplay behavior had obvious errors from playbook sources. Be careful not to overfit to specific situations, decks or games.
 4. Update this document if testing best practices discovered
 5. Choose next focus area from queue
 
@@ -457,5 +457,5 @@ After each iteration:
 
 ---
 
-**Last Updated:** 2025-11-11
-**Current Iteration:** 1 (auto-end-turn testing complete)
+**Last Updated:** 2025-11-21
+**Current Iteration:** 2 (auto-end-turn testing complete)
