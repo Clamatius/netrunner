@@ -44,7 +44,7 @@
                                  :command "play"
                                  :args {:card card-ref}})
               ;; Wait and verify action - now returns status map
-              (let [result (core/verify-action-in-log card-title card-zone 3000)]
+              (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                 (case (:status result)
                   :success
                   (let [after-state @ws/client-state
@@ -146,7 +146,7 @@
                                   :command "play"
                                   :args args})
                ;; Wait and verify action - now returns status map
-               (let [result (core/verify-action-in-log card-title card-zone 3000)]
+               (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                  (case (:status result)
                    :success
                    (let [after-state @ws/client-state
@@ -234,7 +234,7 @@
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
-        (Thread/sleep 1500)
+        (Thread/sleep core/medium-delay)
         (let [ability-label (when abilities
                              (let [ab (nth abilities ability-index nil)]
                                (:label ab)))]
@@ -268,7 +268,7 @@
                            :command "runner-ability"
                            :args {:card card-ref
                                   :ability ability-index}})
-        (Thread/sleep 1500))
+        (Thread/sleep core/medium-delay))
       (println (str "❌ Card not found: " card-name)))))
 
 (defn trash-installed!
@@ -297,7 +297,7 @@
                                     gameid)
                            :command "trash"
                            :args {:card card-ref}})
-        (Thread/sleep 1500)
+        (Thread/sleep core/medium-delay)
         (println (str "🗑️  Trashed: " card-name " (" card-type ")")))
       (println (str "❌ Card not found installed: " card-name)))))
 
@@ -329,7 +329,7 @@
                                :command "rez"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
-            (if (core/verify-action-in-log card-name (:zone card) 3000)
+            (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
               (let [after-state @ws/client-state
                     after-credits (get-in after-state [:game-state :corp :credit])]
                 (println (str "🔴 Rezzed: " card-name))
@@ -357,7 +357,7 @@
                                     gameid)
                            :command "system-msg"
                            :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
-        (Thread/sleep 1000)))))
+        (Thread/sleep core/short-delay)))))
 
 (defn toggle-auto-no-action!
   "Toggle auto-pass priority during runs (Corp only)
@@ -378,7 +378,7 @@
                                     gameid)
                            :command "toggle-auto-no-action"
                            :args nil})
-        (Thread/sleep 500)))))
+        (Thread/sleep core/quick-delay)))))
 
 (defn fire-unbroken-subs!
   "Fire unbroken subroutines on ICE (Corp only)
@@ -404,7 +404,7 @@
                                         gameid)
                                :command "unbroken-subroutines"
                                :args {:card card-ref}})
-            (Thread/sleep 1500))
+            (Thread/sleep core/medium-delay))
           (println (str "❌ ICE not found installed: " ice-name)))))))
 
 (defn advance-card!
@@ -497,7 +497,7 @@
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
-              (if (core/verify-action-in-log card-name (:zone card) 3000)
+              (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
                 (let [after-state @ws/client-state
                       after-score (get-in after-state [:game-state :corp :agenda-point])
                       runner-score (get-in after-state [:game-state :runner :agenda-point])]

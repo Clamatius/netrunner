@@ -196,14 +196,14 @@
                 ;; Auto-continue unless --no-continue flag set
                 (when-not (:no-continue flags)
                   (println "⏩ Auto-continuing...")
-                  (Thread/sleep 500)  ; Brief pause for state sync
+                  (Thread/sleep core/quick-delay)  ; Brief pause for state sync
                   (continue-run!))
                 {:status :success
                  :data {:server normalized :log-entry (:text run-entry) :flags flags}})
 
               (< (System/currentTimeMillis) deadline)
               (do
-                (Thread/sleep 200)
+                (Thread/sleep core/polling-delay)
                 (recur))
 
               :else

@@ -95,7 +95,7 @@
     (with-mock-state
       (mock-client-state :prompt nil)
       (assert-error-message
-        #(ai-actions/choose 0)
+        #(ai-actions/choose! 0)
         "No active prompt"))))
 
 (deftest test-choose-invalid-option
@@ -107,7 +107,7 @@
                  :choices [{:value "Option 1" :idx 0}
                           {:value "Option 2" :idx 1}]))
       (assert-error-message
-        #(ai-actions/choose 999)
+        #(ai-actions/choose! 999)
         "invalid"))))
 
 ;; ============================================================================

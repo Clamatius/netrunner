@@ -56,7 +56,6 @@
 (def auto-start-if-ready! connection/auto-start-if-ready!)
 (def send-chat! connection/send-chat!)
 (def change! connection/change!)
-(def change connection/change)
 
 ;; ============================================================================
 ;; Re-exported functions from ai-display
@@ -108,7 +107,7 @@
 ;; Re-exported functions from ai-prompts
 ;; ============================================================================
 
-(def choose prompts/choose)
+(def choose! prompts/choose!)
 (def choose-option! prompts/choose-option!)
 (def choose-by-value! prompts/choose-by-value!)
 (def choose-card! prompts/choose-card!)

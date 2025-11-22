@@ -16,14 +16,14 @@
                   title-or-options
                   {:title title-or-options :side "Any Side"})]
      (ws/create-lobby! options)
-     (Thread/sleep 2000))))
+     (Thread/sleep core/standard-delay))))
 
 (defn list-lobbies
   "Request and display the list of available games"
   []
   (println "Requesting lobby list...")
   (ws/request-lobby-list!)
-  (Thread/sleep 1000)
+  (Thread/sleep core/short-delay)
   (ws/show-games))
 
 ;; ============================================================================
@@ -43,7 +43,7 @@
             false)
         (do (print ".")
             (flush)
-            (Thread/sleep 200)
+            (Thread/sleep core/polling-delay)
             (recur (+ waited 200)))))))
 
 ;; ============================================================================
@@ -117,7 +117,7 @@
       (do
         (println "✅ Lobby ready! Auto-starting game...")
         (ws/send-message! :game/start {:gameid gameid})
-        (Thread/sleep 2000)
+        (Thread/sleep core/standard-delay)
         {:status :started}))))
 
 (defn send-chat!
@@ -153,9 +153,4 @@
                                 gameid)
                        :command "change"
                        :args {:key key :delta delta}})
-    (Thread/sleep 500)))
-
-(defn change
-  "Alias for change! for backwards compatibility"
-  [key delta]
-  (change! key delta))
+    (Thread/sleep core/quick-delay)))

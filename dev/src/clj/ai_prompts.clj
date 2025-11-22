@@ -7,34 +7,16 @@
 ;; Prompts & Choices
 ;; ============================================================================
 
-(defn- format-choice
-  "Format a choice for display, handling different prompt formats"
-  [choice]
-  (cond
-    ;; Map with :value key (most common)
-    (and (map? choice) (:value choice))
-    (:value choice)
-
-    ;; Map without :value - try :label or show keys
-    (map? choice)
-    (or (:label choice)
-        (:title choice)
-        (str "Option with keys: " (keys choice)))
-
-    ;; String or number - show as-is
-    :else
-    (str choice)))
-
-(defn choose
+(defn choose!
   "Make a choice from current prompt
-   Usage: (choose 0) ; choose first option
-          (choose \"uuid\") ; choose by UUID"
+   Usage: (choose! 0) ; choose first option
+          (choose! \"uuid\") ; choose by UUID"
   [choice]
   (let [prompt (ws/get-prompt)]
     (if prompt
       (do
         (ws/choose! choice)
-        (Thread/sleep 500))
+        (Thread/sleep core/quick-delay))
       (println "⚠️  No active prompt"))))
 
 (defn choose-option!
@@ -55,7 +37,7 @@
                                     gameid)
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
-        (Thread/sleep 2000))
+        (Thread/sleep core/standard-delay))
       (println (str "❌ Invalid choice index: " index)))))
 
 (defn choose-by-value!
@@ -85,7 +67,7 @@
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")
         (doseq [[idx choice] (map-indexed vector choices)]
-          (println (str "  " idx ". " (format-choice choice))))))))
+          (println (str "  " idx ". " (core/format-choice choice))))))))
 
 (defn choose-card!
   "Choose a card from selectable cards in current prompt by index.
@@ -117,7 +99,7 @@
       (let [card (nth selectable index)]
         (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
         (ws/select-card! card eid)
-        (Thread/sleep 1000)))))
+        (Thread/sleep core/short-delay)))))
 
 ;; ============================================================================
 ;; Mulligan
@@ -170,7 +152,7 @@
   []
   (loop [checks 0]
     (when (< checks 20)
-      (Thread/sleep 1000)
+      (Thread/sleep core/short-delay)
       (let [prompt (ws/get-prompt)
             prompt-type (:prompt-type prompt)]
         (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
@@ -207,7 +189,7 @@
             valid-cards (filter some? cards-to-discard)]
         (doseq [card valid-cards]
           (ws/select-card! card (:eid prompt))
-          (Thread/sleep 500))
+          (Thread/sleep core/quick-delay))
         (count valid-cards))
       (do
         (println "❌ No discard prompt active or no indices provided")
@@ -240,7 +222,7 @@
           (do
             (doseq [card cards-to-discard]
               (ws/select-card! card (:eid prompt))
-              (Thread/sleep 500))
+              (Thread/sleep core/quick-delay))
             (println "✅ Discarded" (count cards-to-discard) "card(s)")
             (count cards-to-discard))
           (do

@@ -87,43 +87,40 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
 **Risk if not fixed:** Maintainability issues, future bugs
 
 ### Quality #1: Extract Duplicate `format-choice` Function
-- [ ] **Issue:** Function duplicated verbatim in 2 files
-- [ ] **Locations:**
+- [x] **Issue:** Function duplicated verbatim in 2 files
+- [x] **Locations:**
   - `dev/src/clj/ai_prompts.clj:10-26`
   - `dev/src/clj/ai_display.clj:346-362`
-- [ ] **Action:**
-  1. Move function to `ai_core.clj` as public (not private)
-  2. Update both files to use `core/format-choice`
-  3. Add tests for edge cases (nil counters, missing keys)
+- [x] **Action:**
+  1. Moved function to `ai_core.clj` as public (not private) - added to "Display and Formatting Helpers" section
+  2. Updated both files to use `core/format-choice`
+  3. Tests for edge cases - deferred to future work
 
 ### Quality #2: Define Timeout Constants
-- [ ] **Issue:** Magic numbers scattered throughout (30+ instances)
-- [ ] **Examples:**
+- [x] **Issue:** Magic numbers scattered throughout (30+ instances)
+- [x] **Examples:**
   - `Thread/sleep 2000` - 15+ times
   - `Thread/sleep 1500` - 10+ times
   - `Thread/sleep 500` - 5+ times
   - Timeout values: 3000ms, 5000ms, 10000ms varied inconsistently
-- [ ] **Action:**
-  1. Add constants to `ai_core.clj`:
-     ```clojure
-     (def default-action-timeout 3000)
-     (def default-state-sync-delay 2000)
-     (def default-quick-delay 500)
-     (def default-medium-delay 1500)
-     ```
-  2. Replace all hardcoded values with named constants
-  3. Document what each timeout is for
+- [x] **Action:**
+  1. Added constants to `ai_core.clj`:
+     - `polling-delay` (200ms), `quick-delay` (500ms), `short-delay` (1s)
+     - `medium-delay` (1.5s), `standard-delay` (2s)
+     - `action-timeout` (3s), `extended-timeout` (5s)
+  2. Replaced all hardcoded values in main AI action files
+  3. Documented each constant with description
+- [x] **Note:** Skipped test files and ai_websocket_client_v2.clj (circular dependency)
 
 ### Quality #3: Standardize Naming Conventions (Bang Suffix)
-- [ ] **Issue:** Some state-changing functions missing `!` suffix
-- [ ] **Files to update:**
-  - [ ] `dev/src/clj/ai_prompts.clj` - `choose` → `choose!`
-  - [ ] `dev/src/clj/ai_connection.clj:158-161` - `change` → `change!`
-- [ ] **Action:**
-  1. Rename functions to add `!` suffix
-  2. Update all call sites
-  3. Update re-exports in `ai_actions.clj` facade
-- [ ] **Alternative:** Document why these are exceptions if there's a good reason
+- [x] **Issue:** Some state-changing functions missing `!` suffix
+- [x] **Files to update:**
+  - [x] `dev/src/clj/ai_prompts.clj` - `choose` → `choose!`
+  - [x] `dev/src/clj/ai_connection.clj:158-161` - Removed `change` backwards-compat alias (only `change!` now)
+- [x] **Action:**
+  1. Renamed `prompts/choose` to `prompts/choose!`
+  2. Updated facade export in `ai_actions.clj`
+  3. Removed unused `change` alias from both `ai_connection.clj` and `ai_actions.clj`
 
 ### Quality #4: Standardize Return Values
 - [ ] **Issue:** Inconsistent return value patterns across action functions
@@ -148,24 +145,23 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
   2. Replace with `core/create-card-ref` calls
 
 ### Quality #6: Audit Backwards Compatibility Shims
-- [ ] **File:** `dev/src/clj/ai_basic_actions.clj:485-493`
-- [ ] **Issue:** Commented as "backwards compatibility" but unclear if still needed
-- [ ] **Functions:**
+- [x] **File:** `dev/src/clj/ai_basic_actions.clj:485-493`
+- [x] **Issue:** Commented as "backwards compatibility" but unclear if still needed
+- [x] **Functions:**
   ```clojure
   (defn take-credits [] (take-credit!))
   (defn draw-card [] (draw-card!))
   (defn end-turn [] (end-turn!))
   ```
-- [ ] **Action:**
-  1. Check if any code still calls non-bang versions
-  2. If yes: document why they exist
-  3. If no: remove them
+- [x] **Action:**
+  1. Checked usage - found active use in `ai_display.clj` (lines 541, 542, 550, 551, 699-701)
+  2. **Decision:** Keep shims - they are actively used and provide cleaner API for display functions
 
 ### Quality #7: Extract `normalize-server-name` Regex to Let Binding
-- [ ] **File:** `dev/src/clj/ai_core.clj:270-299`
-- [ ] **Lines:** 291-292
-- [ ] **Issue:** Regex pattern repeated on consecutive lines
-- [ ] **Action:** Extract to `let` binding for clarity
+- [x] **File:** `dev/src/clj/ai_core.clj:324-354`
+- [x] **Lines:** 346-347
+- [x] **Issue:** Regex pattern repeated on consecutive lines
+- [x] **Action:** Extracted `remote-pattern` to let binding - pattern now defined once and reused
 
 ---
 
@@ -324,11 +320,11 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
 
 **Phase 1 (P0):** [x] 2/2 bugs fixed (verification pending)
 **Phase 2 (P1):** [x] 3/3 items completed
-**Phase 3 (P2):** [ ] 0/7 items completed
+**Phase 3 (P2):** [x] 5/7 items completed (Quality #4 and #5 deferred)
 **Phase 4 (P3):** [ ] 0/6 items completed
 **Audits:**      [ ] 0/2 items completed
 
-**Overall Progress:** 5/21 tasks (24%)
+**Overall Progress:** 10/21 tasks (48%)
 
 ---
 
@@ -339,6 +335,13 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
 - **2025-11-21:** GAME_REFERENCE.md was replaced by playbook .mds (user confirmed)
 - **2025-11-21:** Phase 1 (P0) completed - Fixed both arity errors in ai_card_actions.clj
 - **2025-11-21:** Phase 2 (P1) completed - Removed backup file, fixed doc references, enabled Archives/HUD features
+- **2025-11-21:** Phase 3 (P2) mostly completed - 5/7 items done:
+  - Extracted duplicate format-choice function to ai_core.clj
+  - Defined 7 timeout constants and replaced 40+ hardcoded values across 8 files
+  - Standardized naming: `choose` → `choose!`, removed unused `change` alias
+  - Audited backwards-compat shims (keeping active ones)
+  - Extracted repeated regex to let binding in normalize-server-name
+  - Deferred: Quality #4 (return value patterns), #5 (manual card-ref creation)
 
 ### Future Considerations
 - Consider comprehensive test coverage audit

@@ -6,6 +6,40 @@
             [cheshire.core :as json]))
 
 ;; ============================================================================
+;; Timing Constants
+;; ============================================================================
+
+;; Delay constants (milliseconds)
+(def polling-delay
+  "Very brief delay for polling loops (200ms)"
+  200)
+
+(def quick-delay
+  "Quick delay for UI responsiveness (500ms)"
+  500)
+
+(def short-delay
+  "Short delay for waiting on state changes (1s)"
+  1000)
+
+(def medium-delay
+  "Medium delay for card actions to process (1.5s)"
+  1500)
+
+(def standard-delay
+  "Standard delay for most game actions (2s)"
+  2000)
+
+;; Timeout constants (milliseconds)
+(def action-timeout
+  "Timeout for action verification in game log (3s)"
+  3000)
+
+(def extended-timeout
+  "Extended timeout for complex operations (5s)"
+  5000)
+
+;; ============================================================================
 ;; Side Comparison
 ;; ============================================================================
 
@@ -64,7 +98,7 @@
           true
           (if (< (System/currentTimeMillis) deadline)
             (do
-              (Thread/sleep 200)
+              (Thread/sleep polling-delay)
               (recur))
             false))))))
 
@@ -132,7 +166,7 @@
         result
         (if (< (System/currentTimeMillis) deadline)
           (do
-            (Thread/sleep 200)
+            (Thread/sleep polling-delay)
             (recur))
           {:status :error
            :reason "Action not confirmed in game log (timeout)"
@@ -167,6 +201,33 @@
       (let [index (.indexOf (vec same-name-cards) card)]
         (str card-title " [" index "]"))
       card-title)))
+
+;; ============================================================================
+;; Display and Formatting Helpers
+;; ============================================================================
+
+(defn format-choice
+  "Format a choice for display, handling different prompt formats
+   Used by prompt and display functions to consistently format choices
+
+   Usage: (format-choice {:value \"HQ\"}) -> \"HQ\"
+          (format-choice {:label \"Draw a card\"}) -> \"Draw a card\"
+          (format-choice \"Done\") -> \"Done\""
+  [choice]
+  (cond
+    ;; Map with :value key (most common)
+    (and (map? choice) (:value choice))
+    (:value choice)
+
+    ;; Map without :value - try :label or show keys
+    (map? choice)
+    (or (:label choice)
+        (:title choice)
+        (str "Option with keys: " (keys choice)))
+
+    ;; String or number - show as-is
+    :else
+    (str choice)))
 
 ;; ============================================================================
 ;; Agenda Helpers
@@ -280,6 +341,7 @@
    Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
   [server-input]
   (let [s (clojure.string/lower-case (clojure.string/trim server-input))
+        remote-pattern #"(?:remote|r|server)\s*(\d+)"
         normalized (cond
                      ;; Central servers
                      (= s "hq") "HQ"
@@ -288,8 +350,8 @@
 
                      ;; Remote servers - handle various formats
                      ;; remote1, remote 1, r1, server1, server 1 → Server 1
-                     (re-matches #"(?:remote|r|server)\s*(\d+)" s)
-                     (let [num (second (re-matches #"(?:remote|r|server)\s*(\d+)" s))]
+                     (re-matches remote-pattern s)
+                     (let [num (second (re-matches remote-pattern s))]
                        (str "Server " num))
 
                      ;; Already correct format - pass through
@@ -402,7 +464,7 @@
       (if-let [prompt (ws/get-prompt)]
         prompt
         (do
-          (Thread/sleep 1000)
+          (Thread/sleep short-delay)
           (recur (inc checks))))
       (do
         (println "⏱️  Timeout waiting for prompt")
@@ -431,7 +493,7 @@
      (println (format "⏳ Waiting for game state change (timeout: %ds)..." timeout-seconds))
 
      (loop [checks 0]
-       (Thread/sleep 500)
+       (Thread/sleep quick-delay)
        (let [current-state @ws/client-state
              current-log (get-in current-state [:game-state :log])
              current-log-count (count current-log)
@@ -470,7 +532,7 @@
     (println (format "⏳ Waiting for log entries past marker: \"%s\"" (subs marker-text 0 (min 50 (count marker-text)))))
 
     (loop []
-      (Thread/sleep 500)
+      (Thread/sleep quick-delay)
       (let [current-log (get-in @ws/client-state [:game-state :log])
             marker-idx (first (keep-indexed
                                #(when (clojure.string/includes? (:text %2) marker-text) %1)

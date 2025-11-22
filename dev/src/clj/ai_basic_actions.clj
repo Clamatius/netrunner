@@ -178,7 +178,7 @@
                                     gameid)
                            :command "start-turn"
                            :args nil})
-        (Thread/sleep 2000)
+        (Thread/sleep core/standard-delay)
         (core/show-turn-indicator)
         {:status :success})
 
@@ -217,7 +217,7 @@
                                       gameid)
                              :command "start-turn"
                              :args nil})
-          (Thread/sleep 2000)
+          (Thread/sleep core/standard-delay)
           (core/show-turn-indicator)
           ;; For Corp, show what was drawn (mandatory draw)
           (when (= my-side :corp)
@@ -258,7 +258,7 @@
                                   gameid)
                          :command "credit"
                          :args nil})
-      (Thread/sleep 1500)
+      (Thread/sleep core/medium-delay)
       (let [state @ws/client-state
             side (:side state)
             after-credits (get-in state [:game-state (keyword side) :credit])
@@ -291,7 +291,7 @@
                                   gameid)
                          :command "draw"
                          :args nil})
-      (Thread/sleep 1500)
+      (Thread/sleep core/medium-delay)
       (let [state @ws/client-state
             side (:side state)
             hand (get-in state [:game-state (keyword side) :hand])
@@ -347,7 +347,7 @@
                                     gameid)
                            :command "end-turn"
                            :args nil})
-        (Thread/sleep 2000)
+        (Thread/sleep core/standard-delay)
         (core/show-turn-indicator)
         {:status :success}))))
 

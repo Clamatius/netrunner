@@ -237,7 +237,7 @@
           (do
             (when (= 0 (mod checks 5))
               (println (str "  ...waiting (opponent's turn: " active-player ")")))
-            (Thread/sleep 2000)
+            (Thread/sleep core/standard-delay)
             (recur (inc checks))))))))
 
 (defn wait-for-run
@@ -267,7 +267,7 @@
           (do
             (when (= 0 (mod checks 10))
               (println "  ...waiting for run"))
-            (Thread/sleep 1000)
+            (Thread/sleep core/short-delay)
             (recur (inc checks))))))))
 
 (defn show-prompt
@@ -343,24 +343,6 @@
     (when (> facedown-count 0)
       (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
 
-(defn- format-choice
-  "Format a choice for display, handling different prompt formats"
-  [choice]
-  (cond
-    ;; Map with :value key (most common)
-    (and (map? choice) (:value choice))
-    (:value choice)
-
-    ;; Map without :value - try :label or show keys
-    (map? choice)
-    (or (:label choice)
-        (:title choice)
-        (str "Option with keys: " (keys choice)))
-
-    ;; String or number - show as-is
-    :else
-    (str choice)))
-
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -379,7 +361,7 @@
         (when has-choices
           (println "  Choices:")
           (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-            (println (str "    " idx ". " (format-choice choice)))))
+            (println (str "    " idx ". " (core/format-choice choice)))))
         (when has-selectable
           (println "  Selectable cards:" (count (:selectable prompt))
                    "- Use choose-card! to select by index")

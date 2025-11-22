@@ -155,7 +155,7 @@
                    :choices [{:value "Option 1" :idx 0}
                             {:value "Option 2" :idx 1}]))
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/choose 0)
+          (ai-actions/choose! 0)
           (is (= 1 (count @sent))))))))
 
 (deftest test-mulligan

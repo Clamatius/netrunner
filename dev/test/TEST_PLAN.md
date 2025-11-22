@@ -252,7 +252,7 @@ dev/test/
     (with-mock-state
       (mock-client-state :prompt nil)
       (assert-error-message
-        #(ai-actions/choose 0)
+        #(ai-actions/choose! 0)
         "No active prompt"))))
 ```
 
