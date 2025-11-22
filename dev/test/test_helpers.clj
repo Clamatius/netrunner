@@ -152,13 +152,15 @@
 
    Usage:
      (make-prompt :msg \"Choose a card\" :choices [\"Option 1\" \"Option 2\"])
-     (make-prompt :prompt-type \"select\" :choices [{:cid 1} {:cid 2}])"
-  [& {:keys [msg choices prompt-type card]
-      :or {msg "Choose" choices [] prompt-type "select"}}]
+     (make-prompt :prompt-type \"select\" :choices [{:cid 1} {:cid 2}])
+     (make-prompt :prompt-type \"run\" :choices [] :selectable [])"
+  [& {:keys [msg choices prompt-type card selectable]
+      :or {msg "Choose" choices [] prompt-type "select" selectable []}}]
   {:msg msg
    :choices choices
    :prompt-type prompt-type
-   :card card})
+   :card card
+   :selectable selectable})
 
 ;; ============================================================================
 ;; Test Data Fixtures
