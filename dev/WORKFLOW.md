@@ -275,5 +275,5 @@ Clean up with: `./dev/clean-logs.sh`
 ## See Also
 
 - `./dev/send_command --help` - All game commands
-- `./dev/GAME_REFERENCE.md` - Game mechanics reference
+- `./dev/*playbook.md` - Game mechanics reference for players
 - `./dev/ITERATIVE_TESTING_PLAN.md` - Testing strategy

@@ -1,0 +1,359 @@
+# Refactoring Plan - AI Player ./dev Code Review
+**Date Created:** 2025-11-21
+**Status:** Not Started
+**Estimated Total Time:** 6-8 hours
+
+---
+
+## Executive Summary
+
+Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
+- **2 Critical Runtime Bugs** (P0) - arity errors that will crash on execution
+- **3 Immediate Cleanup Items** (P1) - dead files, broken doc references
+- **7 Code Quality Issues** (P2) - duplication, magic numbers, naming inconsistencies
+- **3 Structural Refactorings** (P3) - optional improvements for maintainability
+
+**Overall Assessment:** Modular refactoring was well-executed. Technical debt is typical for rapid feature development and manageable. No major architectural problems.
+
+---
+
+## Phase 1: Critical Bugs (P0) - DO FIRST
+**Estimated Time:** 30 minutes
+**Risk if not fixed:** Runtime crashes
+
+### Bug #1: Arity Error in `rez-card!`
+- [x] **File:** `dev/src/clj/ai_card_actions.clj`
+- [x] **Line:** 332
+- [x] **Issue:** Calls `core/verify-action-in-log` with 2 args, expects 3
+- [x] **Fix:** Change from:
+  ```clojure
+  (core/verify-action-in-log card-name 3000)
+  ```
+  To:
+  ```clojure
+  (core/verify-action-in-log card-name (:zone card) 3000)
+  ```
+
+### Bug #2: Arity Error in `score-agenda!`
+- [x] **File:** `dev/src/clj/ai_card_actions.clj`
+- [x] **Line:** 500
+- [x] **Issue:** Calls `core/verify-action-in-log` with 2 args, expects 3
+- [x] **Fix:** Same as Bug #1:
+  ```clojure
+  (core/verify-action-in-log card-name (:zone card) 3000)
+  ```
+
+### Verification
+- [ ] Run tests to confirm fixes
+- [ ] Test `rez-card!` and `score-agenda!` in actual gameplay
+
+---
+
+## Phase 2: Immediate Cleanup (P1)
+**Estimated Time:** 30 minutes
+**Risk if not fixed:** Developer confusion, broken documentation links
+
+### Cleanup #1: Remove Stale Backup File
+- [x] **File:** `dev/src/clj/ai_actions.clj.original`
+- [x] **Issue:** 101KB (2,563 lines) pre-refactoring monolith still in source tree
+- [x] **Action:** Delete file entirely (all code has been migrated to 7 modules)
+
+### Cleanup #2: Fix Broken Documentation References
+- [x] **Issue:** GAME_REFERENCE.md no longer exists (replaced by playbook .mds)
+- [x] **Files to update:**
+  - [x] `CLAUDE.md` - Already updated to reference `*playbook.md` files
+  - [x] `dev/README.md:257,388` - Updated to reference playbook files
+  - [x] `dev/WORKFLOW.md:278` - Updated to reference playbook files
+  - [x] `dev/test/CONTINUE_RUN_SPEC.md:447` - Updated to reference playbook files
+- [x] **Action:** Replace references with links to actual playbook .md files
+
+### Cleanup #3: Resolve Commented TODOs
+- [x] **File:** `dev/src/clj/ai_websocket_client_v2.clj`
+- [x] **Lines:** 248-252
+- [x] **Issue:** Commented-out functions with TODOs:
+  ```clojure
+  ;; TODO: Move announce-revealed-archives function before handle-message
+  ;; (announce-revealed-archives diff)
+  ;; TODO: Move write-game-log-to-hud function before handle-message
+  ;; (write-game-log-to-hud 30)
+  ```
+- [x] **Action:** Both features enabled (uncommented calls)
+- [x] **Decision:** Archives announcements and auto-HUD updates are now active
+
+---
+
+## Phase 3: Code Quality Improvements (P2)
+**Estimated Time:** 2-3 hours
+**Risk if not fixed:** Maintainability issues, future bugs
+
+### Quality #1: Extract Duplicate `format-choice` Function
+- [ ] **Issue:** Function duplicated verbatim in 2 files
+- [ ] **Locations:**
+  - `dev/src/clj/ai_prompts.clj:10-26`
+  - `dev/src/clj/ai_display.clj:346-362`
+- [ ] **Action:**
+  1. Move function to `ai_core.clj` as public (not private)
+  2. Update both files to use `core/format-choice`
+  3. Add tests for edge cases (nil counters, missing keys)
+
+### Quality #2: Define Timeout Constants
+- [ ] **Issue:** Magic numbers scattered throughout (30+ instances)
+- [ ] **Examples:**
+  - `Thread/sleep 2000` - 15+ times
+  - `Thread/sleep 1500` - 10+ times
+  - `Thread/sleep 500` - 5+ times
+  - Timeout values: 3000ms, 5000ms, 10000ms varied inconsistently
+- [ ] **Action:**
+  1. Add constants to `ai_core.clj`:
+     ```clojure
+     (def default-action-timeout 3000)
+     (def default-state-sync-delay 2000)
+     (def default-quick-delay 500)
+     (def default-medium-delay 1500)
+     ```
+  2. Replace all hardcoded values with named constants
+  3. Document what each timeout is for
+
+### Quality #3: Standardize Naming Conventions (Bang Suffix)
+- [ ] **Issue:** Some state-changing functions missing `!` suffix
+- [ ] **Files to update:**
+  - [ ] `dev/src/clj/ai_prompts.clj` - `choose` → `choose!`
+  - [ ] `dev/src/clj/ai_connection.clj:158-161` - `change` → `change!`
+- [ ] **Action:**
+  1. Rename functions to add `!` suffix
+  2. Update all call sites
+  3. Update re-exports in `ai_actions.clj` facade
+- [ ] **Alternative:** Document why these are exceptions if there's a good reason
+
+### Quality #4: Standardize Return Values
+- [ ] **Issue:** Inconsistent return value patterns across action functions
+- [ ] **Examples:**
+  - `play-card!` returns `{:status :success/:error :data ...}`
+  - `rez-card!` returns nil
+  - `continue-run!` returns detailed status maps
+  - `take-credit!` returns status map
+- [ ] **Action:**
+  1. Document return value conventions in ai_core.clj
+  2. Decide on standard: always return status maps OR document which functions return values
+  3. Update functions to follow convention
+
+### Quality #5: Fix Inconsistent Card Reference Creation
+- [ ] **Issue:** Some functions manually create card refs instead of using helper
+- [ ] **Locations:** `ai_card_actions.clj` lines 211-214, 288-291, 323-326
+- [ ] **Action:**
+  1. Search for all manual card-ref creation patterns:
+     ```clojure
+     {:cid (:cid card) :zone (:zone card) :side (:side card) :type (:type card)}
+     ```
+  2. Replace with `core/create-card-ref` calls
+
+### Quality #6: Audit Backwards Compatibility Shims
+- [ ] **File:** `dev/src/clj/ai_basic_actions.clj:485-493`
+- [ ] **Issue:** Commented as "backwards compatibility" but unclear if still needed
+- [ ] **Functions:**
+  ```clojure
+  (defn take-credits [] (take-credit!))
+  (defn draw-card [] (draw-card!))
+  (defn end-turn [] (end-turn!))
+  ```
+- [ ] **Action:**
+  1. Check if any code still calls non-bang versions
+  2. If yes: document why they exist
+  3. If no: remove them
+
+### Quality #7: Extract `normalize-server-name` Regex to Let Binding
+- [ ] **File:** `dev/src/clj/ai_core.clj:270-299`
+- [ ] **Lines:** 291-292
+- [ ] **Issue:** Regex pattern repeated on consecutive lines
+- [ ] **Action:** Extract to `let` binding for clarity
+
+---
+
+## Phase 4: Structural Refactoring (P3) - OPTIONAL
+**Estimated Time:** 3-4 hours
+**Risk if not fixed:** None immediate, long-term maintainability
+
+### Structure #1: Refactor `continue-run!` Rats Nest
+- [ ] **File:** `dev/src/clj/ai_runs.clj:354-717`
+- [ ] **Issue:** 363-line function with 9 levels of nested cond
+- [ ] **Current responsibilities:**
+  - Force mode, opponent waiting, Corp rez, Corp fire-unbroken
+  - Runner approach-ice, waiting logic, decisions, events
+  - Auto-choices, auto-continue, completion
+- [ ] **Action:** Extract strategy pattern
+  ```clojure
+  (defn continue-run! [& args]
+    (let [state (get-run-state)
+          handlers [handle-force-mode
+                   handle-opponent-wait
+                   handle-corp-rez-strategy
+                   handle-corp-fire-unbroken
+                   handle-runner-approach-ice
+                   handle-waiting-for-opponent
+                   handle-real-decision
+                   handle-events
+                   handle-auto-choice
+                   handle-auto-continue
+                   handle-run-complete]]
+      (run-first-matching-handler handlers state)))
+  ```
+- [ ] **Sub-tasks:**
+  1. Extract each cond branch to separate handler function
+  2. Implement handler interface (returns {:handled? bool :result ...})
+  3. Create `run-first-matching-handler` dispatcher
+  4. Add tests for each handler independently
+  5. Integration test to ensure behavior unchanged
+
+### Structure #2: Add Logging Framework
+- [ ] **Issue:** DEBUG print statements pollute production output (10+ instances)
+- [ ] **Examples:**
+  - `ai_websocket_client_v2.clj:166, 203` - "🔍 RAW RECEIVED:", "🔧 HANDLING MESSAGE:"
+  - `ai_core.clj:48-58` - Verbose diff application logging
+- [ ] **Action:**
+  1. Add dependency: `[com.taoensso/timbre "6.x.x"]` to project.clj
+  2. Configure logging levels (DEBUG, INFO, WARN, ERROR)
+  3. Replace print statements with timbre/debug, timbre/info
+  4. Add env var `AI_DEBUG_LEVEL` to control verbosity
+- [ ] **Alternative:** Use conditional debug flag without external dependency
+
+### Structure #3: Organize Test Files
+- [ ] **Issue:** Test files scattered between `dev/src/clj/` and `dev/test/`
+- [ ] **Files to move from `dev/src/clj/` to `dev/test/`:**
+  - [ ] `test_harness.clj`
+  - [ ] `full_game_test.clj`
+  - [ ] `game_command_test.clj`
+- [ ] **Action:**
+  1. Move files to `dev/test/`
+  2. Update namespaces if needed
+  3. Update any scripts that reference these files
+
+### Structure #4: Split `ai_websocket_client_v2.clj` (OPTIONAL)
+- [ ] **File:** `dev/src/clj/ai_websocket_client_v2.clj` (1,226 lines)
+- [ ] **Issue:** File handles too many concerns
+- [ ] **Current responsibilities:**
+  - WebSocket connection management
+  - Message parsing and routing
+  - State updates (diffs)
+  - HUD file management
+  - Display functions
+  - Game state queries
+- [ ] **Action:** Consider splitting into:
+  1. `ai_websocket.clj` - Pure WebSocket connection
+  2. `ai_state.clj` - State management and diff application
+  3. `ai_hud.clj` - HUD file management
+- [ ] **Complexity:** High - requires careful dependency management
+- [ ] **Priority:** Low - current structure works, only refactor if pain increases
+
+### Structure #5: Convert `handle-message` to Multimethod
+- [ ] **File:** `dev/src/clj/ai_websocket_client_v2.clj:200-296`
+- [ ] **Issue:** Large case statement handling 10+ message types
+- [ ] **Action:** Refactor to multimethod for extensibility
+  ```clojure
+  (defmulti handle-message-type :type)
+
+  (defmethod handle-message-type :chsk/handshake [msg] ...)
+  (defmethod handle-message-type :game/start [msg] ...)
+  (defmethod handle-message-type :game/state [msg] ...)
+  ;; etc.
+  ```
+
+### Structure #6: Add Safety Check to `verify-action-in-log`
+- [ ] **File:** `dev/src/clj/ai_core.clj:130-139`
+- [ ] **Issue:** Timeout loop could theoretically infinite-loop if time is stuck
+- [ ] **Action:** Add max-iterations safety check
+  ```clojure
+  (let [max-iterations 100
+        iterations (atom 0)]
+    (while (and (< @elapsed-time max-wait-ms)
+                (< @iterations max-iterations))
+      (swap! iterations inc)
+      ...))
+  ```
+
+---
+
+## Audit Tasks (Quick Checks)
+
+### Audit #1: Unused Test Utilities
+- [ ] Check if these files are still used or replaced by `send_command`:
+  - [ ] `dev/src/clj/start_ai.clj`
+  - [ ] `dev/src/clj/connect_ai.clj`
+- [ ] Action: Delete if obsolete
+
+### Audit #2: Server Name Normalization
+- [ ] Search test files for manual server name normalization
+- [ ] Ensure all use `core/normalize-server-name` consistently
+
+---
+
+## Appendix: Detailed Code Review Findings
+
+### Code Statistics
+- **Total Files Analyzed:** 21 .clj files
+- **Total Lines of Code:** ~7,700 LOC (main code)
+- **Modular Structure:** 7 core modules + 1 facade + 1 websocket client
+- **Test Coverage:** 8 test files
+
+### File Breakdown
+1. `ai_core.clj` (504 lines) - Shared utilities
+2. `ai_connection.clj` (162 lines) - Lobby/connection
+3. `ai_display.clj` (733 lines) - Read-only display
+4. `ai_basic_actions.clj` (493 lines) - Turn management
+5. `ai_prompts.clj` (252 lines) - Choice handling
+6. `ai_card_actions.clj` (509 lines) - Card operations
+7. `ai_runs.clj` (734 lines) - Run mechanics
+8. `ai_actions.clj` (153 lines) - Facade/re-exports
+9. `ai_websocket_client_v2.clj` (1,226 lines) - WebSocket client
+
+### Positive Findings
+✅ Clean modular refactoring with good separation of concerns
+✅ Excellent docstrings with usage examples on many functions
+✅ Well-executed facade pattern for backward compatibility
+✅ Good error handling with try/catch blocks
+✅ Multi-client support with file locking in HUD management
+✅ Flexible run automation with strategy flags
+✅ Clean atom-based state management
+
+### Known Limitations (Documented)
+- `can-score-agenda?` (ai_core.clj:179-180) - Simple counter check, doesn't detect "cannot score this turn" effects
+- Log parsing for turn state - Fragile string matching instead of game state fields
+
+---
+
+## Progress Tracking
+
+**Phase 1 (P0):** [x] 2/2 bugs fixed (verification pending)
+**Phase 2 (P1):** [x] 3/3 items completed
+**Phase 3 (P2):** [ ] 0/7 items completed
+**Phase 4 (P3):** [ ] 0/6 items completed
+**Audits:**      [ ] 0/2 items completed
+
+**Overall Progress:** 5/21 tasks (24%)
+
+---
+
+## Notes & Decisions
+
+### Decision Log
+- **2025-11-21:** Plan created from initial code review
+- **2025-11-21:** GAME_REFERENCE.md was replaced by playbook .mds (user confirmed)
+- **2025-11-21:** Phase 1 (P0) completed - Fixed both arity errors in ai_card_actions.clj
+- **2025-11-21:** Phase 2 (P1) completed - Removed backup file, fixed doc references, enabled Archives/HUD features
+
+### Future Considerations
+- Consider comprehensive test coverage audit
+- May want to add integration tests for full game flows
+- Documentation: Add "Known Limitations" section to README
+
+---
+
+## How to Use This Document
+
+1. **Start with Phase 1 (P0)** - Critical bugs must be fixed first
+2. **Work through phases sequentially** - Each phase builds on previous
+3. **Check boxes as you complete tasks** - Use `[x]` to mark done
+4. **Update Progress Tracking** - Keep percentage up to date
+5. **Add notes to Decision Log** - Document important choices
+6. **This is a living document** - Update as you discover new issues or complete work
+
+Multiple developers (or Claude instances) can work on different phases concurrently as long as Phase 1 is done first.

@@ -254,7 +254,7 @@ dev/
 │   ├── card_loader.clj            # Card database loader
 │   └── user.clj                   # User namespace (for main server REPL)
 │
-└── GAME_REFERENCE.md              # Complete command reference
+└── *playbook.md                   # Game mechanics reference for players (WIP)
 ```
 
 ### How It Works
@@ -385,9 +385,9 @@ Check terminal where `lein repl` is running
 
 ## Next Steps
 
-- **Game Commands:** See `GAME_REFERENCE.md` for complete command reference
+- **Game Commands:** See `./dev/send_command --help` for complete command reference
+- **Game Mechanics:** See `*playbook.md` files for game reference
 - **Debugging:** See `DEVELOPMENT.md` for WebSocket internals and debugging
-- **Game Mechanics:** See `netrunner-complete-mechanics.md` for full game rules
 
 ---
 

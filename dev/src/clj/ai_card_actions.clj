@@ -329,7 +329,7 @@
                                :command "rez"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
-            (if (core/verify-action-in-log card-name 3000)
+            (if (core/verify-action-in-log card-name (:zone card) 3000)
               (let [after-state @ws/client-state
                     after-credits (get-in after-state [:game-state :corp :credit])]
                 (println (str "🔴 Rezzed: " card-name))
@@ -497,7 +497,7 @@
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
-              (if (core/verify-action-in-log card-name 3000)
+              (if (core/verify-action-in-log card-name (:zone card) 3000)
                 (let [after-state @ws/client-state
                       after-score (get-in after-state [:game-state :corp :agenda-point])
                       runner-score (get-in after-state [:game-state :runner :agenda-point])]

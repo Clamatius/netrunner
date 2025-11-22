@@ -444,7 +444,7 @@ The new `continue-run` should:
 9. ⬜ Refactor `continue-run!` to use pause detection
 10. ⬜ Test against known bug scenarios (Bug #12 reproduction)
 11. ⬜ Iteration test with real games
-12. ⬜ Document behavior in GAME_REFERENCE.md
+12. ⬜ Document behavior in playbook files
 
 ---
 

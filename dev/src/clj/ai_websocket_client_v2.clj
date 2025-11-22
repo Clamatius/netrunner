@@ -30,6 +30,10 @@
          :client-id nil
          :csrf-token nil}))
 
+;; Forward declarations for functions used in handle-message
+(declare announce-revealed-archives)
+(declare write-game-log-to-hud)
+
 (defn apply-diff
   "Apply a diff to current state to get new state using differ library"
   [old-state diff]
@@ -245,11 +249,9 @@
         ;; Clear lobby-state once game has started (receiving diffs means game is active)
         (swap! client-state dissoc :lobby-state)
         ;; Announce newly revealed cards in Archives
-        ;; TODO: Move announce-revealed-archives function before handle-message
-        ;; (announce-revealed-archives diff)
+        (announce-revealed-archives diff)
         ;; Auto-update game log HUD
-        ;; TODO: Move write-game-log-to-hud function before handle-message
-        ;; (write-game-log-to-hud 30)
+        (write-game-log-to-hud 30)
         (println "   ✓ Diff applied successfully")))
 
     :game/resync
