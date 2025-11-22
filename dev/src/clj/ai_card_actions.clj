@@ -207,11 +207,7 @@
                (core/find-installed-card card-name))]
     (if card
       (let [gameid (:gameid state)
-            ;; Create card reference matching wire format
-            card-ref {:cid (:cid card)
-                     :zone (:zone card)
-                     :side (:side card)
-                     :type (:type card)}
+            card-ref (core/create-card-ref card)
             ;; Check if this ability is dynamic (e.g., auto-pump, auto-pump-and-break)
             abilities (:abilities card)
             ability (when (and abilities (< ability-index (count abilities)))
@@ -285,10 +281,7 @@
                (core/find-installed-card card-name))]
     (if card
       (let [gameid (:gameid state)
-            card-ref {:cid (:cid card)
-                     :zone (:zone card)
-                     :side (:side card)
-                     :type (:type card)}
+            card-ref (core/create-card-ref card)
             card-type (:type card)
             card-zone (:zone card)]
         (ws/send-message! :game/action
@@ -317,10 +310,7 @@
       (let [card (core/find-installed-corp-card card-name)]
         (if card
           (let [gameid (:gameid state)
-                card-ref {:cid (:cid card)
-                         :zone (:zone card)
-                         :side (:side card)
-                         :type (:type card)}
+                card-ref (core/create-card-ref card)
                 rez-cost (:cost card)]
             (ws/send-message! :game/action
                               {:gameid (if (string? gameid)

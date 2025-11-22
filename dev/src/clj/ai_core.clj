@@ -40,6 +40,49 @@
   5000)
 
 ;; ============================================================================
+;; Return Value Conventions
+;; ============================================================================
+;;
+;; ACTION FUNCTIONS return values follow these patterns:
+;;
+;; 1. STATUS MAP PATTERN (preferred for new code):
+;;    Functions that need to communicate success/failure return maps:
+;;
+;;    {:status :success
+;;     :data {...}}           ; Success with optional data
+;;
+;;    {:status :error
+;;     :reason "..."}          ; Error with reason string
+;;
+;;    {:status :waiting-input
+;;     :prompt {...}}          ; Waiting for user input (prompt created)
+;;
+;;    {:status :waiting-for-opponent
+;;     :message "..."}         ; Waiting for opponent action
+;;
+;;    Examples: play-card!, install-card!, start-turn!, take-credit!
+;;              continue-run!, choose-card!, choose-by-value!
+;;
+;; 2. NIL RETURN PATTERN (legacy, simpler actions):
+;;    Functions that just perform actions and print feedback return nil:
+;;
+;;    Examples: rez-card!, trash-card!, advance-card!, score-agenda!
+;;              draw-card!, end-turn!, mulligan, keep-hand
+;;
+;; 3. VALUE RETURN PATTERN (queries):
+;;    Read-only query functions return the requested value:
+;;
+;;    Examples: show-hand (returns hand vector)
+;;              show-credits (returns number)
+;;              show-clicks (returns number)
+;;              status (returns state map)
+;;
+;; GUIDELINE: Use status maps when the caller needs to know if the action
+;; succeeded or failed. Use nil returns for simple actions where printing
+;; feedback is sufficient. New code should prefer status maps for better
+;; composability and error handling.
+;;
+;; ============================================================================
 ;; Side Comparison
 ;; ============================================================================
 

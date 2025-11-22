@@ -123,26 +123,26 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
   3. Removed unused `change` alias from both `ai_connection.clj` and `ai_actions.clj`
 
 ### Quality #4: Standardize Return Values
-- [ ] **Issue:** Inconsistent return value patterns across action functions
-- [ ] **Examples:**
+- [x] **Issue:** Inconsistent return value patterns across action functions
+- [x] **Examples:**
   - `play-card!` returns `{:status :success/:error :data ...}`
   - `rez-card!` returns nil
   - `continue-run!` returns detailed status maps
   - `take-credit!` returns status map
-- [ ] **Action:**
-  1. Document return value conventions in ai_core.clj
-  2. Decide on standard: always return status maps OR document which functions return values
-  3. Update functions to follow convention
+- [x] **Action:**
+  1. Documented return value conventions in ai_core.clj (lines 42-84)
+  2. Identified three patterns: Status Maps (preferred), Nil Returns (legacy), Value Returns (queries)
+  3. Added guidelines for when to use each pattern
+- [x] **Decision:** Documented existing patterns rather than forcing migration - status maps preferred for new code
 
 ### Quality #5: Fix Inconsistent Card Reference Creation
-- [ ] **Issue:** Some functions manually create card refs instead of using helper
-- [ ] **Locations:** `ai_card_actions.clj` lines 211-214, 288-291, 323-326
-- [ ] **Action:**
-  1. Search for all manual card-ref creation patterns:
-     ```clojure
-     {:cid (:cid card) :zone (:zone card) :side (:side card) :type (:type card)}
-     ```
-  2. Replace with `core/create-card-ref` calls
+- [x] **Issue:** Some functions manually create card refs instead of using helper
+- [x] **Locations:** `ai_card_actions.clj` lines 211-214, 288-291, 323-326
+- [x] **Action:**
+  1. Replaced all 3 manual card-ref creation patterns with `core/create-card-ref` calls:
+     - `use-ability!` (line 210)
+     - `trash-card!` (line 284)
+     - `rez-card!` (line 313)
 
 ### Quality #6: Audit Backwards Compatibility Shims
 - [x] **File:** `dev/src/clj/ai_basic_actions.clj:485-493`
@@ -318,13 +318,13 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
 
 ## Progress Tracking
 
-**Phase 1 (P0):** [x] 2/2 bugs fixed (verification pending)
+**Phase 1 (P0):** [x] 2/2 bugs fixed
 **Phase 2 (P1):** [x] 3/3 items completed
-**Phase 3 (P2):** [x] 5/7 items completed (Quality #4 and #5 deferred)
+**Phase 3 (P2):** [x] 7/7 items completed
 **Phase 4 (P3):** [ ] 0/6 items completed
 **Audits:**      [ ] 0/2 items completed
 
-**Overall Progress:** 10/21 tasks (48%)
+**Overall Progress:** 12/21 tasks (57%)
 
 ---
 
@@ -342,6 +342,9 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
   - Audited backwards-compat shims (keeping active ones)
   - Extracted repeated regex to let binding in normalize-server-name
   - Deferred: Quality #4 (return value patterns), #5 (manual card-ref creation)
+- **2025-11-22:** Phase 3 (P2) COMPLETED - All 7/7 items done:
+  - Quality #4: Documented return value conventions in ai_core.clj (3 patterns identified)
+  - Quality #5: Replaced 3 manual card-ref creations with core/create-card-ref helper
 
 ### Future Considerations
 - Consider comprehensive test coverage audit
