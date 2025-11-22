@@ -14,24 +14,26 @@
    Usage:
      (mock-client-state)  ; defaults
      (mock-client-state :side \"corp\" :credits 10)
-     (mock-client-state :hand [{:cid 1 :title \"Sure Gamble\"}])"
-  [& {:keys [side credits clicks hand installed prompt servers active-player]
+     (mock-client-state :hand [{:cid 1 :title \"Sure Gamble\"}])
+     (mock-client-state :game-state {...})  ; override entire game-state"
+  [& {:keys [side credits clicks hand installed prompt servers active-player game-state]
       :or {side "runner" credits 5 clicks 4 hand [] installed {} servers {} active-player "runner"}}]
   {:connected true
    :uid "test-user"
-   :gameid "test-game-id"
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")  ; Valid UUID for tests
    :side side
-   :game-state {:runner {:credit (if (= side "runner") credits 5)
-                        :click (if (= side "runner") clicks 4)
-                        :hand (if (= side "runner") hand [])
-                        :rig installed
-                        :prompt-state prompt}
-                :corp {:credit (if (= side "corp") credits 5)
-                       :click (if (= side "corp") clicks 3)
-                       :hand (if (= side "corp") hand [])
-                       :servers servers
-                       :prompt-state prompt}
-                :active-player active-player}})
+   :game-state (or game-state
+                   {:runner {:credit (if (= side "runner") credits 5)
+                            :click (if (= side "runner") clicks 4)
+                            :hand (if (= side "runner") hand [])
+                            :rig installed
+                            :prompt-state prompt}
+                    :corp {:credit (if (= side "corp") credits 5)
+                           :click (if (= side "corp") clicks 3)
+                           :hand (if (= side "corp") hand [])
+                           :servers servers
+                           :prompt-state prompt}
+                    :active-player active-player})})
 
 ;; ============================================================================
 ;; State Manipulation Macros
