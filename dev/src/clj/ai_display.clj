@@ -285,7 +285,7 @@
     hand))
 
 (defn show-hand
-  "Show hand using side-aware state access. Returns nil to avoid printing raw data."
+  "Show hand using side-aware state access. Returns hand vector."
   []
   (let [state @ws/client-state
         side (:side state)
@@ -302,7 +302,7 @@
                     (str " (" c "¢)")
                     "")]
           (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost)))))
-    nil))
+    hand))
 
 (defn show-credits
   "Show current credits (side-aware). Returns credits value."
