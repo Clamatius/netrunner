@@ -26,7 +26,11 @@
 (defn run-command!
   "Execute a command via ./dev/send_command, return output"
   [side cmd]
-  (let [result (shell/sh "./dev/send_command" side cmd :dir "/Users/mcooper/workspace/netrunner")]
+  (let [;; Split command into parts for shell args (e.g. "end-turn --force" -> ["end-turn" "--force"])
+        cmd-parts (str/split cmd #"\s+")
+        ;; Build full command: ["./dev/send_command" "corp" "end-turn" "--force"]
+        full-cmd (concat ["./dev/send_command" side] cmd-parts)
+        result (apply shell/sh (concat full-cmd [:dir "/Users/mcooper/workspace/netrunner"]))]
     (when (not= 0 (:exit result))
       (throw (ex-info (str "Command failed: " side " " cmd)
                       {:side side :cmd cmd :result result})))
