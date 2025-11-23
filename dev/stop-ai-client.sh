@@ -1,13 +1,17 @@
 #!/bin/bash
 # Stop AI Client REPL
 # Usage: ./stop-ai-client.sh [client_name] [port]
+# Usage: ./stop-ai-client.sh [client_name] [port]
 # Old usage still supported: ./stop-ai-client.sh
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
 
 # Parse arguments - support both old and new usage
 if [ $# -eq 0 ]; then
     # Old usage: default client
     CLIENT_NAME="fixed-id"
-    REPL_PORT="7889"
+    REPL_PORT="${CLIENT_1_PORT:-7889}"
 elif [ $# -eq 1 ]; then
     # New usage: just client name
     CLIENT_NAME="$1"
@@ -21,7 +25,7 @@ else
     echo "Examples:"
     echo "  $0              # Stop default client (fixed-id)"
     echo "  $0 runner       # Stop runner client"
-    echo "  $0 corp 7890    # Stop corp client on port 7890"
+    echo "  $0 corp $CLIENT_2_PORT    # Stop corp client on port $CLIENT_2_PORT"
     exit 1
 fi
 

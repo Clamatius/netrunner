@@ -14,6 +14,9 @@ set -e
 GAME_ID="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Load environment variables and default ports
+source "$SCRIPT_DIR/load-env.sh"
+
 echo "🔄 AI Client Bounce & Reconnect"
 echo ""
 
@@ -38,8 +41,8 @@ WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
   # Check if both ports are listening
-  if lsof -i :7889 -sTCP:LISTEN -t > /dev/null 2>&1 && \
-     lsof -i :7890 -sTCP:LISTEN -t > /dev/null 2>&1; then
+  if lsof -i :$CLIENT_1_PORT -sTCP:LISTEN -t > /dev/null 2>&1 && \
+     lsof -i :$CLIENT_2_PORT -sTCP:LISTEN -t > /dev/null 2>&1; then
     echo "✅ Both REPLs are listening"
     break
   fi
@@ -63,12 +66,12 @@ sleep 5
 
 # Step 5: Test REPL connectivity
 echo "🔍 Testing REPL connectivity..."
-if ! TIMEOUT=5 "$SCRIPT_DIR/ai-eval.sh" runner 7889 '(+ 1 1)' > /dev/null 2>&1; then
+if ! TIMEOUT=5 "$SCRIPT_DIR/ai-eval.sh" runner $CLIENT_1_PORT '(+ 1 1)' > /dev/null 2>&1; then
   echo "⚠️  Runner REPL not responding yet, waiting longer..."
   sleep 5
 fi
 
-if ! TIMEOUT=5 "$SCRIPT_DIR/ai-eval.sh" corp 7890 '(+ 1 1)' > /dev/null 2>&1; then
+if ! TIMEOUT=5 "$SCRIPT_DIR/ai-eval.sh" corp $CLIENT_2_PORT '(+ 1 1)' > /dev/null 2>&1; then
   echo "⚠️  Corp REPL not responding yet, waiting longer..."
   sleep 5
 fi
@@ -83,12 +86,12 @@ if [ -n "$GAME_ID" ]; then
 
   # Resync both clients
   echo "   Resyncing Runner..."
-  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" runner 7889 "(ai-actions/resync-game! \"$GAME_ID\")" || true
+  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" runner $CLIENT_1_PORT "(ai-actions/resync-game! \"$GAME_ID\")" || true
 
   sleep 2
 
   echo "   Resyncing Corp..."
-  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" corp 7890 "(ai-actions/resync-game! \"$GAME_ID\")" || true
+  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" corp $CLIENT_2_PORT "(ai-actions/resync-game! \"$GAME_ID\")" || true
 
   sleep 2
 
