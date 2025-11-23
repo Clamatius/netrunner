@@ -351,6 +351,310 @@
        ;; Not a special phase that needs attention
        (not (contains? #{:approach-ice :encounter-ice} run-phase))))
 
+;; ============================================================================
+;; Handler Functions for continue-run! Strategy Pattern
+;; ============================================================================
+;;
+;; Each handler examines the context and either:
+;; - Returns nil (not handled, try next handler)
+;; - Returns a result map {:status ... :action ... ...}
+;;
+;; Handlers are tried in priority order until one returns non-nil.
+
+(defn- send-continue!
+  "Helper to send continue command and return action-taken result"
+  [gameid]
+  (ws/send-message! :game/action
+                   {:gameid (if (string? gameid)
+                             (java.util.UUID/fromString gameid)
+                             gameid)
+                    :command "continue"
+                    :args nil})
+  {:status :action-taken
+   :action :sent-continue})
+
+(defn- send-choice!
+  "Helper to send choice command and return action-taken result"
+  [gameid choice-uuid choice-value]
+  (ws/send-message! :game/action
+                   {:gameid (if (string? gameid)
+                             (java.util.UUID/fromString gameid)
+                             gameid)
+                    :command "choice"
+                    :args {:choice {:uuid choice-uuid}}})
+  {:status :action-taken
+   :action :auto-choice
+   :choice choice-value})
+
+(defn handle-force-mode
+  "Priority 0: --force flag bypasses ALL checks"
+  [{:keys [strategy gameid]}]
+  (when (:force strategy)
+    (println "⚡ FORCE mode - bypassing all checks, sending continue")
+    (ws/send-message! :game/action
+                     {:gameid (if (string? gameid)
+                               (java.util.UUID/fromString gameid)
+                               gameid)
+                      :command "continue"
+                      :args nil})
+    {:status :action-taken
+     :action :forced-continue}))
+
+(defn handle-opponent-wait
+  "Priority 1: Opponent pressed WAIT button (indicate-action)"
+  [{:keys [state side opp-side]}]
+  (when (opponent-indicated-action? state side)
+    (println "⏸️  PAUSED - Opponent pressed WAIT button")
+    {:status :waiting-for-opponent
+     :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")}))
+
+(defn handle-run-complete
+  "Priority 7: Run complete (no run phase, no prompt)"
+  [{:keys [run-phase my-prompt]}]
+  (when (and (nil? run-phase) (nil? my-prompt))
+    (println "✅ Run complete")
+    {:status :run-complete}))
+
+(defn handle-no-run
+  "Priority 8: No active run"
+  [{:keys [run-phase my-prompt]}]
+  (when (and (nil? run-phase)
+             (or (nil? my-prompt)
+                 (not= (:prompt-type my-prompt) "run")))
+    (println "⚠️  No active run detected")
+    {:status :no-run}))
+
+(defn handle-auto-choice
+  "Priority 5: Auto-handle single mandatory choice"
+  [{:keys [my-prompt gameid]}]
+  (when (and my-prompt
+             (seq (:choices my-prompt))
+             (= 1 (count (:choices my-prompt))))
+    (let [choice (first (:choices my-prompt))
+          choice-uuid (:uuid choice)]
+      (println (format "   Auto-choosing: %s" (:value choice)))
+      (send-choice! gameid choice-uuid (:value choice)))))
+
+(defn handle-auto-continue
+  "Priority 6: Auto-continue through boring paid ability windows"
+  [{:keys [my-prompt run-phase gameid]}]
+  (when (can-auto-continue? my-prompt run-phase)
+    (println "   → Auto-continuing through paid ability window")
+    (send-continue! gameid)))
+
+(defn handle-real-decision
+  "Priority 3: I have a real decision to make"
+  [{:keys [my-prompt]}]
+  (when (has-real-decision? my-prompt)
+    (println "🛑 Run paused - decision required")
+    (println (format "   Prompt: %s" (:msg my-prompt)))
+    (when-let [card-title (get-in my-prompt [:card :title])]
+      (println (format "   Card: %s" card-title)))
+    (let [choices (:choices my-prompt)]
+      (println (format "   Choices: %d options" (count choices)))
+      (doseq [[idx choice] (map-indexed vector choices)]
+        (println (format "     %d. %s" idx (:value choice)))))
+    {:status :decision-required
+     :prompt my-prompt}))
+
+(defn handle-waiting-for-opponent
+  "Priority 3: Waiting for opponent to make a decision"
+  [{:keys [state side]}]
+  (when (waiting-for-opponent? state side)
+    (let [reason (waiting-reason state side)]
+      (println (format "⏸️  Waiting for opponent: %s" reason))
+      {:status :waiting-for-opponent
+       :message reason})))
+
+(defn handle-corp-rez-strategy
+  "Priority 1.5: Corp rez strategy - auto-handle rez decisions"
+  [{:keys [side run-phase my-prompt strategy state gameid]}]
+  (when (and (= side "corp")
+             (= run-phase "approach-ice")
+             my-prompt
+             (or (:no-rez strategy) (:rez strategy)))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          ice-title (:title current-ice "ICE")
+          ice-rezzed? (:rezzed current-ice)
+          should-rez? (and (not (:no-rez strategy))
+                          (:rez strategy)
+                          (contains? (:rez strategy) ice-title)
+                          (not ice-rezzed?))]
+      (cond
+        ;; --no-rez: always decline
+        (:no-rez strategy)
+        (do
+          (println (format "🤖 Strategy: --no-rez, declining %s" ice-title))
+          (merge (send-continue! gameid)
+                 {:action :auto-declined-rez
+                  :ice ice-title}))
+
+        ;; --rez <ice-name>: rez if in set, decline otherwise
+        should-rez?
+        (do
+          (println (format "🤖 Strategy: --rez, rezzing %s" ice-title))
+          (if current-ice
+            (let [card-ref (core/create-card-ref current-ice)]
+              (ws/send-message! :game/action
+                               {:gameid (if (string? gameid)
+                                         (java.util.UUID/fromString gameid)
+                                         gameid)
+                                :command "rez"
+                                :args {:card card-ref}})
+              {:status :action-taken
+               :action :auto-rezzed
+               :ice ice-title})
+            (do
+              (println (format "⚠️  Could not find ICE to rez: %s" ice-title))
+              {:status :decision-required
+               :prompt my-prompt})))
+
+        ;; --rez set exists but this ICE is already rezzed: just continue
+        (and (:rez strategy) ice-rezzed?)
+        (do
+          (println (format "   → ICE %s already rezzed, continuing" ice-title))
+          (send-continue! gameid))
+
+        ;; --rez set exists but this ICE not in it: decline
+        :else
+        (do
+          (println (format "🤖 Strategy: --rez (not %s), declining" ice-title))
+          (merge (send-continue! gameid)
+                 {:action :auto-declined-rez
+                  :ice ice-title}))))))
+
+(defn handle-corp-fire-unbroken
+  "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs"
+  [{:keys [side run-phase my-prompt strategy state gameid]}]
+  (when (and (= side "corp")
+             (= run-phase "encounter-ice")
+             my-prompt
+             (:fire-unbroken strategy))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          ice-title (:title current-ice "ICE")]
+      (if current-ice
+        (do
+          (println (format "🤖 Strategy: --fire-unbroken, firing subs on %s" ice-title))
+          (let [card-ref (core/create-card-ref current-ice)]
+            (ws/send-message! :game/action
+                             {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                              :command "unbroken-subroutines"
+                              :args {:card card-ref}})
+            {:status :action-taken
+             :action :auto-fired-subs
+             :ice ice-title}))
+        (do
+          (println "⚠️  Could not find ICE for fire-unbroken")
+          {:status :decision-required
+           :prompt my-prompt})))))
+
+(defn handle-runner-approach-ice
+  "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE"
+  [{:keys [side run-phase state]}]
+  (when (and (= side "runner")
+             (= run-phase "approach-ice")
+             (let [run (get-in state [:game-state :run])
+                   server (:server run)
+                   position (:position run)
+                   ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+                   ice-count (count ice-list)
+                   ice-index (- ice-count position)
+                   current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                                 (nth ice-list ice-index nil))
+                   no-action (:no-action run)
+                   corp-already-declined? (= no-action "corp")]
+               (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          ice-title (:title current-ice "ICE")]
+      (println "⏸️  PAUSED at approach-ice - Waiting for corp rez decision")
+      (println (format "   ICE position: %d/%d (unrezzed)" position ice-count))
+      (println (format "   ICE: %s" ice-title))
+      (println "   ⚠️  Runner prompt says 'Continue to Movement' but that would bypass corp rez!")
+      (println "   → Waiting for corp to rez or continue")
+      {:status :waiting-for-corp-rez
+       :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
+       :ice ice-title
+       :position position})))
+
+(defn handle-events
+  "Priority 4: Pause for important events (rez, abilities, subs, damage)"
+  [{:keys [rez-event ability-event fired-event tag-damage-event]}]
+  (cond
+    rez-event
+    (do
+      (println "⚠️  Run paused - ICE rezzed!")
+      (println (format "   %s" (:text rez-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :ice-rezzed :event rez-event})
+
+    ability-event
+    (do
+      (println "⚠️  Run paused - ability triggered!")
+      (println (format "   %s" (:text ability-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :ability-used :event ability-event})
+
+    fired-event
+    (do
+      (println "⚠️  Run paused - subroutines fired!")
+      (println (format "   %s" (:text fired-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :subs-fired :event fired-event})
+
+    tag-damage-event
+    (do
+      (println "⚠️  Run paused - tag or damage!")
+      (println (format "   %s" (:text tag-damage-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :tag-or-damage :event tag-damage-event})))
+
+(defn handle-unexpected-state
+  "Fallback: Unknown state"
+  [{:keys [side run-phase my-prompt opp-prompt]}]
+  (println "⚠️  Unexpected run state")
+  (println (format "   Side: %s" side))
+  (println (format "   Run phase: %s" run-phase))
+  (println (format "   My prompt type: %s" (:prompt-type my-prompt)))
+  (println (format "   My choices: %d" (count (:choices my-prompt))))
+  (println (format "   Opp has prompt: %s" (some? opp-prompt)))
+  {:status :unexpected-state
+   :prompt my-prompt
+   :phase run-phase})
+
+(defn run-first-matching-handler
+  "Run handlers in order until one returns non-nil result"
+  [handlers context]
+  (loop [remaining handlers]
+    (if-let [handler (first remaining)]
+      (if-let [result (handler context)]
+        result
+        (recur (rest remaining)))
+      ;; No handler matched - shouldn't happen, but return unexpected-state as fallback
+      (handle-unexpected-state context))))
+
 (defn continue-run!
   "Stateless run handler - examines current state, takes ONE action, returns.
    Call repeatedly until run completes or decision required.
@@ -424,297 +728,44 @@
         fired-event (first (filter #(clojure.string/includes? (:text %) "fire") recent-log))
         tag-damage-event (first (filter #(or (clojure.string/includes? (:text %) "tag")
                                              (clojure.string/includes? (:text %) "damage"))
-                                       recent-log))]
+                                       recent-log))
 
-    (cond
-      ;; Priority 0: --force flag bypasses ALL checks
-      (:force strategy)
-      (do
-        (println "⚡ FORCE mode - bypassing all checks, sending continue")
-        (ws/send-message! :game/action
-                         {:gameid (if (string? gameid)
-                                   (java.util.UUID/fromString gameid)
-                                   gameid)
-                          :command "continue"
-                          :args nil})
-        {:status :action-taken
-         :action :forced-continue})
-      ;; Priority 1: Opponent pressed WAIT button (indicate-action)
-      (opponent-indicated-action? state side)
-      (do
-        (println "⏸️  PAUSED - Opponent pressed WAIT button")
-        {:status :waiting-for-opponent
-         :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")})
+        ;; Build context map for handlers
+        context {:strategy strategy
+                 :state state
+                 :side side
+                 :gameid gameid
+                 :run-phase run-phase
+                 :my-prompt my-prompt
+                 :opp-side opp-side
+                 :opp-prompt opp-prompt
+                 :log log
+                 :rez-event rez-event
+                 :ability-event ability-event
+                 :fired-event fired-event
+                 :tag-damage-event tag-damage-event}
 
-      ;; Priority 1.5: Corp rez strategy - auto-handle rez decisions
-      (and (= side "corp")
-           (= run-phase "approach-ice")
-           my-prompt
-           (or (:no-rez strategy) (:rez strategy)))
-      (let [run (get-in state [:game-state :run])
-            server (:server run)
-            position (:position run)
-            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-            ice-count (count ice-list)
-            ice-index (- ice-count position)
-            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                          (nth ice-list ice-index nil))
-            ice-title (:title current-ice "ICE")
-            ice-rezzed? (:rezzed current-ice)
-            should-rez? (and (not (:no-rez strategy))
-                            (:rez strategy)
-                            (contains? (:rez strategy) ice-title)
-                            (not ice-rezzed?))]  ;; Only rez if not already rezzed
-        (cond
-          ;; --no-rez: always decline
-          (:no-rez strategy)
-          (do
-            (println (format "🤖 Strategy: --no-rez, declining %s" ice-title))
-            (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "continue"
-                              :args nil})
-            {:status :action-taken
-             :action :auto-declined-rez
-             :ice ice-title})
+        ;; Handler chain in priority order
+        handlers [handle-force-mode
+                  handle-opponent-wait
+                  handle-corp-rez-strategy
+                  handle-corp-fire-unbroken
+                  handle-runner-approach-ice
+                  handle-waiting-for-opponent
+                  handle-real-decision
+                  handle-events
+                  handle-auto-choice
+                  handle-auto-continue
+                  handle-run-complete
+                  handle-no-run]]
 
-          ;; --rez <ice-name>: rez if in set, decline otherwise
-          should-rez?
-          (do
-            (println (format "🤖 Strategy: --rez, rezzing %s" ice-title))
-            (if current-ice
-              (let [card-ref {:cid (:cid current-ice)
-                             :zone (:zone current-ice)
-                             :side (:side current-ice)
-                             :type (:type current-ice)}]
-                (ws/send-message! :game/action
-                                 {:gameid (if (string? gameid)
-                                           (java.util.UUID/fromString gameid)
-                                           gameid)
-                                  :command "rez"
-                                  :args {:card card-ref}})
-                {:status :action-taken
-                 :action :auto-rezzed
-                 :ice ice-title})
-              (do
-                (println (format "⚠️  Could not find ICE to rez: %s" ice-title))
-                {:status :decision-required
-                 :prompt my-prompt})))
+    ;; Run handlers in order until one returns non-nil
+    (run-first-matching-handler handlers context)))
 
-          ;; --rez set exists but this ICE is already rezzed: just continue
-          (and (:rez strategy) ice-rezzed?)
-          (do
-            (println (format "   → ICE %s already rezzed, continuing" ice-title))
-            (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "continue"
-                              :args nil})
-            {:status :action-taken
-             :action :sent-continue})
+;; REFACTORING NOTE: The code below (lines 734-1022) was the old cond-based implementation.
+;; It has been replaced with the handler chain pattern above.
+;; Keeping this comment as a marker - the old code has been removed.
 
-          ;; --rez set exists but this ICE not in it: decline
-          :else
-          (do
-            (println (format "🤖 Strategy: --rez (not %s), declining" ice-title))
-            (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
-                              :command "continue"
-                              :args nil})
-            {:status :action-taken
-             :action :auto-declined-rez
-             :ice ice-title})))
-
-      ;; Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs during encounter
-      (and (= side "corp")
-           (= run-phase "encounter-ice")
-           my-prompt
-           (:fire-unbroken strategy))
-      (let [run (get-in state [:game-state :run])
-            server (:server run)
-            position (:position run)
-            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-            ice-count (count ice-list)
-            ice-index (- ice-count position)
-            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                          (nth ice-list ice-index nil))
-            ice-title (:title current-ice "ICE")]
-        (if current-ice
-          (do
-            (println (format "🤖 Strategy: --fire-unbroken, firing subs on %s" ice-title))
-            (let [card-ref {:cid (:cid current-ice)
-                           :zone (:zone current-ice)
-                           :side (:side current-ice)
-                           :type (:type current-ice)}]
-              (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
-                                :command "unbroken-subroutines"
-                                :args {:card card-ref}})
-              {:status :action-taken
-               :action :auto-fired-subs
-               :ice ice-title}))
-          (do
-            (println "⚠️  Could not find ICE for fire-unbroken")
-            {:status :decision-required
-             :prompt my-prompt})))
-
-      ;; Priority 2: CRITICAL BUG FIX #12 - Pause at approach-ice with unrezzed ICE
-      ;; Runner's prompt says "Continue to Movement" but that would bypass corp's rez decision!
-      ;; Must check game state directly, not trust the prompt text.
-      ;; Detection: Check if ICE placeholder exists at position and is not rezzed.
-      ;; Note: Runner sees minimal ICE data (placeholder), so we count ICE positions rather than
-      ;;       relying on full card data. The :rezzed field only exists when ICE IS rezzed.
-      ;; REFINEMENT: Check :run :no-action field - when it's "corp", corp already declined to rez
-      ;;             This is more reliable than log parsing since some continues are silent!
-      (and (= side "runner")
-           (= run-phase "approach-ice")
-           (let [run (get-in state [:game-state :run])
-                 server (:server run)
-                 position (:position run)
-                 ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-                 ice-count (count ice-list)
-                 ice-index (- ice-count position)
-                 current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                               (nth ice-list ice-index nil))
-                 ;; Check if corp already declined to rez by checking :run :no-action field
-                 ;; When :no-action is "corp", Corp has already passed the rez window
-                 no-action (:no-action run)
-                 corp-already-declined? (= no-action "corp")]
-             ;; ICE exists at position and is NOT rezzed AND corp hasn't already declined
-             ;; (:rezzed current-ice) is nil when unrezzed, true when rezzed
-             (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))))
-      (let [run (get-in state [:game-state :run])
-            server (:server run)
-            position (:position run)
-            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-            ice-count (count ice-list)
-            ice-index (- ice-count position)
-            current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                          (nth ice-list ice-index nil))
-            ice-title (:title current-ice "ICE")]
-        (println "⏸️  PAUSED at approach-ice - Waiting for corp rez decision")
-        (println (format "   ICE position: %d/%d (unrezzed)" position ice-count))
-        (println (format "   ICE: %s" ice-title))
-        (println "   ⚠️  Runner prompt says 'Continue to Movement' but that would bypass corp rez!")
-        (println "   → Waiting for corp to rez or continue")
-        {:status :waiting-for-corp-rez
-         :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
-         :ice ice-title
-         :position position})
-
-      ;; Priority 3: Waiting for opponent to make a decision
-      (waiting-for-opponent? state side)
-      (let [reason (waiting-reason state side)]
-        (println (format "⏸️  Waiting for opponent: %s" reason))
-        {:status :waiting-for-opponent
-         :message reason})
-
-      ;; Priority 3: I have a real decision to make
-      (has-real-decision? my-prompt)
-      (do
-        (println "🛑 Run paused - decision required")
-        (println (format "   Prompt: %s" (:msg my-prompt)))
-        (when-let [card-title (get-in my-prompt [:card :title])]
-          (println (format "   Card: %s" card-title)))
-        (let [choices (:choices my-prompt)]
-          (println (format "   Choices: %d options" (count choices)))
-          (doseq [[idx choice] (map-indexed vector choices)]
-            (println (format "     %d. %s" idx (:value choice)))))
-        {:status :decision-required
-         :prompt my-prompt})
-
-      ;; Priority 4: Pause for important events (rez, abilities, subs, damage)
-      rez-event
-      (do
-        (println "⚠️  Run paused - ICE rezzed!")
-        (println (format "   %s" (:text rez-event)))
-        (println "   → Use 'continue-run' again to proceed")
-        {:status :ice-rezzed :event rez-event})
-
-      ability-event
-      (do
-        (println "⚠️  Run paused - ability triggered!")
-        (println (format "   %s" (:text ability-event)))
-        (println "   → Use 'continue-run' again to proceed")
-        {:status :ability-used :event ability-event})
-
-      fired-event
-      (do
-        (println "⚠️  Run paused - subroutines fired!")
-        (println (format "   %s" (:text fired-event)))
-        (println "   → Use 'continue-run' again to proceed")
-        {:status :subs-fired :event fired-event})
-
-      tag-damage-event
-      (do
-        (println "⚠️  Run paused - tag or damage!")
-        (println (format "   %s" (:text tag-damage-event)))
-        (println "   → Use 'continue-run' again to proceed")
-        {:status :tag-or-damage :event tag-damage-event})
-
-      ;; Priority 5: Auto-handle single mandatory choice
-      (and my-prompt
-           (seq (:choices my-prompt))
-           (= 1 (count (:choices my-prompt))))
-      (let [choice (first (:choices my-prompt))
-            choice-uuid (:uuid choice)]
-        (println (format "   Auto-choosing: %s" (:value choice)))
-        (ws/send-message! :game/action
-                         {:gameid (if (string? gameid)
-                                   (java.util.UUID/fromString gameid)
-                                   gameid)
-                          :command "choice"
-                          :args {:choice {:uuid choice-uuid}}})
-        {:status :action-taken
-         :action :auto-choice
-         :choice (:value choice)})
-
-      ;; Priority 6: Auto-continue through boring paid ability windows
-      (can-auto-continue? my-prompt run-phase)
-      (do
-        (println "   → Auto-continuing through paid ability window")
-        (ws/send-message! :game/action
-                         {:gameid (if (string? gameid)
-                                   (java.util.UUID/fromString gameid)
-                                   gameid)
-                          :command "continue"
-                          :args nil})
-        {:status :action-taken
-         :action :sent-continue})
-
-      ;; Priority 7: Run complete (no run phase, no prompt)
-      (and (nil? run-phase) (nil? my-prompt))
-      (do
-        (println "✅ Run complete")
-        {:status :run-complete})
-
-      ;; Priority 8: No active run
-      (and (nil? run-phase)
-           (or (nil? my-prompt)
-               (not= (:prompt-type my-prompt) "run")))
-      (do
-        (println "⚠️  No active run detected")
-        {:status :no-run})
-
-      ;; Fallback: Unknown state
-      :else
-      (do
-        (println "⚠️  Unexpected run state")
-        (println (format "   Side: %s" side))
-        (println (format "   Run phase: %s" run-phase))
-        (println (format "   My prompt type: %s" (:prompt-type my-prompt)))
-        (println (format "   My choices: %d" (count (:choices my-prompt))))
-        (println (format "   Opp has prompt: %s" (some? opp-prompt)))
-        {:status :unexpected-state
-         :prompt my-prompt
-         :run-phase run-phase}))))
 
 ;; ============================================================================
 ;; Convenience Wrapper
