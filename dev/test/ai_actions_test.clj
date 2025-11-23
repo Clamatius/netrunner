@@ -1,12 +1,18 @@
 (ns ai-actions-test
   "Tests for AI actions - core functionality validation
 
-   Unit tests: Fast tests with minimal mocking that validate function behavior
-   Integration tests (^:integration): Require complex game state or actual game server
+   Unit tests (12): Fast tests with minimal mocking that validate function behavior
+   Integration tests (5): ^:integration metadata, require complex game state or actual game server
 
-   Run unit tests (default): lein test ai-actions-test
-   Run all tests including integration: lein test :all ai-actions-test
-   Run all integration tests (all namespaces): lein test :integration"
+   Usage:
+     make test              - Run all unit tests
+     make test-all          - Run all tests including integration
+     make test-integration  - Run all integration tests
+
+   Direct:
+     lein test ai-actions-test           - Run unit tests in this namespace
+     lein test :all ai-actions-test      - Run all tests in this namespace
+     lein test :integration              - Run all integration tests (all namespaces)"
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-actions]
