@@ -1,6 +1,7 @@
 (ns ai-websocket-client-v2
   "WebSocket client using gniazdo (JVM WebSocket library)"
   (:require
+   [ai-debug :as debug]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.edn :as edn]
@@ -167,8 +168,7 @@
     (let [data (if (string? msg)
                  (edn/read-string msg)
                  msg)]
-      ;; DEBUG: Log what we received
-      (println "🔍 RAW RECEIVED:" (pr-str data))
+      (debug/debug "🔍 RAW RECEIVED:" (pr-str data))
 
       (cond
         ;; Batched events: [[[event1] [event2] ...]]
@@ -204,9 +204,8 @@
 (defn handle-message
   "Handle parsed message"
   [{:keys [type data] :as msg}]
-  ;; DEBUG: Log all messages being handled
   (when (not= type :chsk/ws-ping)
-    (println "🔧 HANDLING MESSAGE:" type))
+    (debug/debug "🔧 HANDLING MESSAGE:" type))
 
   ;; Record all messages (except pings)
   (when (not= type :chsk/ws-ping)
