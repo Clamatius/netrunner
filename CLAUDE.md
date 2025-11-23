@@ -64,6 +64,19 @@ Jinteki.net (Clojure/ClojureScript) - we're building AI players that connect via
 
 **Prompt blocking:** Can't play/install if active prompt exists (returns immediate error vs 3s timeout)
 
+## Debug Logging
+
+**Enable verbose WebSocket logging:**
+```bash
+AI_DEBUG_LEVEL=true ./dev/send_command corp status
+```
+
+Shows internal debug messages:
+- 🔍 RAW RECEIVED: Full WebSocket message payload
+- 🔧 HANDLING MESSAGE: Message type being processed
+
+Default (unset): Debug messages hidden, only user-facing output shown.
+
 ## References
 
 - `./dev/WORKFLOW.md` - Complete testing workflow guide
