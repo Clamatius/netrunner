@@ -18,6 +18,13 @@
    ["gain 1"]
    :timeout 10000}
 
+  ;; TODO: Additional behavioral tests
+  ;; These require working out game state complexity (prompts, hand size, etc)
+
+  ;; {:name "auto-end-turn-when-clicks-exhausted"
+  ;;  :desc "Auto-end doesn't trigger until prompts resolved (hand size, etc)"
+  ;;  ...}
+
   ;; TODO: Complex tests requiring prompt handling and auto-continue validation
   ;; These will be added once we work out game state complexity
 
