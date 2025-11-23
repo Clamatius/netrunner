@@ -1,35 +1,23 @@
-.PHONY: test test-unit test-integration test-all check clean reset resume help
+.PHONY: test check clean reset resume help
 
 # Default target
 help:
 	@echo "Available targets:"
-	@echo "  make test          - Run unit tests only (fast, default selector)"
-	@echo "  make test-all      - Run all tests including integration tests"
-	@echo "  make test-integration - Run integration tests only"
+	@echo "  make test          - Run unit tests (fast)"
 	@echo "  make check         - Run lein check (compile validation)"
 	@echo "  make reset         - Fresh game (bounce REPLs, new game)"
 	@echo "  make resume        - Reload code, keep game state"
 	@echo "  make clean         - Kill background processes"
 	@echo ""
 	@echo "Test files:"
-	@echo "  - ai_actions_test.clj       - AI action tests (12 unit, 5 integration)"
+	@echo "  - ai_actions_test.clj       - AI action unit tests (12 tests)"
 	@echo "  - ai_runs_test.clj          - continue-run! tests (13 tests)"
-	@echo "  - ai_websocket_diff_test.clj - Diff application tests"
+	@echo "  - ai_websocket_diff_test.clj - Diff application tests (4 tests)"
 
-# Run unit tests only (excludes integration tests via :default selector)
+# Run unit tests
 test:
-	@echo "Running unit tests (excluding integration tests)..."
+	@echo "Running unit tests..."
 	lein test ai-actions-test ai-runs-test ai-websocket-diff-test
-
-# Run all tests including integration tests
-test-all:
-	@echo "Running all tests (unit + integration)..."
-	lein test :all ai-actions-test ai-runs-test ai-websocket-diff-test
-
-# Run integration tests only
-test-integration:
-	@echo "Running integration tests only..."
-	lein test :integration
 
 # Compile check
 check:

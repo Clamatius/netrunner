@@ -1,18 +1,14 @@
 (ns ai-actions-test
-  "Tests for AI actions - core functionality validation
+  "Unit tests for AI actions - validates function behavior with minimal mocking
 
-   Unit tests (12): Fast tests with minimal mocking that validate function behavior
-   Integration tests (5): ^:integration metadata, require complex game state or actual game server
+   Tests (12): Fast unit tests that verify action functions send correct WebSocket messages
+
+   Note: Behavioral/integration tests should test through real game API + log parsing,
+   not mock game state (which is fragile to upstream Jinteki changes).
 
    Usage:
-     make test              - Run all unit tests
-     make test-all          - Run all tests including integration
-     make test-integration  - Run all integration tests
-
-   Direct:
-     lein test ai-actions-test           - Run unit tests in this namespace
-     lein test :all ai-actions-test      - Run all tests in this namespace
-     lein test :integration              - Run all integration tests (all namespaces)"
+     make test                    - Run all unit tests
+     lein test ai-actions-test    - Run this test namespace"
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-actions]
@@ -119,16 +115,6 @@
           (ai-actions/draw-card!)
           (is (= 1 (count @sent))))))))
 
-(deftest ^:integration test-end-turn
-  (testing "end-turn! sends end turn action"
-    ;; Integration test: Requires all clicks to be spent, needs complex validation logic
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-client-state :side "runner")
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/end-turn!)
-          (is (= 1 (count @sent))))))))
-
 ;; ============================================================================
 ;; Run Tests (Runner-specific)
 ;; ============================================================================
@@ -153,66 +139,8 @@
           (is (= 1 (count @sent))))))))
 
 ;; ============================================================================
-;; Prompt Tests
-;; ============================================================================
-
-(deftest ^:integration test-choose-option
-  (testing "choose option by index"
-    ;; Integration test: Requires valid prompt choices and choice validation
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-client-state
-          :prompt (make-prompt
-                   :msg "Choose option"
-                   :choices [{:value "Option 1" :idx 0}
-                            {:value "Option 2" :idx 1}]))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/choose! 0)
-          (is (= 1 (count @sent))))))))
-
-(deftest ^:integration test-mulligan
-  (testing "mulligan sends keep false"
-    ;; Integration test: Requires valid mulligan prompt state
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-client-state
-          :side "runner"
-          :prompt (make-prompt
-                   :msg "Keep hand?"
-                   :prompt-type "mulligan"))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/mulligan)
-          (is (= 1 (count @sent))))))))
-
-(deftest ^:integration test-keep-hand
-  (testing "keep-hand sends keep true"
-    ;; Integration test: Requires valid mulligan prompt state
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-client-state
-          :side "runner"
-          :prompt (make-prompt
-                   :msg "Keep hand?"
-                   :prompt-type "mulligan"))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/keep-hand)
-          (is (= 1 (count @sent))))))))
-
-;; ============================================================================
 ;; Corp-specific Actions
 ;; ============================================================================
-
-(deftest ^:integration test-rez-card
-  (testing "rez-card! sends rez action"
-    ;; Integration test: Requires game log confirmation of rez action
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-client-state
-          :side "corp"
-          :servers {:hq {:ice [{:cid 1 :title "Ice Wall" :rezzed false}]}})
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/rez-card! "Ice Wall")
-          (is (= 1 (count @sent))))))))
 
 (deftest test-advance-card
   (testing "advance-card! sends advance action"

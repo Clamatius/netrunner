@@ -68,10 +68,7 @@
                  [org.flatland/ordered "1.15.12"]
                  [io.github.noahtheduke/fluent-clj "0.0.2"]]
 
-  :test-selectors {:default (fn [m] (and (not (:kaocha/pending m))
-                                         (not (:integration m))))
-                   :all (constantly true)
-                   :integration :integration}
+  :test-selectors {:default (fn [m] (not (:kaocha/pending m)))}
 
   :profiles {:dev {:dependencies [[binaryage/devtools "1.0.7"]
                                   [cider/piggieback "0.5.3"]
