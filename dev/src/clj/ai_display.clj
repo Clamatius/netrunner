@@ -24,9 +24,10 @@
       "")))
 
 (defn status
-  "Show current game status"
+  "Show current game status and return client state"
   []
-  (ws/show-status))
+  (ws/show-status)
+  @ws/client-state)
 
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
