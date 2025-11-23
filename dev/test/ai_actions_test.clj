@@ -208,7 +208,7 @@
           :clicks 3
           :servers {:remote1 {:content [{:cid 1 :title "Agenda"}]}})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (ai-actions/advance-card! 1)
+          (ai-actions/advance-card! "Agenda")
           (is (= 1 (count @sent))))))))
 
 ;; ============================================================================
