@@ -8,6 +8,9 @@ REPL_OUTPUT="dev/repl-output.log"
 COUNTER_FILE="dev/.repl-counter"
 ERROR_WATCHER_PID=""
 
+# Load environment variables and default ports
+source "dev/load-env.sh"
+
 # Reset sequence counter on startup
 echo "0" > "$COUNTER_FILE"
 
@@ -62,4 +65,4 @@ echo "════════════════════════�
 
 # Start REPL and capture output with sequence numbers + timestamps
 # Use script command for proper TTY handling, or direct tee for simpler approach
-lein repl 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")
+lein repl :port $GAME_SERVER_PORT 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")

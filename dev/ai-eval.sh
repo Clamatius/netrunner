@@ -2,7 +2,11 @@
 # AI Client nREPL eval script
 # Sends commands to the AI Client REPL
 # Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
+# Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
 # Old usage still supported: ./ai-eval.sh <clojure-expression>
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
 
 TIMEOUT=${TIMEOUT:-10}
 
@@ -10,7 +14,7 @@ TIMEOUT=${TIMEOUT:-10}
 if [ $# -eq 1 ]; then
     # Old usage: just expression
     CLIENT_NAME="fixed-id"
-    REPL_PORT="7889"
+    REPL_PORT="${CLIENT_1_PORT:-7889}"
     EXPRESSION="$1"
 elif [ $# -eq 3 ]; then
     # New usage: client_name port expression
@@ -21,7 +25,7 @@ else
     echo "Usage: $0 [client_name] [port] <clojure-expression>"
     echo "Examples:"
     echo "  $0 '(ai-actions/status)'"
-    echo "  $0 runner 7889 '(ai-actions/status)'"
+    echo "  $0 runner $CLIENT_1_PORT '(ai-actions/status)'"
     exit 1
 fi
 

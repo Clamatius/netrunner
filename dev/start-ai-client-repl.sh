@@ -5,8 +5,11 @@
 # Usage: ./start-ai-client-repl.sh [client_name] [port]
 # Example: ./start-ai-client-repl.sh runner 7889
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
+
 CLIENT_NAME=${1:-fixed-id}
-REPL_PORT=${2:-7889}
+REPL_PORT=${2:-${CLIENT_1_PORT:-7889}}
 
 echo "Starting AI Client REPL for '$CLIENT_NAME' on port $REPL_PORT..."
 echo "This REPL will maintain connection to the game server."
