@@ -1,9 +1,73 @@
 (ns ai-display
-  "Read-only display functions for game status, board state, and information"
-  (:require [ai-websocket-client-v2 :as ws]
+  "Display functions for game status, board state, and HUD file management"
+  (:require [ai-state :as state]
+            [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
             [ai-basic-actions :as actions]
-            [jinteki.cards :refer [all-cards]]))
+            [clojure.string :as str]
+            [jinteki.cards :refer [all-cards]])
+  (:import [java.nio.channels FileChannel FileLock]
+           [java.nio.file Files Paths StandardOpenOption]))
+
+;; ============================================================================
+;; HUD File Management (Multi-Client Safe)
+;; ============================================================================
+
+(defn with-file-lock
+  "Execute body with an exclusive file lock. Returns result of body."
+  [file-path f]
+  (let [path (Paths/get file-path (into-array String []))
+        lock-path (Paths/get (str file-path ".lock") (into-array String []))]
+    (with-open [channel (FileChannel/open lock-path
+                                          (into-array StandardOpenOption
+                                                      [StandardOpenOption/CREATE
+                                                       StandardOpenOption/WRITE]))]
+      (let [lock (.lock channel)]
+        (try
+          (f)
+          (finally
+            (.release lock)))))))
+
+(defn update-hud-section
+  "Update a specific section in the shared HUD file with file locking.
+   Reads entire file, updates the section for this client, writes back atomically."
+  [section-name content]
+  (let [hud-path "CLAUDE.local.md"
+        client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")]
+    (with-file-lock hud-path
+      (fn []
+        ;; Read existing content
+        (let [existing (try (slurp hud-path)
+                           (catch Exception _ "# Game Log HUD\n\n"))
+              section-marker (str "## " section-name " (" client-name ")")
+              section-end-marker "## "
+              ;; Find or insert section
+              lines (str/split-lines existing)
+              section-start-idx (or (->> lines
+                                         (map-indexed vector)
+                                         (filter (fn [[_ line]] (= line section-marker)))
+                                         first
+                                         first)
+                                   -1)
+              ;; Build new content
+              new-section (str section-marker "\n\n" content "\n")
+              updated-content
+              (if (>= section-start-idx 0)
+                ;; Replace existing section
+                (let [before (str/join "\n" (take section-start-idx lines))
+                      after-start (drop (inc section-start-idx) lines)
+                      next-section-idx (or (->> after-start
+                                               (map-indexed vector)
+                                               (filter (fn [[_ line]]
+                                                        (str/starts-with? line section-end-marker)))
+                                               first
+                                               first)
+                                          (count after-start))
+                      after (str/join "\n" (drop next-section-idx after-start))]
+                  (str/join "\n" [before new-section after]))
+                ;; Append new section
+                (str existing "\n" new-section))]
+          (spit hud-path updated-content))))))
 
 ;; ============================================================================
 ;; Status & Information
@@ -27,12 +91,12 @@
   "Show current game status and return client state"
   []
   (ws/show-status)
-  @ws/client-state)
+  @state/client-state)
 
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         gs (:game-state state)
         corp-servers (:servers (:corp gs))
         runner-rig (get-in gs [:runner :rig])
@@ -121,7 +185,7 @@
 (defn show-board-compact
   "Display ultra-compact board state (2-5 lines, no decorations)"
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         gs (:game-state state)
         corp-servers (:servers (:corp gs))
         runner-rig (get-in gs [:runner :rig])]
@@ -176,7 +240,7 @@
   "Display ultra-compact game log (recent N entries, one line each, no decorations)"
   ([] (show-log-compact 5))
   ([n]
-   (let [state @ws/client-state
+   (let [state @state/client-state
          log (get-in state [:game-state :log])
          recent (take-last n log)]
      (doseq [entry recent]
@@ -206,7 +270,7 @@
 
    Usage: (wait-for-my-turn)"
   []
-  (let [my-side (:side @ws/client-state)]
+  (let [my-side (:side @state/client-state)]
     (println (str "💤 Waiting for my turn (" my-side ")..."))
     (loop [checks 0]
       (let [state (ws/get-game-state)
@@ -249,7 +313,7 @@
 
    Usage: (wait-for-run)"
   []
-  (let [my-side (:side @ws/client-state)]
+  (let [my-side (:side @state/client-state)]
     (when (not= my-side "corp")
       (println "❌ wait-for-run is Corp-only (use wait-for-my-turn as Runner)")
       (throw (Exception. "wait-for-run is Corp-only")))
@@ -288,7 +352,7 @@
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (:side state)
         hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
     (when hand
@@ -308,7 +372,7 @@
 (defn show-credits
   "Show current credits (side-aware). Returns credits value."
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (:side state)
         credits (get-in state [:game-state (keyword (clojure.string/lower-case side)) :credit])]
     (println "💰 Credits:" credits)
@@ -317,7 +381,7 @@
 (defn show-clicks
   "Show remaining clicks (side-aware). Returns clicks value."
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (:side state)
         clicks (get-in state [:game-state (keyword (clojure.string/lower-case side)) :click])]
     (println "⏱️  Clicks:" clicks)
@@ -326,7 +390,7 @@
 (defn show-archives
   "Show Corp's Archives (discard pile) with faceup/facedown counts"
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         archives (get-in state [:game-state :corp :discard])
         faceup (filter :seen archives)
         facedown-count (- (count archives) (count faceup))]
@@ -347,7 +411,7 @@
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (:side state)
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
@@ -502,7 +566,7 @@
    Usage: (show-card-abilities \"Smartware Distributor\")
           (show-card-abilities \"Cleaver\")"
   [card-name]
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (:side state)
         ;; Find card in appropriate location
         card (if (= "Corp" side)
@@ -559,7 +623,7 @@
 (defn inspect-state
   "Show raw game state (for debugging)"
   []
-  (clojure.pprint/pprint @ws/client-state))
+  (clojure.pprint/pprint @state/client-state))
 
 (defn inspect-prompt
   "Show raw prompt data (for debugging)"
@@ -574,7 +638,7 @@
   "List all currently playable actions (cards, abilities, basic actions)
    Useful for AI decision-making - shows exactly what can be done right now"
   []
-  (let [state @ws/client-state
+  (let [state @state/client-state
         side (keyword (clojure.string/lower-case (:side state)))
         gs (:game-state state)
         my-state (get gs side)
