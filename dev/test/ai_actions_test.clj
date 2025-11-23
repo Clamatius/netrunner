@@ -1,8 +1,12 @@
 (ns ai-actions-test
-  "Happy path tests for AI actions - core functionality validation
+  "Tests for AI actions - core functionality validation
 
-   These tests ensure the main AI action functions work correctly
-   under normal conditions."
+   Unit tests: Fast tests with minimal mocking that validate function behavior
+   Integration tests (^:integration): Require complex game state or actual game server
+
+   Run unit tests (default): lein test ai-actions-test
+   Run all tests including integration: lein test :all ai-actions-test
+   Run all integration tests (all namespaces): lein test :integration"
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-actions]
@@ -109,8 +113,9 @@
           (ai-actions/draw-card!)
           (is (= 1 (count @sent))))))))
 
-(deftest test-end-turn
+(deftest ^:integration test-end-turn
   (testing "end-turn! sends end turn action"
+    ;; Integration test: Requires all clicks to be spent, needs complex validation logic
     (let [sent (atom [])]
       (with-mock-state
         (mock-client-state :side "runner")
@@ -145,8 +150,9 @@
 ;; Prompt Tests
 ;; ============================================================================
 
-(deftest test-choose-option
+(deftest ^:integration test-choose-option
   (testing "choose option by index"
+    ;; Integration test: Requires valid prompt choices and choice validation
     (let [sent (atom [])]
       (with-mock-state
         (mock-client-state
@@ -158,8 +164,9 @@
           (ai-actions/choose! 0)
           (is (= 1 (count @sent))))))))
 
-(deftest test-mulligan
+(deftest ^:integration test-mulligan
   (testing "mulligan sends keep false"
+    ;; Integration test: Requires valid mulligan prompt state
     (let [sent (atom [])]
       (with-mock-state
         (mock-client-state
@@ -171,8 +178,9 @@
           (ai-actions/mulligan)
           (is (= 1 (count @sent))))))))
 
-(deftest test-keep-hand
+(deftest ^:integration test-keep-hand
   (testing "keep-hand sends keep true"
+    ;; Integration test: Requires valid mulligan prompt state
     (let [sent (atom [])]
       (with-mock-state
         (mock-client-state
@@ -188,8 +196,9 @@
 ;; Corp-specific Actions
 ;; ============================================================================
 
-(deftest test-rez-card
+(deftest ^:integration test-rez-card
   (testing "rez-card! sends rez action"
+    ;; Integration test: Requires game log confirmation of rez action
     (let [sent (atom [])]
       (with-mock-state
         (mock-client-state
