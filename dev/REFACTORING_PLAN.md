@@ -194,11 +194,14 @@ Code review of 21 Clojure files (~7,700 LOC) in ./dev revealed:
       (run-first-matching-handler handlers state)))
   ```
 - [ ] **Sub-tasks:**
-  1. Extract each cond branch to separate handler function
-  2. Implement handler interface (returns {:handled? bool :result ...})
-  3. Create `run-first-matching-handler` dispatcher
-  4. Add tests for each handler independently
-  5. Integration test to ensure behavior unchanged
+  1. ✅ Add comprehensive tests for current behavior (13 tests, 41 assertions - ALL PASSING)
+     - Created `ai_runs_test.clj` with tests covering all major branches
+     - Test coverage: force mode, corp rez strategies, real decisions, auto-choice, auto-continue
+     - Found and documented bug: keyword/string mismatch in `can-auto-continue?`
+  2. Extract each cond branch to separate handler function
+  3. Implement handler interface (returns {:handled? bool :result ...})
+  4. Create `run-first-matching-handler` dispatcher
+  5. Verify tests still pass after refactoring
 
 ### Structure #2: Add Logging Framework
 - [ ] **Issue:** DEBUG print statements pollute production output (10+ instances)
