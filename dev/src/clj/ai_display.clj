@@ -2,72 +2,17 @@
   "Display functions for game status, board state, and HUD file management"
   (:require [ai-state :as state]
             [ai-websocket-client-v2 :as ws]
+            [ai-hud-utils :as hud]
             [ai-core :as core]
             [ai-basic-actions :as actions]
             [clojure.string :as str]
-            [jinteki.cards :refer [all-cards]])
-  (:import [java.nio.channels FileChannel FileLock]
-           [java.nio.file Files Paths StandardOpenOption]))
+            [jinteki.cards :refer [all-cards]]))
 
 ;; ============================================================================
-;; HUD File Management (Multi-Client Safe)
+;; HUD File Management (Delegated to ai-hud-utils)
 ;; ============================================================================
 
-(defn with-file-lock
-  "Execute body with an exclusive file lock. Returns result of body."
-  [file-path f]
-  (let [path (Paths/get file-path (into-array String []))
-        lock-path (Paths/get (str file-path ".lock") (into-array String []))]
-    (with-open [channel (FileChannel/open lock-path
-                                          (into-array StandardOpenOption
-                                                      [StandardOpenOption/CREATE
-                                                       StandardOpenOption/WRITE]))]
-      (let [lock (.lock channel)]
-        (try
-          (f)
-          (finally
-            (.release lock)))))))
-
-(defn update-hud-section
-  "Update a specific section in the shared HUD file with file locking.
-   Reads entire file, updates the section for this client, writes back atomically."
-  [section-name content]
-  (let [hud-path "CLAUDE.local.md"
-        client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")]
-    (with-file-lock hud-path
-      (fn []
-        ;; Read existing content
-        (let [existing (try (slurp hud-path)
-                           (catch Exception _ "# Game Log HUD\n\n"))
-              section-marker (str "## " section-name " (" client-name ")")
-              section-end-marker "## "
-              ;; Find or insert section
-              lines (str/split-lines existing)
-              section-start-idx (or (->> lines
-                                         (map-indexed vector)
-                                         (filter (fn [[_ line]] (= line section-marker)))
-                                         first
-                                         first)
-                                   -1)
-              ;; Build new content
-              new-section (str section-marker "\n\n" content "\n")
-              updated-content
-              (if (>= section-start-idx 0)
-                ;; Replace existing section
-                (let [before (str/join "\n" (take section-start-idx lines))
-                      after-start (drop (inc section-start-idx) lines)
-                      next-section-idx (or (->> after-start
-                                               (map-indexed vector)
-                                               (filter (fn [[_ line]]
-                                                        (str/starts-with? line section-end-marker)))
-                                               first
-                                               first)
-                                          (count after-start))
-                      after (str/join "\n" (drop next-section-idx after-start))]
-                  (str/join "\n" [before new-section after]))
-                ;; Append new section
-                (str existing "\n" new-section))]
-          (spit hud-path updated-content))))))
+(def update-hud-section hud/update-hud-section)
 
 ;; ============================================================================
 ;; Status & Information
@@ -273,8 +218,8 @@
   (let [my-side (:side @state/client-state)]
     (println (str "💤 Waiting for my turn (" my-side ")..."))
     (loop [checks 0]
-      (let [state (ws/get-game-state)
-            active-player (ws/active-player)
+      (let [state (state/get-game-state)
+            active-player (state/active-player)
             end-turn (get-in state [:end-turn])
             clicks (get-in state [(keyword my-side) :click])]
         (cond
@@ -282,20 +227,20 @@
           (and (= my-side active-player) (> clicks 0))
           (do
             (println (str "✅ Your turn! (" my-side " - " clicks " clicks remaining)"))
-            {:status :ready :turn (ws/turn-number) :side my-side :clicks clicks})
+            {:status :ready :turn (state/turn-number) :side my-side :clicks clicks})
 
           ;; End turn called, waiting for me to start
           (and end-turn (not= my-side active-player))
           (do
             (println (str "✅ Ready to start turn! (use 'start-turn')"))
-            {:status :ready-to-start :turn (ws/turn-number) :side my-side})
+            {:status :ready-to-start :turn (state/turn-number) :side my-side})
 
           ;; Both at 0 clicks
           (and (= 0 (get-in state [:runner :click]))
                (= 0 (get-in state [:corp :click])))
           (do
             (println (str "✅ Ready to start turn! (use 'start-turn')"))
-            {:status :ready-to-start :turn (ws/turn-number) :side my-side})
+            {:status :ready-to-start :turn (state/turn-number) :side my-side})
 
           ;; Still waiting
           :else
@@ -320,7 +265,7 @@
 
     (println "💤 Waiting for Runner to initiate run...")
     (loop [checks 0]
-      (let [state (ws/get-game-state)
+      (let [state (state/get-game-state)
             run-state (get-in state [:run])]
         (if run-state
           (do
@@ -343,7 +288,7 @@
 (defn hand
   "Show my hand"
   []
-  (let [hand (ws/my-hand)]
+  (let [hand (state/my-hand)]
     (println "\n=== MY HAND ===" (count hand) "cards ===")
     (doseq [[idx card] (map-indexed vector hand)]
       (println (format "  %d. %s [%s]" idx (:title card) (:type card))))
@@ -554,7 +499,7 @@
           (show-hand-cards true) ; full format"
   ([] (show-hand-cards false))
   ([full?]
-   (let [hand (ws/my-hand)
+   (let [hand (state/my-hand)
          card-names (map :title hand)]
      (if (empty? card-names)
        (println "🃏 Hand is empty")
@@ -628,7 +573,7 @@
 (defn inspect-prompt
   "Show raw prompt data (for debugging)"
   []
-  (clojure.pprint/pprint (ws/get-prompt)))
+  (clojure.pprint/pprint (state/get-prompt)))
 
 ;; ============================================================================
 ;; Help
