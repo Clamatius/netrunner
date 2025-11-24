@@ -83,3 +83,120 @@
     (swap! client-state dissoc :lobby-state)
     (when side
       (println "   Detected side:" side))))
+
+;; ============================================================================
+;; Game State Queries
+;; ============================================================================
+
+(defn get-game-state [] (:game-state @client-state))
+
+(defn active-player [] (get-in @client-state [:game-state :active-player]))
+(defn my-turn? [] (= (:side @client-state) (active-player)))
+(defn turn-number [] (get-in @client-state [:game-state :turn]))
+
+(defn runner-state [] (get-in @client-state [:game-state :runner]))
+(defn corp-state [] (get-in @client-state [:game-state :corp]))
+
+;; Core game state accessors - single source of truth
+(defn credits-for-side [side] (get-in @client-state [:game-state side :credit]))
+(defn clicks-for-side [side] (get-in @client-state [:game-state side :click]))
+(defn hand-count-for-side [side] (get-in @client-state [:game-state side :hand-count]))
+
+;; Context-aware helpers (based on current client's side)
+(defn my-credits []
+  (credits-for-side (keyword (:side @client-state))))
+
+(defn my-clicks []
+  (clicks-for-side (keyword (:side @client-state))))
+
+(defn my-hand []
+  (let [side (keyword (:side @client-state))]
+    (get-in @client-state [:game-state side :hand])))
+
+(defn my-hand-count []
+  (hand-count-for-side (keyword (:side @client-state))))
+
+(defn my-installed []
+  (let [side (keyword (:side @client-state))]
+    (if (= side :runner)
+      (get-in @client-state [:game-state :runner :rig])
+      ;; Corp doesn't have a "rig", return nil or servers
+      nil)))
+
+;; Absolute side helpers (always return specific side's data)
+(defn runner-credits [] (credits-for-side :runner))
+(defn runner-clicks [] (clicks-for-side :runner))
+(defn runner-hand-count [] (hand-count-for-side :runner))
+
+(defn corp-credits [] (credits-for-side :corp))
+(defn corp-clicks [] (clicks-for-side :corp))
+(defn corp-hand-count [] (hand-count-for-side :corp))
+
+(defn get-prompt
+  "Get current prompt for our side, if any"
+  []
+  (let [side (:side @client-state)]
+    (get-in @client-state [:game-state (keyword side) :prompt-state])))
+
+(defn get-turn-status
+  "Get structured turn status information
+   Returns map with:
+   - :whose-turn - 'runner', 'corp', or 'none'
+   - :my-turn? - boolean
+   - :turn-number - integer
+   - :can-act? - boolean (my turn AND not waiting prompt)
+   - :in-run? - boolean
+   - :run-server - server name if in run
+   - :status-emoji - visual indicator
+   - :status-text - human-readable status"
+  []
+  (let [gs (get-game-state)
+        my-side (:side @client-state)
+        active-side (active-player)
+        turn-num (turn-number)
+        end-turn (get-in gs [:end-turn])
+        prompt (get-prompt)
+        prompt-type (:prompt-type prompt)
+        run-state (get-in gs [:run])
+        runner-clicks (get-in gs [:runner :click])
+        corp-clicks (get-in gs [:corp :click])
+        both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
+        ;; Compare case-insensitively since my-side is "Corp"/"Runner" but active-side is "corp"/"runner"
+        my-turn (and my-side active-side
+                     (= (clojure.string/lower-case my-side)
+                        (clojure.string/lower-case active-side)))
+        ;; When both have 0 clicks, determine who should go next
+        ;; At turn 0: Corp goes first
+        ;; Otherwise: opposite of whoever is currently active
+        next-player (cond
+                     (= turn-num 0) "corp"
+                     (= active-side "corp") "runner"
+                     (= active-side "runner") "corp"
+                     :else "unknown")
+
+        ;; Determine status
+        [emoji text can-act]
+        (cond
+          both-zero-clicks
+          ["🟢" (str "Waiting to start " next-player " turn") false]
+
+          (not my-turn)
+          ["⏳" (str "Waiting for " active-side) false]
+
+          end-turn
+          ["🟢" "Ready to start turn" true]
+
+          (= :waiting prompt-type)
+          ["⏳" (or (:msg prompt) "Waiting...") false]
+
+          :else
+          ["✅" "Your turn to act" true])]
+
+    {:whose-turn active-side
+     :my-turn? my-turn
+     :turn-number turn-num
+     :can-act? can-act
+     :in-run? (boolean run-state)
+     :run-server (:server run-state)
+     :status-emoji emoji
+     :status-text text}))
