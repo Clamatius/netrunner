@@ -65,4 +65,4 @@ echo "════════════════════════�
 
 # Start REPL and capture output with sequence numbers + timestamps
 # Use script command for proper TTY handling, or direct tee for simpler approach
-lein repl :port $GAME_SERVER_PORT 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")
+lein repl :start :port $GAME_SERVER_PORT 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")
