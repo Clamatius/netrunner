@@ -16,7 +16,10 @@
 
   :repl-options {:timeout 180000
                  :init-ns web.dev
-                 :init (go)}
+                 ;; Disabled auto-start due to initialization failure
+                 ;; Run (go) manually in the REPL when ready
+                 ;; :init (go)
+                 }
 
   :dependencies [[org.clojure/clojure "1.12.0"]
                  [org.clojure/clojurescript "1.11.132"

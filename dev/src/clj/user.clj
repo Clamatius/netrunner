@@ -30,12 +30,14 @@
   [kaocha.repl
    run])
 
-(require '[nrepl.server :as nrepl])
-(defonce nrepl-server
-  (try
-    (let [server (nrepl/start-server :port 7888)]
-      (println "nREPL server started on port 7888")
-      server)
-    (catch java.net.BindException _
-      (println "nREPL port 7888 already in use, skipping startup")
-      nil)))
+;; nREPL server is started by lein repl, no need to start another one here
+;; The port is configured via GAME_SERVER_PORT environment variable in dev/load-env.sh
+;; (require '[nrepl.server :as nrepl])
+;; (defonce nrepl-server
+;;   (try
+;;     (let [server (nrepl/start-server :port 7888)]
+;;       (println "nREPL server started on port 7888")
+;;       server)
+;;     (catch java.net.BindException _
+;;       (println "nREPL port 7888 already in use, skipping startup")
+;;       nil)))
