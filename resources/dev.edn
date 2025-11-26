@@ -5,7 +5,7 @@
                       ; Monger requires a db name in the URI string, be sure to specify
                       :connection-string #or [#env MONGO_CONNECTION_URI nil]}
  :web/app-state nil
- :web/server {:port #or [#env WEB_SERVER_PORT 1042]
+ :web/server {:port #long #or [#env WEB_SERVER_PORT 1042]
               :app #ig/ref :web/app}
  :web/auth {:expiration 60
             :secret "Dev salt"
