@@ -6,15 +6,15 @@
 ./dev/repl-start.sh
 ```
 
-Then in the REPL:
-```clojure
-(go)  ; Start the web server and game systems
-```
-
-Verify it's running:
+The web server will start automatically! Verify it's running:
 ```bash
 lsof -i :7888  # nREPL
 lsof -i :1042  # Web server
+```
+
+If auto-start fails, you can start manually in the REPL:
+```clojure
+(go)  ; Start the web server and game systems
 ```
 
 ## What Was Fixed
@@ -31,15 +31,12 @@ lsof -i :1042  # Web server
 
 ## Current Behavior
 
-✅ **Works:**
+✅ **Fully Working:**
 - REPL starts on port 7888 (configurable via `GAME_SERVER_PORT`)
-- Calling `(go)` manually in REPL starts web server on port 1042
+- Web server auto-starts on port 1042 during REPL initialization
 - MongoDB connection successful
 - Full Integrant system initialization
-
-⚠️ **Known Issue:**
-- Auto-init (`:init (go)` in `project.clj`) causes REPL to exit immediately
-- **Workaround**: Call `(go)` manually after REPL starts
+- Graceful error handling if auto-start fails
 
 ## Debugging
 
