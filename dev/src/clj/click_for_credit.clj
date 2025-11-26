@@ -3,7 +3,7 @@
 
 (load-file "dev/src/clj/ai_websocket_client_v2.clj")
 
-(def gs (:game-state @ai-websocket-client-v2/client-state))
+(def gs (:game-state @ai-state/client-state))
 
 (println "\n📊 Before Action:")
 (println "  Clicks:" (get-in gs [:corp :click]))
@@ -19,7 +19,7 @@
 (println "⏳ Waiting for response...")
 (Thread/sleep 2000)
 
-(def gs2 (:game-state @ai-websocket-client-v2/client-state))
+(def gs2 (:game-state @ai-state/client-state))
 
 (println "\n📊 After Action:")
 (println "  Clicks:" (get-in gs2 [:corp :click]))

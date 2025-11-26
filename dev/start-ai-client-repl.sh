@@ -21,13 +21,13 @@ echo "To send commands from scripts:"
 echo "  ./dev/ai-eval.sh '$CLIENT_NAME' $REPL_PORT '<expression>'"
 echo ""
 
-# Start REPL on specified port without loading user.clj
-# Use 'with-profile base' to avoid the dev profile which loads user.clj
-# This prevents the port 7888 nREPL server from starting
+# Start REPL on specified port
+# Use 'with-profile dev' to get all source paths
+# nrepl.cmdline doesn't trigger :repl-options auto-init, so (go) won't run
 # Use nohup and redirect to keep it running in background
 # Pass client name via environment variable (simpler than JVM prop through lein)
 export AI_CLIENT_NAME=$CLIENT_NAME
-nohup lein with-profile base run -m nrepl.cmdline \
+nohup lein with-profile dev run -m nrepl.cmdline \
   --port $REPL_PORT \
   > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &
 

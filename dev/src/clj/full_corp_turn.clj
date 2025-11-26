@@ -19,7 +19,7 @@
   {:gameid gameid :command "credit" :args nil})
 (Thread/sleep 1500)
 
-(def gs (:game-state @ai-websocket-client-v2/client-state))
+(def gs (:game-state @ai-state/client-state))
 (println "\n📊 After 3 clicks:")
 (println "  Clicks:" (get-in gs [:corp :click]))
 (println "  Credits:" (get-in gs [:corp :credit]))
@@ -31,7 +31,7 @@
   {:gameid gameid :command "end-turn" :args nil})
 (Thread/sleep 2000)
 
-(def gs2 (:game-state @ai-websocket-client-v2/client-state))
+(def gs2 (:game-state @ai-state/client-state))
 (println "\n📊 After end-turn:")
 (println "  Turn:" (:turn gs2))
 (println "  Active player:" (:active-player gs2))
@@ -43,7 +43,7 @@
   (println "  " (:text entry)))
 
 (println "\n📡 Connection:")
-(println "  Still connected:" (:connected @ai-websocket-client-v2/client-state))
+(println "  Still connected:" (:connected @ai-state/client-state))
 
 (println "\n✅ Corp turn 1 complete!")
 (println "=== END ===")

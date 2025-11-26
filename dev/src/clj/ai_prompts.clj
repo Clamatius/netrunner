@@ -1,6 +1,7 @@
 (ns ai-prompts
   "Prompt handling, choices, mulligan, and discard management"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
             [ai-core :as core]))
 
 ;; ============================================================================
@@ -12,7 +13,7 @@
    Usage: (choose! 0) ; choose first option
           (choose! \"uuid\") ; choose by UUID"
   [choice]
-  (let [prompt (ws/get-prompt)]
+  (let [prompt (state/get-prompt)]
     (if prompt
       (do
         (ws/choose! choice)
@@ -22,10 +23,10 @@
 (defn choose-option!
   "Choose from prompt by index (side-aware)"
   [index]
-  (let [state @ws/client-state
-        side (:side state)
-        gameid (:gameid state)
-        prompt (get-in state [:game-state (keyword side) :prompt-state])
+  (let [client-state @state/client-state
+        side (:side client-state)
+        gameid (:gameid client-state)
+        prompt (get-in client-state [:game-state (keyword side) :prompt-state])
         choice (nth (:choices prompt) index nil)
         choice-uuid (:uuid choice)]
     (if choice-uuid
@@ -44,9 +45,9 @@
   "Choose from prompt by matching value/label text (case-insensitive substring match).
    Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")"
   [value-text]
-  (let [state @ws/client-state
-        side (:side state)
-        prompt (get-in state [:game-state (keyword side) :prompt-state])
+  (let [client-state @state/client-state
+        side (:side client-state)
+        prompt (get-in client-state [:game-state (keyword side) :prompt-state])
         choices (:choices prompt)
         value-lower (clojure.string/lower-case (str value-text))
         ;; Find first choice whose value contains the search text
@@ -76,9 +77,9 @@
    Usage: (choose-card! 0)  ; Select first selectable card
           (choose-card! 2)  ; Select third selectable card"
   [index]
-  (let [state @ws/client-state
-        side (keyword (:side state))
-        prompt (get-in state [:game-state side :prompt-state])
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        prompt (get-in client-state [:game-state side :prompt-state])
         selectable (:selectable prompt)
         eid (:eid prompt)]
     (cond
@@ -108,11 +109,11 @@
 (defn keep-hand
   "Keep hand during mulligan"
   []
-  (let [prompt (ws/get-prompt)
+  (let [prompt (state/get-prompt)
         prompt-type (:prompt-type prompt)
-        state @ws/client-state
-        side (keyword (:side state))
-        hand-size (count (get-in state [:game-state side :hand]))]
+        client-state @state/client-state
+        side (keyword (:side client-state))
+        hand-size (count (get-in client-state [:game-state side :hand]))]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
@@ -129,11 +130,11 @@
 (defn mulligan
   "Mulligan (redraw) hand"
   []
-  (let [prompt (ws/get-prompt)
+  (let [prompt (state/get-prompt)
         prompt-type (:prompt-type prompt)
-        state @ws/client-state
-        side (keyword (:side state))
-        hand-size (count (get-in state [:game-state side :hand]))]
+        client-state @state/client-state
+        side (keyword (:side client-state))
+        hand-size (count (get-in client-state [:game-state side :hand]))]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
@@ -153,7 +154,7 @@
   (loop [checks 0]
     (when (< checks 20)
       (Thread/sleep core/short-delay)
-      (let [prompt (ws/get-prompt)
+      (let [prompt (state/get-prompt)
             prompt-type (:prompt-type prompt)]
         (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
           (keep-hand)
@@ -167,8 +168,8 @@
   "Discard cards down to maximum hand size
    Auto-detects side and discards until at or below max hand size"
   []
-  (let [state @ws/client-state
-        side (keyword (:side state))
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
         discarded (ws/handle-discard-prompt! side)]
     (when (= discarded 0)
       (println "No cards to discard"))))
@@ -178,9 +179,9 @@
 
    Usage: (discard-specific-cards! [0 2 4])  ; Discard cards at indices 0, 2, 4"
   [indices]
-  (let [state @ws/client-state
-        side (keyword (:side state))
-        gs (ws/get-game-state)
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        gs (state/get-game-state)
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])]
     (if (and (= "select" (:prompt-type prompt))
@@ -203,9 +204,9 @@
           (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy"
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
-        state @ws/client-state
-        side (keyword (:side state))
-        gs (ws/get-game-state)
+        client-state @state/client-state
+        side (keyword (:side client-state))
+        gs (state/get-game-state)
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])]
     (if (and (= "select" (:prompt-type prompt))

@@ -1,6 +1,7 @@
 (ns ai-card-actions
   "Card manipulation - play, install, use abilities, rez, trash, advance, score"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
             [ai-core :as core]
             [ai-basic-actions :as basic]))
 
@@ -15,7 +16,7 @@
           (play-card! 0)"
   [name-or-index]
   ;; Check for pre-existing blocking prompt before attempting action
-  (let [existing-prompt (ws/get-prompt)]
+  (let [existing-prompt (state/get-prompt)]
     (if (and existing-prompt
              (not= :waiting (:prompt-type existing-prompt)))
       (do
@@ -29,11 +30,11 @@
         (let [card (core/find-card-in-hand name-or-index)]
           (if card
             (let [before-state (core/capture-state-snapshot)
-                  state @ws/client-state
-                  side (keyword (:side state))
-                  before-credits (get-in state [:game-state side :credit])
-                  before-clicks (get-in state [:game-state side :click])
-                  gameid (:gameid state)
+                  client-state @state/client-state
+                  side (keyword (:side client-state))
+                  before-credits (get-in client-state [:game-state side :credit])
+                  before-clicks (get-in client-state [:game-state side :click])
+                  gameid (:gameid client-state)
                   card-ref (core/create-card-ref card)
                   card-title (:title card)
                   card-zone (:zone card)]
@@ -47,7 +48,7 @@
               (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                 (case (:status result)
                   :success
-                  (let [after-state @ws/client-state
+                  (let [after-state @state/client-state
                         after-credits (get-in after-state [:game-state side :credit])
                         after-clicks (get-in after-state [:game-state side :click])
                         credit-delta (- after-credits before-credits)]
@@ -109,7 +110,7 @@
    (install-card! name-or-index nil))
   ([name-or-index server]
    ;; Check for pre-existing blocking prompt before attempting action
-   (let [existing-prompt (ws/get-prompt)]
+   (let [existing-prompt (state/get-prompt)]
      (if (and existing-prompt
               (not= :waiting (:prompt-type existing-prompt)))
        (do
@@ -123,10 +124,10 @@
          (let [card (core/find-card-in-hand name-or-index)]
            (if card
              (let [before-state (core/capture-state-snapshot)
-                   state @ws/client-state
-                   side (keyword (:side state))
-                   before-clicks (get-in state [:game-state side :click])
-                   gameid (:gameid state)
+                   client-state @state/client-state
+                   side (keyword (:side client-state))
+                   before-clicks (get-in client-state [:game-state side :click])
+                   gameid (:gameid client-state)
                    card-ref (core/create-card-ref card)
                    card-title (:title card)
                    card-type (:type card)
@@ -149,7 +150,7 @@
                (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                  (case (:status result)
                    :success
-                   (let [after-state @ws/client-state
+                   (let [after-state @state/client-state
                          after-clicks (get-in after-state [:game-state side :click])]
                      (if normalized-server
                        (println (str "📥 Installed: " card-title " on " normalized-server))
@@ -199,14 +200,14 @@
    Usage: (use-ability! \"Smartware Distributor\" 0)
           (use-ability! \"Sure Gamble\" 1)"
   [card-name ability-index]
-  (let [state @ws/client-state
-        side (:side state)
+  (let [client-state @state/client-state
+        side (:side client-state)
         ;; Find card in appropriate location based on side
         card (if (core/side= "Corp" side)
                (core/find-installed-corp-card card-name)
                (core/find-installed-card card-name))]
     (if card
-      (let [gameid (:gameid state)
+      (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
             ;; Check if this ability is dynamic (e.g., auto-pump, auto-pump-and-break)
             abilities (:abilities card)
@@ -247,11 +248,11 @@
    Usage: (use-runner-ability! \"Brân 1.0\" 0)
           During encounter, activates the bioroid's click-to-break ability"
   [card-name ability-index]
-  (let [state @ws/client-state
+  (let [client-state @state/client-state
         ;; Find the Corp card (usually ICE during encounter)
         card (core/find-installed-corp-card card-name)]
     (if card
-      (let [gameid (:gameid state)
+      (let [gameid (:gameid client-state)
             ;; Create card reference matching wire format
             card-ref {:cid (:cid card)
                      :zone (:zone card)
@@ -273,14 +274,14 @@
    Usage: (trash-installed! \"Palisade\")
           (trash-installed! \"Daily Casts\")"
   [card-name]
-  (let [state @ws/client-state
-        side (:side state)
+  (let [client-state @state/client-state
+        side (:side client-state)
         ;; Find card in appropriate location based on side
         card (if (= "Corp" side)
                (core/find-installed-corp-card card-name)
                (core/find-installed-card card-name))]
     (if card
-      (let [gameid (:gameid state)
+      (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
             card-type (:type card)
             card-zone (:zone card)]
@@ -302,14 +303,14 @@
    Usage: (rez-card! \"Prisec\")
           (rez-card! \"Palisade [1]\")"
   [card-name]
-  (let [state @ws/client-state
-        side (:side state)
-        before-credits (get-in state [:game-state :corp :credit])]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        before-credits (get-in client-state [:game-state :corp :credit])]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can rez cards")
       (let [card (core/find-installed-corp-card card-name)]
         (if card
-          (let [gameid (:gameid state)
+          (let [gameid (:gameid client-state)
                 card-ref (core/create-card-ref card)
                 rez-cost (:cost card)]
             (ws/send-message! :game/action
@@ -320,7 +321,7 @@
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
             (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
-              (let [after-state @ws/client-state
+              (let [after-state @state/client-state
                     after-credits (get-in after-state [:game-state :corp :credit])]
                 (println (str "🔴 Rezzed: " card-name))
                 (when rez-cost
@@ -335,9 +336,9 @@
    Usage: (let-subs-fire! \"Whitespace\")
           (let-subs-fire! \"IP Block\")"
   [ice-name]
-  (let [state @ws/client-state
-        side (:side state)
-        gameid (:gameid state)]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        gameid (:gameid client-state)]
     (if (not (core/side= "Runner" side))
       (println "❌ Only Runner can let subroutines fire")
       (do
@@ -356,9 +357,9 @@
 
    Usage: (toggle-auto-no-action!)"
   []
-  (let [state @ws/client-state
-        side (:side state)
-        gameid (:gameid state)]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        gameid (:gameid client-state)]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can toggle auto-pass priority")
       (do
@@ -377,13 +378,13 @@
    Usage: (fire-unbroken-subs! \"Palisade\")
           (fire-unbroken-subs! \"IP Block\")"
   [ice-name]
-  (let [state @ws/client-state
-        side (:side state)]
+  (let [client-state @state/client-state
+        side (:side client-state)]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can fire ICE subroutines")
       (let [card (core/find-installed-corp-card ice-name)]
         (if card
-          (let [gameid (:gameid state)
+          (let [gameid (:gameid client-state)
                 card-ref {:cid (:cid card)
                          :zone (:zone card)
                          :side (:side card)
@@ -406,17 +407,17 @@
           (advance-card! \"Oaktown Renovation\")"
   [card-name]
   (when (basic/ensure-turn-started!)
-    (let [state @ws/client-state
-          side (:side state)]
+    (let [client-state @state/client-state
+          side (:side client-state)]
       (if (not (core/side= "Corp" side))
         (println "❌ Only Corp can advance cards")
         (let [card (core/find-installed-corp-card card-name)
               before-counters (or (:advance-counter card) 0)
-              before-credits (get-in state [:game-state :corp :credit])
-              before-clicks (get-in state [:game-state :corp :click])
+              before-credits (get-in client-state [:game-state :corp :credit])
+              before-clicks (get-in client-state [:game-state :corp :click])
               advancement-requirement (:advancementcost card)]
           (if card
-            (let [gameid (:gameid state)
+            (let [gameid (:gameid client-state)
                   card-ref {:cid (:cid card)
                            :zone (:zone card)
                            :side (:side card)
@@ -431,7 +432,7 @@
               ;; Note: Card doesn't change zones, so we pass its current zone
               (let [result (core/verify-action-in-log card-name (:zone card) 3000)]
                 (if (= :success (:status result))
-                  (let [after-state @ws/client-state
+                  (let [after-state @state/client-state
                         updated-card (core/find-installed-corp-card card-name)
                         after-counters (or (:advance-counter updated-card) 0)
                         after-credits (get-in after-state [:game-state :corp :credit])
@@ -466,15 +467,15 @@
    Usage: (score-agenda! \"Project Vitruvius\")
           (score-agenda! \"Send a Message\")"
   [card-name]
-  (let [state @ws/client-state
-        side (:side state)
-        before-score (get-in state [:game-state :corp :agenda-point])]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        before-score (get-in client-state [:game-state :corp :agenda-point])]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can score agendas")
       (let [card (core/find-installed-corp-card card-name)]
         (if card
           (if (= "Agenda" (:type card))
-            (let [gameid (:gameid state)
+            (let [gameid (:gameid client-state)
                   card-ref {:cid (:cid card)
                            :zone (:zone card)
                            :side (:side card)
@@ -488,7 +489,7 @@
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
               (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
-                (let [after-state @ws/client-state
+                (let [after-state @state/client-state
                       after-score (get-in after-state [:game-state :corp :agenda-point])
                       runner-score (get-in after-state [:game-state :runner :agenda-point])]
                   (println (str "🎯 Scored: " card-name

@@ -1,30 +1,91 @@
 (ns ai-connection
   "Lobby management, game connection, and dev/testing commands"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
+            [ai-display :as display]
             [ai-core :as core]))
 
 ;; ============================================================================
-;; Lobby Management
+;; Lobby Operations (Implementations)
 ;; ============================================================================
+
+(defn request-lobby-list!
+  "Request the list of available games"
+  []
+  (ws/send-message! :lobby/list nil))
 
 (defn create-lobby!
   "Create a new game lobby
    Usage: (create-lobby! \"My Test Game\")
-          (create-lobby! {:title \"My Game\" :side \"Corp\" :format \"startup\"})"
+          (create-lobby! {:title \"My Game\" :side \"Corp\" :format \"startup\"})
+   Options:
+     :title - game title (required)
+     :side - \"Corp\", \"Runner\", or \"Any Side\" (default: \"Any Side\")
+     :format - game format (default: \"system-gateway\" for beginner fixed decks)
+     :gateway-type - \"Beginner\" or \"Intermediate\" (default: \"Beginner\")
+     :room - \"casual\" or \"competitive\" (default: \"casual\")
+     :allow-spectator - allow spectators (default: true)
+     :spectatorhands - spectators can see hands (default: true for AI testing)
+     :save-replay - save replay (default: true)"
   ([title-or-options]
    (let [options (if (map? title-or-options)
                   title-or-options
-                  {:title title-or-options :side "Any Side"})]
-     (ws/create-lobby! options)
-     (Thread/sleep core/standard-delay))))
+                  {:title title-or-options :side "Any Side"})
+         {:keys [title side format gateway-type room allow-spectator spectatorhands save-replay]
+          :or {side "Any Side"
+               format "system-gateway"
+               gateway-type "Beginner"
+               room "casual"
+               allow-spectator true
+               spectatorhands true
+               save-replay true}} options]
+     (if-not title
+       (println "❌ Error: :title is required")
+       (let [lobby-options (assoc options
+                                  :side side
+                                  :format format
+                                  :gateway-type gateway-type
+                                  :room room
+                                  :allow-spectator allow-spectator
+                                  :spectatorhands spectatorhands
+                                  :save-replay save-replay)]
+         (ws/send-message! :lobby/create lobby-options)
+         (println "🎮 Creating lobby:" title)
+         (println "   Format:" format (when (= format "system-gateway") (str "(" gateway-type ")")))
+         (Thread/sleep core/standard-delay))))))
+
+(defn join-game!
+  "Join a game by ID
+   Options:
+     :gameid - game ID to join
+     :side - \"Corp\" or \"Runner\" or \"Any Side\"
+     :password - optional password"
+  [{:keys [gameid side password]}]
+  (let [request-side (or side "Any Side")]
+    (ws/send-message! :lobby/join
+                     (cond-> {:gameid gameid
+                              :request-side request-side}
+                       password (assoc :password password)))
+    (println "🎮 Attempting to join game" gameid "as" request-side)))
+
+(defn resync-game!
+  "Request full game state resync (for reconnecting to started games)
+   Usage: (resync-game! gameid)"
+  [gameid]
+  (let [uuid-gameid (if (string? gameid)
+                      (java.util.UUID/fromString gameid)
+                      gameid)]
+    (swap! state/client-state assoc :gameid uuid-gameid)
+    (ws/send-message! :game/resync {:gameid uuid-gameid})
+    (println "🔄 Requesting game state resync for" uuid-gameid)))
 
 (defn list-lobbies
   "Request and display the list of available games"
   []
   (println "Requesting lobby list...")
-  (ws/request-lobby-list!)
+  (request-lobby-list!)
   (Thread/sleep core/short-delay)
-  (ws/show-games))
+  (display/show-games))
 
 ;; ============================================================================
 ;; Helpers
@@ -47,40 +108,44 @@
             (recur (+ waited 200)))))))
 
 ;; ============================================================================
-;; Game Connection
+;; Game Connection (Higher-Level)
 ;; ============================================================================
 
+(defn in-game?
+  "Check if currently in a game"
+  []
+  (some? (:gameid @state/client-state)))
+
 (defn connect-game!
-  "Join a game by ID
+  "Join a game by ID (with wait and status display)
    Usage: (connect-game! \"game-uuid\" \"Corp\")
           (connect-game! \"game-uuid\") ; defaults to Corp"
   ([gameid] (connect-game! gameid "Corp"))
   ([gameid side]
-   ;; Convert string UUID to java.util.UUID if needed
    (let [uuid (if (string? gameid)
                 (java.util.UUID/fromString gameid)
                 gameid)]
-     (ws/join-game! {:gameid uuid :side side}))
-   
-   (if (wait-for-condition ws/in-game? 5000 "game join")
-     (ws/show-status)
+     (join-game! {:gameid uuid :side side}))
+
+   (if (wait-for-condition in-game? 5000 "game join")
+     (display/show-status)
      (println "❌ Failed to join game"))))
 
-(defn resync-game!
-  "Rejoin an already-started game by requesting full state resync
-   Usage: (resync-game! \"game-uuid\")"
+(defn reconnect-game!
+  "Rejoin an already-started game by requesting full state resync (with wait)
+   Usage: (reconnect-game! \"game-uuid\")"
   [gameid]
-  (ws/resync-game! gameid)
-  (if (wait-for-condition ws/in-game? 5000 "state resync")
-     (ws/show-status)
+  (resync-game! gameid)
+  (if (wait-for-condition in-game? 5000 "state resync")
+     (display/show-status)
      (println "❌ Failed to resync game state")))
 
 (defn lobby-ready-to-start?
   "Check if the current lobby is ready to start a game.
    Validates: 2 players, both have decks with identities, one Corp + one Runner."
   []
-  (let [state @ws/client-state
-        lobby (:lobby-state state)]
+  (let [client @state/client-state
+        lobby (:lobby-state client)]
     (and lobby
          (= 2 (count (:players lobby)))
          (not (:started lobby))
@@ -95,9 +160,9 @@
   "Check if lobby is ready and auto-start the game if safe.
    Returns :started if game was started, :not-ready if not ready, :already-started if started."
   []
-  (let [state @ws/client-state
-        lobby (:lobby-state state)
-        gameid (:gameid state)]
+  (let [client @state/client-state
+        lobby (:lobby-state client)
+        gameid (:gameid client)]
     (cond
       (not lobby)
       (do (println "❌ Not in a lobby")
@@ -124,8 +189,8 @@
   "Send a chat message to the game
    Usage: (send-chat! \"Hello, world!\")"
   [message]
-  (let [state (ws/get-game-state)
-        gameid (:gameid state)]
+  (let [gs (state/get-game-state)
+        gameid (:gameid gs)]
     (if gameid
       (ws/send-message! :game/say
         {:gameid (if (string? gameid)
@@ -145,8 +210,8 @@
 
    WARNING: This is a testing backdoor and will appear in game log!"
   [key delta]
-  (let [state @ws/client-state
-        gameid (:gameid state)]
+  (let [client @state/client-state
+        gameid (:gameid client)]
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)

@@ -2,8 +2,20 @@
   "Initialization script for AI Client REPL")
 
 (println "\n=== AI Client REPL Starting ===")
-(println "Loading WebSocket client...")
+(println "Loading foundational modules...")
 
+;; Load foundation modules first (no dependencies)
+(try
+  (load-file "dev/src/clj/ai_debug.clj")
+  (load-file "dev/src/clj/ai_state.clj")
+  (load-file "dev/src/clj/ai_hud_utils.clj")
+  (catch Exception e
+    (println "❌ FATAL ERROR loading foundation modules:")
+    (println (.getMessage e))
+    (.printStackTrace e)
+    (throw e)))
+
+(println "Loading WebSocket client...")
 ;; Load the websocket client
 (try
   (load-file "dev/src/clj/ai_websocket_client_v2.clj")
@@ -46,7 +58,7 @@
 (let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")
       client-id (str "ai-client-" client-name)]
   (println (str "Client name: " client-name))
-  (swap! ai-websocket-client-v2/client-state assoc :client-id client-id))
+  (swap! ai-state/client-state assoc :client-id client-id))
 
 ;; Get CSRF token from the main page
 (println "\nGetting CSRF token...")
@@ -59,7 +71,7 @@
 (if (ai-websocket-client-v2/connected?)
   (do
     (println "\n✅ AI Client Ready!")
-    (println "   UID:" (:uid @ai-websocket-client-v2/client-state))
+    (println "   UID:" (:uid @ai-state/client-state))
     (println "\nAvailable commands:")
     (println "  (ai-actions/connect-game! \"game-id\" \"Corp\") - Join a game")
     (println "  (ai-actions/status)                          - Show game status")

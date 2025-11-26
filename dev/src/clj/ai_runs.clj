@@ -1,6 +1,7 @@
 (ns ai-runs
   "Run mechanics - initiation, automation, and state management"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
             [ai-core :as core]
             [ai-prompts :as prompts]
             [ai-basic-actions :as basic]))
@@ -152,9 +153,9 @@
     (let [{:keys [server flags]} (parse-run-flags args)
           _ (when (nil? server)
               (throw (ex-info "No server specified" {:args args})))
-          state @ws/client-state
-          gameid (:gameid state)
-          initial-log-size (count (get-in @ws/client-state [:game-state :log]))
+          client-state @state/client-state
+          gameid (:gameid client-state)
+          initial-log-size (count (get-in @state/client-state [:game-state :log]))
           {:keys [normalized original changed?]} (core/normalize-server-name server)]
 
       ;; Reset and set strategy for this run
@@ -185,7 +186,7 @@
       ;; Wait for "make a run on" log entry and echo it
       (let [deadline (+ (System/currentTimeMillis) 5000)]
         (loop []
-          (let [log (get-in @ws/client-state [:game-state :log])
+          (let [log (get-in @state/client-state [:game-state :log])
                 new-entries (drop initial-log-size log)
                 run-entry (first (filter #(clojure.string/includes? (:text %) "make a run on")
                                          new-entries))]
@@ -710,14 +711,14 @@
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
         strategy (merge (get-strategy) flags)
 
-        state @ws/client-state
-        side (:side state)
-        gameid (:gameid state)
-        run-phase (get-in state [:game-state :run :phase])
-        my-prompt (get-in state [:game-state (keyword side) :prompt-state])
+        client-state @state/client-state
+        side (:side client-state)
+        gameid (:gameid client-state)
+        run-phase (get-in client-state [:game-state :run :phase])
+        my-prompt (get-in client-state [:game-state (keyword side) :prompt-state])
         opp-side (core/other-side side)
-        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])
-        log (get-in state [:game-state :log])
+        opp-prompt (get-in client-state [:game-state (keyword opp-side) :prompt-state])
+        log (get-in client-state [:game-state :log])
 
         ;; Check for new events in recent log (last 3 entries)
         recent-log (take 3 log)
@@ -732,7 +733,7 @@
 
         ;; Build context map for handlers
         context {:strategy strategy
-                 :state state
+                 :state client-state
                  :side side
                  :gameid gameid
                  :run-phase run-phase

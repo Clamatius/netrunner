@@ -1,7 +1,6 @@
 (ns ai-display
   "Display functions for game status, board state, and HUD file management"
   (:require [ai-state :as state]
-            [ai-websocket-client-v2 :as ws]
             [ai-hud-utils :as hud]
             [ai-core :as core]
             [ai-basic-actions :as actions]
@@ -32,10 +31,202 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn show-status
+  "Display current game status or lobby state"
+  []
+  (let [lobby (:lobby-state @state/client-state)
+        gs (state/get-game-state)]
+    ;; Check if we're in a lobby but game hasn't started yet
+    (if (and lobby (not (:started lobby)))
+      ;; Show lobby status
+      (let [players (:players lobby)
+            player-count (count players)
+            players-with-decks (count (filter :deck players))
+            sides (set (map :side players))
+            ready? (and (= 2 player-count)
+                       (every? :deck players)
+                       (every? #(get-in % [:deck :identity]) players)
+                       (contains? sides "Corp")
+                       (contains? sides "Runner"))]
+        (println "📊 LOBBY STATUS")
+        (println "\nGame:" (:title lobby))
+        (println "Format:" (:format lobby))
+        (println "Players:" player-count "/2")
+        (doseq [player players]
+          (let [username (get-in player [:user :username])
+                side (:side player)
+                has-deck? (some? (:deck player))
+                deck-name (get-in player [:deck :name])]
+            (println (format "  • %s (%s) - %s"
+                           username
+                           side
+                           (if has-deck?
+                             (str "✅ " deck-name)
+                             "⏳ No deck selected")))))
+        (println "\nStatus:"
+               (cond
+                 ready? "✅ Ready to start! Use 'start-game' or 'auto-start'"
+                 (< player-count 2) (format "⏳ Waiting for players (%d/2)" player-count)
+                 (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
+                 :else "⏳ Waiting...")))
+      ;; Show game status
+      (let [my-side (:side @state/client-state)
+            game-id (:gameid @state/client-state)
+            active-side (state/active-player)
+            turn-num (state/turn-number)
+            end-turn (get-in gs [:end-turn])
+            prompt (state/get-prompt)
+            prompt-type (:prompt-type prompt)
+            run-state (get-in gs [:run])
+            runner-clicks (get-in gs [:runner :click])
+            corp-clicks (get-in gs [:corp :click])
+            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
+            next-player (cond
+                         (= turn-num 0) "corp"
+                         (= active-side "corp") "runner"
+                         (= active-side "runner") "corp"
+                         :else "unknown")
+            runner-missing? (and gs (nil? (get-in gs [:runner :user])))
+            corp-missing? (and gs (nil? (get-in gs [:corp :user])))]
+
+        ;; If a player has left, show recovery message
+        (if (or runner-missing? corp-missing?)
+          (do
+            (println "📊 GAME STATUS")
+            (println "\n⚠️  PLAYER DISCONNECTED")
+            (when runner-missing?
+              (println "\n❌ Runner has left the game"))
+            (when corp-missing?
+              (println "\n❌ Corp has left the game"))
+            (println "\n💡 To reconnect:")
+            (println "   ./dev/send_command" (str/lower-case my-side) "join" game-id my-side)
+            (println "\nOr use ai-bounce.sh to restart both clients:")
+            (println "   ./dev/ai-bounce.sh" game-id))
+
+          ;; Normal game status display
+          (do
+            (println "📊 GAME STATUS")
+            (println "\nTurn:" turn-num "-" active-side)
+
+            ;; Active player / waiting status
+            (cond
+              ;; End-turn was called, and it's my side's turn to start
+              (and end-turn (not= my-side active-side))
+              (do
+                (println "Status: 🟢 Waiting to start" my-side "turn (use 'start-turn' command)")
+                (println "💡 Use 'start-turn' to begin your turn"))
+
+              ;; End-turn was called, waiting for opponent to start
+              (and end-turn (= my-side active-side))
+              (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to start turn")
+
+              ;; Both players have 0 clicks but end-turn not called yet
+              both-zero-clicks
+              (println "Status: 🟢 Waiting to start" next-player "turn (use 'start-turn' command)")
+
+              ;; Waiting for opponent
+              (not= my-side active-side)
+              (println "Status: ⏳ Waiting for" active-side "to act")
+
+              ;; Waiting prompt
+              (= :waiting prompt-type)
+              (println "Status: ⏳" (:msg prompt))
+
+              ;; My turn and active
+              :else
+              (println "Status: ✅ Your turn to act"))
+
+            ;; Run status
+            (when run-state
+              (println "\n🏃 ACTIVE RUN:")
+              (println "  Server:" (:server run-state))
+              (println "  Phase:" (:phase run-state))
+              (when-let [pos (:position run-state)]
+                (println "  Position:" pos)))
+
+            (println "\n--- RUNNER ---")
+            (println "Credits:" (state/runner-credits))
+            (let [clicks runner-clicks]
+              (if (and (= "runner" active-side) (zero? clicks) (not end-turn))
+                (do
+                  (println "Clicks:" clicks "(End of Turn)")
+                  (println "💡 Use 'end-turn' to finish your turn"))
+                (println "Clicks:" clicks)))
+            (let [hand-count (state/my-hand-count)
+                  max-hand-size (get-in gs [:runner :hand-size-modification] 5)]
+              (println "Hand:" hand-count "cards")
+              (when (and (= "runner" my-side) (> hand-count max-hand-size))
+                (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
+            (let [agenda-points (get-in gs [:runner :agenda-point] 0)
+                  corp-scored (get-in gs [:corp :agenda-point] 0)
+                  runner-stolen agenda-points
+                  hq-size (get-in gs [:corp :hand-count] 0)
+                  rd-size (get-in gs [:corp :deck-count] 0)
+                  discard-size (count (get-in gs [:corp :discard] []))
+                  initial-deck-size (+ rd-size hq-size discard-size (* corp-scored 1))
+                  total-agendas (cond
+                                 (<= initial-deck-size 44) 18
+                                 (<= initial-deck-size 49) 20
+                                 (<= initial-deck-size 54) 22
+                                 :else (+ 22 (* 2 (quot (- initial-deck-size 50) 5))))
+                  accounted (+ corp-scored runner-stolen)
+                  missing (- total-agendas accounted)
+                  cards-drawn (max 0 turn-num)
+                  agenda-density (if (pos? initial-deck-size)
+                                  (/ (float total-agendas) initial-deck-size)
+                                  0)
+                  expected-drawn (int (* cards-drawn agenda-density))
+                  servers (get-in gs [:corp :servers] {})
+                  remotes (filter #(and (string? (key %))
+                                      (re-matches #"remote\d+" (key %)))
+                                servers)
+                  unrezzed-remotes (filter (fn [[_ server]]
+                                            (let [content (get-in server [:content])]
+                                              (some #(not (:rezzed %)) content)))
+                                          remotes)
+                  unrezzed-count (count unrezzed-remotes)
+                  advanced-count (count (filter (fn [[_ server]]
+                                                 (let [content (get-in server [:content])]
+                                                   (some #(and (not (:rezzed %))
+                                                              (pos? (get-in % [:advance-counter] 0)))
+                                                        content)))
+                                               remotes))]
+              (if (= "runner" my-side)
+                (println (format "Agenda Points: %d / 7  │  Missing: %d (Drawn: ~%d, HQ: %d, R&D: %d, Remotes: %d/%d)"
+                                agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count))
+                (println "Agenda Points:" agenda-points "/ 7")))
+            (println "\n--- CORP ---")
+            (println "Credits:" (state/corp-credits))
+            (let [clicks corp-clicks]
+              (if (and (= "corp" active-side) (zero? clicks) (not end-turn))
+                (do
+                  (println "Clicks:" clicks "(End of Turn)")
+                  (println "💡 Use 'end-turn' to finish your turn"))
+                (println "Clicks:" clicks)))
+            (let [hand-count (state/corp-hand-count)
+                  max-hand-size (get-in gs [:corp :hand-size-modification] 5)]
+              (println "Hand:" hand-count "cards")
+              (when (and (= "corp" my-side) (> hand-count max-hand-size))
+                (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
+            (let [agenda-points (get-in gs [:corp :agenda-point] 0)]
+              (println "Agenda Points:" agenda-points "/ 7"))
+            (when (and prompt (not= :waiting prompt-type))
+              (println "\n🔔 Active Prompt:" (:msg prompt)))
+
+            ;; Show recent log entries
+            (when-let [log (get-in gs [:log])]
+              (let [recent-log (take-last 3 log)]
+                (when (seq recent-log)
+                  (println "\n--- RECENT LOG ---")
+                  (doseq [entry recent-log]
+                    (println " " (:text entry))))))
+
+            nil))))))
+
 (defn status
   "Show current game status and return client state"
   []
-  (ws/show-status)
+  (show-status)
   @state/client-state)
 
 (defn show-board
@@ -176,10 +367,63 @@
                         ""))))
     nil))
 
+(defn get-game-log
+  "Get the game log from current game state"
+  []
+  (get-in @state/client-state [:game-state :log]))
+
+(defn show-game-log
+  "Display game log in readable format"
+  ([] (show-game-log 20))
+  ([n]
+   (if-let [log (get-game-log)]
+     (do
+       (println "\n📜 GAME LOG (last" n "entries)")
+       (doseq [entry (take-last n log)]
+         (when (map? entry)
+           (let [text (str/replace (:text entry "") "[hr]" "")]
+             (println (str "  " text)))))
+       nil)
+     (println "No game log available"))))
+
 (defn show-log
   "Display game log (natural language event history)"
-  ([] (ws/show-game-log 20))
-  ([n] (ws/show-game-log n)))
+  ([] (show-game-log 20))
+  ([n] (show-game-log n)))
+
+(defn get-lobby-list
+  "Get the current lobby list from state"
+  []
+  (:lobby-list @state/client-state))
+
+(defn list-active-game-ids
+  "Return list of active game IDs (parseable format for scripts)
+   Returns vector of game ID strings, or empty vector if none"
+  []
+  (if-let [games (get-lobby-list)]
+    (vec (map :gameid games))
+    []))
+
+(defn show-games
+  "Display available games in a readable format"
+  []
+  (if-let [games (get-lobby-list)]
+    (do
+      (println "\n📋 Available Games:")
+      (doseq [game games]
+        (println "\n🎮" (:title game))
+        (println "   ID:" (:gameid game))
+        (println "   Players:" (count (:players game)) "/" (:max-players game 2))
+        (when-let [players (:players game)]
+          (doseq [player players]
+            (println "     -" (:side player) ":" (get-in player [:user :username] "Waiting..."))))
+        (when (:started game)
+          (println "   ⚠️  Game already started")))
+      (println "\nTo join a game, use: (join-game! {:gameid \"...\" :side \"Corp\"})")
+      (println))
+    (do
+      (println "No games available. Request lobby list with: (request-lobby-list!)")
+      nil)))
 
 (defn show-log-compact
   "Display ultra-compact game log (recent N entries, one line each, no decorations)"
@@ -194,10 +438,70 @@
            (println text))))
      nil)))
 
+(defn show-status-compact
+  "Display ultra-compact game status (1-2 lines, no decorations)"
+  []
+  (let [lobby (:lobby-state @state/client-state)
+        gs (state/get-game-state)]
+    (if (and lobby (not (:started lobby)))
+      ;; Lobby compact status
+      (let [players (:players lobby)
+            player-count (count players)
+            ready? (and (= 2 player-count) (every? :deck players))]
+        (println (format "Lobby: %d/2 players%s"
+                        player-count
+                        (if ready? " [READY]" ""))))
+      ;; Game compact status
+      (let [my-side (:side @state/client-state)
+            active-side (state/active-player)
+            turn (state/turn-number)
+            prompt (state/get-prompt)
+            run-state (get-in gs [:run])
+
+            ;; Runner state
+            runner-credits (get-in gs [:runner :credit] 0)
+            runner-clicks (get-in gs [:runner :click] 0)
+            runner-hand (get-in gs [:runner :hand] [])
+            runner-ap (get-in gs [:runner :agenda-point] 0)
+
+            ;; Corp state
+            corp-credits (get-in gs [:corp :credit] 0)
+            corp-clicks (get-in gs [:corp :click] 0)
+            corp-hand (get-in gs [:corp :hand] [])
+            corp-ap (get-in gs [:corp :agenda-point] 0)
+
+            ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
+            my-stats (if (= my-side "runner")
+                      (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap)
+                      (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap))
+            opp-stats (if (= my-side "runner")
+                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap)
+                       (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap))
+            my-label (if (= my-side "runner") "R" "C")
+            opp-label (if (= my-side "runner") "C" "R")
+
+            prompt-str (cond
+                        run-state (format "Run:%s" (:server run-state))
+                        prompt (let [msg (:msg prompt)]
+                                (if (> (count msg) 30)
+                                  (str (subs msg 0 27) "...")
+                                  msg))
+                        :else "-")]
+
+        (println (format "T%d-%s | Me(%s):%s | Opp(%s):%s | %s"
+                        turn
+                        active-side
+                        my-label
+                        my-stats
+                        opp-label
+                        opp-stats
+                        prompt-str))
+        nil))))
+
 (defn status-compact
   "Show ultra-compact game status (1 line)"
   []
-  (ws/show-status-compact))
+  (show-status-compact))
 
 (defn board-compact
   "Show ultra-compact board state (2-3 lines)"
@@ -280,10 +584,78 @@
             (Thread/sleep core/short-delay)
             (recur (inc checks))))))))
 
+(defn- access-prompt?
+  "Detect if prompt is an access prompt by checking for 'steal' or 'trash' keywords"
+  [prompt]
+  (when-let [choices (:choices prompt)]
+    (let [choice-values (map :value choices)
+          choice-text (str/lower-case (str/join " " choice-values))]
+      (or (str/includes? choice-text "steal")
+          (str/includes? choice-text "trash")))))
+
+(defn- extract-card-name
+  "Extract card name from access prompt message
+   Format: 'You accessed Regolith Mining License'"
+  [msg]
+  (when msg
+    (let [msg-lower (str/lower-case msg)]
+      (when (str/includes? msg-lower "you accessed")
+        (when-let [match (re-find #"(?i)you accessed\s+(.+?)(?:\.|$)" msg)]
+          (second match))))))
+
+(defn- show-access-prompt
+  "Display access prompt with enhanced card metadata"
+  [prompt]
+  (let [msg (:msg prompt)
+        card-name (extract-card-name msg)
+        card-data (when card-name (get @all-cards card-name))
+        choices (:choices prompt)
+        has-steal? (some #(str/includes?
+                           (str/lower-case (str (:value %)))
+                           "steal")
+                        choices)]
+
+    ;; Display header with card metadata
+    (if card-data
+      (let [card-type (or (:type card-data) "unknown")
+            trash-cost (:cost card-data)
+            points (:agendapoints card-data)
+            metadata (cond
+                       points (str "[" card-type ", points=" points "]")
+                       trash-cost (str "[" card-type ", trash=" trash-cost "]")
+                       :else (str "[" card-type "]"))]
+        (println (str "\n❓ You accessed: " card-name " " metadata)))
+      (println (str "\n❓ " msg)))
+
+    ;; Show full card text ONLY when "steal" keyword present
+    (when (and has-steal? card-data (:text card-data))
+      (println "⚠️  SPECIAL STEAL CONDITION:")
+      (println (str "   " (:text card-data))))
+
+    ;; Display choices
+    (when choices
+      (doseq [[idx choice] (map-indexed vector choices)]
+        (println (str "  [" idx "] " (:value choice)))))
+
+    prompt))
+
 (defn show-prompt
-  "Display current prompt"
+  "Display current prompt in readable format.
+   Detects access prompts and shows enhanced card metadata."
   []
-  (ws/show-prompt))
+  (if-let [prompt (state/get-prompt)]
+    (if (access-prompt? prompt)
+      (show-access-prompt prompt)
+      (do
+        (println "\n🔔 PROMPT")
+        (println "Message:" (:msg prompt))
+        (println "Type:" (:prompt-type prompt))
+        (when-let [choices (:choices prompt)]
+          (println "Choices:")
+          (doseq [[idx choice] (map-indexed vector choices)]
+            (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
+        prompt))
+    (println "No active prompt")))
 
 (defn hand
   "Show my hand"

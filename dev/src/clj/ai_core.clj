@@ -1,6 +1,7 @@
 (ns ai-core
   "Core utility functions for AI player - shared helpers used across modules"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
             [jinteki.cards :refer [all-cards]]
             [clj-http.client :as http]
             [cheshire.core :as json]))
@@ -124,8 +125,8 @@
 (defn get-log-size
   "Get current size of the game log"
   []
-  (let [state @ws/client-state
-        log (get-in state [:game-state :log])]
+  (let [client-state @state/client-state
+        log (get-in client-state [:game-state :log])]
     (count log)))
 
 (defn verify-new-log-entry
@@ -160,16 +161,16 @@
    Waits up to max-wait-ms for the log entry to appear"
   [card-name card-initial-zone max-wait-ms]
   (let [initial-size (get-log-size)
-        initial-prompt (ws/get-prompt)
+        initial-prompt (state/get-prompt)
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
-                      (let [state @ws/client-state
-                            log (get-in state [:game-state :log])
+                      (let [client-state @state/client-state
+                            log (get-in client-state [:game-state :log])
                             current-size (count log)
-                            current-prompt (ws/get-prompt)
+                            current-prompt (state/get-prompt)
                             ;; Check if card is still in original zone (hand)
-                            side (keyword (:side state))
-                            hand (get-in state [:game-state side :hand])
+                            side (keyword (:side client-state))
+                            hand (get-in client-state [:game-state side :hand])
                             card-still-in-hand (some #(and (= (:title %) card-name)
                                                            (= (:zone %) card-initial-zone))
                                                     hand)
@@ -284,10 +285,10 @@
    It does NOT detect effects like 'cannot score this turn' or similar restrictions.
    Therefore, use conservatively - if this returns agendas, assume they MIGHT be scorable."
   []
-  (let [state @ws/client-state
-        side (:side state)]
+  (let [client-state @state/client-state
+        side (:side client-state)]
     (if (side= "Corp" side)
-      (let [servers (get-in state [:game-state :corp :servers])
+      (let [servers (get-in client-state [:game-state :corp :servers])
             ;; Get all content (assets/upgrades/agendas) from all servers
             all-content (mapcat :content (vals servers))
             ;; Filter for agendas only
@@ -317,9 +318,9 @@
    Supports [N] suffix for duplicate cards: \"Sure Gamble [1]\"
    Returns card object or nil if not found"
   [name-or-index]
-  (let [state @ws/client-state
-        side (:side state)
-        hand (get-in state [:game-state (keyword side) :hand])]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        hand (get-in client-state [:game-state (keyword side) :hand])]
     (cond
       (number? name-or-index)
       (nth hand name-or-index nil)
@@ -344,8 +345,8 @@
    Supports [N] suffix for duplicate cards: \"Corroder [1]\"
    Searches programs, hardware, and resources"
   [card-name]
-  (let [state @ws/client-state
-        rig (get-in state [:game-state :runner :rig])
+  (let [client-state @state/client-state
+        rig (get-in client-state [:game-state :runner :rig])
         all-installed (concat (:program rig) (:hardware rig) (:resource rig))
         {:keys [title index]} (parse-card-reference card-name)
         matches (filter #(= title (:title %)) all-installed)]
@@ -356,8 +357,8 @@
    Supports [N] suffix for duplicate cards: \"Palisade [1]\"
    Searches all servers for ICE, assets, and upgrades"
   [card-name]
-  (let [state @ws/client-state
-        servers (get-in state [:game-state :corp :servers])
+  (let [client-state @state/client-state
+        servers (get-in client-state [:game-state :corp :servers])
         ;; Get all ICE from all servers
         all-ice (mapcat :ices (vals servers))
         ;; Get all content (assets/upgrades) from all servers
@@ -415,13 +416,13 @@
 (defn show-turn-indicator
   "Display turn status indicator after command execution"
   []
-  (let [status (ws/get-turn-status)
+  (let [status (state/get-turn-status)
         emoji (:status-emoji status)
         text (:status-text status)
         turn-num (:turn-number status)
         in-run (:in-run? status)
         run-server (:run-server status)
-        clicks (ws/my-clicks)]
+        clicks (state/my-clicks)]
     (if in-run
       (println (str emoji " " text " | In run on " run-server))
       (if (:can-act? status)
@@ -432,9 +433,9 @@
   "Capture current game state for before/after comparison
    Returns map with key state values"
   []
-  (let [state @ws/client-state
-        side (keyword (:side state))
-        gs (:game-state state)
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        gs (:game-state client-state)
         runner-state (:runner gs)
         corp-state (:corp gs)
         rig (:rig runner-state)
@@ -504,7 +505,7 @@
   [max-seconds]
   (loop [checks 0]
     (if (< checks max-seconds)
-      (if-let [prompt (ws/get-prompt)]
+      (if-let [prompt (state/get-prompt)]
         prompt
         (do
           (Thread/sleep short-delay)
@@ -528,7 +529,7 @@
                 {:timeout timeout-or-opts :verbose true}
                 (merge {:timeout 60 :verbose true} timeout-or-opts))
          timeout-seconds (:timeout opts)
-         initial-state @ws/client-state
+         initial-state @state/client-state
          initial-log (get-in initial-state [:game-state :log])
          initial-log-count (count initial-log)
          deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
@@ -537,7 +538,7 @@
 
      (loop [checks 0]
        (Thread/sleep quick-delay)
-       (let [current-state @ws/client-state
+       (let [current-state @state/client-state
              current-log (get-in current-state [:game-state :log])
              current-log-count (count current-log)
              new-entries (drop initial-log-count current-log)
@@ -576,7 +577,7 @@
 
     (loop []
       (Thread/sleep quick-delay)
-      (let [current-log (get-in @ws/client-state [:game-state :log])
+      (let [current-log (get-in @state/client-state [:game-state :log])
             marker-idx (first (keep-indexed
                                #(when (clojure.string/includes? (:text %2) marker-text) %1)
                                current-log))

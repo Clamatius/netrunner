@@ -4,7 +4,7 @@
 (load-file "dev/src/clj/ai_websocket_client_v2.clj")
 
 (println "\n📊 Current State:")
-(def gs (:game-state @ai-websocket-client-v2/client-state))
+(def gs (:game-state @ai-state/client-state))
 (println "  Turn:" (:turn gs))
 (println "  Active player:" (:active-player gs))
 (println "  End-turn:" (:end-turn gs))
@@ -21,7 +21,7 @@
 (Thread/sleep 3000)
 
 (println "\n📊 State After Start Turn:")
-(def gs2 (:game-state @ai-websocket-client-v2/client-state))
+(def gs2 (:game-state @ai-state/client-state))
 (println "  Turn:" (:turn gs2))
 (println "  Active player:" (:active-player gs2))
 (println "  Corp clicks:" (get-in gs2 [:corp :click]))
@@ -33,6 +33,6 @@
   (println "  " (:text entry)))
 
 (println "\n📡 Connection:")
-(println "  Still connected:" (:connected @ai-websocket-client-v2/client-state))
+(println "  Still connected:" (:connected @ai-state/client-state))
 
 (println "\n=== END ===")

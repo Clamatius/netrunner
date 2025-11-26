@@ -1,6 +1,7 @@
 (ns ai-basic-actions
   "Turn management and basic game actions (credit, draw, end turn)"
   (:require [ai-websocket-client-v2 :as ws]
+            [ai-state :as state]
             [ai-core :as core]))
 
 ;; Forward declaration for function used in take-credit! and draw-card!
@@ -26,15 +27,15 @@
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
    - :ready - all checks passed, can start turn"
   []
-  (let [state @ws/client-state
-        my-side (keyword (:side state))
+  (let [client-state @state/client-state
+        my-side (keyword (:side client-state))
         opp-side (if (= my-side :runner) :corp :runner)
-        my-clicks (get-in state [:game-state my-side :click])
-        opp-clicks (get-in state [:game-state opp-side :click])
-        turn-number (get-in state [:game-state :turn] 0)
-        log (get-in state [:game-state :log])
+        my-clicks (get-in client-state [:game-state my-side :click])
+        opp-clicks (get-in client-state [:game-state opp-side :click])
+        turn-number (get-in client-state [:game-state :turn] 0)
+        log (get-in client-state [:game-state :log])
         recent-log (take-last 5 log)
-        my-uid (:uid state)
+        my-uid (:uid client-state)
         opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
                                (not (clojure.string/includes? (:text %) my-uid)))
                         recent-log)
@@ -79,9 +80,9 @@
    - true if ready to proceed with action (turn is started)
    - false if cannot proceed (turn not started and can't auto-start)"
   []
-  (let [state @ws/client-state
-        my-side (keyword (:side state))
-        my-clicks (get-in state [:game-state my-side :click] 0)
+  (let [client-state @state/client-state
+        my-side (keyword (:side client-state))
+        my-clicks (get-in client-state [:game-state my-side :click] 0)
         can-start-result (can-start-turn?)]
     (cond
       ;; Already have clicks - turn started, ready to go
@@ -136,19 +137,19 @@
 
    Returns {:status :error} if validation fails, {:status :success} if successful."
   []
-  (let [state @ws/client-state
-        gameid (:gameid state)
-        my-side (keyword (:side state))
+  (let [client-state @state/client-state
+        gameid (:gameid client-state)
+        my-side (keyword (:side client-state))
         opp-side (if (= my-side :runner) :corp :runner)
-        my-clicks (get-in state [:game-state my-side :click])
-        opp-clicks (get-in state [:game-state opp-side :click])
-        active-player (get-in state [:game-state :active-player])
-        turn-number (get-in state [:game-state :turn] 0)
-        log (get-in state [:game-state :log])
+        my-clicks (get-in client-state [:game-state my-side :click])
+        opp-clicks (get-in client-state [:game-state opp-side :click])
+        active-player (get-in client-state [:game-state :active-player])
+        turn-number (get-in client-state [:game-state :turn] 0)
+        log (get-in client-state [:game-state :log])
         recent-log (take-last 5 log)
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
         ;; This prevents Corp from ending and immediately starting again
-        my-uid (:uid state)
+        my-uid (:uid client-state)
         opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
                                (not (clojure.string/includes? (:text %) my-uid)))
                         recent-log)
@@ -210,7 +211,7 @@
       ;; The other checks (opp-clicks, opp-ended, my-clicks) are sufficient to prevent turn stealing.
       :else
       (do
-        (let [before-hand (count (get-in state [:game-state my-side :hand]))]
+        (let [before-hand (count (get-in client-state [:game-state my-side :hand]))]
           (ws/send-message! :game/action
                             {:gameid (if (string? gameid)
                                       (java.util.UUID/fromString gameid)
@@ -221,7 +222,7 @@
           (core/show-turn-indicator)
           ;; For Corp, show what was drawn (mandatory draw)
           (when (= my-side :corp)
-            (let [after-state @ws/client-state
+            (let [after-state @state/client-state
                   hand (get-in after-state [:game-state :corp :hand])
                   after-hand (count hand)
                   new-card (last hand)
@@ -233,8 +234,8 @@
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
   []
-  (let [state @ws/client-state
-        gameid (:gameid state)]
+  (let [client-state @state/client-state
+        gameid (:gameid client-state)]
     (ws/send-message! :game/action
                       {:gameid (if (string? gameid)
                                 (java.util.UUID/fromString gameid)
@@ -247,11 +248,11 @@
    Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
   (if (ensure-turn-started!)
-    (let [state @ws/client-state
-          side (:side state)
-          before-credits (get-in state [:game-state (keyword side) :credit])
-          before-clicks (get-in state [:game-state (keyword side) :click])
-          gameid (:gameid state)]
+    (let [client-state @state/client-state
+          side (:side client-state)
+          before-credits (get-in client-state [:game-state (keyword side) :credit])
+          before-clicks (get-in client-state [:game-state (keyword side) :click])
+          gameid (:gameid client-state)]
       (ws/send-message! :game/action
                         {:gameid (if (string? gameid)
                                   (java.util.UUID/fromString gameid)
@@ -259,10 +260,10 @@
                          :command "credit"
                          :args nil})
       (Thread/sleep core/medium-delay)
-      (let [state @ws/client-state
-            side (:side state)
-            after-credits (get-in state [:game-state (keyword side) :credit])
-            after-clicks (get-in state [:game-state (keyword side) :click])]
+      (let [client-state @state/client-state
+            side (:side client-state)
+            after-credits (get-in client-state [:game-state (keyword side) :credit])
+            after-clicks (get-in client-state [:game-state (keyword side) :click])]
         (core/show-before-after "💰 Credits" before-credits after-credits)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (core/show-turn-indicator)
@@ -280,11 +281,11 @@
    Auto-starts turn if needed (opponent has ended and we haven't started yet)."
   []
   (if (ensure-turn-started!)
-    (let [state @ws/client-state
-          side (:side state)
-          before-hand (count (get-in state [:game-state (keyword side) :hand]))
-          before-clicks (get-in state [:game-state (keyword side) :click])
-          gameid (:gameid state)]
+    (let [client-state @state/client-state
+          side (:side client-state)
+          before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
+          before-clicks (get-in client-state [:game-state (keyword side) :click])
+          gameid (:gameid client-state)]
       (ws/send-message! :game/action
                         {:gameid (if (string? gameid)
                                   (java.util.UUID/fromString gameid)
@@ -292,11 +293,11 @@
                          :command "draw"
                          :args nil})
       (Thread/sleep core/medium-delay)
-      (let [state @ws/client-state
-            side (:side state)
-            hand (get-in state [:game-state (keyword side) :hand])
+      (let [client-state @state/client-state
+            side (:side client-state)
+            hand (get-in client-state [:game-state (keyword side) :hand])
             after-hand (count hand)
-            after-clicks (get-in state [:game-state (keyword side) :click])
+            after-clicks (get-in client-state [:game-state (keyword side) :click])
             ;; Get the newly drawn card (last card in hand)
             new-card (last hand)
             card-title (get new-card :title "Unknown")]
@@ -318,13 +319,13 @@
    Usage: (end-turn!)              ; Normal - errors if clicks remain
           (end-turn! :force true)  ; Forced - allows clicks remaining"
   [& {:keys [force] :or {force false}}]
-  (let [state @ws/client-state
-        side (:side state)
+  (let [client-state @state/client-state
+        side (:side client-state)
         side-kw (keyword side)
-        clicks (get-in state [:game-state side-kw :click])
-        hand-size (count (get-in state [:game-state side-kw :hand]))
-        max-hand-size (get-in state [:game-state side-kw :hand-size :total] 5)
-        gameid (:gameid state)]
+        clicks (get-in client-state [:game-state side-kw :click])
+        hand-size (count (get-in client-state [:game-state side-kw :hand]))
+        max-hand-size (get-in client-state [:game-state side-kw :hand-size :total] 5)
+        gameid (:gameid client-state)]
     (cond
       ;; ERROR: clicks remaining and not forced
       (and (> clicks 0) (not force))
@@ -364,15 +365,15 @@
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
    This prevents the 'forgot to end-turn' stuck state."
   []
-  (let [state @ws/client-state
-        side (keyword (:side state))
-        clicks (get-in state [:game-state side :click])
-        prompt (get-in state [:game-state side :prompt-state])
-        hand-size (count (get-in state [:game-state side :hand]))
-        max-hand-size (get-in state [:game-state side :hand-size :total] 5)
-        log (get-in state [:game-state :log])
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        clicks (get-in client-state [:game-state side :click])
+        prompt (get-in client-state [:game-state side :prompt-state])
+        hand-size (count (get-in client-state [:game-state side :hand]))
+        max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
+        log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
-        my-uid (:uid state)
+        my-uid (:uid client-state)
         ;; Check if WE already ended (not opponent) - prevents double auto-end
         already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
                                    (clojure.string/includes? (:text %) my-uid))
@@ -421,13 +422,13 @@
 
    Usage: (smart-end-turn!)  ; Auto-end if safe, warn if not"
   []
-  (let [state @ws/client-state
-        side (keyword (:side state))
-        clicks (get-in state [:game-state side :click])
-        prompt (get-in state [:game-state side :prompt-state])
-        hand-size (get-in state [:game-state side :hand-count])
-        max-hand-size (get-in state [:game-state side :hand-size :total] 5)
-        installed (get-in state [:game-state side :installed])
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        clicks (get-in client-state [:game-state side :click])
+        prompt (get-in client-state [:game-state side :prompt-state])
+        hand-size (get-in client-state [:game-state side :hand-count])
+        max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
+        installed (get-in client-state [:game-state side :installed])
 
         ;; Check for EOT-related conditions
         has-prompt? (some? prompt)
