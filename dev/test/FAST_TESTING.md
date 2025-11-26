@@ -85,7 +85,7 @@ This is **30x faster** than running `lein kaocha` each time!
   (ai/show-hand))
 
 ;; Check state
-@ai-websocket-client-v2/client-state
+@ai-state/client-state
 ```
 
 ## Tips

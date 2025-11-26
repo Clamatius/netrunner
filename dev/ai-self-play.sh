@@ -36,7 +36,7 @@ sleep 2
 
 # Step 2: Get the game ID from Corp's state
 echo "🔍 Getting game ID..."
-GAME_ID=$(TIMEOUT=5 ./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-websocket-client-v2/client-state))' | tail -1 | tr -d '"' | tr -d '\n')
+GAME_ID=$(TIMEOUT=5 ./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-state/client-state))' | tail -1 | tr -d '"' | tr -d '\n')
 
 if [ -z "$GAME_ID" ] || [ "$GAME_ID" = "nil" ]; then
     echo "❌ Failed to create game or get game ID"

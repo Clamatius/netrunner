@@ -36,8 +36,18 @@
   []
   (let [lobby (:lobby-state @state/client-state)
         gs (state/get-game-state)]
-    ;; Check if we're in a lobby but game hasn't started yet
-    (if (and lobby (not (:started lobby)))
+    ;; Not in a game or lobby
+    (if (and (nil? lobby) (nil? gs))
+      (do
+        (println "📊 STATUS")
+        (println "\n⚠️  Not in a game")
+        (println "\n💡 To start a new game:")
+        (println "   ./dev/reset.sh")
+        (println "\n   Or join an existing game:")
+        (println "   ./dev/send_command <side> list-lobbies")
+        (println "   ./dev/send_command <side> join <game-id> <Side>"))
+      ;; Check if we're in a lobby but game hasn't started yet
+      (if (and lobby (not (:started lobby)))
       ;; Show lobby status
       (let [players (:players lobby)
             player-count (count players)
@@ -221,7 +231,7 @@
                   (doseq [entry recent-log]
                     (println " " (:text entry))))))
 
-            nil))))))
+            nil)))))))
 
 (defn status
   "Show current game status and return client state"

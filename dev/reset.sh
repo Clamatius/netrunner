@@ -117,7 +117,7 @@ run_step "Starting Corp turn" 5 "$SCRIPT_DIR/send_command corp start-turn"
 # Verify game state
 echo ""
 echo "🎮 Verifying game state..."
-GAME_ID=$("$SCRIPT_DIR/send_command" corp eval '(str (:gameid @ai-websocket-client-v2/client-state))' 2>/dev/null | tail -1 | tr -d '"' | tr -d '\n')
+GAME_ID=$("$SCRIPT_DIR/send_command" corp eval '(str (:gameid @ai-state/client-state))' 2>/dev/null | tail -1 | tr -d '"' | tr -d '\n')
 
 if [ -z "$GAME_ID" ] || [ "$GAME_ID" = "nil" ]; then
     echo "⚠️  Warning: Could not verify game ID"

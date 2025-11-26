@@ -146,7 +146,7 @@ This will:
 ./dev/ai-eval.sh corp 7890 '(ai-actions/create-lobby! "Test Game")'
 
 # 3. Get game ID from Corp
-GAME_ID=$(./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-websocket-client-v2/client-state))' | tail -1)
+GAME_ID=$(./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-state/client-state))' | tail -1)
 
 # 4. Runner joins
 ./dev/ai-eval.sh runner 7889 "(ai-actions/connect-game! \"$GAME_ID\" \"Runner\")"
@@ -276,7 +276,7 @@ dev/
 
 ### State Management
 
-Game state stored in atom: `@ai-websocket-client-v2/client-state`
+Game state stored in atom: `@ai-state/client-state`
 
 Contains:
 - `:gameid` - Current game UUID

@@ -183,7 +183,7 @@ CORP_CONNECTED=false
 
 # Check runner
 RUNNER_GID=$(TIMEOUT=5 "$SCRIPT_DIR/send_command" runner eval \
-    '(str (:gameid @ai-websocket-client-v2/client-state))' 2>/dev/null \
+    '(str (:gameid @ai-state/client-state))' 2>/dev/null \
     | tail -1 | tr -d '"' | tr -d '\n' || echo "")
 
 if [ "$RUNNER_GID" = "$GAME_ID" ]; then
@@ -195,7 +195,7 @@ fi
 
 # Check corp
 CORP_GID=$(TIMEOUT=5 "$SCRIPT_DIR/send_command" corp eval \
-    '(str (:gameid @ai-websocket-client-v2/client-state))' 2>/dev/null \
+    '(str (:gameid @ai-state/client-state))' 2>/dev/null \
     | tail -1 | tr -d '"' | tr -d '\n' || echo "")
 
 if [ "$CORP_GID" = "$GAME_ID" ]; then
