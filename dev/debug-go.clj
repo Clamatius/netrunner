@@ -24,8 +24,10 @@
   (println "Calling (go)...")
   (let [result (go)]
     (println "✓ (go) returned successfully!")
+    (println "  Result:" result)
     (println "  Result type:" (type result))
-    (println "  Result keys:" (keys result)))
+    (when (map? result)
+      (println "  System keys:" (keys result))))
   (catch Exception e
     (println "✗ (go) failed:")
     (println "  Message:" (.getMessage e))
