@@ -15,6 +15,7 @@ fi
 export GAME_SERVER_PORT="${GAME_SERVER_PORT:-7888}"
 export CLIENT_1_PORT="${CLIENT_1_PORT:-7889}"
 export CLIENT_2_PORT="${CLIENT_2_PORT:-7890}"
+export WEB_SERVER_PORT="${WEB_SERVER_PORT:-1042}"
 
 # Log configuration (optional, can be noisy)
 # echo "Configuration:"

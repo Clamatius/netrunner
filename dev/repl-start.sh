@@ -60,9 +60,9 @@ else
 fi
 
 echo ""
-echo "Starting REPL..."
+echo "Starting REPL on port $GAME_SERVER_PORT"
 echo "════════════════════════════════════════════════════════════════"
 
 # Start REPL and capture output with sequence numbers + timestamps
-# Use script command for proper TTY handling, or direct tee for simpler approach
-lein repl :start :port $GAME_SERVER_PORT 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")
+# Using :start :port syntax to specify the nREPL port
+lein repl :start :host localhost :port "$GAME_SERVER_PORT" 2>&1 | tee >(add_sequence_and_timestamp >> "$REPL_OUTPUT")
