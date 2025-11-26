@@ -37,7 +37,8 @@ echo "AI Client REPL starting (initial PID: $REPL_PID)"
 echo "Waiting for nREPL server to be ready..."
 
 # Wait for nREPL to actually be listening
-MAX_WAIT=30
+# Dev profile takes 30-60s to start due to dependency loading
+MAX_WAIT=90
 for i in $(seq 1 $MAX_WAIT); do
     if lsof -i:$REPL_PORT > /dev/null 2>&1; then
         echo "✅ nREPL server is listening on port $REPL_PORT"
@@ -48,6 +49,10 @@ for i in $(seq 1 $MAX_WAIT); do
         echo "Last 20 lines of log:"
         tail -20 /tmp/ai-client-${CLIENT_NAME}.log
         exit 1
+    fi
+    # Show progress every 10 seconds
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "   Still waiting... (${i}s / ${MAX_WAIT}s)"
     fi
     sleep 1
 done
