@@ -140,8 +140,8 @@
   (let [side (keyword (:side @client-state))]
     (if (= side :runner)
       (get-in @client-state [:game-state :runner :rig])
-      ;; Corp doesn't have a "rig", return nil or servers
-      nil)))
+      ;; Corp doesn't have a "rig", return servers
+      (get-in @client-state [:game-state :corp :servers]))))
 
 ;; Absolute side helpers (always return specific side's data)
 (defn runner-credits [] (credits-for-side :runner))

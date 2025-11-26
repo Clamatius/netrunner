@@ -380,7 +380,7 @@
 (defn get-game-log
   "Get the game log from current game state"
   []
-  (get-in @state/client-state [:game-state :log]))
+  (state/game-log))
 
 (defn show-game-log
   "Display game log in readable format"
@@ -439,9 +439,7 @@
   "Display ultra-compact game log (recent N entries, one line each, no decorations)"
   ([] (show-log-compact 5))
   ([n]
-   (let [state @state/client-state
-         log (get-in state [:game-state :log])
-         recent (take-last n log)]
+   (let [recent (state/recent-log n)]
      (doseq [entry recent]
        (when (map? entry)
          (let [text (clojure.string/replace (:text entry "") "[hr]" "")]

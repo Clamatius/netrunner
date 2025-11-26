@@ -285,10 +285,9 @@
    It does NOT detect effects like 'cannot score this turn' or similar restrictions.
    Therefore, use conservatively - if this returns agendas, assume they MIGHT be scorable."
   []
-  (let [client-state @state/client-state
-        side (:side client-state)]
+  (let [side (:side @state/client-state)]
     (if (side= "Corp" side)
-      (let [servers (get-in client-state [:game-state :corp :servers])
+      (let [servers (state/corp-servers)
             ;; Get all content (assets/upgrades/agendas) from all servers
             all-content (mapcat :content (vals servers))
             ;; Filter for agendas only
@@ -318,9 +317,8 @@
    Supports [N] suffix for duplicate cards: \"Sure Gamble [1]\"
    Returns card object or nil if not found"
   [name-or-index]
-  (let [client-state @state/client-state
-        side (:side client-state)
-        hand (get-in client-state [:game-state (keyword side) :hand])]
+  (let [side (:side @state/client-state)
+        hand (state/hand-for-side side)]
     (cond
       (number? name-or-index)
       (nth hand name-or-index nil)
@@ -345,8 +343,7 @@
    Supports [N] suffix for duplicate cards: \"Corroder [1]\"
    Searches programs, hardware, and resources"
   [card-name]
-  (let [client-state @state/client-state
-        rig (get-in client-state [:game-state :runner :rig])
+  (let [rig (state/runner-rig)
         all-installed (concat (:program rig) (:hardware rig) (:resource rig))
         {:keys [title index]} (parse-card-reference card-name)
         matches (filter #(= title (:title %)) all-installed)]
@@ -357,8 +354,7 @@
    Supports [N] suffix for duplicate cards: \"Palisade [1]\"
    Searches all servers for ICE, assets, and upgrades"
   [card-name]
-  (let [client-state @state/client-state
-        servers (get-in client-state [:game-state :corp :servers])
+  (let [servers (state/corp-servers)
         ;; Get all ICE from all servers
         all-ice (mapcat :ices (vals servers))
         ;; Get all content (assets/upgrades) from all servers
