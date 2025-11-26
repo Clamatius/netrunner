@@ -16,10 +16,16 @@
 
   :repl-options {:timeout 180000
                  :init-ns web.dev
-                 ;; Auto-start disabled - call (go) manually
-                 ;; The REPL exits when auto-init fails
-                 ;; :init (go)
-                 }
+                 :init (do
+                         (println "\n🚀 Starting web server...")
+                         (try
+                           (go)
+                           (println "✅ Web server started successfully on port 1042")
+                           (catch Exception e
+                             (println "⚠️  Auto-start failed:" (.getMessage e))
+                             (println "   Run (go) manually when ready")))
+                         (println "")
+                         nil)}
 
   :dependencies [[org.clojure/clojure "1.12.0"]
                  [org.clojure/clojurescript "1.11.132"
