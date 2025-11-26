@@ -22,28 +22,22 @@
 (println "\n3. Attempting (go) with error handling...")
 (try
   (println "Calling (go)...")
-  (go)
-  (println "✓ (go) succeeded!")
-  (println "\n4. Checking if web server is running...")
-  (Thread/sleep 2000)
-  (if-let [server @integrant.repl.state/system]
-    (do
-      (println "✓ Integrant system started:")
-      (println "  Keys:" (keys server)))
-    (println "✗ No Integrant system found"))
+  (let [result (go)]
+    (println "✓ (go) returned successfully!")
+    (println "  Result type:" (type result))
+    (println "  Result keys:" (keys result)))
   (catch Exception e
     (println "✗ (go) failed:")
     (println "  Message:" (.getMessage e))
     (println "\nStack trace:")
     (.printStackTrace e)))
 
-(println "\n5. Checking port 1042...")
+(println "\n4. Checking port 1042...")
 (try
-  (import '[java.net ServerSocket])
-  (let [test-sock (ServerSocket. 1042)]
+  (let [test-sock (java.net.ServerSocket. 1042)]
     (.close test-sock)
-    (println "✓ Port 1042 is available"))
+    (println "✓ Port 1042 is available (web server NOT running)"))
   (catch java.net.BindException e
-    (println "✗ Port 1042 is already in use"))
+    (println "✅ Port 1042 is in use - WEB SERVER IS RUNNING!"))
   (catch Exception e
     (println "? Port check error:" (.getMessage e))))
