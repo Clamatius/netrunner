@@ -85,9 +85,9 @@ ensure_connection() {
     # We check by trying to access the client-state atom which should always exist if loaded
     local check_result=$(TIMEOUT=5 "$AI_EVAL" '(do
       (try
-        (require (quote [ai-websocket-client-v2 :as ws]))
-        (let [state @ws/client-state
-              uid (:uid state)]
+        (require (quote [ai-state :as state]))
+        (let [s @state/client-state
+              uid (:uid s)]
           (if uid
             "connected"
             "disconnected"))
@@ -727,22 +727,22 @@ case "$COMMAND" in
         PRECON="${3:-worlds-2012-a}"
         info "Creating game: $TITLE (Side: $SIDE)..."
         execute "(do
-                   (require (quote [ai-websocket-client-v2 :as ws]))
-                   (ws/create-lobby! {:title \"$TITLE\"
-                                      :side \"$SIDE\"
-                                      :format \"system-gateway\"
-                                      :gateway-type \"Beginner\"
-                                      :precon \"$PRECON\"
-                                      :room \"casual\"
-                                      :allow-spectator true
-                                      :spectatorhands false
-                                      :save-replay false
-                                      :api-access false
-                                      :password \"\"
-                                      :singleton false
-                                      :open-decklists false
-                                      :turmoil false
-                                      :timer nil})
+                   (require (quote [ai-connection :as conn]))
+                   (conn/create-lobby! {:title \"$TITLE\"
+                                        :side \"$SIDE\"
+                                        :format \"system-gateway\"
+                                        :gateway-type \"Beginner\"
+                                        :precon \"$PRECON\"
+                                        :room \"casual\"
+                                        :allow-spectator true
+                                        :spectatorhands false
+                                        :save-replay false
+                                        :api-access false
+                                        :password \"\"
+                                        :singleton false
+                                        :open-decklists false
+                                        :turmoil false
+                                        :timer nil})
                    (Thread/sleep 2000)
                    (println \"✅ Lobby creation request sent\"))"
         ;;
@@ -752,8 +752,9 @@ case "$COMMAND" in
         info "Starting game..."
         execute '(do
                    (require (quote [ai-websocket-client-v2 :as ws]))
-                   (let [state @ws/client-state
-                         gameid (:gameid state)]
+                   (require (quote [ai-state :as state]))
+                   (let [s @state/client-state
+                         gameid (:gameid s)]
                      (if gameid
                        (do
                          (ws/send-message! :game/start {:gameid gameid})
@@ -773,14 +774,15 @@ case "$COMMAND" in
         info "Leaving game lobby..."
         execute '(do
                    (require (quote [ai-websocket-client-v2 :as ws]))
-                   (let [state @ws/client-state
-                         gameid (:gameid state)]
+                   (require (quote [ai-state :as state]))
+                   (let [s @state/client-state
+                         gameid (:gameid s)]
                      (if gameid
                        (do
                          (ws/send-message! :lobby/leave {:gameid gameid})
                          (Thread/sleep 1000)
                          ;; Clear client state after leaving
-                         (swap! ws/client-state assoc :gameid nil :side nil)
+                         (swap! state/client-state assoc :gameid nil :side nil)
                          (println "✅ Left game lobby"))
                        (println "⚠️  Not in a game lobby"))))'
         ;;
@@ -789,21 +791,23 @@ case "$COMMAND" in
         ensure_connection
         info "Fetching lobby list..."
         execute '(do
-                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (require (quote [ai-connection :as conn]))
+                   (require (quote [ai-display :as display]))
                    (println "Requesting lobby list...")
-                   (ws/request-lobby-list!)
+                   (conn/request-lobby-list!)
                    (Thread/sleep 1000)
-                   (ws/show-games))'
+                   (display/show-games))'
         ;;
 
     list-game-ids)
         ensure_connection
         # Return just game IDs (one per line) for script parsing
         execute '(do
-                   (require (quote [ai-websocket-client-v2 :as ws]))
-                   (ws/request-lobby-list!)
+                   (require (quote [ai-connection :as conn]))
+                   (require (quote [ai-display :as display]))
+                   (conn/request-lobby-list!)
                    (Thread/sleep 1000)
-                   (let [ids (ws/list-active-game-ids)]
+                   (let [ids (display/list-active-game-ids)]
                      (if (seq ids)
                        (doseq [id ids] (println id))
                        (println "NO_GAMES"))))'
