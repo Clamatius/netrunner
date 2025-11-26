@@ -16,8 +16,8 @@
 
   :repl-options {:timeout 180000
                  :init-ns web.dev
-                 ;; Disabled auto-start due to initialization failure
-                 ;; Run (go) manually in the REPL when ready
+                 ;; Auto-start disabled - call (go) manually
+                 ;; The REPL exits when auto-init fails
                  ;; :init (go)
                  }
 
