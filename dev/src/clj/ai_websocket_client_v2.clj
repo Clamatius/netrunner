@@ -85,7 +85,7 @@
       (hud/update-hud-section "Game Status"
                          (str "Game starting...\nGameID: " (:gameid state)))
       (state/set-full-state! state)
-      (swap! state/client-state assoc :gameid (:gameid state)))
+      (swap! state/client-state assoc :gameid (state/normalize-gameid (:gameid state))))
 
     :game/diff
     (let [diff-data (if (string? data)
@@ -131,7 +131,7 @@
       (println "🎮 Lobby state update")
       (when data
         (when-let [gameid (:gameid data)]
-          (swap! state/client-state assoc :gameid gameid :lobby-state data)
+          (swap! state/client-state assoc :gameid (state/normalize-gameid gameid) :lobby-state data)
           (println "   GameID:" gameid))))
 
     :lobby/notification
@@ -298,14 +298,10 @@
   [command args]
   (let [gameid (:gameid @state/client-state)]
     (if gameid
-      ;; Convert gameid string to UUID object for server
-      (let [gameid-uuid (if (string? gameid)
-                          (java.util.UUID/fromString gameid)
-                          gameid)]
-        (send-message! :game/action
-                       {:gameid gameid-uuid
+      (send-message! :game/action
+                       {:gameid gameid
                         :command command
-                        :args args}))
+                        :args args})
       (println "❌ No active game"))))
 
 ;; ============================================================================
@@ -340,12 +336,9 @@
   []
   (when-let [gameid (get-in @state/client-state [:game-state :gameid])]
     (println "♻️  Rejoining game:" gameid)
-    (let [gameid-uuid (if (string? gameid)
-                        (java.util.UUID/fromString gameid)
-                        gameid)]
-      (send-message! :lobby/join
-                     {:gameid gameid-uuid
-                      :request-side "Runner"}))
+    (send-message! :lobby/join
+                   {:gameid (state/normalize-gameid gameid)
+                    :request-side "Runner"})
     (Thread/sleep 2000)
     true))
 

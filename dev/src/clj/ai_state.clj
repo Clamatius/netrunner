@@ -1,6 +1,7 @@
 (ns ai-state
   "Client state management and diff application for AI WebSocket connection"
-  (:require [differ.core :as differ]))
+  (:require [differ.core :as differ]
+            [ai-debug :as debug]))
 
 ;; ============================================================================
 ;; Client State Atom
@@ -17,6 +18,25 @@
          :lobby-list nil
          :client-id nil
          :csrf-token nil}))
+
+;; ============================================================================
+;; Gameid Normalization
+;; ============================================================================
+
+(defn normalize-gameid
+  "Convert gameid to UUID. Accepts string or UUID, returns UUID.
+   All gameid values should be normalized at entry points, so downstream
+   code can assume gameid is always a UUID."
+  [gameid]
+  (when gameid
+    (if (string? gameid)
+      (java.util.UUID/fromString gameid)
+      gameid)))
+
+(defn get-gameid
+  "Get gameid from client state, guaranteed to be UUID or nil."
+  []
+  (:gameid @client-state))
 
 ;; ============================================================================
 ;; State Diff Application
@@ -200,3 +220,209 @@
      :run-server (:server run-state)
      :status-emoji emoji
      :status-text text}))
+
+;; ============================================================================
+;; Defensive Gamestate Accessors
+;; ============================================================================
+;; These accessors centralize all game state access and provide:
+;; - Nil-safety with sensible defaults
+;; - Logging of unexpected structure (helps detect jinteki changes)
+;; - Single source of truth for state paths
+;;
+;; If jinteki changes their gamestate format, fix it HERE once rather than
+;; chasing down 20+ direct access points.
+
+(defn- warn-unexpected
+  "Log warning about unexpected game state structure"
+  [accessor-name expected actual]
+  (debug/debug "WARN" (str accessor-name " unexpected: expected " expected ", got " (type actual))))
+
+;; === Card Zone Accessors ===
+
+(defn corp-hand
+  "Returns corp's hand as vector. Returns [] if unavailable."
+  []
+  (let [hand (get-in @client-state [:game-state :corp :hand])]
+    (cond
+      (nil? hand) []
+      (sequential? hand) (vec hand)
+      :else (do (warn-unexpected "corp-hand" "sequential" hand) []))))
+
+(defn runner-hand
+  "Returns runner's hand as vector. Returns [] if unavailable."
+  []
+  (let [hand (get-in @client-state [:game-state :runner :hand])]
+    (cond
+      (nil? hand) []
+      (sequential? hand) (vec hand)
+      :else (do (warn-unexpected "runner-hand" "sequential" hand) []))))
+
+(defn corp-deck
+  "Returns corp's deck as vector. Returns [] if unavailable."
+  []
+  (let [deck (get-in @client-state [:game-state :corp :deck])]
+    (cond
+      (nil? deck) []
+      (sequential? deck) (vec deck)
+      :else (do (warn-unexpected "corp-deck" "sequential" deck) []))))
+
+(defn runner-deck
+  "Returns runner's deck as vector. Returns [] if unavailable."
+  []
+  (let [deck (get-in @client-state [:game-state :runner :deck])]
+    (cond
+      (nil? deck) []
+      (sequential? deck) (vec deck)
+      :else (do (warn-unexpected "runner-deck" "sequential" deck) []))))
+
+(defn corp-discard
+  "Returns corp's discard (Archives) as vector. Returns [] if unavailable."
+  []
+  (let [discard (get-in @client-state [:game-state :corp :discard])]
+    (cond
+      (nil? discard) []
+      (sequential? discard) (vec discard)
+      :else (do (warn-unexpected "corp-discard" "sequential" discard) []))))
+
+(defn runner-discard
+  "Returns runner's discard (Heap) as vector. Returns [] if unavailable."
+  []
+  (let [discard (get-in @client-state [:game-state :runner :discard])]
+    (cond
+      (nil? discard) []
+      (sequential? discard) (vec discard)
+      :else (do (warn-unexpected "runner-discard" "sequential" discard) []))))
+
+;; === Installed Cards ===
+
+(defn corp-servers
+  "Returns corp's servers map. Returns {} if unavailable.
+   Structure: {:hq {...} :rd {...} :archives {...} :remote1 {...} ...}"
+  []
+  (let [servers (get-in @client-state [:game-state :corp :servers])]
+    (cond
+      (nil? servers) {}
+      (map? servers) servers
+      :else (do (warn-unexpected "corp-servers" "map" servers) {}))))
+
+(defn server-cards
+  "Returns cards installed in a server (content). Returns [] if unavailable.
+   server-key is :hq, :rd, :archives, or :remote1 etc."
+  [server-key]
+  (let [content (get-in @client-state [:game-state :corp :servers server-key :content])]
+    (cond
+      (nil? content) []
+      (sequential? content) (vec content)
+      :else (do (warn-unexpected "server-cards" "sequential" content) []))))
+
+(defn server-ice
+  "Returns ICE protecting a server (outermost last). Returns [] if unavailable."
+  [server-key]
+  (let [ices (get-in @client-state [:game-state :corp :servers server-key :ices])]
+    (cond
+      (nil? ices) []
+      (sequential? ices) (vec ices)
+      :else (do (warn-unexpected "server-ice" "sequential" ices) []))))
+
+(defn runner-rig
+  "Returns runner's rig map. Returns {:program [] :hardware [] :resource []} if unavailable.
+   Structure: {:program [...] :hardware [...] :resource [...]}"
+  []
+  (let [rig (get-in @client-state [:game-state :runner :rig])]
+    (cond
+      (nil? rig) {:program [] :hardware [] :resource []}
+      (map? rig) rig
+      :else (do (warn-unexpected "runner-rig" "map" rig) {:program [] :hardware [] :resource []}))))
+
+(defn runner-programs
+  "Returns runner's installed programs. Returns [] if unavailable."
+  []
+  (let [programs (:program (runner-rig))]
+    (if (sequential? programs) (vec programs) [])))
+
+(defn runner-hardware
+  "Returns runner's installed hardware. Returns [] if unavailable."
+  []
+  (let [hardware (:hardware (runner-rig))]
+    (if (sequential? hardware) (vec hardware) [])))
+
+(defn runner-resources
+  "Returns runner's installed resources. Returns [] if unavailable."
+  []
+  (let [resources (:resource (runner-rig))]
+    (if (sequential? resources) (vec resources) [])))
+
+;; === Run State ===
+
+(defn current-run
+  "Returns current run map, or nil if no run active."
+  []
+  (get-in @client-state [:game-state :run]))
+
+(defn run-server
+  "Returns current run server (keyword like :hq or :remote1), or nil if no run."
+  []
+  (when-let [run (current-run)]
+    (let [server (:server run)]
+      (if (sequential? server)
+        (keyword (last server))
+        server))))
+
+(defn run-position
+  "Returns current run ICE position (1-indexed from server), or nil if no run."
+  []
+  (:position (current-run)))
+
+(defn run-phase
+  "Returns current run phase keyword, or nil if no run.
+   Phases: :approach-ice, :encounter-ice, :approach-server, etc."
+  []
+  (:phase (current-run)))
+
+;; === Game Meta ===
+
+(defn game-log
+  "Returns game log entries as vector. Returns [] if unavailable."
+  []
+  (let [log (get-in @client-state [:game-state :log])]
+    (cond
+      (nil? log) []
+      (sequential? log) (vec log)
+      :else (do (warn-unexpected "game-log" "sequential" log) []))))
+
+(defn recent-log
+  "Returns last n game log entries. Returns [] if unavailable."
+  [n]
+  (vec (take-last n (game-log))))
+
+(defn active-player-side
+  "Returns active player as keyword (:corp or :runner), or nil."
+  []
+  (when-let [active (get-in @client-state [:game-state :active-player])]
+    (keyword active)))
+
+;; === Side-Aware Accessors ===
+
+(defn hand-for-side
+  "Returns hand for specified side. Returns [] if unavailable."
+  [side]
+  (case (keyword side)
+    :corp (corp-hand)
+    :runner (runner-hand)
+    []))
+
+(defn deck-for-side
+  "Returns deck for specified side. Returns [] if unavailable."
+  [side]
+  (case (keyword side)
+    :corp (corp-deck)
+    :runner (runner-deck)
+    []))
+
+(defn discard-for-side
+  "Returns discard for specified side. Returns [] if unavailable."
+  [side]
+  (case (keyword side)
+    :corp (corp-discard)
+    :runner (runner-discard)
+    []))

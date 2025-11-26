@@ -72,9 +72,7 @@
   "Request full game state resync (for reconnecting to started games)
    Usage: (resync-game! gameid)"
   [gameid]
-  (let [uuid-gameid (if (string? gameid)
-                      (java.util.UUID/fromString gameid)
-                      gameid)]
+  (let [uuid-gameid (state/normalize-gameid gameid)]
     (swap! state/client-state assoc :gameid uuid-gameid)
     (ws/send-message! :game/resync {:gameid uuid-gameid})
     (println "🔄 Requesting game state resync for" uuid-gameid)))
@@ -122,9 +120,7 @@
           (connect-game! \"game-uuid\") ; defaults to Corp"
   ([gameid] (connect-game! gameid "Corp"))
   ([gameid side]
-   (let [uuid (if (string? gameid)
-                (java.util.UUID/fromString gameid)
-                gameid)]
+   (let [uuid (state/normalize-gameid gameid)]
      (join-game! {:gameid uuid :side side}))
 
    (if (wait-for-condition in-game? 5000 "game join")
@@ -193,9 +189,7 @@
         gameid (:gameid gs)]
     (if gameid
       (ws/send-message! :game/say
-        {:gameid (if (string? gameid)
-                   (java.util.UUID/fromString gameid)
-                   gameid)
+        {:gameid (state/normalize-gameid gameid)
          :msg message})
       (println "❌ Not in a game"))))
 
@@ -213,9 +207,7 @@
   (let [client @state/client-state
         gameid (:gameid client)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid gameid
                        :command "change"
                        :args {:key key :delta delta}})
     (Thread/sleep core/quick-delay)))

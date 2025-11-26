@@ -33,9 +33,7 @@
       (do
         (println (str "✅ Chose: " (:value choice)))
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
         (Thread/sleep core/standard-delay))

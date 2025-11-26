@@ -174,9 +174,7 @@
       is-first-turn?
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "start-turn"
                            :args nil})
         (Thread/sleep core/standard-delay)
@@ -213,9 +211,7 @@
       (do
         (let [before-hand (count (get-in client-state [:game-state my-side :hand]))]
           (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
+                            {:gameid gameid
                              :command "start-turn"
                              :args nil})
           (Thread/sleep core/standard-delay)
@@ -237,9 +233,7 @@
   (let [client-state @state/client-state
         gameid (:gameid client-state)]
     (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                (java.util.UUID/fromString gameid)
-                                gameid)
+                      {:gameid gameid
                        :command "indicate-action"
                        :args nil})))
 
@@ -254,9 +248,7 @@
           before-clicks (get-in client-state [:game-state (keyword side) :click])
           gameid (:gameid client-state)]
       (ws/send-message! :game/action
-                        {:gameid (if (string? gameid)
-                                  (java.util.UUID/fromString gameid)
-                                  gameid)
+                        {:gameid gameid
                          :command "credit"
                          :args nil})
       (Thread/sleep core/medium-delay)
@@ -287,9 +279,7 @@
           before-clicks (get-in client-state [:game-state (keyword side) :click])
           gameid (:gameid client-state)]
       (ws/send-message! :game/action
-                        {:gameid (if (string? gameid)
-                                  (java.util.UUID/fromString gameid)
-                                  gameid)
+                        {:gameid gameid
                          :command "draw"
                          :args nil})
       (Thread/sleep core/medium-delay)
@@ -343,9 +333,7 @@
         (when (> hand-size max-hand-size)
           (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "end-turn"
                            :args nil})
         (Thread/sleep core/standard-delay)

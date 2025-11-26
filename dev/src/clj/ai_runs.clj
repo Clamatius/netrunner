@@ -177,9 +177,7 @@
                                                 (dissoc flags :no-continue))))))
 
       (ws/send-message! :game/action
-                        {:gameid (if (string? gameid)
-                                  (java.util.UUID/fromString gameid)
-                                  gameid)
+                        {:gameid gameid
                          :command "run"
                          :args {:server normalized}})
 
@@ -366,9 +364,7 @@
   "Helper to send continue command and return action-taken result"
   [gameid]
   (ws/send-message! :game/action
-                   {:gameid (if (string? gameid)
-                             (java.util.UUID/fromString gameid)
-                             gameid)
+                   {:gameid gameid
                     :command "continue"
                     :args nil})
   {:status :action-taken
@@ -378,9 +374,7 @@
   "Helper to send choice command and return action-taken result"
   [gameid choice-uuid choice-value]
   (ws/send-message! :game/action
-                   {:gameid (if (string? gameid)
-                             (java.util.UUID/fromString gameid)
-                             gameid)
+                   {:gameid gameid
                     :command "choice"
                     :args {:choice {:uuid choice-uuid}}})
   {:status :action-taken
@@ -393,9 +387,7 @@
   (when (:force strategy)
     (println "⚡ FORCE mode - bypassing all checks, sending continue")
     (ws/send-message! :game/action
-                     {:gameid (if (string? gameid)
-                               (java.util.UUID/fromString gameid)
-                               gameid)
+                     {:gameid gameid
                       :command "continue"
                       :args nil})
     {:status :action-taken
@@ -504,9 +496,7 @@
           (if current-ice
             (let [card-ref (core/create-card-ref current-ice)]
               (ws/send-message! :game/action
-                               {:gameid (if (string? gameid)
-                                         (java.util.UUID/fromString gameid)
-                                         gameid)
+                               {:gameid gameid
                                 :command "rez"
                                 :args {:card card-ref}})
               {:status :action-taken
@@ -552,9 +542,7 @@
           (println (format "🤖 Strategy: --fire-unbroken, firing subs on %s" ice-title))
           (let [card-ref (core/create-card-ref current-ice)]
             (ws/send-message! :game/action
-                             {:gameid (if (string? gameid)
-                                       (java.util.UUID/fromString gameid)
-                                       gameid)
+                             {:gameid gameid
                               :command "unbroken-subroutines"
                               :args {:card card-ref}})
             {:status :action-taken

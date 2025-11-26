@@ -39,9 +39,7 @@
                   card-title (:title card)
                   card-zone (:zone card)]
               (ws/send-message! :game/action
-                                {:gameid (if (string? gameid)
-                                          (java.util.UUID/fromString gameid)
-                                          gameid)
+                                {:gameid gameid
                                  :command "play"
                                  :args {:card card-ref}})
               ;; Wait and verify action - now returns status map
@@ -141,9 +139,7 @@
                          {:card card-ref :server normalized-server}
                          {:card card-ref})]
                (ws/send-message! :game/action
-                                 {:gameid (if (string? gameid)
-                                           (java.util.UUID/fromString gameid)
-                                           gameid)
+                                 {:gameid gameid
                                   :command "play"
                                   :args args})
                ;; Wait and verify action - now returns status map
@@ -217,17 +213,13 @@
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
           (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
+                            {:gameid gameid
                              :command "dynamic-ability"
                              :args {:card card-ref
                                     :dynamic dynamic-type}})
           ;; Use regular ability command for normal abilities
           (ws/send-message! :game/action
-                            {:gameid (if (string? gameid)
-                                      (java.util.UUID/fromString gameid)
-                                      gameid)
+                            {:gameid gameid
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
@@ -259,9 +251,7 @@
                      :side (:side card)
                      :type (:type card)}]
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "runner-ability"
                            :args {:card card-ref
                                   :ability ability-index}})
@@ -286,9 +276,7 @@
             card-type (:type card)
             card-zone (:zone card)]
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "trash"
                            :args {:card card-ref}})
         (Thread/sleep core/medium-delay)
@@ -314,9 +302,7 @@
                 card-ref (core/create-card-ref card)
                 rez-cost (:cost card)]
             (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
+                              {:gameid gameid
                                :command "rez"
                                :args {:card card-ref}})
             ;; Wait and verify action appeared in log
@@ -343,9 +329,7 @@
       (println "❌ Only Runner can let subroutines fire")
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "system-msg"
                            :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
         (Thread/sleep core/short-delay)))))
@@ -364,9 +348,7 @@
       (println "❌ Only Corp can toggle auto-pass priority")
       (do
         (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                    (java.util.UUID/fromString gameid)
-                                    gameid)
+                          {:gameid gameid
                            :command "toggle-auto-no-action"
                            :args nil})
         (Thread/sleep core/quick-delay)))))
@@ -390,9 +372,7 @@
                          :side (:side card)
                          :type (:type card)}]
             (ws/send-message! :game/action
-                              {:gameid (if (string? gameid)
-                                        (java.util.UUID/fromString gameid)
-                                        gameid)
+                              {:gameid gameid
                                :command "unbroken-subroutines"
                                :args {:card card-ref}})
             (Thread/sleep core/medium-delay))
@@ -423,9 +403,7 @@
                            :side (:side card)
                            :type (:type card)}]
               (ws/send-message! :game/action
-                                {:gameid (if (string? gameid)
-                                          (java.util.UUID/fromString gameid)
-                                          gameid)
+                                {:gameid gameid
                                  :command "advance"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log
@@ -482,9 +460,7 @@
                            :type (:type card)}
                   agenda-points (:agendapoints card)]
               (ws/send-message! :game/action
-                                {:gameid (if (string? gameid)
-                                          (java.util.UUID/fromString gameid)
-                                          gameid)
+                                {:gameid gameid
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
