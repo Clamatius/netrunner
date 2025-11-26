@@ -104,6 +104,11 @@
              :repl {:source-paths ["src/clj" "src/cljs" "src/cljc" "src/css"
                                     "dev/src/clj" "dev/src/cljs" "dev/test"
                                     "test/clj" "test/cljc" "test/cljs"]}
+             ;; Lightweight profile for AI client REPLs - no heavy dev deps
+             ;; Starts in ~8s vs ~35s with full dev profile
+             ;; user.clj gracefully handles missing deps (kaocha, web.dev)
+             :ai-client {:source-paths ["src/clj" "src/cljc" "dev/src/clj"]
+                         :plugins [[cider/cider-nrepl "0.47.1"]]}
              :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}}
 
   :aliases {"fetch" ^{:doc "Fetch card data and images from github"} ["run" "-m" "tasks.fetch/command"]

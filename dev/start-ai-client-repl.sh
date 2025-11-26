@@ -22,12 +22,12 @@ echo "  ./dev/ai-eval.sh '$CLIENT_NAME' $REPL_PORT '<expression>'"
 echo ""
 
 # Start REPL on specified port
-# Use 'with-profile dev' to get all source paths
-# nrepl.cmdline doesn't trigger :repl-options auto-init, so (go) won't run
-# Use nohup and redirect to keep it running in background
+# Use 'with-profile ai-client' - lightweight profile without heavy dev deps
+# Starts in ~8s vs ~35s with full dev profile
+# AI code loaded via load-file in ai_client_init.clj (not via source-paths)
 # Pass client name via environment variable (simpler than JVM prop through lein)
 export AI_CLIENT_NAME=$CLIENT_NAME
-nohup lein with-profile dev run -m nrepl.cmdline \
+nohup lein with-profile ai-client run -m nrepl.cmdline \
   --port $REPL_PORT \
   > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &
 
@@ -37,8 +37,8 @@ echo "AI Client REPL starting (initial PID: $REPL_PID)"
 echo "Waiting for nREPL server to be ready..."
 
 # Wait for nREPL to actually be listening
-# Dev profile takes 30-60s to start due to dependency loading
-MAX_WAIT=90
+# ai-client profile starts in ~8s (vs ~35s with dev profile)
+MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
     if lsof -i:$REPL_PORT > /dev/null 2>&1; then
         echo "✅ nREPL server is listening on port $REPL_PORT"
