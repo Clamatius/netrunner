@@ -178,12 +178,20 @@ ${GREEN}Card Actions:${NC}
   score <name>    - Score agenda with sufficient advancement counters (Corp only)
 
 ${GREEN}Runner Actions:${NC}
-  run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
+  run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.)
   let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
 
 ${GREEN}Run Automation:${NC}
-  continue-run    - Smart run handler (auto-continues both players, stops at decisions)
-  monitor-run     - Corp: auto-pass boring windows during a run (like continue-run for Corp)
+  continue-run [flags] - Smart run handler (auto-continues both players, stops at decisions)
+  monitor-run [flags]  - Corp: auto-pass boring windows during a run (like continue-run for Corp)
+
+  ${BLUE}Run Flags:${NC} (usable with run, continue-run, monitor-run)
+    --no-rez         Corp: don't rez any ICE (auto-decline all rez windows)
+    --rez <name>     Corp: only rez ICE matching <name>, decline others
+    --fire-unbroken  Corp: auto-fire unbroken subroutines
+    --full-break     Runner: auto-break all ICE with available breakers
+    --no-continue    Don't auto-continue after run start (single-step mode)
+    --force          Bypass smart checks (force continue even at decision points)
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
@@ -227,12 +235,12 @@ ${YELLOW}Turn Timing Quick Reference:${NC}
     • Clicks must be spent before end-turn
 
   ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter ice → movement → access/jack out
-    • Initiation: 'run <server>' then 'continue'
-    • Approach: Corp may rez ice, then 'continue'
-    • Encounter: Break subs with icebreakers, then 'continue'
-    • Movement: Can 'jack-out' here, otherwise 'continue' to next ice or server
+    • Runner: 'run <server>' auto-continues through unopposed runs
+    • Corp: 'monitor-run' to participate (auto-continues, pauses at rez decisions)
+    • Approach: Corp decides to rez ICE or decline (use 'rez <name>' or 'continue')
+    • Encounter: Break subs with icebreakers (or let fire with 'let-subs-fire')
     • Access: 'choose-value steal/trash/"no action"' for each accessed card
-    • Use 'continue-run' for automated run handling (stops at decisions)
+    • Runs auto-pause at: rez decisions (Corp), trashable access, sub fire decisions
 
   ${BLUE}Common Stuck States:${NC}
     • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn

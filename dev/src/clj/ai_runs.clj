@@ -21,10 +21,14 @@
 ;;  :force true/false}          ; Bypass all smart checks
 (defonce run-strategy (atom {}))
 
+;; Track last waiting status to suppress repeated output
+(defonce last-waiting-status (atom nil))
+
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
   []
-  (reset! run-strategy {}))
+  (reset! run-strategy {})
+  (reset! last-waiting-status nil))
 
 (defn set-strategy!
   "Merge new strategy flags into current strategy"
@@ -275,7 +279,7 @@
 
     (or
       ;; Approaching unrezzed ICE - ALWAYS a rez opportunity
-      (and (= run-phase :approach-ice)
+      (and (= run-phase "approach-ice")
            current-ice
            (not (:rezzed current-ice))
            corp-prompt)
@@ -301,14 +305,14 @@
 
       ;; Runner waiting for corp rez decision
       (and (= side "runner")
-           (= run-phase :approach-ice)
+           (= run-phase "approach-ice")
            (not my-prompt)  ; Runner has no prompt
            (corp-has-rez-opportunity? state))
       true
 
       ;; Corp waiting for runner break decision
       (and (= side "corp")
-           (= run-phase :encounter-ice)
+           (= run-phase "encounter-ice")
            (not my-prompt)
            (has-real-decision? opp-prompt))
       true
@@ -338,10 +342,10 @@
         current-ice (get-current-ice state)]
 
     (cond
-      (and (= side "runner") (= run-phase :approach-ice) current-ice)
+      (and (= side "runner") (= run-phase "approach-ice") current-ice)
       (str "Corp must decide: rez " (:title current-ice) " or continue")
 
-      (and (= side "corp") (= run-phase :encounter-ice))
+      (and (= side "corp") (= run-phase "encounter-ice"))
       "Runner must decide: break subroutines or take effects"
 
       :else
@@ -349,13 +353,14 @@
 
 (defn can-auto-continue?
   "True if can safely auto-continue (empty paid ability window, no decisions)"
-  [prompt run-phase]
+  [prompt run-phase side]
   (and prompt
        (= (:prompt-type prompt) "run")
        (empty? (:choices prompt))
        (empty? (:selectable prompt))
-       ;; Not a special phase that needs attention
-       (not (contains? #{:approach-ice :encounter-ice} run-phase))))
+       ;; Approach-ice: Corp needs explicit rez decision (handled by other handlers)
+       ;; Encounter-ice: Runner with no choices (no icebreaker) can auto-continue
+       (not (and (= run-phase "approach-ice") (= side "corp")))))
 
 ;; ============================================================================
 ;; Handler Functions for continue-run! Strategy Pattern
@@ -409,20 +414,22 @@
      :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")}))
 
 (defn handle-run-complete
-  "Priority 7: Run complete (no run phase, no prompt)"
-  [{:keys [run-phase my-prompt]}]
-  (when (and (nil? run-phase) (nil? my-prompt))
-    (println "✅ Run complete")
-    {:status :run-complete}))
+  "Priority 7: Run complete (run object is nil)"
+  [{:keys [state my-prompt]}]
+  (let [run (get-in state [:game-state :run])]
+    (when (nil? run)
+      (println "✅ Run complete")
+      {:status :run-complete})))
 
 (defn handle-no-run
   "Priority 8: No active run"
-  [{:keys [run-phase my-prompt]}]
-  (when (and (nil? run-phase)
-             (or (nil? my-prompt)
-                 (not= (:prompt-type my-prompt) "run")))
-    (println "⚠️  No active run detected")
-    {:status :no-run}))
+  [{:keys [state my-prompt]}]
+  (let [run (get-in state [:game-state :run])]
+    (when (and (nil? run)
+               (or (nil? my-prompt)
+                   (not= (:prompt-type my-prompt) "run")))
+      (println "⚠️  No active run detected")
+      {:status :no-run})))
 
 (defn handle-auto-choice
   "Priority 5: Auto-handle single mandatory choice"
@@ -437,8 +444,8 @@
 
 (defn handle-auto-continue
   "Priority 6: Auto-continue through boring paid ability windows"
-  [{:keys [my-prompt run-phase gameid]}]
-  (when (can-auto-continue? my-prompt run-phase)
+  [{:keys [my-prompt run-phase gameid side]}]
+  (when (can-auto-continue? my-prompt run-phase side)
     (println "   → Auto-continuing through paid ability window")
     (send-continue! gameid)))
 
@@ -459,12 +466,24 @@
 
 (defn handle-waiting-for-opponent
   "Priority 3: Waiting for opponent to make a decision"
-  [{:keys [state side]}]
-  (when (waiting-for-opponent? state side)
-    (let [reason (waiting-reason state side)]
-      (println (format "⏸️  Waiting for opponent: %s" reason))
-      {:status :waiting-for-opponent
-       :message reason})))
+  [{:keys [state side my-prompt]}]
+  (let [run-phase (get-in state [:game-state :run :phase])
+        ;; Corp should wait during success phase (can't see runner's prompt)
+        corp-waiting-for-access? (and (= side "corp")
+                                      (= run-phase "success")
+                                      (not (has-real-decision? my-prompt)))]
+    (when (or (waiting-for-opponent? state side)
+              corp-waiting-for-access?)
+      (let [reason (if corp-waiting-for-access?
+                     "Runner resolving access"
+                     (waiting-reason state side))
+            status-key [:waiting-for-opponent reason]
+            already-printed? (= @last-waiting-status status-key)]
+        (when-not already-printed?
+          (reset! last-waiting-status status-key)
+          (println (format "⏸️  Waiting for opponent: %s" reason)))
+        {:status :waiting-for-opponent
+         :message reason}))))
 
 (defn handle-corp-rez-strategy
   "Priority 1.5: Corp rez strategy - auto-handle rez decisions"
@@ -490,8 +509,11 @@
       (cond
         ;; --no-rez: always decline
         (:no-rez strategy)
-        (do
-          (println (format "🤖 Strategy: --no-rez, declining %s" ice-title))
+        (let [status-key [:corp-no-rez position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "🤖 Strategy: declining rez on %s" ice-title)))
           (merge (send-continue! gameid)
                  {:action :auto-declined-rez
                   :ice ice-title}))
@@ -527,6 +549,36 @@
           (merge (send-continue! gameid)
                  {:action :auto-declined-rez
                   :ice ice-title}))))))
+
+(defn handle-corp-rez-decision
+  "Priority 1.7: Corp at approach-ice WITHOUT strategy - pause for human decision"
+  [{:keys [side run-phase my-prompt strategy state]}]
+  (when (and (= side "corp")
+             (= run-phase "approach-ice")
+             my-prompt
+             ;; Only trigger if NO rez strategy is set (otherwise handle-corp-rez-strategy handles it)
+             (not (:no-rez strategy))
+             (not (:rez strategy)))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))]
+      (when (and current-ice (not (:rezzed current-ice)))
+        (let [ice-title (:title current-ice "ICE")
+              status-key [:corp-rez-decision position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "🛑 Rez decision: %s (cost %d¢)" ice-title (get current-ice :cost 0)))
+            (println "   → Use 'rez <name>' to rez, or 'continue' to decline"))
+          {:status :decision-required
+           :message (format "Corp must decide: rez %s or continue" ice-title)
+           :ice ice-title
+           :position position})))))
 
 (defn handle-corp-fire-unbroken
   "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs"
@@ -584,12 +636,14 @@
           ice-index (- ice-count position)
           current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                         (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")]
-      (println "⏸️  PAUSED at approach-ice - Waiting for corp rez decision")
-      (println (format "   ICE position: %d/%d (unrezzed)" position ice-count))
-      (println (format "   ICE: %s" ice-title))
-      (println "   ⚠️  Runner prompt says 'Continue to Movement' but that would bypass corp rez!")
-      (println "   → Waiting for corp to rez or continue")
+          ice-title (:title current-ice "ICE")
+          status-key [:waiting-for-corp-rez position ice-title]
+          already-printed? (= @last-waiting-status status-key)]
+      ;; Only print verbose output first time we hit this state
+      (when-not already-printed?
+        (reset! last-waiting-status status-key)
+        (println "⏸️  Waiting for corp rez decision")
+        (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count)))
       {:status :waiting-for-corp-rez
        :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
        :ice ice-title
@@ -628,17 +682,19 @@
       {:status :tag-or-damage :event tag-damage-event})))
 
 (defn handle-unexpected-state
-  "Fallback: Unknown state"
+  "Fallback: Unknown state - wait and retry rather than give up"
   [{:keys [side run-phase my-prompt opp-prompt]}]
-  (println "⚠️  Unexpected run state")
-  (println (format "   Side: %s" side))
-  (println (format "   Run phase: %s" run-phase))
-  (println (format "   My prompt type: %s" (:prompt-type my-prompt)))
-  (println (format "   My choices: %d" (count (:choices my-prompt))))
-  (println (format "   Opp has prompt: %s" (some? opp-prompt)))
-  {:status :unexpected-state
-   :prompt my-prompt
-   :phase run-phase})
+  (let [status-key [:unexpected-state side run-phase]
+        already-printed? (= @last-waiting-status status-key)]
+    ;; Only print debug info once
+    (when-not already-printed?
+      (reset! last-waiting-status status-key)
+      (println (format "⏳ Waiting (phase: %s, side: %s)..." run-phase side)))
+    ;; Return waiting status so loop retries
+    {:status :waiting-for-opponent
+     :message "Unclear state, waiting for game to advance"
+     :prompt my-prompt
+     :phase run-phase}))
 
 (defn run-first-matching-handler
   "Run handlers in order until one returns non-nil result"
@@ -745,6 +801,7 @@
         handlers [handle-force-mode
                   handle-opponent-wait
                   handle-corp-rez-strategy
+                  handle-corp-rez-decision   ; Corp rez decision without strategy
                   handle-corp-fire-unbroken
                   handle-runner-approach-ice
                   handle-waiting-for-opponent
@@ -776,8 +833,7 @@
   "Returns true if this status should stop the auto-continue loop"
   [status]
   (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
-               :tag-or-damage :run-complete :no-run :unexpected-state
-               :waiting-for-corp-rez}
+               :tag-or-damage :run-complete :no-run}
              status))
 
 (defn- should-pause-for-event?
@@ -848,7 +904,8 @@
                    :elapsed-ms (- (System/currentTimeMillis) start-time))
 
             ;; Waiting for opponent - brief pause then check again
-            (= status :waiting-for-opponent)
+            (or (= status :waiting-for-opponent)
+                (= status :waiting-for-corp-rez))
             (do
               (Thread/sleep wait-delay-ms)
               (recur (inc iteration)))
@@ -856,7 +913,8 @@
             ;; Action taken - immediately continue
             (= status :action-taken)
             (do
-              (Thread/sleep core/quick-delay)  ; Brief sync pause
+              (reset! last-waiting-status nil)  ; Clear so new waiting messages will print
+              (Thread/sleep core/quick-delay)   ; Brief sync pause
               (recur (inc iteration)))
 
             ;; Unknown status - treat as terminal
@@ -890,7 +948,9 @@
         (println "⚠️  No active run to monitor")
         {:status :no-run})
       (do
-        ;; Parse and set strategy flags if provided
+        ;; Reset strategy from any previous run
+        (reset-strategy!)
+        ;; Parse and set new strategy flags if provided
         (when (seq args)
           (let [{:keys [flags]} (parse-run-flags (vec args))]
             (set-strategy! flags)
