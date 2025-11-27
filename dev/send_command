@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|continue|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -81,26 +81,43 @@ check_client() {
 
 # Ensure WebSocket connection is active (auto-reconnect if needed)
 ensure_connection() {
-    # Check if WebSocket client is loaded and connected
-    # We check by trying to access the client-state atom which should always exist if loaded
-    local check_result=$(TIMEOUT=5 "$AI_EVAL" '(do
-      (try
-        (require (quote [ai-state :as state]))
-        (let [s @state/client-state
-              uid (:uid s)]
-          (if uid
-            "connected"
-            "disconnected"))
-        (catch Exception e
-          "error")))' 2>&1 | grep -E '^"(connected|disconnected|error)"$' | tr -d '"' || echo "error")
-
-    if [[ "$check_result" != "connected" ]]; then
-        # Silently reconnect if needed (check is fragile, so don't warn)
-        TIMEOUT=10 "$AI_EVAL" '(do
+    # Use the improved ensure-connected! which checks socket health
+    # This detects broken sockets where connected? returns true but socket is dead
+    local connect_result
+    if [[ -n "$CLIENT_NAME" ]]; then
+        connect_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
           (require (quote [ai-websocket-client-v2 :as ws]))
-          (ws/connect! "ws://localhost:1042/chsk")
-          (Thread/sleep 2000))' > /dev/null 2>&1
-        sleep 1
+          (ws/ensure-connected!)
+          "ok")' 2>&1)
+    else
+        connect_result=$(TIMEOUT=10 "$AI_EVAL" '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/ensure-connected!)
+          "ok")' 2>&1)
+    fi
+
+    # Show connection messages if present (they go to stdout)
+    if [[ "$connect_result" == *"reconnecting"* ]] || [[ "$connect_result" == *"broken"* ]]; then
+        echo "$connect_result" | grep -v '^"ok"$' || true
+    fi
+
+    # Check for stale game state and auto-resync if needed
+    local sync_result
+    if [[ -n "$CLIENT_NAME" ]]; then
+        sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+          (require (quote [ai-connection :as conn]))
+          (conn/ensure-synced!)
+          "ok")' 2>&1)
+    else
+        sync_result=$(TIMEOUT=10 "$AI_EVAL" '(do
+          (require (quote [ai-connection :as conn]))
+          (conn/ensure-synced!)
+          "ok")' 2>&1)
+    fi
+
+    # Show sync messages if present (Stale, Kicked, or Resync)
+    if [[ "$sync_result" == *"Stale"* ]] || [[ "$sync_result" == *"Kicked"* ]] || [[ "$sync_result" == *"Resync"* ]]; then
+        echo "$sync_result" | grep -v '^"ok"$' || true
     fi
 }
 
@@ -164,12 +181,15 @@ ${GREEN}Runner Actions:${NC}
   run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
   let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
 
+${GREEN}Run Automation:${NC}
+  continue-run    - Smart run handler (auto-continues both players, stops at decisions)
+  monitor-run     - Corp: auto-pass boring windows during a run (like continue-run for Corp)
+
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   choose-card <N> - Choose card N from select prompt (for card-targeting effects)
   continue        - Continue/pass priority (for paid ability windows, run phases)
-  continue-run    - Smart run handler (auto-continues both players, stops at decisions)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
@@ -185,7 +205,8 @@ ${GREEN}Lobby:${NC}
   chat <message>         - Send chat message to game
 
 ${GREEN}Installation:${NC}
-  install <name> [server]  - Install card by name (Corp needs server: HQ, "R&D", "New remote")
+  install <name> [server] [--overwrite]  - Install card (Corp needs server: HQ, "R&D", "New remote")
+                                           Use --overwrite to replace existing asset/agenda
   install-index <N> [server] - Install card by index (Corp needs server)
 
 ${GREEN}Connection:${NC}
@@ -233,10 +254,11 @@ EOF
 }
 
 # Execute command via ai-eval.sh
+# Uses stdin mode to avoid shell escaping issues with ! in function names
 execute() {
     local expr="$1"
     local wrapped=false
-    
+
     # Wrap expression in with-out-str to capture stdout if it's a display command
     # This is a heuristic: if it starts with (ai-actions/show- or (ai-actions/list-, wrap it
     if [[ "$expr" == *"(ai-actions/show-"* ]] || [[ "$expr" == *"(ai-actions/list-"* ]] || [[ "$expr" == *"(ai-actions/hand"* ]] || [[ "$expr" == *"(ai-actions/status"* ]] || [[ "$expr" == *"(ai-actions/board"* ]]; then
@@ -245,15 +267,25 @@ execute() {
         wrapped=true
     fi
 
+    # Use temp file with stdin mode to avoid shell escaping issues with ! and other special chars
+    # Write expression to temp file to preserve ! without backslash escaping
+    local EXPR_FILE
+    EXPR_FILE=$(mktemp)
+    printf '%s' "$expr" > "$EXPR_FILE"
+    trap "rm -f '$EXPR_FILE'" RETURN
+
     if [[ -n "$CLIENT_NAME" ]]; then
-        # Multi-client mode: pass client name and port
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" "$expr")
+        # Multi-client mode: pass client name and port via stdin
+        # Note: 2>&1 captures stderr too, so errors are visible
+        # The || true prevents set -e from exiting on non-zero return
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || true
     else
         # Single-client mode: use default (backward compatible)
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" "$expr")
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin < "$EXPR_FILE" 2>&1) || true
     fi
+    # Note: $? here is from || true (always 0), but we parse errors from output
     RET=$?
-    
+
     # If we wrapped it, the result is a string literal like "output\n". We need to unquote it.
     # If it wasn't wrapped, just print the result as is.
     if [[ "$wrapped" == "true" ]]; then
@@ -268,7 +300,7 @@ execute() {
     else
         echo "$RESULT"
     fi
-    
+
     return $RET
 }
 
@@ -686,6 +718,20 @@ case "$COMMAND" in
         show_last_log_if_enabled
         ;;
 
+    monitor-run)
+        ensure_connection
+        # Build flag arguments for varargs call
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+
+        info "Monitoring run (Corp: auto-pass boring windows)..."
+        execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
+        show_last_log_if_enabled
+        ;;
+
     jack-out)
         ensure_connection
         info "Jacking out of run..."
@@ -841,12 +887,30 @@ case "$COMMAND" in
     # Installation
     install)
         ensure_connection
-        CARD_NAME="${1:-}"
-        SERVER="${2:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name> [server]"
+        # Parse args: install <card-name> [server] [--overwrite]
+        CARD_NAME=""
+        SERVER=""
+        OVERWRITE=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --overwrite) OVERWRITE=":overwrite true"; shift ;;
+                *)
+                    if [[ -z "$CARD_NAME" ]]; then
+                        CARD_NAME="$1"
+                    elif [[ -z "$SERVER" ]]; then
+                        SERVER="$1"
+                    fi
+                    shift ;;
+            esac
+        done
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name> [server] [--overwrite]"
         if [[ -n "$SERVER" ]]; then
             info "Installing card: $CARD_NAME on $SERVER"
-            execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+            if [[ -n "$OVERWRITE" ]]; then
+                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\" {$OVERWRITE})"
+            else
+                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+            fi
         else
             info "Installing card: $CARD_NAME"
             execute "(ai-actions/install-card! \"$CARD_NAME\")"

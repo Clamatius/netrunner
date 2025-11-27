@@ -10,8 +10,14 @@ source "$SCRIPT_DIR/load-env.sh"
 
 TIMEOUT=${TIMEOUT:-10}
 
-# Parse arguments - support both old and new usage
-if [ $# -eq 1 ]; then
+# Parse arguments - support both old and new usage plus stdin mode
+# Stdin mode: ./ai-eval.sh --stdin client_name port < file_with_expression
+if [ "${1:-}" == "--stdin" ]; then
+    # Stdin mode: read expression from stdin to avoid shell escaping
+    CLIENT_NAME="${2:-fixed-id}"
+    REPL_PORT="${3:-7889}"
+    EXPRESSION=$(cat)
+elif [ $# -eq 1 ]; then
     # Old usage: just expression
     CLIENT_NAME="fixed-id"
     REPL_PORT="${CLIENT_1_PORT:-7889}"
@@ -23,9 +29,11 @@ elif [ $# -eq 3 ]; then
     EXPRESSION="$3"
 else
     echo "Usage: $0 [client_name] [port] <clojure-expression>"
+    echo "       $0 --stdin [client_name] [port] < file_with_expression"
     echo "Examples:"
     echo "  $0 '(ai-actions/status)'"
     echo "  $0 runner $CLIENT_1_PORT '(ai-actions/status)'"
+    echo "  echo '(ai-actions/install-card! \"test\")' | $0 --stdin corp 7890"
     exit 1
 fi
 
@@ -46,14 +54,20 @@ fi
 # Use Babashka if available (much faster), otherwise fall back to lein
 if command -v bb &> /dev/null; then
     # Babashka nREPL client - fast and designed for scripting
-    # Use environment variable to avoid escaping issues with multi-line expressions
-    NREPL_EXPR="$EXPRESSION" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
-          (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
-            (let [in (java.io.PushbackInputStream. (io/input-stream sock))
-                  out (io/output-stream sock)
-                  bytes->str #(when % (String. (bytes %)))
-                  result-value (atom nil)]
-              (b/write-bencode out {\"op\" \"eval\" \"code\" (System/getenv \"NREPL_EXPR\")})
+    # Use temp file to avoid shell escaping issues with ! and other special chars
+    EXPR_FILE=$(mktemp)
+    printf '%s' "$EXPRESSION" > "$EXPR_FILE"
+    trap "rm -f '$EXPR_FILE'" EXIT
+
+    bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+          (let [expr-file \"$EXPR_FILE\"
+                expr-code (slurp expr-file)]
+            (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
+              (let [in (java.io.PushbackInputStream. (io/input-stream sock))
+                    out (io/output-stream sock)
+                    bytes->str #(when % (String. (bytes %)))
+                    result-value (atom nil)]
+                (b/write-bencode out {\"op\" \"eval\" \"code\" expr-code})
               (.flush out)
               (loop []
                 (when-let [response (b/read-bencode in)]
@@ -76,15 +90,15 @@ if command -v bb &> /dev/null; then
                     (reset! result-value :error))
                   (when-not (get response \"status\")
                     (recur))))
-              ;; Check if result indicates error and exit with code 1
-              (when (= @result-value :error)
-                (System/exit 1))
-              (when @result-value
-                (try
-                  (let [result (read-string @result-value)]
-                    (when (and (map? result) (= :error (:status result)))
-                      (System/exit 1)))
-                  (catch Exception _ nil)))))"
+                ;; Check if result indicates error and exit with code 1
+                (when (= @result-value :error)
+                  (System/exit 1))
+                (when @result-value
+                  (try
+                    (let [result (read-string @result-value)]
+                      (when (and (map? result) (= :error (:status result)))
+                        (System/exit 1)))
+                    (catch Exception _ nil))))))"
 else
     # Fallback to lein repl :connect (slower, for compatibility)
     timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \

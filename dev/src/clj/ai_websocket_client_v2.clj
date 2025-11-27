@@ -94,22 +94,29 @@
           {:keys [gameid diff]} diff-data
           client-gameid (:gameid @state/client-state)]
       ;; FIX: Compare as strings since JSON parses UUIDs as strings
-      (when (= (str gameid) (str client-gameid))
-        (println "\n🔄 GAME/DIFF received")
-        (println "   GameID:" gameid)
-        (println "   Diff type:" (type diff))
-        (println "   Diff keys (if map):" (when (map? diff) (keys diff)))
-        (println "   Diff sample:" (pr-str (if (coll? diff)
-                                              (take 5 diff)
-                                              diff)))
-        (state/update-game-state! diff)
-        ;; Clear lobby-state once game has started (receiving diffs means game is active)
-        (swap! state/client-state dissoc :lobby-state)
-        ;; Announce newly revealed cards in Archives
-        (hud/announce-revealed-archives diff)
-        ;; Auto-update game log HUD
-        (hud/write-game-log-to-hud 30)
-        (println "   ✓ Diff applied successfully")))
+      (if (= (str gameid) (str client-gameid))
+        (do
+          (println "\n🔄 GAME/DIFF received")
+          (println "   GameID:" gameid)
+          (println "   Diff type:" (type diff))
+          (println "   Diff keys (if map):" (when (map? diff) (keys diff)))
+          (println "   Diff sample:" (pr-str (if (coll? diff)
+                                                (take 5 diff)
+                                                diff)))
+          (state/update-game-state! diff)
+          ;; Clear lobby-state once game has started (receiving diffs means game is active)
+          (swap! state/client-state dissoc :lobby-state :diff-mismatch)
+          ;; Track last successful diff time
+          (swap! state/client-state assoc :last-diff-time (System/currentTimeMillis))
+          ;; Announce newly revealed cards in Archives
+          (hud/announce-revealed-archives diff)
+          ;; Auto-update game log HUD
+          (hud/write-game-log-to-hud 30)
+          (println "   ✓ Diff applied successfully"))
+        ;; Diff doesn't match our game - we might be stale
+        (do
+          (swap! state/client-state assoc :diff-mismatch true)
+          (debug/debug "WARN" (str "Diff dropped - gameid mismatch. Diff: " gameid " Client: " client-gameid)))))
 
     :game/resync
     (let [state (if (string? data)
@@ -315,21 +322,51 @@
 (defn in-game? [] (some? (:gameid @state/client-state)))
 (defn get-lobby-list [] (:lobby-list @state/client-state))
 
+(defn socket-healthy?
+  "Check if the WebSocket socket is actually usable.
+   The :connected flag can be true even when the socket object is broken.
+   This function tries to verify the socket can send a message."
+  []
+  (when-let [socket (:socket @state/client-state)]
+    (try
+      ;; Try to send a ping message - if socket is broken, this will throw
+      ;; We use ws-pong as a lightweight message that won't affect game state
+      (ws/send-msg socket (pr-str [[:chsk/ws-ping]]))
+      true
+      (catch Exception e
+        (debug/debug "WARN" (str "Socket health check failed: " (.getMessage e)))
+        false))))
+
 ;; ============================================================================
 ;; Connection Management
 ;; ============================================================================
 
 (defn ensure-connected!
-  "Check connection and reconnect if needed. Returns true if connected."
+  "Check connection and reconnect if needed. Returns true if connected.
+   Also checks socket health - the :connected flag can be stale."
   ([] (ensure-connected! "ws://localhost:1042/chsk"))
   ([url]
-   (if (connected?)
-     true
+   (cond
+     ;; Socket exists but is broken - clear it and reconnect
+     (and (connected?) (not (socket-healthy?)))
+     (do
+       (println "⚠️  Socket broken, clearing and reconnecting...")
+       (swap! state/client-state assoc :socket nil :ws-client nil :connected false)
+       (Thread/sleep 200)
+       (connect! url)
+       (Thread/sleep 2000)
+       (connected?))
+
+     ;; Not connected at all
+     (not (connected?))
      (do
        (println "⚠️  Not connected, reconnecting...")
        (connect! url)
        (Thread/sleep 2000)
-       (connected?)))))
+       (connected?))
+
+     ;; Connected and healthy
+     :else true)))
 
 (defn rejoin-game!
   "Rejoin a game after reconnection using gameid from game state"

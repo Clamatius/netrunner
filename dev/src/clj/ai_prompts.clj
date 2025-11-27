@@ -230,3 +230,26 @@
       (do
         (println "❌ No discard prompt active or no card names provided")
         0))))
+
+;; ============================================================================
+;; Auto-resolve Info Prompts
+;; ============================================================================
+
+(defn ok-only-prompt?
+  "Check if current prompt is an info-only prompt with just 'OK' as option"
+  []
+  (let [prompt (state/get-prompt)
+        choices (:choices prompt)]
+    (and prompt
+         (= 1 (count choices))
+         (= "OK" (:value (first choices))))))
+
+(defn auto-resolve-ok-prompt!
+  "Auto-resolve any 'OK-only' info prompt (like trash confirmation).
+   Returns true if a prompt was resolved, false otherwise."
+  []
+  (when (ok-only-prompt?)
+    (let [prompt (state/get-prompt)]
+      (println (str "   ℹ️  " (:msg prompt)))
+      (choose-option! 0)
+      true)))

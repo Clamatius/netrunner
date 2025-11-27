@@ -309,6 +309,88 @@
       [])))
 
 ;; ============================================================================
+;; Install Validation (Baby-proofing)
+;; ============================================================================
+;; The jinteki server is permissive (allows illegal moves for manual state fixes).
+;; These functions validate installs client-side to prevent our AI from cheating.
+
+(defn- server-name->key
+  "Convert server name string to keyword for state lookup.
+   'Server 1' -> :remote1, 'HQ' -> :hq, etc."
+  [server-name]
+  (when server-name
+    (let [lower (clojure.string/lower-case server-name)]
+      (cond
+        (= lower "hq") :hq
+        (= lower "r&d") :rd
+        (= lower "archives") :archives
+        (re-matches #"server \d+" lower)
+        (keyword (str "remote" (second (re-find #"server (\d+)" lower))))
+        (re-matches #"remote\d+" lower)
+        (keyword lower)
+        :else nil))))
+
+(defn- central-server?
+  "Check if server name refers to a central server"
+  [server-name]
+  (contains? #{:hq :rd :archives} (server-name->key server-name)))
+
+(defn- root-card-type?
+  "Check if card type is a 'root' card (asset or agenda) that occupies the server slot"
+  [card-type]
+  (contains? #{"Asset" "Agenda"} card-type))
+
+(defn server-has-root-card?
+  "Check if a server already has an asset or agenda installed.
+   Returns the existing root card if found, nil otherwise."
+  [server-name]
+  (when-let [server-key (server-name->key server-name)]
+    (let [content (state/server-cards server-key)]
+      (->> content
+           (filter #(root-card-type? (:type %)))
+           first))))
+
+(defn validate-corp-install
+  "Validate a Corp install is legal. Returns nil if valid, error map if invalid.
+
+   Rules enforced:
+   - Assets/Agendas can only be installed in remotes (not centrals)
+   - Only one asset/agenda per remote server
+   - ICE can be installed on any server (multiple allowed)
+   - Upgrades can be installed anywhere (multiple allowed)"
+  [card server-name]
+  (let [card-type (:type card)
+        card-title (:title card)]
+    (cond
+      ;; ICE and Upgrades are always allowed
+      (contains? #{"ICE" "Upgrade"} card-type)
+      nil
+
+      ;; Assets and Agendas need special checks
+      (root-card-type? card-type)
+      (cond
+        ;; Can't install in centrals
+        (central-server? server-name)
+        {:error true
+         :reason (str "Cannot install " card-type " in central server " server-name)
+         :hint "Assets and Agendas can only be installed in remote servers"}
+
+        ;; Check if "New remote" - always allowed
+        (and server-name
+             (= "New remote" (clojure.string/trim server-name)))
+        nil
+
+        ;; Check if remote already has a root card
+        :else
+        (when-let [existing (server-has-root-card? server-name)]
+          {:error true
+           :reason (str "Cannot install " card-title " - " server-name " already has " (:title existing))
+           :hint "Each remote can only have one asset or agenda"}))
+
+      ;; Unknown card type - allow (don't block unexpected things)
+      :else nil)))
+
+;; ============================================================================
 ;; Card Lookup Helpers
 ;; ============================================================================
 

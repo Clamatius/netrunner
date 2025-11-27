@@ -3,7 +3,8 @@
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
             [ai-core :as core]
-            [ai-basic-actions :as basic]))
+            [ai-basic-actions :as basic]
+            [ai-prompts :as prompts]))
 
 ;; ============================================================================
 ;; Card Actions
@@ -100,13 +101,21 @@
    - New remote: \"New remote\"
    - Existing remotes: \"Server 1\", \"Server 2\", etc.
 
+   Options:
+   - :overwrite true - Allow overwriting existing asset/agenda in remote
+
    Usage: (install-card! \"Palisade\" \"HQ\")         ; Corp ICE on HQ
           (install-card! \"Urtica Cipher\" \"New remote\") ; Corp asset in new remote
           (install-card! 0 \"R&D\")                   ; Corp install by index
-          (install-card! \"Unity\")                   ; Runner install"
+          (install-card! \"Unity\")                   ; Runner install
+          (install-card! \"Agenda\" \"Server 1\" :overwrite true) ; Overwrite existing"
   ([name-or-index]
-   (install-card! name-or-index nil))
+   (install-card! name-or-index nil {}))
   ([name-or-index server]
+   (install-card! name-or-index server {}))
+  ([name-or-index server opts]
+   (let [opts (if (keyword? opts) {opts true} opts)  ; Support (install-card! "x" "y" :overwrite true)
+         overwrite? (:overwrite opts)]
    ;; Check for pre-existing blocking prompt before attempting action
    (let [existing-prompt (state/get-prompt)]
      (if (and existing-prompt
@@ -121,27 +130,43 @@
        (if (basic/ensure-turn-started!)
          (let [card (core/find-card-in-hand name-or-index)]
            (if card
-             (let [before-state (core/capture-state-snapshot)
-                   client-state @state/client-state
+             (let [client-state @state/client-state
                    side (keyword (:side client-state))
-                   before-clicks (get-in client-state [:game-state side :click])
-                   gameid (:gameid client-state)
-                   card-ref (core/create-card-ref card)
                    card-title (:title card)
                    card-type (:type card)
-                   card-zone (:zone card)
                    ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
                    normalized-server (when server
                                       (:normalized (core/normalize-server-name server)))
-                   ;; Both Corp and Runner use "play" command
-                   ;; Corp requires :server, Runner installs without :server arg
-                   args (if normalized-server
-                         {:card card-ref :server normalized-server}
-                         {:card card-ref})]
-               (ws/send-message! :game/action
-                                 {:gameid gameid
-                                  :command "play"
-                                  :args args})
+                   ;; Validate Corp installs (baby-proofing) unless overwrite is requested
+                   validation-error (when (and (core/side= "Corp" (:side client-state))
+                                               (not overwrite?))
+                                     (core/validate-corp-install card normalized-server))]
+               ;; Check validation before proceeding
+               (if validation-error
+                 (do
+                   (println (str "⚠️  Blocked install: " (:reason validation-error)))
+                   (when-let [hint (:hint validation-error)]
+                     (println (str "   💡 " hint)))
+                   (println "   Use --overwrite flag to proceed anyway")
+                   (flush)
+                   {:status :blocked
+                    :reason (:reason validation-error)
+                    :hint "Use --overwrite to install anyway (will trash existing card)"})
+                 ;; Valid install - proceed
+                 (let [before-state (core/capture-state-snapshot)
+                       before-clicks (get-in client-state [:game-state side :click])
+                       gameid (:gameid client-state)
+                       card-ref (core/create-card-ref card)
+                       card-zone (:zone card)
+                       ;; Both Corp and Runner use "play" command
+                       ;; Corp requires :server, Runner installs without :server arg
+                       args (if normalized-server
+                             {:card card-ref :server normalized-server}
+                             {:card card-ref})]
+                   (ws/send-message! :game/action
+                                     {:gameid gameid
+                                      :command "play"
+                                      :args args})
                ;; Wait and verify action - now returns status map
                (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                  (case (:status result)
@@ -152,6 +177,9 @@
                        (println (str "📥 Installed: " card-title " on " normalized-server))
                        (println (str "📥 Installed: " card-title " (" card-type ")")))
                      (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+                     ;; Auto-resolve any OK-only prompts (e.g., trash confirmation from overwrite)
+                     (when overwrite?
+                       (prompts/auto-resolve-ok-prompt!))
                      (core/show-turn-indicator)
                      (flush)
                      ;; Auto-end turn if no clicks remaining
@@ -175,7 +203,7 @@
                      (println (str "   Reason: " (:reason result)))
                      (core/show-turn-indicator)
                      (flush)
-                     result))))
+                     result)))))) ; close case, let(result), let(before-state), if(validation), let(client-state)
              (do
                (println (str "❌ Card not found in hand: " name-or-index))
                (flush)
@@ -184,7 +212,7 @@
          (do
            (flush)
            {:status :error
-            :reason "Failed to start turn"})))))) ; close defn arities
+            :reason "Failed to start turn"}))))))) ; close defn arities + outer let
 
 ;; ============================================================================
 ;; Card Abilities

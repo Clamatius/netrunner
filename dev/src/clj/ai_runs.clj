@@ -116,6 +116,7 @@
 ;; ============================================================================
 
 (declare continue-run!)
+(declare auto-continue-loop!)
 
 ;; ============================================================================
 ;; Run Initiation
@@ -193,12 +194,16 @@
               (do
                 (println "🏃" (:text run-entry))
                 ;; Auto-continue unless --no-continue flag set
-                (when-not (:no-continue flags)
-                  (println "⏩ Auto-continuing...")
-                  (Thread/sleep core/quick-delay)  ; Brief pause for state sync
-                  (continue-run!))
-                {:status :success
-                 :data {:server normalized :log-entry (:text run-entry) :flags flags}})
+                (if (:no-continue flags)
+                  {:status :success
+                   :data {:server normalized :log-entry (:text run-entry) :flags flags}}
+                  (do
+                    (println "⏩ Auto-continuing run...")
+                    (Thread/sleep core/quick-delay)  ; Brief pause for state sync
+                    (let [loop-result (auto-continue-loop!)]
+                      (merge {:status :success
+                              :data {:server normalized :log-entry (:text run-entry) :flags flags}}
+                             {:run-result loop-result})))))
 
               (< (System/currentTimeMillis) deadline)
               (do
@@ -308,10 +313,12 @@
            (has-real-decision? opp-prompt))
       true
 
-      ;; CRITICAL: During run, if opponent has ANY prompt, pause and wait
-      ;; Opponent may have indicated action or may have paid ability they want to use
+      ;; During run, only wait if opponent has a REAL decision
+      ;; (not just empty paid ability windows that they'll auto-pass)
+      ;; The critical phases (approach-ice rez, encounter-ice break) are handled above
       (and during-run?
            opp-prompt
+           (has-real-decision? opp-prompt)
            (not my-prompt))
       true
 
@@ -751,10 +758,152 @@
     ;; Run handlers in order until one returns non-nil
     (run-first-matching-handler handlers context)))
 
-;; REFACTORING NOTE: The code below (lines 734-1022) was the old cond-based implementation.
-;; It has been replaced with the handler chain pattern above.
-;; Keeping this comment as a marker - the old code has been removed.
+;; ============================================================================
+;; Auto-Continue Loop
+;; ============================================================================
+;;
+;; The loop calls continue-run! repeatedly until:
+;; - Run completes (:run-complete)
+;; - Real decision required (:decision-required)
+;; - Notable event occurs (:ice-rezzed, :ability-used, :subs-fired, :tag-or-damage)
+;; - Max iterations reached (safety guard)
+;; - Timeout reached
+;;
+;; For :waiting-for-opponent status, the loop waits briefly then retries,
+;; allowing the other client to take their action.
 
+(defn- terminal-status?
+  "Returns true if this status should stop the auto-continue loop"
+  [status]
+  (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
+               :tag-or-damage :run-complete :no-run :unexpected-state
+               :waiting-for-corp-rez}
+             status))
+
+(defn- should-pause-for-event?
+  "Returns true if this is a notable event we should pause to show the user"
+  [status]
+  (contains? #{:ice-rezzed :ability-used :subs-fired :tag-or-damage} status))
+
+(defn auto-continue-loop!
+  "Runs continue-run! in a loop until run ends or decision required.
+
+   This is the core of run automation - both sides can call this to
+   auto-pass through boring paid ability windows.
+
+   Loop continues on:
+   - :action-taken - took an action, might need more
+   - :waiting-for-opponent - wait briefly, then check again
+
+   Loop stops on:
+   - :decision-required - user must make a choice
+   - :ice-rezzed, :ability-used, :subs-fired, :tag-or-damage - notable events
+   - :run-complete - run finished successfully
+   - :no-run - no active run
+   - :waiting-for-corp-rez - runner waiting for corp (corp should call their loop)
+   - max iterations or timeout reached
+
+   Options:
+   :max-iterations  - Safety guard (default 50)
+   :timeout-ms      - Max time to loop (default 30000ms = 30s)
+   :wait-delay-ms   - Delay when waiting for opponent (default 200ms)
+   :pause-on-events - Pause on events like :ice-rezzed (default true)
+
+   Returns the final result from continue-run! plus:
+   :iterations - how many times continue-run! was called
+   :elapsed-ms - how long the loop ran"
+  [& {:keys [max-iterations timeout-ms wait-delay-ms pause-on-events]
+      :or {max-iterations 50
+           timeout-ms 30000
+           wait-delay-ms 200
+           pause-on-events true}}]
+  (let [start-time (System/currentTimeMillis)
+        deadline (+ start-time timeout-ms)]
+    (loop [iteration 0]
+      (cond
+        ;; Safety: max iterations
+        (>= iteration max-iterations)
+        (do
+          (println (format "⚠️  Auto-continue stopped: max iterations (%d) reached" max-iterations))
+          {:status :max-iterations
+           :iterations iteration
+           :elapsed-ms (- (System/currentTimeMillis) start-time)})
+
+        ;; Safety: timeout
+        (> (System/currentTimeMillis) deadline)
+        (do
+          (println (format "⚠️  Auto-continue stopped: timeout (%dms) reached" timeout-ms))
+          {:status :timeout
+           :iterations iteration
+           :elapsed-ms (- (System/currentTimeMillis) start-time)})
+
+        :else
+        (let [result (continue-run!)
+              status (:status result)]
+          (cond
+            ;; Terminal status - stop loop
+            (terminal-status? status)
+            (assoc result
+                   :iterations (inc iteration)
+                   :elapsed-ms (- (System/currentTimeMillis) start-time))
+
+            ;; Waiting for opponent - brief pause then check again
+            (= status :waiting-for-opponent)
+            (do
+              (Thread/sleep wait-delay-ms)
+              (recur (inc iteration)))
+
+            ;; Action taken - immediately continue
+            (= status :action-taken)
+            (do
+              (Thread/sleep core/quick-delay)  ; Brief sync pause
+              (recur (inc iteration)))
+
+            ;; Unknown status - treat as terminal
+            :else
+            (do
+              (println (format "⚠️  Auto-continue: unknown status %s, stopping" status))
+              (assoc result
+                     :iterations (inc iteration)
+                     :elapsed-ms (- (System/currentTimeMillis) start-time)))))))))
+
+(defn monitor-run!
+  "Corp command to enter auto-continue mode during a run.
+
+   When runner initiates a run, corp can call this to auto-handle
+   boring paid ability windows. The loop will pause when:
+   - Corp has a real decision (rez opportunity, ability choice)
+   - Notable events occur
+   - Run ends
+
+   This enables the 'both sides auto-pass' flow where neither player
+   has to manually pass empty windows.
+
+   Usage:
+     (monitor-run!)                    ; Auto-pass until decision needed
+     (monitor-run! \"--no-rez\")       ; Also auto-decline all rez opportunities
+     (monitor-run! \"--rez\" \"Tithe\") ; Only rez Tithe, decline others"
+  [& args]
+  (let [run (get-in @state/client-state [:game-state :run])]
+    (if (nil? run)
+      (do
+        (println "⚠️  No active run to monitor")
+        {:status :no-run})
+      (do
+        ;; Parse and set strategy flags if provided
+        (when (seq args)
+          (let [{:keys [flags]} (parse-run-flags (vec args))]
+            (set-strategy! flags)
+            (when (seq flags)
+              (println (format "🎯 Strategy: %s"
+                              (clojure.string/join ", "
+                                                   (map (fn [[k v]]
+                                                          (if (set? v)
+                                                            (str (name k) " " (clojure.string/join "," v))
+                                                            (name k)))
+                                                        flags)))))))
+        (println "👁️  Monitoring run... (auto-passing boring windows)")
+        (auto-continue-loop!)))))
 
 ;; ============================================================================
 ;; Convenience Wrapper

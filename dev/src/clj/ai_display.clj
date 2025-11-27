@@ -244,6 +244,8 @@
   []
   (let [state @state/client-state
         gs (:game-state state)
+        my-side (:side state)  ;; "corp" or "runner" (lowercase) - determines what we can see
+        is-corp? (= "corp" (some-> my-side clojure.string/lower-case))
         corp-servers (:servers (:corp gs))
         runner-rig (get-in gs [:runner :rig])
         corp-deck-count (get-in gs [:corp :deck-count])
@@ -267,12 +269,17 @@
           (if (seq ice-list)
             (doseq [[idx ice] (map-indexed vector ice-list)]
               (let [rezzed (:rezzed ice)
-                    title (if rezzed (core/format-card-name-with-index ice ice-list) (:title ice))
+                    title (core/format-card-name-with-index ice ice-list)
                     subtype (or (first (clojure.string/split (or (:subtype ice) "") #" - ")) "?")
                     strength (:current-strength ice)
-                    status-icon (if rezzed "🔴" "⚪")]
+                    status-icon (if rezzed "🔴" "⚪")
+                    ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
+                    display-name (cond
+                                   rezzed title
+                                   is-corp? (str title " [unrezzed]")
+                                   :else "Unrezzed ICE")]
                 (println (str "  ICE #" idx ": " status-icon " "
-                             (if rezzed title "Unrezzed ICE")
+                             display-name
                              (when rezzed (str " (" subtype ")"))
                              (when (and rezzed strength) (str " (str: " strength ")"))
                              (format-counters ice)))))
@@ -285,8 +292,13 @@
               (doseq [card rezzed-content]
                 (let [card-name (core/format-card-name-with-index card content-list)]
                   (println (str "  Content: 🔴 " card-name " (" (:type card) ")" (format-counters card)))))
+              ;; Corp sees their own unrezzed cards, Runner sees "Unrezzed card"
               (doseq [card unrezzed-content]
-                (println (str "  Content: ⚪ Unrezzed card" (format-counters card))))))
+                (let [card-name (core/format-card-name-with-index card content-list)
+                      display-name (if is-corp?
+                                     (str card-name " [unrezzed]")
+                                     "Unrezzed card")]
+                  (println (str "  Content: ⚪ " display-name (format-counters card)))))))
           )))
 
     ;; Runner Rig

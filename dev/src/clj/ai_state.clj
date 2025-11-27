@@ -426,3 +426,32 @@
     :corp (corp-discard)
     :runner (runner-discard)
     []))
+
+;; ============================================================================
+;; Staleness Detection
+;; ============================================================================
+;; Detect when client state is stale (out of sync with server).
+;; This can happen when:
+;; - Server marks us as "left" but WebSocket stays connected
+;; - Diffs are received but filtered out due to gameid mismatch
+;; - Connection hiccups cause missed diffs
+
+(defn stale?
+  "Returns true if client appears to have stale state.
+   Checks:
+   - diff-mismatch flag (set when we receive diffs for wrong game)
+   - gameid mismatch (have game-state but no gameid)
+
+   Can be extended with additional sensors as needed."
+  []
+  (let [{:keys [diff-mismatch gameid game-state]} @client-state]
+    (or
+      ;; Received a diff that didn't match our gameid
+      diff-mismatch
+      ;; Have game state but lost our gameid somehow
+      (and (some? game-state) (nil? gameid)))))
+
+(defn clear-stale-flag!
+  "Clear staleness indicators after successful resync"
+  []
+  (swap! client-state dissoc :diff-mismatch))

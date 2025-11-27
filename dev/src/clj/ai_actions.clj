@@ -56,6 +56,9 @@
 (def auto-start-if-ready! connection/auto-start-if-ready!)
 (def send-chat! connection/send-chat!)
 (def change! connection/change!)
+(def find-our-game connection/find-our-game)
+(def verify-in-game! connection/verify-in-game!)
+(def ensure-synced! connection/ensure-synced!)
 
 ;; ============================================================================
 ;; Re-exported functions from ai-display
@@ -149,3 +152,5 @@
 (def can-auto-continue? runs/can-auto-continue?)
 (def continue-run! runs/continue-run!)
 (def continue! runs/continue!)
+(def auto-continue-loop! runs/auto-continue-loop!)
+(def monitor-run! runs/monitor-run!)

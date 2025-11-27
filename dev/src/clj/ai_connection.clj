@@ -211,3 +211,103 @@
                        :command "change"
                        :args {:key key :delta delta}})
     (Thread/sleep core/quick-delay)))
+
+;; ============================================================================
+;; Staleness Detection & Auto-Recovery
+;; ============================================================================
+
+(defn find-our-game
+  "Look through lobby list to find a game where we're a player.
+   Returns gameid if found, nil otherwise.
+   Useful for auto-recovery when we've been marked as 'left' but can rejoin."
+  []
+  (let [lobby-list (:lobby-list @state/client-state)
+        ;; Get our expected username from current state
+        ;; The username format is 'AI-{side}' e.g., 'AI-runner', 'AI-corp'
+        my-side (:side @state/client-state)
+        my-name (when my-side (str "AI-" (clojure.string/lower-case my-side)))]
+    (when (and lobby-list my-name)
+      (->> lobby-list
+           (filter (fn [game]
+                    ;; Player structure is {:user {:username "AI-corp" ...} :side "Corp" ...}
+                    (some #(= my-name (get-in % [:user :username]))
+                          (:players game))))
+           first
+           :gameid))))
+
+(defn verify-in-game!
+  "Verify we're actually in the game by checking lobby list.
+   Returns true if we're in the game, false if we've been kicked.
+   Refreshes lobby list as a side effect."
+  []
+  (let [my-gameid (:gameid @state/client-state)]
+    (when my-gameid
+      ;; Request fresh lobby list
+      (request-lobby-list!)
+      (Thread/sleep 500)
+      (let [found-gameid (find-our-game)]
+        (= (str my-gameid) (str found-gameid))))))
+
+(defn- do-rejoin-resync!
+  "Internal: Perform the rejoin and resync sequence"
+  []
+  ;; Request lobby list to find our game
+  (request-lobby-list!)
+  (Thread/sleep 500)
+
+  (let [;; First check if we're still in game (maybe different game)
+        my-gameid (:gameid @state/client-state)
+        ;; Then look for a game we could be in
+        found-gameid (find-our-game)
+        ;; Use the game we found, or our current gameid as fallback
+        target-gameid (or found-gameid my-gameid)]
+    (if target-gameid
+      (let [my-side (or (:side @state/client-state) "Runner")]
+        (println "   Rejoining game:" target-gameid)
+        ;; Rejoin the game
+        (join-game! {:gameid target-gameid :side my-side})
+        (Thread/sleep 500)
+        ;; Request full state resync
+        (resync-game! target-gameid)
+        (Thread/sleep 1000)
+        ;; Clear staleness flags
+        (state/clear-stale-flag!)
+        (println "✅ Resynced successfully")
+        true)
+      (do
+        (println "❌ Could not find any game to rejoin")
+        (println "   Try: list-lobbies + join + resync manually")
+        false))))
+
+(defn ensure-synced!
+  "Check for staleness and auto-resync if detected.
+   Returns true if we're synced (or successfully resynced), false if can't recover.
+
+   Checks multiple staleness indicators:
+   1. diff-mismatch flag (set when diffs for wrong game arrive)
+   2. Kicked from game (we have gameid but aren't in lobby list)
+
+   Performs these recovery steps when stale:
+   1. Request lobby list to find our game
+   2. Rejoin the game
+   3. Request full state resync
+   4. Clear staleness flags"
+  []
+  (cond
+    ;; Check basic staleness indicators first (cheap check)
+    (state/stale?)
+    (do
+      (println "⚠️  Stale state detected (diff mismatch) - auto-resyncing...")
+      (do-rejoin-resync!))
+
+    ;; If we think we're in a game, verify we actually are
+    ;; This catches "kicked from game" scenarios
+    (:gameid @state/client-state)
+    (if (verify-in-game!)
+      true
+      (do
+        (println "⚠️  Kicked from game detected - auto-resyncing...")
+        (do-rejoin-resync!)))
+
+    ;; No game state at all - nothing to sync
+    :else true))
