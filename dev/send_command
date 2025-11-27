@@ -700,15 +700,18 @@ case "$COMMAND" in
     continue)
         ensure_connection
         info "Passing priority (continue)..."
-        execute '(let [state @ai-websocket-client-v2/client-state
-                       gameid (:gameid state)]
-                  (ai-websocket-client-v2/send-message! :game/action
-                    {:gameid (if (string? gameid)
-                               (java.util.UUID/fromString gameid)
-                               gameid)
-                     :command "continue"
-                     :args nil})
-                  (Thread/sleep 1000))'
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (require (quote [ai-websocket-client-v2 :as ws]))
+                  (let [s @state/client-state
+                        gameid (:gameid s)]
+                    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                 (java.util.UUID/fromString gameid)
+                                 gameid)
+                       :command "continue"
+                       :args nil})
+                    (Thread/sleep 1000)))'
         show_last_log_if_enabled
         ;;
 
@@ -743,15 +746,18 @@ case "$COMMAND" in
     jack-out)
         ensure_connection
         info "Jacking out of run..."
-        execute '(let [state @ai-websocket-client-v2/client-state
-                       gameid (:gameid state)]
-                  (ai-websocket-client-v2/send-message! :game/action
-                    {:gameid (if (string? gameid)
-                               (java.util.UUID/fromString gameid)
-                               gameid)
-                     :command "jack-out"
-                     :args nil})
-                  (Thread/sleep 1000))'
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (require (quote [ai-websocket-client-v2 :as ws]))
+                  (let [s @state/client-state
+                        gameid (:gameid s)]
+                    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                 (java.util.UUID/fromString gameid)
+                                 gameid)
+                       :command "jack-out"
+                       :args nil})
+                    (Thread/sleep 1000)))'
         ;;
 
     wait-for-diff)
