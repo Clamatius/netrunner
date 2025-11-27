@@ -373,22 +373,29 @@
 ;; Handlers are tried in priority order until one returns non-nil.
 
 (defn- send-continue!
-  "Helper to send continue command and return action-taken result"
+  "Helper to send continue command and return action-taken result.
+   Waits briefly for state to sync via WebSocket."
   [gameid]
   (ws/send-message! :game/action
                    {:gameid gameid
                     :command "continue"
                     :args nil})
+  ;; Brief wait for WebSocket state update to arrive
+  ;; Without this, caller may see stale state on next read
+  (Thread/sleep 100)
   {:status :action-taken
    :action :sent-continue})
 
 (defn- send-choice!
-  "Helper to send choice command and return action-taken result"
+  "Helper to send choice command and return action-taken result.
+   Waits briefly for state to sync via WebSocket."
   [gameid choice-uuid choice-value]
   (ws/send-message! :game/action
                    {:gameid gameid
                     :command "choice"
                     :args {:choice {:uuid choice-uuid}}})
+  ;; Brief wait for WebSocket state update to arrive
+  (Thread/sleep 100)
   {:status :action-taken
    :action :auto-choice
    :choice choice-value})
