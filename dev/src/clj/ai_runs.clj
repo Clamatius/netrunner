@@ -612,6 +612,40 @@
           {:status :decision-required
            :prompt my-prompt})))))
 
+(defn handle-corp-fire-decision
+  "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision"
+  [{:keys [side run-phase my-prompt strategy state]}]
+  (when (and (= side "corp")
+             (= run-phase "encounter-ice")
+             my-prompt
+             (not (:fire-unbroken strategy)))
+    ;; Check if there are unbroken subs to fire
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          unbroken-subs (filter #(not (:broken %)) subroutines)]
+      (when (and current-ice (seq unbroken-subs))
+        (let [ice-title (:title current-ice "ICE")
+              sub-count (count unbroken-subs)
+              status-key [:corp-fire-decision position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "🛑 Fire decision: %s (%d unbroken sub%s)"
+                           ice-title sub-count (if (= sub-count 1) "" "s")))
+            (println "   → Use 'fire-subs <name>' to fire, or 'continue' to skip"))
+          {:status :decision-required
+           :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
+           :ice ice-title
+           :unbroken-count sub-count
+           :position position})))))
+
 (defn handle-runner-approach-ice
   "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE"
   [{:keys [side run-phase state]}]
@@ -803,6 +837,7 @@
                   handle-corp-rez-strategy
                   handle-corp-rez-decision   ; Corp rez decision without strategy
                   handle-corp-fire-unbroken
+                  handle-corp-fire-decision  ; Corp fire decision without strategy
                   handle-runner-approach-ice
                   handle-waiting-for-opponent
                   handle-real-decision
