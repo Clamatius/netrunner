@@ -784,8 +784,9 @@
         ;; Show playable icebreakers for Runner
         (when (= my-side "runner")
           (let [programs (get-in state [:game-state :runner :rig :program])
-                breakers (filter #(some (fn [st] (clojure.string/includes? (str st) "Icebreaker"))
-                                        (clojure.string/split (or (:subtype %) "") #" - "))
+                ;; Check :subtypes vector for "Icebreaker"
+                breakers (filter #(some (fn [st] (= (str st) "Icebreaker"))
+                                        (or (:subtypes %) []))
                                  programs)
                 playable-breakers (filter #(some :playable (:abilities %)) breakers)]
             (when (seq playable-breakers)
