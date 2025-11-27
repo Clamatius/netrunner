@@ -152,7 +152,25 @@
               (println "  Server:" (:server run-state))
               (println "  Phase:" (:phase run-state))
               (when-let [pos (:position run-state)]
-                (println "  Position:" pos)))
+                (println "  Position:" pos))
+              ;; Show ICE info during encounter-ice
+              (when (= "encounter-ice" (:phase run-state))
+                (let [server (:server run-state)
+                      position (:position run-state)
+                      ice-list (get-in gs [:corp :servers (keyword (last server)) :ices])
+                      ice-count (count ice-list)
+                      ice-index (when (and position (pos? position)) (- ice-count position))
+                      current-ice (when (and ice-index (>= ice-index 0) (< ice-index ice-count))
+                                    (nth ice-list ice-index nil))]
+                  (when (and current-ice (:rezzed current-ice))
+                    (let [ice-title (:title current-ice)
+                          ice-str (:strength current-ice)
+                          ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
+                          subs (:subroutines current-ice)
+                          unbroken (count (filter #(not (:broken %)) subs))]
+                      (println (format "  🧊 ICE: %s (str %s)" ice-title ice-str))
+                      (println (format "     Type: %s" ice-subtypes))
+                      (println (format "     Subs: %d unbroken of %d" unbroken (count subs))))))))
 
             (println "\n--- RUNNER ---")
             (println "Credits:" (state/runner-credits))
@@ -745,6 +763,39 @@
     (when (> facedown-count 0)
       (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
 
+(defn- show-encounter-ice-info
+  "Display ICE encounter info: current ICE and playable icebreakers"
+  [state run my-side]
+  (let [server (:server run)
+        position (:position run)
+        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+        ice-count (count ice-list)
+        ice-index (when (and position (pos? position)) (- ice-count position))
+        current-ice (when (and ice-index (>= ice-index 0) (< ice-index ice-count))
+                      (nth ice-list ice-index nil))]
+    (when (and current-ice (:rezzed current-ice))
+      (let [ice-title (:title current-ice)
+            ice-str (:strength current-ice)
+            ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
+            subs (:subroutines current-ice)
+            unbroken (count (filter #(not (:broken %)) subs))]
+        (println (format "  🧊 ICE: %s (str %s, %s)" ice-title ice-str ice-subtypes))
+        (println (format "     Subroutines: %d unbroken of %d" unbroken (count subs)))
+        ;; Show playable icebreakers for Runner
+        (when (= my-side "runner")
+          (let [programs (get-in state [:game-state :runner :rig :program])
+                breakers (filter #(some (fn [st] (clojure.string/includes? (str st) "Icebreaker"))
+                                        (clojure.string/split (or (:subtype %) "") #" - "))
+                                 programs)
+                playable-breakers (filter #(some :playable (:abilities %)) breakers)]
+            (when (seq playable-breakers)
+              (println "  💪 Icebreakers with playable abilities:")
+              (doseq [b playable-breakers]
+                (let [playable-abs (filter :playable (:abilities b))]
+                  (println (format "     • %s (str %s)" (:title b) (or (:current-strength b) (:strength b))))
+                  (doseq [ab playable-abs]
+                    (println (format "       → %s" (:label ab)))))))))))))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -776,9 +827,22 @@
                             (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")"))))))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
-          (println "  Action: Paid ability window")
-          (println "    → No choices required")
-          (println "    → Use 'continue' command to pass priority")))
+          (let [run (get-in state [:game-state :run])
+                run-phase (when run (:phase run))
+                my-side (clojure.string/lower-case (or side "runner"))]
+            (if run-phase
+              ;; Show run phase context
+              (do
+                (println (str "  Run Phase: " run-phase))
+                ;; During encounter-ice, show ICE and breaker info
+                (when (= run-phase "encounter-ice")
+                  (show-encounter-ice-info state run my-side))
+                (println "    → Use 'continue' to pass priority"))
+              ;; Not in a run
+              (do
+                (println "  Action: Paid ability window")
+                (println "    → No choices required")
+                (println "    → Use 'continue' command to pass priority"))))))
       (println "No active prompt"))))
 
 (defn show-card-text
