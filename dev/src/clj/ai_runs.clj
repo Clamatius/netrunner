@@ -431,6 +431,36 @@
       (println "⚠️  No active run detected")
       {:status :no-run})))
 
+(defn handle-access-display
+  "Display accessed cards during run - returns nil to allow auto-continue.
+   This handler prints access info but doesn't stop the run automation."
+  [{:keys [my-prompt side]}]
+  ;; Display access info but always return nil to continue processing
+  (when (and my-prompt
+             (= side "runner")
+             (or (= (:prompt-type my-prompt) "other")
+                 (= (:prompt-type my-prompt) "access")))
+    (let [msg (:msg my-prompt)
+          card-title (get-in my-prompt [:card :title])]
+      ;; Check for "You accessed" pattern
+      (when (and msg (clojure.string/starts-with? (str msg) "You accessed"))
+        (let [status-key [:access-display msg]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println "")
+            (println (format "📋 %s" msg))
+            (when card-title
+              (println (format "   Card: %s" card-title)))
+            ;; Show choices if any (e.g., "Steal", "Pay to trash")
+            (when-let [choices (:choices my-prompt)]
+              (when (> (count choices) 1)
+                (println "   Options:")
+                (doseq [[idx choice] (map-indexed vector choices)]
+                  (println (format "     %d. %s" idx (:value choice)))))))))))
+  ;; Always return nil - let subsequent handlers (auto-choice/auto-continue) handle it
+  nil)
+
 (defn handle-auto-choice
   "Priority 5: Auto-handle single mandatory choice"
   [{:keys [my-prompt gameid]}]
@@ -646,6 +676,39 @@
            :unbroken-count sub-count
            :position position})))))
 
+(defn handle-paid-ability-window
+  "Priority 1.8: General handler for paid ability windows in ALL phases.
+   Detects when we've passed priority but opponent hasn't yet.
+   This enables AI-to-AI coordination without LLM turns.
+
+   The :no-action field in run state tracks who has passed:
+   - nil/false: No one has passed yet (active player should act or pass)
+   - \"runner\": Runner passed, Corp has priority
+   - \"corp\": Corp passed, Runner has priority
+   - When both pass, phase advances and :no-action resets"
+  [{:keys [side run-phase state]}]
+  (let [run (get-in state [:game-state :run])
+        no-action (:no-action run)
+        my-side side
+        opp-side (if (= side "runner") "corp" "runner")
+        ;; Check if we've passed (no-action equals our side)
+        we-passed? (= no-action my-side)
+        ;; Check if opponent passed (no-action equals their side)
+        opp-passed? (= no-action opp-side)]
+    ;; Only pause if WE have passed but opponent hasn't yet
+    ;; This creates the "baton pass" for AI-to-AI coordination
+    (when (and we-passed? (not opp-passed?))
+      (let [status-key [:waiting-for-opponent-paid-ability run-phase my-side]
+            already-printed? (= @last-waiting-status status-key)]
+        (when-not already-printed?
+          (reset! last-waiting-status status-key)
+          (println (format "⏸️  Waiting for %s paid abilities (%s phase)"
+                          (clojure.string/capitalize opp-side) run-phase)))
+        {:status :waiting-for-opponent-paid-abilities
+         :message (format "Waiting for %s to pass or use paid abilities" opp-side)
+         :phase run-phase
+         :we-passed true}))))
+
 (defn handle-runner-approach-ice
   "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE"
   [{:keys [side run-phase state]}]
@@ -682,6 +745,42 @@
        :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
        :ice ice-title
        :position position})))
+
+(defn handle-runner-encounter-ice
+  "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision"
+  [{:keys [side run-phase state]}]
+  (when (and (= side "runner")
+             (= run-phase "encounter-ice"))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          ;; Subs that haven't been broken AND haven't fired yet
+          unfired-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ;; Check if Corp has already declined to fire (no-action)
+          no-action (:no-action run)
+          corp-passed? (= no-action "corp")]
+      ;; Only wait if ICE is rezzed, has unfired subs, and Corp hasn't passed yet
+      (when (and current-ice (:rezzed current-ice) (seq unfired-subs) (not corp-passed?))
+        (let [ice-title (:title current-ice "ICE")
+              sub-count (count unfired-subs)
+              status-key [:waiting-for-corp-fire position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          ;; Only print once
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
+                           ice-title sub-count (if (= sub-count 1) "" "s"))))
+          {:status :waiting-for-corp-fire
+           :message (format "Waiting for Corp to fire subs on %s or pass" ice-title)
+           :ice ice-title
+           :unbroken-count sub-count
+           :position position})))))
 
 (defn handle-events
   "Priority 4: Pause for important events (rez, abilities, subs, damage)"
@@ -838,10 +937,13 @@
                   handle-corp-rez-decision   ; Corp rez decision without strategy
                   handle-corp-fire-unbroken
                   handle-corp-fire-decision  ; Corp fire decision without strategy
+                  handle-paid-ability-window ; Wait after passing in any phase
                   handle-runner-approach-ice
+                  handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
                   handle-waiting-for-opponent
                   handle-real-decision
                   handle-events
+                  handle-access-display      ; Display accessed cards (returns nil to continue)
                   handle-auto-choice
                   handle-auto-continue
                   handle-run-complete
@@ -868,7 +970,9 @@
   "Returns true if this status should stop the auto-continue loop"
   [status]
   (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
-               :tag-or-damage :run-complete :no-run}
+               :tag-or-damage :run-complete :no-run
+               :waiting-for-corp-rez :waiting-for-corp-fire
+               :waiting-for-opponent-paid-abilities}
              status))
 
 (defn- should-pause-for-event?

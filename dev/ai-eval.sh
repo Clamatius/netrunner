@@ -74,19 +74,24 @@ if command -v bb &> /dev/null; then
                   (when-let [val (get response \"value\")]
                     (let [val-str (bytes->str val)]
                       (print val-str)
+                      (flush)
                       (reset! result-value val-str)))
                   (when-let [out-msg (get response \"out\")]
-                    (print (bytes->str out-msg)))
+                    (print (bytes->str out-msg))
+                    (flush))
                   (when-let [err (get response \"err\")]
                     (binding [*out* *err*]
-                      (print (bytes->str err))))
+                      (print (bytes->str err))
+                      (flush)))
                   (when-let [ex (get response \"ex\")]
                     (binding [*out* *err*]
-                      (println (str \"Exception: \" (bytes->str ex))))
+                      (println (str \"Exception: \" (bytes->str ex)))
+                      (flush))
                     (reset! result-value :error))
                   (when-let [root-ex (get response \"root-ex\")]
                     (binding [*out* *err*]
-                      (println (str \"Root Exception: \" (bytes->str root-ex))))
+                      (println (str \"Root Exception: \" (bytes->str root-ex)))
+                      (flush))
                     (reset! result-value :error))
                   (when-not (get response \"status\")
                     (recur))))
