@@ -46,11 +46,15 @@
     (.printStackTrace e)
     (throw e)))
 
-;; Also make these available in user namespace for easier access
+;; Make these available in user namespace for easier access
 (in-ns 'user)
+(require '[ai-state :as state])
 (require '[ai-websocket-client-v2 :as ws])
+(require '[ai-actions])
 (require '[ai-actions :as ai])
-(in-ns 'ai-client-init)
+
+;; Stay in user namespace so evals work correctly
+;; (REPL evals will be in whatever namespace is current when init finishes)
 
 (println "Setting client id")
 ;; Set client-id from environment variable or use default
