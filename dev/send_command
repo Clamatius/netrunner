@@ -182,8 +182,8 @@ ${GREEN}Runner Actions:${NC}
   let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
 
 ${GREEN}Run Automation:${NC}
-  continue-run [flags] - Smart run handler (auto-continues both players, stops at decisions)
-  monitor-run [flags]  - Corp: auto-pass boring windows during a run (like continue-run for Corp)
+  continue-run [flags] - Take one run step (either side), returns when action taken or decision needed
+  monitor-run [flags]  - Loop calling continue-run until run ends or decision needed (either side)
 
   ${BLUE}Run Flags:${NC} (usable with run, continue-run, monitor-run)
     --no-rez         Corp: don't rez any ICE (auto-decline all rez windows)
