@@ -25,12 +25,13 @@
   1. `handle-corp-fire-unbroken` required `my-prompt` but Corp has no prompt during encounter-ice
   2. `continue --flag` didn't route to `continue-run` handler (now it does)
 
-### 2. Premature Rez Timing (Turn 2 HQ Run)
+### 2. Premature Rez Timing (Turn 2 HQ Run) ✅ FIXED
 **What happened**: AI rezzed Tithe before runner formally approached the ICE
 **Game log shows**: Subs fired at 5:23:57, but approach happened at 5:24:04
 **Result**: Subs fired twice (once premature, once during proper encounter)
 **Root cause**: AI didn't wait for approach-ice phase before rezzing
 **Priority**: MEDIUM - affects run flow
+**Fix**: `rez-card!` now validates run phase - ICE can only be rezzed during approach-ice
 
 ### 3. Seamless Launch Misplay (Turn 8)
 **What happened**: Played Seamless Launch on same-turn installed agenda
@@ -40,11 +41,14 @@
 **Lesson**: Should parse card text for timing restrictions
 **Priority**: LOW - player error, not system bug
 
-### 4. Multiple Continues Required for Run Progression
+### 4. Multiple Continues Required for Run Progression ✅ FIXED
 **Symptom**: Single `continue` often returned `nil` without advancing phase
 **Workaround**: Had to call `continue` multiple times and check `status` repeatedly
 **Impact**: Tedious manual progression
 **Priority**: MEDIUM - UX issue
+**Fix**: Consolidated UX - `continue` now defaults to loop mode (auto-continues until
+decision required). Use `continue --single` for single-step debugging. The old
+`continue-run` and `monitor-run` are now aliases.
 
 ### 5. Whitespace Subs Required Explicit Fire ✅ FIXED
 **Turn 10**: Runner let Whitespace subs fire, but AI had to call `fire-subs "Whitespace"` explicitly

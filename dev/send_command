@@ -182,10 +182,11 @@ ${GREEN}Runner Actions:${NC}
   let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
 
 ${GREEN}Run Automation:${NC}
-  continue-run [flags] - Take one run step (either side), returns when action taken or decision needed
-  monitor-run [flags]  - Loop calling continue-run until run ends or decision needed (either side)
+  continue [flags]     - Auto-continue until decision required (see Prompts section)
+  continue-run [flags] - (alias for 'continue --single') Single-step mode
+  monitor-run [flags]  - (alias for 'continue') Loop mode
 
-  ${BLUE}Run Flags:${NC} (usable with run, continue-run, monitor-run)
+  ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE (auto-decline all rez windows)
     --rez <name>     Corp: only rez ICE matching <name>, decline others
     --fire-unbroken  Corp: auto-fire unbroken subroutines
@@ -197,7 +198,9 @@ ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   choose-card <N> - Choose card N from select prompt (for card-targeting effects)
-  continue        - Continue/pass priority (for paid ability windows, run phases)
+  continue [flags] - Auto-continue until decision required (default: loop mode)
+                     --single  Single-step mode (one action, then return)
+                     --raw     Raw WebSocket pass (debugging only)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
@@ -699,17 +702,18 @@ case "$COMMAND" in
 
     continue)
         ensure_connection
-        # If any --flags passed, route to continue-run instead (better UX)
-        if [[ "$1" == --* ]]; then
-            info "Detected flags - using continue-run handler..."
+        # Modes: --single (one step), --raw (dumb WebSocket), default is loop
+        if [[ "${1:-}" == "--single" ]]; then
+            shift
+            info "Single-step mode..."
             FLAGS_ARGS=""
             while [[ $# -gt 0 ]]; do
                 FLAGS_ARGS="$FLAGS_ARGS \"$1\""
                 shift
             done
             execute "(ai-actions/continue-run!$FLAGS_ARGS)"
-        else
-            info "Passing priority (continue)..."
+        elif [[ "${1:-}" == "--raw" ]]; then
+            info "Raw mode - direct WebSocket continue..."
             execute '(do
                       (require (quote [ai-state :as state]))
                       (require (quote [ai-websocket-client-v2 :as ws]))
@@ -722,34 +726,43 @@ case "$COMMAND" in
                            :command "continue"
                            :args nil})
                         (Thread/sleep 1000)))'
+        else
+            # Default: loop mode (auto-continue until decision)
+            # Strip --loop if present (for backwards compat)
+            [[ "${1:-}" == "--loop" ]] && shift
+            FLAGS_ARGS=""
+            while [[ $# -gt 0 ]]; do
+                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                shift
+            done
+            info "Continuing until decision required..."
+            execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
         fi
         show_last_log_if_enabled
         ;;
 
     continue-run)
+        # Alias for 'continue --single' (single-step mode)
         ensure_connection
-        # Build flag arguments for varargs call
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do
             FLAGS_ARGS="$FLAGS_ARGS \"$1\""
             shift
         done
-
-        info "Auto-handling run (both players)..."
+        info "Single-step mode (continue-run is alias for 'continue --single')..."
         execute "(ai-actions/continue-run!$FLAGS_ARGS)"
         show_last_log_if_enabled
         ;;
 
     monitor-run)
+        # Alias for 'continue' (loop mode is now default)
         ensure_connection
-        # Build flag arguments for varargs call
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do
             FLAGS_ARGS="$FLAGS_ARGS \"$1\""
             shift
         done
-
-        info "Monitoring run (Corp: auto-pass boring windows)..."
+        info "Loop mode (monitor-run is alias for 'continue')..."
         execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
         show_last_log_if_enabled
         ;;

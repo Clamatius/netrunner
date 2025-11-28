@@ -316,6 +316,8 @@
 
    Supports [N] suffix for multiple copies: \"Palisade [1]\"
 
+   Phase validation: ICE can only be rezzed during approach-ice phase.
+
    Usage: (rez-card! \"Prisec\")
           (rez-card! \"Palisade [1]\")"
   [card-name]
@@ -328,19 +330,36 @@
         (if card
           (let [gameid (:gameid client-state)
                 card-ref (core/create-card-ref card)
-                rez-cost (:cost card)]
-            (ws/send-message! :game/action
-                              {:gameid gameid
-                               :command "rez"
-                               :args {:card card-ref}})
-            ;; Wait and verify action appeared in log
-            (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
-              (let [after-state @state/client-state
-                    after-credits (get-in after-state [:game-state :corp :credit])]
-                (println (str "🔴 Rezzed: " card-name))
-                (when rez-cost
-                  (println (str "   💰 Cost: " rez-cost "₵ (remaining: " after-credits "₵)"))))
-              (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))
+                rez-cost (:cost card)
+                card-type (:type card)
+                ;; Phase validation for ICE rez
+                run (get-in client-state [:game-state :run])
+                run-phase (when run
+                            (or (:phase run)
+                                (some-> run :run-phase name)))
+                ;; ICE can only be rezzed during approach-ice
+                is-ice? (= card-type "ICE")
+                valid-ice-rez? (or (not is-ice?)
+                                   (nil? run)  ; No run = shouldn't happen but allow
+                                   (= run-phase "approach-ice"))]
+            (if (not valid-ice-rez?)
+              (do
+                (println (format "❌ Cannot rez ICE during %s phase" (or run-phase "this")))
+                (println "   → ICE can only be rezzed during approach-ice phase")
+                nil)
+              (do
+                (ws/send-message! :game/action
+                                  {:gameid gameid
+                                   :command "rez"
+                                   :args {:card card-ref}})
+                ;; Wait and verify action appeared in log
+                (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
+                  (let [after-state @state/client-state
+                        after-credits (get-in after-state [:game-state :corp :credit])]
+                    (println (str "🔴 Rezzed: " card-name))
+                    (when rez-cost
+                      (println (str "   💰 Cost: " rez-cost "₵ (remaining: " after-credits "₵)"))))
+                  (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
 (defn let-subs-fire!
