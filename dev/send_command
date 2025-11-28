@@ -699,19 +699,30 @@ case "$COMMAND" in
 
     continue)
         ensure_connection
-        info "Passing priority (continue)..."
-        execute '(do
-                  (require (quote [ai-state :as state]))
-                  (require (quote [ai-websocket-client-v2 :as ws]))
-                  (let [s @state/client-state
-                        gameid (:gameid s)]
-                    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                 (java.util.UUID/fromString gameid)
-                                 gameid)
-                       :command "continue"
-                       :args nil})
-                    (Thread/sleep 1000)))'
+        # If any --flags passed, route to continue-run instead (better UX)
+        if [[ "$1" == --* ]]; then
+            info "Detected flags - using continue-run handler..."
+            FLAGS_ARGS=""
+            while [[ $# -gt 0 ]]; do
+                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                shift
+            done
+            execute "(ai-actions/continue-run!$FLAGS_ARGS)"
+        else
+            info "Passing priority (continue)..."
+            execute '(do
+                      (require (quote [ai-state :as state]))
+                      (require (quote [ai-websocket-client-v2 :as ws]))
+                      (let [s @state/client-state
+                            gameid (:gameid s)]
+                        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                     (java.util.UUID/fromString gameid)
+                                     gameid)
+                           :command "continue"
+                           :args nil})
+                        (Thread/sleep 1000)))'
+        fi
         show_last_log_if_enabled
         ;;
 

@@ -618,11 +618,14 @@
            :position position})))))
 
 (defn handle-corp-fire-unbroken
-  "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs"
-  [{:keys [side run-phase my-prompt strategy state gameid]}]
+  "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs.
+
+   Bug fix: Removed my-prompt requirement. During encounter-ice phase,
+   Corp often has no prompt-state - just a paid ability window where
+   firing subs is available as an action, not a prompt choice."
+  [{:keys [side run-phase strategy state gameid]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice")
-             my-prompt
              (:fire-unbroken strategy))
     (let [run (get-in state [:game-state :run])
           server (:server run)
@@ -632,10 +635,28 @@
           ice-index (- ice-count position)
           current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                         (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")]
-      (if current-ice
+          ice-title (:title current-ice "ICE")
+          ;; Check for unbroken, unfired subs
+          subroutines (:subroutines current-ice)
+          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
+      (cond
+        ;; No ICE found at position
+        (nil? current-ice)
         (do
-          (println (format "🤖 Strategy: --fire-unbroken, firing subs on %s" ice-title))
+          (println "⚠️  --fire-unbroken: no ICE at current position")
+          nil)  ; Let other handlers try
+
+        ;; No unbroken subs to fire
+        (empty? unbroken-subs)
+        (do
+          (println (format "   → All subs already broken/fired on %s" ice-title))
+          nil)  ; Let other handlers continue (auto-continue will pass)
+
+        ;; Fire the unbroken subs!
+        :else
+        (do
+          (println (format "🤖 Strategy: --fire-unbroken, firing %d sub(s) on %s"
+                          (count unbroken-subs) ice-title))
           (let [card-ref (core/create-card-ref current-ice)]
             (ws/send-message! :game/action
                              {:gameid gameid
@@ -643,11 +664,8 @@
                               :args {:card card-ref}})
             {:status :action-taken
              :action :auto-fired-subs
-             :ice ice-title}))
-        (do
-          (println "⚠️  Could not find ICE for fire-unbroken")
-          {:status :decision-required
-           :prompt my-prompt})))))
+             :ice ice-title
+             :sub-count (count unbroken-subs)}))))))
 
 (defn handle-corp-fire-decision
   "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision"
