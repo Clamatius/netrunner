@@ -622,6 +622,10 @@
             (Thread/sleep core/short-delay)
             (recur (inc checks))))))))
 
+;; ============================================================================
+;; Access Prompt Display
+;; ============================================================================
+
 (defn- access-prompt?
   "Detect if prompt is an access prompt by checking for 'steal' or 'trash' keywords"
   [prompt]
@@ -646,6 +650,7 @@
   [prompt]
   (let [msg (:msg prompt)
         card-name (extract-card-name msg)
+        _ (when card-name (core/show-card-on-first-sight! card-name))  ; Show text on first access
         card-data (when card-name (get @all-cards card-name))
         choices (:choices prompt)
         has-steal? (some #(str/includes?

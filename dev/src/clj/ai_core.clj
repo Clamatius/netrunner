@@ -686,3 +686,34 @@
   "Return the opposite side"
   [side]
   (if (= side "runner") "corp" "runner"))
+
+;; ============================================================================
+;; First-Seen Card Display
+;; ============================================================================
+
+(defn show-card-on-first-sight!
+  "Display card text if this is the first time seeing it this session.
+   Returns true if card was shown, false/nil if already seen or not found."
+  [card-title]
+  (when (and card-title (state/first-time-seeing? card-title))
+    (load-cards-from-api!)
+    (when-let [card (get @all-cards card-title)]
+      (let [card-type (:type card)
+            cost (:cost card)
+            text (or (:text card) "")
+            ;; Clean text: remove HTML tags, collapse whitespace
+            clean-text (-> text
+                          (clojure.string/replace #"<[^>]+>" "")
+                          (clojure.string/replace #"\s+" " ")
+                          clojure.string/trim)]
+        (println (format "   📖 %s [%s%s]%s"
+                        card-title
+                        card-type
+                        (if cost (str ", " cost "¢") "")
+                        (if (not-empty clean-text)
+                          (str ": " (if (> (count clean-text) 150)
+                                      (str (subs clean-text 0 147) "...")
+                                      clean-text))
+                          "")))
+        (state/mark-card-seen! card-title)
+        true))))

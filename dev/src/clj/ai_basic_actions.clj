@@ -293,6 +293,7 @@
             card-title (get new-card :title "Unknown")]
         (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
         (println (str "   Drew: " card-title))
+        (core/show-card-on-first-sight! card-title)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (check-auto-end-turn!)
         nil))

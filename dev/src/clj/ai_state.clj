@@ -455,3 +455,26 @@
   "Clear staleness indicators after successful resync"
   []
   (swap! client-state dissoc :diff-mismatch))
+
+;; ============================================================================
+;; Seen Cards Tracking
+;; ============================================================================
+;; Track which card titles have been shown to the user this session.
+;; On first encounter, display card text. Subsequent encounters are silent.
+
+(defonce seen-cards (atom #{}))
+
+(defn first-time-seeing?
+  "Returns true if this card title hasn't been displayed yet this session."
+  [card-title]
+  (not (contains? @seen-cards card-title)))
+
+(defn mark-card-seen!
+  "Mark a card title as having been displayed."
+  [card-title]
+  (swap! seen-cards conj card-title))
+
+(defn reset-seen-cards!
+  "Reset seen cards tracking (e.g., for new game session)."
+  []
+  (reset! seen-cards #{}))
