@@ -289,6 +289,18 @@
         (let [choices (:choices corp-prompt)]
           (some #(clojure.string/includes? (:value % "") "Rez") choices))))))
 
+(defn is-waiting-prompt?
+  "True if prompt is just a 'waiting' type prompt with no real decisions"
+  [prompt]
+  (and prompt
+       (= (:prompt-type prompt) "waiting")))
+
+(defn has-actionable-prompt?
+  "True if we have a real prompt (not just 'waiting')"
+  [prompt]
+  (and prompt
+       (not (is-waiting-prompt? prompt))))
+
 (defn waiting-for-opponent?
   "True if my side is waiting for opponent to make a decision"
   [state side]
@@ -296,7 +308,9 @@
         my-prompt (get-in state [:game-state (keyword side) :prompt-state])
         opp-side (core/other-side side)
         opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])
-        during-run? (some? run-phase)]
+        during-run? (some? run-phase)
+        ;; Treat "waiting" prompts as if we have no prompt
+        my-real-prompt? (has-actionable-prompt? my-prompt)]
 
     (cond
       ;; CRITICAL: Opponent pressed WAIT button - ALWAYS pause
@@ -306,30 +320,29 @@
       ;; Runner waiting for corp rez decision
       (and (= side "runner")
            (= run-phase "approach-ice")
-           (not my-prompt)  ; Runner has no prompt
+           (not my-real-prompt?)  ; Runner has no real prompt
            (corp-has-rez-opportunity? state))
       true
 
-      ;; Corp waiting for runner break decision
+      ;; Corp waiting for runner break decision or other real decision
       (and (= side "corp")
            (= run-phase "encounter-ice")
-           (not my-prompt)
+           (not my-real-prompt?)
            (has-real-decision? opp-prompt))
       true
 
       ;; During run, only wait if opponent has a REAL decision
       ;; (not just empty paid ability windows that they'll auto-pass)
-      ;; The critical phases (approach-ice rez, encounter-ice break) are handled above
       (and during-run?
            opp-prompt
            (has-real-decision? opp-prompt)
-           (not my-prompt))
+           (not my-real-prompt?))
       true
 
       ;; Generally waiting if opponent has real decision and I don't
       (and opp-prompt
            (has-real-decision? opp-prompt)
-           (not my-prompt))
+           (not my-real-prompt?))
       true
 
       :else
@@ -352,15 +365,22 @@
       "Waiting for opponent action")))
 
 (defn can-auto-continue?
-  "True if can safely auto-continue (empty paid ability window, no decisions)"
-  [prompt run-phase side]
+  "True if can safely auto-continue (empty paid ability window, no decisions).
+   Now takes state to check ICE rezzed status."
+  [prompt run-phase side state]
   (and prompt
        (= (:prompt-type prompt) "run")
        (empty? (:choices prompt))
        (empty? (:selectable prompt))
-       ;; Approach-ice: Corp needs explicit rez decision (handled by other handlers)
+       ;; Approach-ice: Corp needs explicit rez decision UNLESS ICE is already rezzed
        ;; Encounter-ice: Runner with no choices (no icebreaker) can auto-continue
-       (not (and (= run-phase "approach-ice") (= side "corp")))))
+       (let [corp-approach-unrezzed?
+             (and (= run-phase "approach-ice")
+                  (= side "corp")
+                  ;; Check if current ICE is unrezzed
+                  (let [current-ice (get-current-ice state)]
+                    (and current-ice (not (:rezzed current-ice)))))]
+         (not corp-approach-unrezzed?))))
 
 ;; ============================================================================
 ;; Handler Functions for continue-run! Strategy Pattern
@@ -481,8 +501,8 @@
 
 (defn handle-auto-continue
   "Priority 6: Auto-continue through boring paid ability windows"
-  [{:keys [my-prompt run-phase gameid side]}]
-  (when (can-auto-continue? my-prompt run-phase side)
+  [{:keys [my-prompt run-phase gameid side state]}]
+  (when (can-auto-continue? my-prompt run-phase side state)
     (println "   → Auto-continuing through paid ability window")
     (send-continue! gameid)))
 
@@ -508,12 +528,17 @@
         ;; Corp should wait during success phase (can't see runner's prompt)
         corp-waiting-for-access? (and (= side "corp")
                                       (= run-phase "success")
-                                      (not (has-real-decision? my-prompt)))]
+                                      (not (has-real-decision? my-prompt)))
+        ;; If we have a "waiting" type prompt, we're explicitly waiting for opponent
+        ;; This handles cases where we can't see opponent's prompt (client isolation)
+        has-waiting-prompt? (is-waiting-prompt? my-prompt)]
     (when (or (waiting-for-opponent? state side)
-              corp-waiting-for-access?)
-      (let [reason (if corp-waiting-for-access?
-                     "Runner resolving access"
-                     (waiting-reason state side))
+              corp-waiting-for-access?
+              has-waiting-prompt?)
+      (let [reason (cond
+                     corp-waiting-for-access? "Runner resolving access"
+                     has-waiting-prompt? (or (:msg my-prompt) "Waiting for opponent decision")
+                     :else (waiting-reason state side))
             status-key [:waiting-for-opponent reason]
             already-printed? (= @last-waiting-status status-key)]
         (when-not already-printed?
@@ -622,7 +647,11 @@
 
    Bug fix: Removed my-prompt requirement. During encounter-ice phase,
    Corp often has no prompt-state - just a paid ability window where
-   firing subs is available as an action, not a prompt choice."
+   firing subs is available as an action, not a prompt choice.
+
+   Bug fix #2: Track fired position to prevent infinite loop.
+   The server doesn't sync :fired flag on subroutines, so we track
+   whether we've already fired at this position in this encounter."
   [{:keys [side run-phase strategy state gameid]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice")
@@ -630,16 +659,21 @@
     (let [run (get-in state [:game-state :run])
           server (:server run)
           position (:position run)
+          ;; Check if we already fired at this position (prevent infinite loop)
+          already-fired-here? (= (:fired-at-position strategy) position)
           ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
           ice-count (count ice-list)
           ice-index (- ice-count position)
           current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                         (nth ice-list ice-index nil))
           ice-title (:title current-ice "ICE")
-          ;; Check for unbroken, unfired subs
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
+          unbroken-subs (filter #(not (:broken %)) subroutines)]
       (cond
+        ;; Already fired at this position - don't fire again
+        already-fired-here?
+        nil  ; Let other handlers try (auto-continue will pass priority)
+
         ;; No ICE found at position
         (nil? current-ice)
         (do
@@ -648,15 +682,15 @@
 
         ;; No unbroken subs to fire
         (empty? unbroken-subs)
-        (do
-          (println (format "   → All subs already broken/fired on %s" ice-title))
-          nil)  ; Let other handlers continue (auto-continue will pass)
+        nil  ; Let other handlers continue (auto-continue will pass)
 
         ;; Fire the unbroken subs!
         :else
         (do
           (println (format "🤖 Strategy: --fire-unbroken, firing %d sub(s) on %s"
                           (count unbroken-subs) ice-title))
+          ;; Mark that we've fired at this position
+          (set-strategy! {:fired-at-position position})
           (let [card-ref (core/create-card-ref current-ice)]
             (ws/send-message! :game/action
                              {:gameid gameid
@@ -997,7 +1031,9 @@
   (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
                :tag-or-damage :run-complete :no-run
                :waiting-for-corp-rez :waiting-for-corp-fire
-               :waiting-for-opponent-paid-abilities}
+               :waiting-for-opponent-paid-abilities
+               ;; Stop when opponent has a real decision (not just priority passing)
+               :waiting-for-opponent}
              status))
 
 (defn- should-pause-for-event?
