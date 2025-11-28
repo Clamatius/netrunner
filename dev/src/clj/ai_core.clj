@@ -459,16 +459,22 @@
    - 'rd', 'r&d', 'R&D' → 'R&D'
    - 'archives', 'Archives' → 'Archives'
    - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
+   - 'new', 'remotenew', 'server new' → 'New' (first remote before renumbering)
 
    Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
   [server-input]
   (let [s (clojure.string/lower-case (clojure.string/trim server-input))
         remote-pattern #"(?:remote|r|server)\s*(\d+)"
+        ;; Pattern for 'new' server: new, remotenew, remote new, servernew, server new
+        new-pattern #"(?:remote\s*|server\s*)?new"
         normalized (cond
                      ;; Central servers
                      (= s "hq") "HQ"
                      (or (= s "rd") (= s "r&d")) "R&D"
                      (= s "archives") "Archives"
+
+                     ;; 'New' server (first remote before it gets numbered)
+                     (re-matches new-pattern s) "New"
 
                      ;; Remote servers - handle various formats
                      ;; remote1, remote 1, r1, server1, server 1 → Server 1
