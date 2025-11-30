@@ -366,12 +366,18 @@
 
 (defn can-auto-continue?
   "True if can safely auto-continue (empty paid ability window, no decisions).
-   Now takes state to check ICE rezzed status."
+   Now takes state to check ICE rezzed status and priority passing."
   [prompt run-phase side state]
   (and prompt
        (= (:prompt-type prompt) "run")
        (empty? (:choices prompt))
        (empty? (:selectable prompt))
+       ;; Don't auto-continue if we've already passed priority
+       ;; (waiting for opponent to pass - handle-paid-ability-window handles that)
+       (let [run (get-in state [:game-state :run])
+             no-action (:no-action run)
+             already-passed? (= no-action side)]
+         (not already-passed?))
        ;; Approach-ice: Corp needs explicit rez decision UNLESS ICE is already rezzed
        ;; Encounter-ice: Runner with no choices (no icebreaker) can auto-continue
        (let [corp-approach-unrezzed?

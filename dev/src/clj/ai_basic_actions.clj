@@ -384,6 +384,17 @@
         (println "💡 Review agendas and score if able, then manually end turn")
         (flush))
 
+      ;; Has prompt blocking - notify user
+      (and (= clicks 0)
+           prompt
+           (not already-ended?))
+      (do
+        (println "")
+        (println "⚠️  Cannot auto-end turn: Active prompt must be resolved first")
+        (println (format "   Prompt: %s" (:msg prompt)))
+        (println "💡 Use 'prompt' command to see choices, or 'choose' to respond")
+        (flush))
+
       ;; Safe to auto-end
       (and (= clicks 0)
            (nil? prompt)

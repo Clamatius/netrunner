@@ -98,6 +98,38 @@
      (clojure.string/lower-case (or actual-side ""))))
 
 ;; ============================================================================
+;; Error Response Helpers
+;; ============================================================================
+
+(defn get-active-prompt-summary
+  "Get a brief summary of the active prompt, if any.
+   Returns nil if no prompt, or a map with :msg and :type"
+  []
+  (let [side (:side @state/client-state)
+        prompt (get-in @state/client-state [:game-state (keyword side) :prompt-state])]
+    (when prompt
+      {:msg (:msg prompt)
+       :type (:prompt-type prompt)
+       :card-title (get-in prompt [:card :title])
+       :choices-count (count (:choices prompt))})))
+
+(defn with-prompt-hint
+  "Enriches an error result with active prompt info if present.
+   If result is an error and there's an active prompt, adds :active-prompt key
+   and prints a hint to the user.
+
+   Usage: (with-prompt-hint {:status :error :reason \"something failed\"})"
+  [result]
+  (if (and (= :error (:status result))
+           (get-active-prompt-summary))
+    (let [prompt-summary (get-active-prompt-summary)]
+      (println (format "💡 Note: There's an active prompt: %s"
+                      (or (:msg prompt-summary) "Unknown")))
+      (println "   Use 'prompt' to see details, or resolve it before retrying")
+      (assoc result :active-prompt prompt-summary))
+    result))
+
+;; ============================================================================
 ;; Card Database Management
 ;; ============================================================================
 
@@ -316,7 +348,7 @@
 
 (defn- server-name->key
   "Convert server name string to keyword for state lookup.
-   'Server 1' -> :remote1, 'HQ' -> :hq, etc."
+   'Server 1' -> :remote1, 'HQ' -> :hq, 'New' -> :remoteNew, etc."
   [server-name]
   (when server-name
     (let [lower (clojure.string/lower-case server-name)]
@@ -324,6 +356,8 @@
         (= lower "hq") :hq
         (= lower "r&d") :rd
         (= lower "archives") :archives
+        ;; Handle "New" server (first remote before renumbering)
+        (= lower "new") :remoteNew
         (re-matches #"server \d+" lower)
         (keyword (str "remote" (second (re-find #"server (\d+)" lower))))
         (re-matches #"remote\d+" lower)

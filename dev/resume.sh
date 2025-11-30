@@ -99,7 +99,8 @@ if [ -z "$GAME_ID" ]; then
 
     if lsof -i :$CLIENT_PORT > /dev/null 2>&1; then
         # Get list of active game IDs
-        GAME_LIST=$(TIMEOUT=10 "$SCRIPT_DIR/send_command" runner list-game-ids 2>/dev/null | grep -E '^[0-9a-f-]{36}$' || true)
+        # Handle both raw UUIDs and #uuid "..." Clojure format
+        GAME_LIST=$(TIMEOUT=10 "$SCRIPT_DIR/send_command" runner list-game-ids 2>/dev/null | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || true)
 
         if [ -z "$GAME_LIST" ]; then
             echo "❌ No active games found on server" | tee -a "$LOG_FILE"
