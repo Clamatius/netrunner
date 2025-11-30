@@ -501,10 +501,7 @@
         (if card
           (if (= "Agenda" (:type card))
             (let [gameid (:gameid client-state)
-                  card-ref {:cid (:cid card)
-                           :zone (:zone card)
-                           :side (:side card)
-                           :type (:type card)}
+                  card-ref (core/create-card-ref card)
                   agenda-points (:agendapoints card)]
               (ws/send-message! :game/action
                                 {:gameid gameid

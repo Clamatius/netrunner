@@ -452,7 +452,8 @@
   {:cid (:cid card)
    :zone (:zone card)
    :side (:side card)
-   :type (:type card)})
+   :type (:type card)
+   :title (:title card)})
 
 (defn find-installed-card
   "Find an installed card by title in the rig
