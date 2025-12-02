@@ -373,11 +373,19 @@
        (empty? (:choices prompt))
        (empty? (:selectable prompt))
        ;; Don't auto-continue if we've already passed priority
-       ;; (waiting for opponent to pass - handle-paid-ability-window handles that)
+       ;; Trust :no-action state if set; only use log as backup when :no-action is nil/false
        (let [run (get-in state [:game-state :run])
              no-action (:no-action run)
-             already-passed? (= no-action side)]
-         (not already-passed?))
+             already-passed-by-state? (= no-action side)
+             ;; Only check log if :no-action is nil/false (server didn't set it)
+             ;; This prevents stale log entries from blocking auto-continue
+             recently-passed-in-log? (when-not no-action
+                                       (let [log (get-in state [:game-state :log])
+                                             recent-entries (take 3 (reverse log))
+                                             side-name (if (= side "runner") "AI-runner" "AI-corp")
+                                             passed-pattern (re-pattern (str side-name " has no further action"))]
+                                         (some #(re-find passed-pattern (str (:text %))) recent-entries)))]
+         (not (or already-passed-by-state? recently-passed-in-log?)))
        ;; Approach-ice: Corp needs explicit rez decision UNLESS ICE is already rezzed
        ;; Encounter-ice: Runner with no choices (no icebreaker) can auto-continue
        (let [corp-approach-unrezzed?
@@ -504,6 +512,32 @@
           choice-uuid (:uuid choice)]
       (println (format "   Auto-choosing: %s" (:value choice)))
       (send-choice! gameid choice-uuid (:value choice)))))
+
+(defn handle-recently-passed-in-log
+  "Priority 5.5: Detect when we've passed via game log (backup for :no-action).
+   Only triggers when :no-action is nil/false - prevents stale log entries from blocking."
+  [{:keys [side state run-phase]}]
+  (let [run (get-in state [:game-state :run])
+        no-action (:no-action run)]
+    ;; Only check log if :no-action is nil/false (server didn't set it)
+    ;; When :no-action has a value, trust it instead of potentially stale log
+    (when-not no-action
+      (let [log (get-in state [:game-state :log])
+            recent-entries (take 3 (reverse log))
+            side-name (if (= side "runner") "AI-runner" "AI-corp")
+            passed-pattern (re-pattern (str side-name " has no further action"))
+            recently-passed? (some #(re-find passed-pattern (str (:text %))) recent-entries)
+            opp-side (if (= side "runner") "Corp" "Runner")]
+        (when recently-passed?
+          (let [status-key [:waiting-after-pass-log run-phase side]
+                already-printed? (= @last-waiting-status status-key)]
+            (when-not already-printed?
+              (reset! last-waiting-status status-key)
+              (println (format "⏸️  Waiting for %s paid abilities (%s phase)" opp-side run-phase)))
+            {:status :waiting-for-opponent-paid-abilities
+             :message (format "Waiting for %s to pass or use paid abilities" opp-side)
+             :phase run-phase
+             :we-passed true}))))))
 
 (defn handle-auto-continue
   "Priority 6: Auto-continue through boring paid ability windows"
@@ -714,7 +748,7 @@
              (= run-phase "encounter-ice")
              my-prompt
              (not (:fire-unbroken strategy)))
-    ;; Check if there are unbroken subs to fire
+    ;; Check if there are unfired unbroken subs to fire
     (let [run (get-in state [:game-state :run])
           server (:server run)
           position (:position run)
@@ -724,7 +758,8 @@
           current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                         (nth ice-list ice-index nil))
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)]
+          ;; Must check both :broken AND :fired - subs can fire at most once per encounter
+          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
       (when (and current-ice (seq unbroken-subs))
         (let [ice-title (:title current-ice "ICE")
               sub-count (count unbroken-subs)
@@ -740,6 +775,48 @@
            :ice ice-title
            :unbroken-count sub-count
            :position position})))))
+
+(defn handle-corp-waiting-after-subs-fired
+  "Priority 1.75: Corp at encounter-ice after subs have fired.
+   If Runner hasn't passed yet, wait. If Runner already passed, continue to advance phase."
+  [{:keys [side run-phase state gameid]}]
+  (when (and (= side "corp")
+             (= run-phase "encounter-ice"))
+    ;; Check if all subs have either been broken or fired
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          ;; Subs that can still fire (not broken, not already fired)
+          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ;; Check if at least one sub has fired (meaning we're past the fire phase)
+          any-fired? (some :fired subroutines)]
+      ;; If no actionable subs AND at least one sub fired
+      (when (and current-ice (empty? actionable-subs) any-fired?)
+        (let [ice-title (:title current-ice "ICE")
+              ;; Check if Runner already passed (via log, since :no-action is unreliable)
+              log (get-in state [:game-state :log])
+              recent-entries (take 5 (reverse log))
+              runner-passed? (some #(re-find #"AI-runner has no further action" (str (:text %))) recent-entries)]
+          (if runner-passed?
+            ;; Runner already passed - Corp should continue to advance the phase
+            (do
+              (println (format "   → Runner passed, Corp continuing past %s" ice-title))
+              (send-continue! gameid))
+            ;; Runner hasn't passed yet - wait
+            (let [status-key [:corp-waiting-after-fire position ice-title]
+                  already-printed? (= @last-waiting-status status-key)]
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "⏸️  Waiting for Runner to continue past %s (subs resolved)" ice-title)))
+              {:status :waiting-for-opponent
+               :message (format "Waiting for Runner to continue past %s" ice-title)
+               :phase run-phase})))))))
 
 (defn handle-paid-ability-window
   "Priority 1.8: General handler for paid ability windows in ALL phases.
@@ -1002,6 +1079,7 @@
                   handle-corp-rez-decision   ; Corp rez decision without strategy
                   handle-corp-fire-unbroken
                   handle-corp-fire-decision  ; Corp fire decision without strategy
+                  handle-corp-waiting-after-subs-fired ; Corp waits for Runner after subs resolve
                   handle-paid-ability-window ; Wait after passing in any phase
                   handle-runner-approach-ice
                   handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
@@ -1010,6 +1088,7 @@
                   handle-events
                   handle-access-display      ; Display accessed cards (returns nil to continue)
                   handle-auto-choice
+                  handle-recently-passed-in-log ; Log-based backup for :no-action
                   handle-auto-continue
                   handle-run-complete
                   handle-no-run]]
