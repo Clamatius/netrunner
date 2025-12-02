@@ -565,9 +565,12 @@
   "Priority 3: Waiting for opponent to make a decision"
   [{:keys [state side my-prompt]}]
   (let [run-phase (get-in state [:game-state :run :phase])
-        ;; Corp should wait during success phase (can't see runner's prompt)
+        ;; Corp should wait during success phase ONLY if Corp has no prompt at all
+        ;; If Corp has any prompt (even trivial "Done"), that needs to be handled first
+        corp-has-prompt-with-choices? (and my-prompt (seq (:choices my-prompt)))
         corp-waiting-for-access? (and (= side "corp")
                                       (= run-phase "success")
+                                      (not corp-has-prompt-with-choices?)
                                       (not (has-real-decision? my-prompt)))
         ;; If we have a "waiting" type prompt, we're explicitly waiting for opponent
         ;; This handles cases where we can't see opponent's prompt (client isolation)
