@@ -179,7 +179,7 @@
                            :args nil})
         (Thread/sleep core/standard-delay)
         (core/show-turn-indicator)
-        ;; For Corp, show what was drawn (mandatory draw)
+        ;; For Corp, show what was drawn (mandatory draw) with card text
         (when (= my-side :corp)
           (let [after-state @state/client-state
                 hand (get-in after-state [:game-state :corp :hand])
@@ -187,7 +187,8 @@
                 new-card (last hand)
                 card-title (get new-card :title "Unknown")]
             (when (> after-hand before-hand)
-              (println (str "🃏 Drew: " card-title)))))
+              (println (str "🃏 Drew: " card-title))
+              (core/show-card-on-first-sight! card-title))))
         {:status :success})
 
       ;; ERROR: Already have clicks (turn already started)
@@ -225,7 +226,7 @@
                              :args nil})
           (Thread/sleep core/standard-delay)
           (core/show-turn-indicator)
-          ;; For Corp, show what was drawn (mandatory draw)
+          ;; For Corp, show what was drawn (mandatory draw) with card text
           (when (= my-side :corp)
             (let [after-state @state/client-state
                   hand (get-in after-state [:game-state :corp :hand])
@@ -233,7 +234,8 @@
                   new-card (last hand)
                   card-title (get new-card :title "Unknown")]
               (when (> after-hand before-hand)
-                (println (str "🃏 Drew: " card-title)))))
+                (println (str "🃏 Drew: " card-title))
+                (core/show-card-on-first-sight! card-title))))
           {:status :success})))))
 
 (defn indicate-action!

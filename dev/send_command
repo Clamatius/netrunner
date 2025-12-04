@@ -309,9 +309,9 @@ execute() {
             echo "$RESULT"
         fi
     else
-        # Suppress {:status :success...} lines - it's noise when things work
+        # Suppress success noise - {:status :success...} and bare nil returns
         # Keep error statuses and all other output
-        echo "$RESULT" | grep -v '^{:status :success'
+        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^nil$'
     fi
 
     return $RET

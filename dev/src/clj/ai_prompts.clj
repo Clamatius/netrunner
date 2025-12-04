@@ -111,12 +111,16 @@
         prompt-type (:prompt-type prompt)
         client-state @state/client-state
         side (keyword (:side client-state))
-        hand-size (count (get-in client-state [:game-state side :hand]))]
+        hand (get-in client-state [:game-state side :hand])
+        hand-size (count hand)]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
       ;; Option 0 is always "Keep", option 1 is always "Mulligan"
       (do
         (println (str "✅ Kept starting hand (" hand-size " cards)"))
+        ;; Show card text for each card in hand (first time only)
+        (doseq [card hand]
+          (core/show-card-on-first-sight! (:title card)))
         (choose-option! 0)
         {:status :success
          :data {:action :keep-hand}})
@@ -139,6 +143,12 @@
       (do
         (println (str "🔄 Mulligan - redrawing " hand-size " cards"))
         (choose-option! 1)
+        ;; Wait for state to update with new hand
+        (Thread/sleep core/standard-delay)
+        ;; Show card text for each card in new hand (first time only)
+        (let [new-hand (get-in @state/client-state [:game-state side :hand])]
+          (doseq [card new-hand]
+            (core/show-card-on-first-sight! (:title card))))
         {:status :success
          :data {:action :mulligan}})
       (do
