@@ -4,7 +4,7 @@
 
 **Core objective:** Score 7 agenda points before Runner steals 7 (6s in tutorial game). Do this by creating scoring windows and exploiting Runner weaknesses.
 
----
+**Golden Rule:** Netrunner is a dynamic game and boardstate can override rules, never mind strategies - so strats here are heuristics at best.
 
 ## Fundamental Principles
 

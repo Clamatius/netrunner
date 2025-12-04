@@ -503,15 +503,26 @@
   nil)
 
 (defn handle-auto-choice
-  "Priority 5: Auto-handle single mandatory choice"
+  "Priority 5: Auto-handle single mandatory choice.
+   Specifically handles trivial access prompts (only 'No action')."
   [{:keys [my-prompt gameid]}]
   (when (and my-prompt
              (seq (:choices my-prompt))
              (= 1 (count (:choices my-prompt))))
     (let [choice (first (:choices my-prompt))
-          choice-uuid (:uuid choice)]
-      (println (format "   Auto-choosing: %s" (:value choice)))
-      (send-choice! gameid choice-uuid (:value choice)))))
+          choice-uuid (:uuid choice)
+          choice-value (:value choice)
+          card-title (get-in my-prompt [:card :title])
+          msg (:msg my-prompt)]
+      ;; For access prompts with "No action", show accessed card info
+      (when (and msg
+                 (clojure.string/starts-with? (str msg) "You accessed")
+                 (= choice-value "No action"))
+        (println (format "📋 %s" msg))
+        (when card-title
+          (core/show-card-on-first-sight! card-title)))
+      (println (format "   → Auto-choosing: %s" choice-value))
+      (send-choice! gameid choice-uuid choice-value))))
 
 (defn handle-recently-passed-in-log
   "Priority 5.5: Detect when we've passed via game log (backup for :no-action).

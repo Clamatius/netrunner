@@ -309,9 +309,9 @@ execute() {
             echo "$RESULT"
         fi
     else
-        # Suppress success noise - {:status :success...} and bare nil returns
-        # Keep error statuses and all other output
-        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^nil$'
+        # Suppress status noise - only show :error and :waiting-input statuses
+        # Filter out success, action-taken, waiting-for-opponent, etc.
+        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^{:status :action-taken' | grep -v '^{:status :waiting-for-opponent' | grep -v '^nil$'
     fi
 
     return $RET

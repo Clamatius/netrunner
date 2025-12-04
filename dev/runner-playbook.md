@@ -4,7 +4,7 @@
 
 **Core objective:** Find 7 agenda points before Corp scores 7 (6s in tutorial game). Do this through volume of accesses.
 
----
+**Golden Rule:** Netrunner is a dynamic game and boardstate can override rules, never mind strategies - so strats here are heuristics at best.
 
 ## Fundamental Principles
 
