@@ -830,10 +830,14 @@
           (println "  Selectable cards:" (count (:selectable prompt))
                    "- Use choose-card! to select by index")
           (let [selectable (:selectable prompt)]
-            (doseq [[idx card] (map-indexed vector selectable)]
-              (let [title (or (:title card) (:printed-title card)
+            (doseq [[idx cid-or-card] (map-indexed vector selectable)]
+              ;; Selectable can be CID strings or card maps - resolve CIDs to cards
+              (let [card (if (string? cid-or-card)
+                           (core/find-card-by-cid cid-or-card)
+                           cid-or-card)
+                    title (or (:title card) (:printed-title card)
                              (when (seq (:zone card)) (str "Card in " (clojure.string/join "/" (map name (:zone card)))))
-                             "Unknown")
+                             (str "CID: " (if (string? cid-or-card) cid-or-card "?")))
                     card-type (or (:type card) "")
                     zone (:zone card)
                     rezzed? (:rezzed card)]

@@ -481,6 +481,26 @@
         matches (filter #(= title (:title %)) all-installed)]
     (nth (vec matches) index nil)))
 
+(defn find-card-by-cid
+  "Find a card by CID (card ID) anywhere in the game state.
+   Searches Corp servers (ICE, content), Runner rig, and hands.
+   Returns the card map or nil if not found."
+  [cid]
+  (let [gs (state/get-game-state)
+        ;; Corp servers - ICE and content
+        servers (get-in gs [:corp :servers])
+        all-ice (mapcat :ices (vals servers))
+        all-content (mapcat :content (vals servers))
+        ;; Runner rig
+        rig (get-in gs [:runner :rig])
+        runner-cards (concat (:program rig) (:hardware rig) (:resource rig))
+        ;; Hands
+        corp-hand (get-in gs [:corp :hand])
+        runner-hand (get-in gs [:runner :hand])
+        ;; All searchable cards
+        all-cards (concat all-ice all-content runner-cards corp-hand runner-hand)]
+    (first (filter #(= cid (:cid %)) all-cards))))
+
 ;; ============================================================================
 ;; Server Name Normalization
 ;; ============================================================================
