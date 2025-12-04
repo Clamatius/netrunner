@@ -288,7 +288,10 @@
             (doseq [[idx ice] (map-indexed vector ice-list)]
               (let [rezzed (:rezzed ice)
                     title (core/format-card-name-with-index ice ice-list)
-                    subtype (or (first (clojure.string/split (or (:subtype ice) "") #" - ")) "?")
+                    subtypes (:subtypes ice)
+                    subtype-str (if (seq subtypes)
+                                  (clojure.string/join " " (map name subtypes))
+                                  "?")
                     strength (:current-strength ice)
                     status-icon (if rezzed "🔴" "⚪")
                     ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
@@ -298,7 +301,7 @@
                                    :else "Unrezzed ICE")]
                 (println (str "  ICE #" idx ": " status-icon " "
                              display-name
-                             (when rezzed (str " (" subtype ")"))
+                             (when rezzed (str " (" subtype-str ")"))
                              (when (and rezzed strength) (str " (str: " strength ")"))
                              (format-counters ice)))))
             (println "  (No ICE)"))
@@ -1087,11 +1090,13 @@
       (when (seq playable-cards)
         (println "\n📋 Hand Cards:")
         (doseq [card playable-cards]
-          (let [card-name (core/format-card-name-with-index card hand)]
-            (println (format "  - %s (%s, %d credits)"
+          (let [card-name (core/format-card-name-with-index card hand)
+                cost (:cost card)
+                cost-str (if cost (str cost " credits") "free")]
+            (println (format "  - %s (%s, %s)"
                             card-name
                             (:type card)
-                            (:cost card)))))))
+                            cost-str))))))
 
     ;; Playable installed abilities
     (let [all-installed (concat

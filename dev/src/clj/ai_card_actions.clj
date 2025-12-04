@@ -30,19 +30,29 @@
       (if (basic/ensure-turn-started!)
         (let [card (core/find-card-in-hand name-or-index)]
           (if card
-            (let [before-state (core/capture-state-snapshot)
-                  client-state @state/client-state
+            (let [client-state @state/client-state
                   side (keyword (:side client-state))
-                  before-credits (get-in client-state [:game-state side :credit])
-                  before-clicks (get-in client-state [:game-state side :click])
-                  gameid (:gameid client-state)
-                  card-ref (core/create-card-ref card)
-                  card-title (:title card)
-                  card-zone (:zone card)]
-              (ws/send-message! :game/action
-                                {:gameid gameid
-                                 :command "play"
-                                 :args {:card card-ref}})
+                  credits (get-in client-state [:game-state side :credit])
+                  card-cost (:cost card)
+                  card-title (:title card)]
+              ;; Pre-check: can we afford this card?
+              (if (and card-cost (> card-cost credits))
+                (do
+                  (println (str "❌ Cannot play: " card-title))
+                  (println (str "   Insufficient credits: need " card-cost ", have " credits))
+                  {:status :error
+                   :reason (str "Insufficient credits: need " card-cost ", have " credits)})
+                ;; Can afford (or card is free), proceed
+                (let [before-state (core/capture-state-snapshot)
+                      before-credits credits
+                      before-clicks (get-in client-state [:game-state side :click])
+                      gameid (:gameid client-state)
+                      card-ref (core/create-card-ref card)
+                      card-zone (:zone card)]
+                  (ws/send-message! :game/action
+                                    {:gameid gameid
+                                     :command "play"
+                                     :args {:card card-ref}})
               ;; Wait and verify action - now returns status map
               (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
                 (case (:status result)
@@ -79,7 +89,7 @@
                     (println (str "   Reason: " (:reason result)))
                     (core/show-turn-indicator)
                     (flush)
-                    result))))
+                    result)))))) ; close let, if (afford check)
             (do
               (println (str "❌ Card not found in hand: " name-or-index))
               (flush)

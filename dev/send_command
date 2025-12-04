@@ -309,9 +309,9 @@ execute() {
             echo "$RESULT"
         fi
     else
-        # Suppress status noise - only show :error and :waiting-input statuses
-        # Filter out success, action-taken, waiting-for-opponent, decision-required, etc.
-        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^{:status :action-taken' | grep -v '^{:status :waiting-for-opponent' | grep -v '^{:status :decision-required' | grep -v '^{:status :run-complete' | grep -v '^{:status :no-run' | grep -v '^nil$'
+        # Suppress all status map noise - we print human-readable messages instead
+        # Filter out any line starting with {:status (success, error, waiting, etc.)
+        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$'
     fi
 
     return $RET
@@ -771,19 +771,23 @@ case "$COMMAND" in
 
     jack-out)
         ensure_connection
-        info "Jacking out of run..."
         execute '(do
                   (require (quote [ai-state :as state]))
                   (require (quote [ai-websocket-client-v2 :as ws]))
                   (let [s @state/client-state
-                        gameid (:gameid s)]
-                    (ws/send-message! :game/action
-                      {:gameid (if (string? gameid)
-                                 (java.util.UUID/fromString gameid)
-                                 gameid)
-                       :command "jack-out"
-                       :args nil})
-                    (Thread/sleep 1000)))'
+                        gameid (:gameid s)
+                        run-state (get-in s [:game-state :run])]
+                    (if run-state
+                      (do
+                        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                     (java.util.UUID/fromString gameid)
+                                     gameid)
+                           :command "jack-out"
+                           :args nil})
+                        (Thread/sleep 500)
+                        (println "🚪 Jacked out of run"))
+                      (println "❌ Not in a run"))))'
         ;;
 
     wait-for-diff)
