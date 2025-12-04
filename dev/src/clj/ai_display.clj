@@ -713,21 +713,24 @@
   "Show hand using side-aware state access. Returns hand vector."
   []
   (let [state @state/client-state
-        side (:side state)
-        hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
-    (when hand
-      (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
-      (doseq [[idx card] (map-indexed vector hand)]
-        (let [card-name (core/format-card-name-with-index card hand)
-              card-type (:type card)
-              subtypes (when-let [st (:subtypes card)]
-                        (when (seq st)
-                          (str ": " (clojure.string/join ", " st))))
-              cost (if-let [c (:cost card)]
-                    (str " (" c "¢)")
-                    "")]
-          (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost)))))
-    hand))
+        side (:side state)]
+    (if-not side
+      (do (println "⚠️  No game state - not in a game yet")
+          nil)
+      (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
+        (when hand
+          (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
+          (doseq [[idx card] (map-indexed vector hand)]
+            (let [card-name (core/format-card-name-with-index card hand)
+                  card-type (:type card)
+                  subtypes (when-let [st (:subtypes card)]
+                            (when (seq st)
+                              (str ": " (clojure.string/join ", " st))))
+                  cost (if-let [c (:cost card)]
+                        (str " (" c "¢)")
+                        "")]
+              (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost)))))
+        hand))))
 
 (defn show-credits
   "Show current credits (side-aware). Returns credits value."
