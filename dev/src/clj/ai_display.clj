@@ -729,7 +729,9 @@
                   cost (if-let [c (:cost card)]
                         (str " (" c "¢)")
                         "")]
-              (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost)))))
+              (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost))
+              ;; Show card text for first-seen cards
+              (core/show-card-on-first-sight! (:title card)))))
         hand))))
 
 (defn show-credits
