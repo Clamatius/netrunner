@@ -95,10 +95,17 @@
                       index (count selectable) (dec (count selectable))))
 
       :else
-      (let [card (nth selectable index)]
-        (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
-        (ws/select-card! card eid)
-        (Thread/sleep core/short-delay)))))
+      (let [cid-or-card (nth selectable index)
+            ;; Selectable can be CID strings or card maps - resolve CIDs to cards
+            card (if (string? cid-or-card)
+                   (core/find-card-by-cid cid-or-card)
+                   cid-or-card)]
+        (if card
+          (do
+            (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
+            (ws/select-card! card eid)
+            (Thread/sleep core/short-delay))
+          (println (format "❌ Could not resolve card at index %d" index)))))))
 
 ;; ============================================================================
 ;; Mulligan
