@@ -831,11 +831,16 @@
                    "- Use choose-card! to select by index")
           (let [selectable (:selectable prompt)]
             (doseq [[idx card] (map-indexed vector selectable)]
-              (let [title (core/format-card-name-with-index card selectable)
-                    card-type (or (:type card) "?")
-                    zone (or (:zone card) [])]
-                (println (str "    " idx ". " title " [" card-type "]"
-                            (when (seq zone) (str " (in " (clojure.string/join " > " (map name zone)) ")"))))))))
+              (let [title (or (:title card) (:printed-title card)
+                             (when (seq (:zone card)) (str "Card in " (clojure.string/join "/" (map name (:zone card)))))
+                             "Unknown")
+                    card-type (or (:type card) "")
+                    zone (:zone card)
+                    rezzed? (:rezzed card)]
+                (println (str "    " idx ". " title
+                            (when (seq card-type) (str " [" card-type "]"))
+                            (when (and (seq zone) (:title card)) (str " (in " (clojure.string/join "/" (map name zone)) ")"))
+                            (when (some? rezzed?) (if rezzed? " (rezzed)" " (unrezzed)"))))))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
           (let [run (get-in state [:game-state :run])
