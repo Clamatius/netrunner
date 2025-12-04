@@ -172,13 +172,22 @@
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?
-      (do
+      (let [before-hand (count (get-in client-state [:game-state my-side :hand]))]
         (ws/send-message! :game/action
                           {:gameid gameid
                            :command "start-turn"
                            :args nil})
         (Thread/sleep core/standard-delay)
         (core/show-turn-indicator)
+        ;; For Corp, show what was drawn (mandatory draw)
+        (when (= my-side :corp)
+          (let [after-state @state/client-state
+                hand (get-in after-state [:game-state :corp :hand])
+                after-hand (count hand)
+                new-card (last hand)
+                card-title (get new-card :title "Unknown")]
+            (when (> after-hand before-hand)
+              (println (str "🃏 Drew: " card-title)))))
         {:status :success})
 
       ;; ERROR: Already have clicks (turn already started)

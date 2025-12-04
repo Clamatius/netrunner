@@ -155,7 +155,7 @@ ${GREEN}Basic Actions:${NC}
   indicate-action - Signal you want to use paid ability (pauses game)
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
-  end-turn [--force] - End your turn (requires --force if clicks remain)
+  end-turn [--force] - End your turn (requires --force if clicks remain - typically breaks the gamestate)
   smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
 
 ${GREEN}Mulligan & Hand Management:${NC}
@@ -309,7 +309,9 @@ execute() {
             echo "$RESULT"
         fi
     else
-        echo "$RESULT"
+        # Suppress {:status :success} - it's noise when things work
+        # Keep error statuses and all other output
+        echo "$RESULT" | grep -v '^{:status :success}$'
     fi
 
     return $RET
