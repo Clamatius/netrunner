@@ -564,7 +564,9 @@
     (println "🛑 Run paused - decision required")
     (println (format "   Prompt: %s" (:msg my-prompt)))
     (when-let [card-title (get-in my-prompt [:card :title])]
-      (println (format "   Card: %s" card-title)))
+      (println (format "   Card: %s" card-title))
+      ;; Show card text for first-seen cards (especially useful during access)
+      (core/show-card-on-first-sight! card-title))
     (let [choices (:choices my-prompt)]
       (println (format "   Choices: %d options" (count choices)))
       (doseq [[idx choice] (map-indexed vector choices)]

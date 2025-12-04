@@ -310,8 +310,8 @@ execute() {
         fi
     else
         # Suppress status noise - only show :error and :waiting-input statuses
-        # Filter out success, action-taken, waiting-for-opponent, etc.
-        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^{:status :action-taken' | grep -v '^{:status :waiting-for-opponent' | grep -v '^nil$'
+        # Filter out success, action-taken, waiting-for-opponent, decision-required, etc.
+        echo "$RESULT" | grep -v '^{:status :success' | grep -v '^{:status :action-taken' | grep -v '^{:status :waiting-for-opponent' | grep -v '^{:status :decision-required' | grep -v '^{:status :run-complete' | grep -v '^{:status :no-run' | grep -v '^nil$'
     fi
 
     return $RET
