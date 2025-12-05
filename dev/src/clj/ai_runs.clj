@@ -24,11 +24,16 @@
 ;; Track last waiting status to suppress repeated output
 (defonce last-waiting-status (atom nil))
 
+;; Track position where Runner has signaled "let subs fire"
+;; Reset when run ends or new ICE encountered
+(defonce signaled-fire-position (atom nil))
+
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
   []
   (reset! run-strategy {})
-  (reset! last-waiting-status nil))
+  (reset! last-waiting-status nil)
+  (reset! signaled-fire-position nil))
 
 (defn set-strategy!
   "Merge new strategy flags into current strategy"
@@ -397,6 +402,33 @@
          (not corp-approach-unrezzed?))))
 
 ;; ============================================================================
+;; Subroutine Fire Coordination (Runner <-> Corp handoff)
+;; ============================================================================
+;;
+;; During ICE encounters, Runner must signal when done breaking so Corp can fire.
+;; This prevents race conditions in model-vs-model play where both clients poll.
+
+(defn- let-subs-fire-signal!
+  "Send system message signaling Runner is done breaking subs on this ICE.
+   Called once per ICE encounter (tracked by signaled-fire-position atom)."
+  [gameid ice-title]
+  (ws/send-message! :game/action
+    {:gameid gameid
+     :command "system-msg"
+     :args {:msg (str "indicates to fire all unbroken subroutines on " ice-title)}})
+  (Thread/sleep core/polling-delay))
+
+(defn- runner-signaled-let-fire?
+  "Check if Runner has signaled they're done breaking on current ICE.
+   Looks for the specific system message in recent game log."
+  [state ice-title]
+  (let [log (get-in state [:game-state :log])
+        recent (take-last 10 log)]
+    (some #(and (clojure.string/includes? (str (:text %)) "indicates to fire")
+                (clojure.string/includes? (str (:text %)) ice-title))
+          recent)))
+
+;; ============================================================================
 ;; Handler Functions for continue-run! Strategy Pattern
 ;; ============================================================================
 ;;
@@ -692,7 +724,7 @@
           (when-not already-printed?
             (reset! last-waiting-status status-key)
             (println (format "🛑 Rez decision: %s (cost %d¢)" ice-title (get current-ice :cost 0)))
-            (println "   → Use 'rez <name>' to rez, or 'continue' to decline"))
+            (println "   → Use continue with '--rez <name>' to rez, or '--no-rez' to decline"))
           {:status :decision-required
            :message (format "Corp must decide: rez %s or continue" ice-title)
            :ice ice-title
@@ -707,7 +739,10 @@
 
    Bug fix #2: Track fired position to prevent infinite loop.
    The server doesn't sync :fired flag on subroutines, so we track
-   whether we've already fired at this position in this encounter."
+   whether we've already fired at this position in this encounter.
+
+   Bug fix #3: Wait for Runner's signal before firing (model-vs-model coordination).
+   In simultaneous play, Corp must wait for Runner to signal they're done breaking."
   [{:keys [side run-phase strategy state gameid]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice")
@@ -724,7 +759,9 @@
                         (nth ice-list ice-index nil))
           ice-title (:title current-ice "ICE")
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)]
+          unbroken-subs (filter #(not (:broken %)) subroutines)
+          ;; Check if Runner has signaled they're done breaking
+          runner-signaled? (runner-signaled-let-fire? state ice-title)]
       (cond
         ;; Already fired at this position - don't fire again
         already-fired-here?
@@ -740,10 +777,14 @@
         (empty? unbroken-subs)
         nil  ; Let other handlers continue (auto-continue will pass)
 
-        ;; Fire the unbroken subs!
+        ;; Runner hasn't signaled yet - wait for them
+        (not runner-signaled?)
+        nil  ; Let other handlers try (will poll again)
+
+        ;; Runner signaled, fire the unbroken subs!
         :else
         (do
-          (println (format "🤖 Strategy: --fire-unbroken, firing %d sub(s) on %s"
+          (println (format "🤖 Strategy: --fire-unbroken, firing %d sub(s) on %s (Runner signaled)"
                           (count unbroken-subs) ice-title))
           ;; Mark that we've fired at this position
           (set-strategy! {:fired-at-position position})
@@ -905,8 +946,9 @@
        :position position})))
 
 (defn handle-runner-encounter-ice
-  "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision"
-  [{:keys [side run-phase state]}]
+  "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
+   Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff."
+  [{:keys [side run-phase state gameid]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice"))
     (let [run (get-in state [:game-state :run])
@@ -928,8 +970,15 @@
         (let [ice-title (:title current-ice "ICE")
               sub-count (count unfired-subs)
               status-key [:waiting-for-corp-fire position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          ;; Only print once
+              already-printed? (= @last-waiting-status status-key)
+              ;; Check if we've already signaled at this position
+              already-signaled? (= @signaled-fire-position position)]
+          ;; Send signal once per ICE encounter (for model-vs-model coordination)
+          (when-not already-signaled?
+            (reset! signaled-fire-position position)
+            (println (format "📡 Signaling Corp: done breaking on %s" ice-title))
+            (let-subs-fire-signal! gameid ice-title))
+          ;; Only print waiting message once
           (when-not already-printed?
             (reset! last-waiting-status status-key)
             (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"

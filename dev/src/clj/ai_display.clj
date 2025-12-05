@@ -108,8 +108,9 @@
               (println "\n❌ Runner has left the game"))
             (when corp-missing?
               (println "\n❌ Corp has left the game"))
-            (println "\n💡 To reconnect:")
-            (println "   ./dev/send_command" (str/lower-case my-side) "join" game-id my-side)
+            (when my-side
+              (println "\n💡 To reconnect:")
+              (println "   ./dev/send_command" (str/lower-case my-side) "join" game-id my-side))
             (println "\nOr use ai-bounce.sh to restart both clients:")
             (println "   ./dev/ai-bounce.sh" game-id))
 
