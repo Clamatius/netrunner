@@ -203,6 +203,10 @@ ${GREEN}Prompts:${NC}
                      --raw     Raw WebSocket pass (debugging only)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
+  wait-for-relevant-diff [seconds] - Wait for relevant events only (model-vs-model coordination)
+                     Wakes on: runs starting, prompts needing response
+                     Ignores: opponent economy actions (credits, draws)
+                     Use case: Corp waits during Runner turn, wakes when run starts
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
 
 ${GREEN}Lobby:${NC}
@@ -795,6 +799,13 @@ case "$COMMAND" in
         TIMEOUT="${1:-60}"
         info "Waiting for game state change (timeout: ${TIMEOUT}s)..."
         execute "(ai-actions/wait-for-diff $TIMEOUT)"
+        ;;
+
+    wait-for-relevant-diff)
+        ensure_connection
+        TIMEOUT="${1:-300}"
+        info "Waiting for relevant events (timeout: ${TIMEOUT}s)..."
+        execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
         ;;
 
     wait-for-log-past)

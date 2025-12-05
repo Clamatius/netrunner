@@ -740,6 +740,123 @@
           (recur))))))
 
 ;; ============================================================================
+;; Relevant Diff Waiting (for model-vs-model coordination)
+;; ============================================================================
+
+(defn- run-active?
+  "Check if a run is currently in progress"
+  [state]
+  (some? (get-in state [:game-state :run])))
+
+(defn- has-prompt?
+  "Check if the given side has an actionable prompt"
+  [state side]
+  (let [prompt (get-in state [:game-state (keyword side) :prompt-state])]
+    (and prompt
+         (not= (:prompt-type prompt) "waiting")
+         (or (seq (:choices prompt))
+             (seq (:selectable prompt))))))
+
+(defn- relevance-reason
+  "Determine why we should wake up (or nil if not relevant).
+   Returns keyword indicating wake reason."
+  [state side initial-run-active?]
+  (let [current-run-active? (run-active? state)
+        has-actionable-prompt? (has-prompt? state side)]
+    (cond
+      ;; Run started - high priority, wake up!
+      (and current-run-active? (not initial-run-active?))
+      :run-started
+
+      ;; Run is active and state changed - stay alert
+      current-run-active?
+      :run-active
+
+      ;; We have a prompt to respond to
+      has-actionable-prompt?
+      :has-prompt
+
+      ;; Run just ended - might need cleanup
+      (and initial-run-active? (not current-run-active?))
+      :run-ended
+
+      ;; Nothing relevant
+      :else nil)))
+
+(defn wait-for-relevant-diff
+  "Wait for game state changes that are relevant to our side.
+   Unlike wait-for-diff, this filters for events we care about:
+   - Any change while a run is active
+   - When we have a prompt to respond to
+   - When a run starts or ends
+
+   Sleeps through opponent economy/draw actions that don't affect us.
+
+   Usage: (wait-for-relevant-diff)           ;; default 300s timeout
+          (wait-for-relevant-diff 60)        ;; custom timeout
+          (wait-for-relevant-diff {:timeout 120 :verbose true})"
+  ([]
+   (wait-for-relevant-diff 300))
+  ([timeout-or-opts]
+   (let [opts (if (number? timeout-or-opts)
+                {:timeout timeout-or-opts :verbose true}
+                (merge {:timeout 300 :verbose true} timeout-or-opts))
+         timeout-seconds (:timeout opts)
+         side (:side @state/client-state)
+         deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
+         initial-run-active? (run-active? @state/client-state)
+         initial-log-count (count (get-in @state/client-state [:game-state :log]))]
+
+     (when (:verbose opts)
+       (println (format "💤 Waiting for relevant events (timeout: %ds)..." timeout-seconds))
+       (when initial-run-active?
+         (println "   ⚡ Run already active - watching closely")))
+
+     (loop [last-log-count initial-log-count]
+       (Thread/sleep polling-delay)
+       (let [current-state @state/client-state
+             current-log (get-in current-state [:game-state :log])
+             current-log-count (count current-log)
+             new-entries (when (> current-log-count last-log-count)
+                          (take (- current-log-count last-log-count) current-log))
+             reason (relevance-reason current-state side initial-run-active?)]
+
+         (cond
+           ;; Found something relevant
+           reason
+           (do
+             (when (:verbose opts)
+               (println (format "⚡ Woke up: %s" (name reason)))
+               (when (seq new-entries)
+                 (doseq [entry (take 3 new-entries)]
+                   (println (format "  • %s" (:text entry))))))
+             {:status :relevant-change
+              :reason reason
+              :new-log-entries new-entries
+              :run-active? (run-active? current-state)
+              :has-prompt? (has-prompt? current-state side)})
+
+           ;; Timeout
+           (> (System/currentTimeMillis) deadline)
+           (do
+             (when (:verbose opts)
+               (println "⏱️  Timeout - no relevant events"))
+             {:status :timeout})
+
+           ;; State changed but not relevant - keep waiting
+           (> current-log-count last-log-count)
+           (do
+             (when (:verbose opts)
+               (let [text (or (-> new-entries first :text) "")
+                     truncated (subs text 0 (min 60 (count text)))]
+                 (println (format "   💤 Ignoring: %s" truncated))))
+             (recur current-log-count))
+
+           ;; No change yet
+           :else
+           (recur last-log-count)))))))
+
+;; ============================================================================
 ;; Run Helper Functions
 ;; ============================================================================
 

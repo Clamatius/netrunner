@@ -41,6 +41,7 @@
 (def show-state-diff core/show-state-diff)
 (def wait-for-prompt core/wait-for-prompt)
 (def wait-for-diff core/wait-for-diff)
+(def wait-for-relevant-diff core/wait-for-relevant-diff)
 (def wait-for-log-past core/wait-for-log-past)
 (def other-side core/other-side)
 
