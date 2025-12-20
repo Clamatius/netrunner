@@ -536,7 +536,9 @@
 
 (defn handle-auto-choice
   "Priority 5: Auto-handle single mandatory choice.
-   Specifically handles trivial access prompts (only 'No action')."
+   For access prompts with only 'Done' as option: show card text (if new), then auto-continue.
+   Access prompts with 2+ choices are handled by handle-real-decision (earlier in chain).
+   For other single-choice prompts: auto-continue immediately."
   [{:keys [my-prompt gameid]}]
   (when (and my-prompt
              (seq (:choices my-prompt))
@@ -545,14 +547,13 @@
           choice-uuid (:uuid choice)
           choice-value (:value choice)
           card-title (get-in my-prompt [:card :title])
-          msg (:msg my-prompt)]
-      ;; For access prompts with "No action", show accessed card info
-      (when (and msg
-                 (clojure.string/starts-with? (str msg) "You accessed")
-                 (= choice-value "No action"))
-        (println (format "📋 %s" msg))
-        (when card-title
-          (core/show-card-on-first-sight! card-title)))
+          msg (:msg my-prompt)
+          is-access-prompt? (and msg (clojure.string/starts-with? (str msg) "You accessed"))]
+      ;; For access prompts, ensure card text is shown for first-time cards
+      ;; (handle-access-display already printed basic info, but this shows full card text)
+      (when (and is-access-prompt? card-title)
+        (core/show-card-on-first-sight! card-title))
+      ;; All single-choice prompts auto-continue (2+ choice access handled by handle-real-decision)
       (println (format "   → Auto-choosing: %s" choice-value))
       (send-choice! gameid choice-uuid choice-value))))
 
