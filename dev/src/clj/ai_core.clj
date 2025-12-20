@@ -757,6 +757,25 @@
          (or (seq (:choices prompt))
              (seq (:selectable prompt))))))
 
+(defn- my-turn-to-act?
+  "Check if it's our turn to act (need to start-turn or have clicks).
+   Handles Netrunner priority system where active-player doesn't flip until start-turn."
+  [state side]
+  (let [my-side (keyword side)
+        active-player (get-in state [:game-state :active-player])
+        my-clicks (get-in state [:game-state my-side :click] 0)
+        end-turn (get-in state [:game-state :end-turn])
+        turn-number (get-in state [:game-state :turn] 0)]
+    (or
+      ;; My turn and I have clicks
+      (and (= (name my-side) active-player) (> my-clicks 0))
+      ;; Opponent ended turn, waiting for me to start
+      ;; (active-player = opponent because end-turn was called, I'm next)
+      (and end-turn (not= (name my-side) active-player))
+      ;; Turn 0 with 0 clicks = post-mulligan, Corp needs to start
+      ;; (Corp always goes first)
+      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))
+
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
    Returns keyword indicating wake reason."
@@ -779,6 +798,10 @@
       ;; Run just ended - might need cleanup
       (and initial-run-active? (not current-run-active?))
       :run-ended
+
+      ;; It's our turn to act (need to start-turn or take action)
+      (my-turn-to-act? state side)
+      :my-turn
 
       ;; Nothing relevant
       :else nil)))

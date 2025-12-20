@@ -583,7 +583,7 @@
              :we-passed true}))))))
 
 (defn handle-auto-continue
-  "Priority 6: Auto-continue through boring paid ability windows"
+  "Priority 6: Auto-continue through paid ability windows where we don't need to act"
   [{:keys [my-prompt run-phase gameid side state]}]
   (when (can-auto-continue? my-prompt run-phase side state)
     (println "   → Auto-continuing through paid ability window")
@@ -1179,11 +1179,7 @@
   "Returns true if this status should stop the auto-continue loop"
   [status]
   (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
-               :tag-or-damage :run-complete :no-run
-               :waiting-for-corp-rez :waiting-for-corp-fire
-               :waiting-for-opponent-paid-abilities
-               ;; Stop when opponent has a real decision (not just priority passing)
-               :waiting-for-opponent}
+               :tag-or-damage :run-complete :no-run}
              status))
 
 (defn- should-pause-for-event?
@@ -1253,11 +1249,14 @@
                    :iterations (inc iteration)
                    :elapsed-ms (- (System/currentTimeMillis) start-time))
 
-            ;; Waiting for opponent - brief pause then check again
+            ;; Waiting for opponent - use wait-for-relevant-diff to sleep efficiently
             (or (= status :waiting-for-opponent)
-                (= status :waiting-for-corp-rez))
+                (= status :waiting-for-corp-rez)
+                (= status :waiting-for-corp-fire)
+                (= status :waiting-for-opponent-paid-abilities))
             (do
-              (Thread/sleep wait-delay-ms)
+              ;; Use wait-for-relevant-diff with short timeout - it will wake on any run state change
+              (core/wait-for-relevant-diff {:timeout 30 :verbose false})
               (recur (inc iteration)))
 
             ;; Action taken - immediately continue
