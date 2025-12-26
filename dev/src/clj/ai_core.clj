@@ -248,6 +248,65 @@
            :reason "Action not confirmed in game log (timeout)"
            :card-name card-name})))))
 
+(defn verify-ability-in-log
+  "Check if ability usage appears in game log.
+   Unlike verify-action-in-log, doesn't check zone change (card stays installed).
+   Returns status map with:
+   - :status - :success (ability fired), :waiting-input (prompt created), :error (failed)
+   - :prompt - the prompt that was created (if :waiting-input)
+   - :card-name - the card name being verified
+
+   IMPORTANT: Only checks NEW log entries (after initial-size) to avoid false positives
+   when abilities are used repeatedly (e.g., Regolith Mining License).
+
+   Waits up to max-wait-ms for the log entry to appear"
+  [card-name max-wait-ms]
+  (let [initial-size (get-log-size)
+        initial-prompt (state/get-prompt)
+        deadline (+ (System/currentTimeMillis) max-wait-ms)
+        check-result (fn []
+                       (let [client-state @state/client-state
+                             log (get-in client-state [:game-state :log])
+                             current-size (count log)
+                             current-prompt (state/get-prompt)
+                             ;; Check if new prompt was created
+                             new-prompt-created (and current-prompt
+                                                     (not= current-prompt initial-prompt))
+                             ;; Only check NEW log entries (added after initial-size)
+                             new-entries (drop initial-size log)
+                             card-in-new-entries (some #(when (string? (:text %))
+                                                          (clojure.string/includes? (:text %) card-name))
+                                                       new-entries)]
+                         (cond
+                           ;; Card name in NEW log entries = success
+                           card-in-new-entries
+                           {:status :success :card-name card-name}
+
+                           ;; New prompt created = waiting for input
+                           new-prompt-created
+                           {:status :waiting-input
+                            :prompt current-prompt
+                            :card-name card-name}
+
+                           ;; Log grew (but no card name visible) = might be success
+                           ;; (some abilities may not mention card name in log)
+                           (> current-size initial-size)
+                           {:status :success :card-name card-name}
+
+                           ;; No change yet
+                           :else nil)))]
+    ;; Poll until we get a result or timeout
+    (loop []
+      (if-let [result (check-result)]
+        result
+        (if (< (System/currentTimeMillis) deadline)
+          (do
+            (Thread/sleep polling-delay)
+            (recur))
+          {:status :error
+           :reason "Ability not confirmed in game log (timeout)"
+           :card-name card-name})))))
+
 ;; ============================================================================
 ;; Card Name Parsing and Formatting
 ;; ============================================================================

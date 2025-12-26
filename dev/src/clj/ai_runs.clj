@@ -4,7 +4,8 @@
             [ai-state :as state]
             [ai-core :as core]
             [ai-prompts :as prompts]
-            [ai-basic-actions :as basic]))
+            [ai-basic-actions :as basic]
+            [ai-card-actions :as actions]))
 
 ;; ============================================================================
 ;; Run Strategy State
@@ -946,6 +947,87 @@
        :ice ice-title
        :position position})))
 
+;; Track last --full-break warning to avoid repeating
+(defonce last-full-break-warning (atom nil))
+
+(defn handle-runner-full-break
+  "Priority 2.4: Auto-break with --full-break strategy.
+   During encounter-ice phase, if Runner has --full-break set, automatically
+   find and use 'Match strength and fully break' abilities on icebreakers.
+   Returns nil if no breaking possible (falls through to handle-runner-encounter-ice)."
+  [{:keys [side run-phase state strategy gameid]}]
+  (when (and (= side "runner")
+             (= run-phase "encounter-ice")
+             (:full-break strategy))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          ;; Subs that haven't been broken yet
+          unbroken-subs (filter #(not (:broken %)) subroutines)]
+      ;; Only try to break if ICE is rezzed and has unbroken subs
+      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs))
+        (let [ice-title (:title current-ice "ICE")
+              ;; Find icebreakers with playable abilities
+              runner-rig (get-in state [:game-state :runner :rig])
+              all-programs (get runner-rig :program [])
+              ;; Look for playable dynamic abilities (auto-pump-and-break)
+              breakable-abilities
+              (for [program all-programs
+                    [idx ability] (map-indexed vector (:abilities program))
+                    :when (and (:playable ability)
+                               (:dynamic ability)
+                               ;; dynamic type containing "break" is the full-break ability
+                               (when-let [dyn (:dynamic ability)]
+                                 (clojure.string/includes? (str dyn) "break")))]
+                {:card program
+                 :card-name (:title program)
+                 :ability-index idx
+                 :label (:label ability)
+                 :dynamic (:dynamic ability)})]
+          (if (seq breakable-abilities)
+            ;; Use the first available break ability
+            (let [{:keys [card-name ability-index label]} (first breakable-abilities)]
+              (reset! last-full-break-warning nil) ; Clear warning state on successful break
+              (println (format "🔨 Auto-breaking %s with %s" ice-title card-name))
+              (println (format "   Using: %s (ability %d)" label ability-index))
+              (let [result (actions/use-ability! card-name ability-index)]
+                (if (= :success (:status result))
+                  {:status :ability-used
+                   :message (format "Auto-broke %s with %s" ice-title card-name)
+                   :ice ice-title
+                   :breaker card-name}
+                  ;; If ability failed, let it fall through to normal handling
+                  nil)))
+            ;; No playable break ability - check if any breakers exist but can't afford
+            (let [warning-key [position ice-title]
+                  ;; Check for any dynamic break abilities (playable or not)
+                  all-break-abilities
+                  (for [program all-programs
+                        [idx ability] (map-indexed vector (:abilities program))
+                        :when (and (:dynamic ability)
+                                   (when-let [dyn (:dynamic ability)]
+                                     (clojure.string/includes? (str dyn) "break")))]
+                    {:card-name (:title program)
+                     :label (:label ability)
+                     :playable (:playable ability)
+                     :cost-label (:cost-label ability)})]
+              (when (not= @last-full-break-warning warning-key)
+                (reset! last-full-break-warning warning-key)
+                (if (seq all-break-abilities)
+                  ;; Breaker exists but ability not playable (likely insufficient credits)
+                  (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
+                    (println (format "⚠️  --full-break: Can't afford to break %s" ice-title))
+                    (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
+                  ;; No breaker can break this ICE type at all
+                  (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
+              nil)))))))
+
 (defn handle-runner-encounter-ice
   "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
    Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff."
@@ -1148,6 +1230,7 @@
                   handle-corp-waiting-after-subs-fired ; Corp waits for Runner after subs resolve
                   handle-paid-ability-window ; Wait after passing in any phase
                   handle-runner-approach-ice
+                  handle-runner-full-break   ; Runner auto-break with --full-break
                   handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
                   handle-waiting-for-opponent
                   handle-real-decision

@@ -229,7 +229,10 @@
 ;; ============================================================================
 
 (defn use-ability!
-  "Use an installed card's ability
+  "Use an installed card's ability. Returns status map:
+   - {:status :success} - ability fired
+   - {:status :waiting-input :prompt ...} - created a prompt (e.g., choose target)
+   - {:status :error :reason ...} - failed
 
    Usage: (use-ability! \"Smartware Distributor\" 0)
           (use-ability! \"Sure Gamble\" 1)"
@@ -247,7 +250,9 @@
             abilities (:abilities card)
             ability (when (and abilities (< ability-index (count abilities)))
                      (nth abilities ability-index))
+            ability-label (when ability (:label ability))
             dynamic-type (:dynamic ability)]
+        ;; Send the ability command
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
           (ws/send-message! :game/action
@@ -261,14 +266,24 @@
                              :command "ability"
                              :args {:card card-ref
                                     :ability ability-index}}))
-        (Thread/sleep core/medium-delay)
-        (let [ability-label (when abilities
-                             (let [ab (nth abilities ability-index nil)]
-                               (:label ab)))]
-          (if ability-label
-            (println (str "⚡ Used ability: " card-name " - " ability-label))
-            (println (str "⚡ Used ability #" ability-index " on " card-name)))))
-      (println (str "❌ Card not found installed: " card-name)))))
+        ;; Verify the ability fired by checking game log
+        (let [result (core/verify-ability-in-log card-name core/action-timeout)]
+          (case (:status result)
+            :success
+            (if ability-label
+              (println (str "⚡ Used ability: " card-name " - " ability-label))
+              (println (str "⚡ Used ability #" ability-index " on " card-name)))
+
+            :waiting-input
+            (println (str "⏳ Ability triggered prompt: " card-name " - "
+                          (or ability-label (str "#" ability-index))))
+
+            :error
+            (println (str "❌ Ability failed: " card-name " - " (:reason result))))
+          result))
+      (do
+        (println (str "❌ Card not found installed: " card-name))
+        {:status :error :reason (str "Card not found: " card-name)}))))
 
 (defn use-runner-ability!
   "Use a runner ability on a Corp card (e.g., bioroid click-to-break)
