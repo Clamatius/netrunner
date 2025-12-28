@@ -17,9 +17,8 @@
 ;; Test Client State Management
 ;; ============================================================================
 
-(defonce test-clients
-  "Registry of active test clients"
-  (atom {}))
+;; Registry of active test clients
+(defonce test-clients (atom {}))
 
 (defn create-client-state
   "Create isolated state for a test client"
