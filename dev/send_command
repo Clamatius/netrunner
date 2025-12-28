@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -198,6 +198,9 @@ ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
   choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
   choose-card <N> - Choose card N from select prompt (for card-targeting effects)
+  multi-choose <cards...> - Select multiple cards for prompts like discard
+                     By name: multi-choose "Hedge Fund" "IPO" "Rashida"
+                     By index: multi-choose 0 1 2 3
   continue [flags] - Auto-continue until decision required (default: loop mode)
                      --single  Single-step mode (one action, then return)
                      --raw     Raw WebSocket pass (debugging only)
@@ -704,6 +707,42 @@ case "$COMMAND" in
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
         info "Choosing card at index $INDEX..."
         execute "(ai-actions/choose-card! $INDEX)"
+        ;;
+
+    multi-choose)
+        ensure_connection
+        if [[ $# -eq 0 ]]; then
+            error "Usage: send_command multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."
+        fi
+
+        # Check if all args are numeric (indices) or text (card names)
+        ALL_NUMERIC=true
+        for arg in "$@"; do
+            if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
+                ALL_NUMERIC=false
+                break
+            fi
+        done
+
+        if [[ "$ALL_NUMERIC" == "true" ]]; then
+            # Select by index
+            INDICES=("$@")
+            info "Multi-selecting cards at indices: ${INDICES[*]}"
+            ARGS_STR=""
+            for idx in "${INDICES[@]}"; do
+                ARGS_STR="$ARGS_STR $idx"
+            done
+            execute "(ai-actions/multi-choose!$ARGS_STR)"
+        else
+            # Select by card name
+            CARD_NAMES=("$@")
+            info "Multi-selecting cards by name: ${CARD_NAMES[*]}"
+            ARGS_STR=""
+            for name in "${CARD_NAMES[@]}"; do
+                ARGS_STR="$ARGS_STR \"$name\""
+            done
+            execute "(ai-actions/multi-choose!$ARGS_STR)"
+        fi
         ;;
 
     continue)

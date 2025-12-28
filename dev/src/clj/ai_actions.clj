@@ -115,6 +115,7 @@
 (def choose-option! prompts/choose-option!)
 (def choose-by-value! prompts/choose-by-value!)
 (def choose-card! prompts/choose-card!)
+(def multi-choose! prompts/multi-choose!)
 (def keep-hand prompts/keep-hand)
 (def mulligan prompts/mulligan)
 (def auto-keep-mulligan prompts/auto-keep-mulligan)

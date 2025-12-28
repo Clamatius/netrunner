@@ -831,9 +831,28 @@
           (doseq [[idx choice] (map-indexed vector (:choices prompt))]
             (println (str "    " idx ". " (core/format-choice choice)))))
         (when has-selectable
-          (println "  Selectable cards:" (count (:selectable prompt))
-                   "- Use choose-card! to select by index")
-          (let [selectable (:selectable prompt)]
+          (let [selectable (:selectable prompt)
+                prompt-msg (or (:msg prompt) "")
+                ;; Detect if this is a multi-select prompt
+                ;; Pattern 1: "choose N cards" in message
+                choose-n-match (re-find #"[Cc]hoose (\d+) cards?" prompt-msg)
+                ;; Pattern 2: Discard prompt - check hand vs max
+                gs (state/get-game-state)
+                hand-size (count (get-in gs [side :hand]))
+                max-hand-size (get-in gs [side :hand-size :total] 5)
+                is-discard? (str/includes? (str/lower-case prompt-msg) "discard")
+                cards-to-discard (when is-discard? (max 0 (- hand-size max-hand-size)))
+                cards-required (cond
+                                 choose-n-match (Integer/parseInt (second choose-n-match))
+                                 (and is-discard? (pos? cards-to-discard)) cards-to-discard
+                                 :else nil)]
+            ;; Show multi-select warning if applicable
+            (if cards-required
+              (do
+                (println (str "  ⚠️  MULTI-SELECT: Choose " cards-required " card(s)"))
+                (println "     Use: multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."))
+              (println "  Selectable cards: (Use choose-card! to select by index)"))
+            (println (str "  Available (" (count selectable) " cards):"))
             (doseq [[idx cid-or-card] (map-indexed vector selectable)]
               ;; Selectable can be CID strings or card maps - resolve CIDs to cards
               (let [card (if (string? cid-or-card)

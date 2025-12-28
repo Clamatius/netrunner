@@ -107,6 +107,107 @@
             (Thread/sleep core/short-delay))
           (println (format "❌ Could not resolve card at index %d" index)))))))
 
+(defn- find-card-in-selectable
+  "Find a card in the selectable list by name (case-insensitive substring match).
+   Returns the resolved card map or nil."
+  [card-name selectable]
+  (let [name-lower (clojure.string/lower-case (str card-name))]
+    (first
+     (keep (fn [cid-or-card]
+             (let [card (if (string? cid-or-card)
+                          (core/find-card-by-cid cid-or-card)
+                          cid-or-card)]
+               (when (and card
+                          (clojure.string/includes?
+                           (clojure.string/lower-case (str (:title card)))
+                           name-lower))
+                 card)))
+           selectable))))
+
+(defn multi-choose!
+  "Select multiple cards from a select prompt (e.g., discard to hand size).
+   Cards can be specified by name (substring match) or index.
+
+   Usage: (multi-choose! \"Hedge Fund\" \"IPO\" \"Rashida\")    ; By name
+          (multi-choose! 0 1 2 3)                              ; By index
+          (multi-choose! \"Hedge Fund\" 1 \"IPO\")             ; Mixed
+
+   The prompt auto-resolves when enough cards are selected."
+  [& card-refs]
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        prompt (get-in client-state [:game-state side :prompt-state])
+        selectable (:selectable prompt)
+        eid (:eid prompt)]
+    (cond
+      (not= "select" (:prompt-type prompt))
+      (do
+        (println "❌ No select prompt active")
+        (when prompt
+          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
+        {:status :error :reason "No select prompt active"})
+
+      (empty? selectable)
+      (do
+        (println "❌ No selectable cards in current prompt")
+        {:status :error :reason "No selectable cards"})
+
+      (empty? card-refs)
+      (do
+        (println "❌ No cards specified")
+        (println "   Usage: (multi-choose! \"Card Name\" \"Another Card\" ...)")
+        (println "      or: (multi-choose! 0 1 2 ...)  ; by index")
+        {:status :error :reason "No cards specified"})
+
+      :else
+      (let [;; Resolve selectable CIDs to cards upfront for name matching
+            resolved-selectable (map (fn [cid-or-card]
+                                       (if (string? cid-or-card)
+                                         (core/find-card-by-cid cid-or-card)
+                                         cid-or-card))
+                                     selectable)
+            ;; Track cards to select - find each referenced card
+            cards-to-select
+            (reduce
+             (fn [acc card-ref]
+               (cond
+                 ;; By index
+                 (number? card-ref)
+                 (if (< -1 card-ref (count selectable))
+                   (let [card (nth resolved-selectable card-ref)]
+                     (if card
+                       (conj acc {:card card :ref card-ref})
+                       (do (println (format "⚠️  Could not resolve card at index %d" card-ref))
+                           acc)))
+                   (do (println (format "⚠️  Invalid index: %d" card-ref))
+                       acc))
+
+                 ;; By name
+                 (string? card-ref)
+                 (if-let [card (find-card-in-selectable card-ref resolved-selectable)]
+                   (conj acc {:card card :ref card-ref})
+                   (do (println (format "⚠️  No selectable card matching: %s" card-ref))
+                       acc))
+
+                 :else
+                 (do (println (format "⚠️  Invalid card reference: %s" card-ref))
+                     acc)))
+             []
+             card-refs)]
+
+        (if (empty? cards-to-select)
+          (do
+            (println "❌ No valid cards found to select")
+            {:status :error :reason "No valid cards found"})
+          (do
+            (println (format "📇 Selecting %d card(s)..." (count cards-to-select)))
+            (doseq [{:keys [card ref]} cards-to-select]
+              (println (format "   → %s" (:title card)))
+              (ws/select-card! card eid)
+              (Thread/sleep core/short-delay))
+            (println "✅ Selection complete")
+            {:status :success :selected (count cards-to-select)}))))))
+
 ;; ============================================================================
 ;; Mulligan
 ;; ============================================================================
