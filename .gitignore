@@ -87,3 +87,4 @@ CLAUDE.local.md
 dev/.repl-counter
 dev/.error-state
 .env
+.forum/

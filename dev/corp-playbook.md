@@ -1,515 +1,207 @@
 # Corp Playbook
 
-**Purpose:** Strategic guidance for Corp play in Netrunner. Assumes you know the rules (see `netrunner-complete-mechanics.md`) and commands (see `send_command help`).
+**Purpose:** Strategic guidance for Corp play. Assumes rules knowledge (see `netrunner-complete-mechanics.md`).
 
-**Core objective:** Score 7 agenda points before Runner steals 7 (6s in tutorial game). Do this by creating scoring windows and exploiting Runner weaknesses.
-
-**Golden Rule:** Netrunner is a dynamic game and boardstate can override rules, never mind strategies - so strats here are heuristics at best.
-
-## Fundamental Principles
-
-### The Fundamental Asymmetry (Why Corp Is Hard)
-
-**Runner's base card includes:** `Click: Run any server.`
-
-This is always available. No setup. No cost beyond the click. Every unrezzed ICE is a free pass. Every naked server is a free access. The threat is permanent and omnidirectional.
-
-**Corp's base card:** Click for credit, draw, install, advance. No attack action. Everything is building toward a scoring window that Runner can disrupt at any time.
-
-**Mandatory draw is secretly a curse:**
-- Can't stop it
-- Floods HQ with agendas you can't score fast enough
-- Deck-out is a loss condition (Runner doesn't have this)
-
-**When both sides play poorly:** Runner wins by default. Runner's floor is "randomly check servers, eventually find 7 points." Corp's floor is "pray Runner doesn't run the right server." You must actively create situations where Runner's base action isn't good enough.
-
-### The Time Pressure
-
-**You are racing against the clock.** Runner has statistical inevitability (~17 random accesses to find 7 points). Your advantages:
-
-- **Information asymmetry:** You know what's in HQ, R&D, and remotes (Runner doesn't)
-- **Tempo control:** You choose when to install, advance, and score
-- **Deferred costs:** Install cards facedown (rez later only when needed, e.g. drip before start of turn)
-- **Flatline threat:** Deal damage > Runner's hand size = instant win
-
-**Your goal:** Score 7 points before Runner completes rig and applies relentless pressure.
-
-### The Click Economy (Corp Version)
-
-**You get 3 clicks + mandatory draw** (Runner gets 4 clicks, no mandatory draw).
-
-**This means:**
-- You have 3 effective clicks per turn (draw is automatic)
-- Every click-for-credit is 33% of your turn = **failure state**
-- Play economy cards instead as much as possible, that's why they're there
-
-**Click efficiency ratings:**
-- 1 click → 1 credit = **BAD** (basic action, desperation only)
-- 1 click → 4 credits = **GOOD** (Hedge Fund)
-- 1 click → install ICE protecting key server = **EXCELLENT**
-- 1 click → advance agenda toward scoring = **EXCELLENT**
-
-### Key Corp Deck Type Strats (often hybrids of these concepts)
-
-#### Always Be Jamming (ABJ)
-
-- Install cards in defended remotes constantly. Make Runner check everything and pay a tax to do so
-- Runner can't tell agendas from assets from traps
-- Every check costs Runner tempo (clicks, credits, damage)
-- Forces Runner into difficult decisions
-- Some checks will be too expensive → you score
-- Single remote has highest tax but e.g. dual allows separate drip and scoring remotes
-
-#### Kill
-- Winning with agendas is the backup plan
-- Typically requires significant density of kill combo in deck so it's obvious if your deck is of this kind
-- Examples: tag-into-meat damage, a Weyland speciality. Net damage, from Jinteki. Rarely, brain damage combos from Haas-Bioroid.
-- Sometimes tries to fork runner - let corp score or flatline
-
-#### Spam
- - Generate many, typically undefended remotes with annoying trash costs or effects
- - Decks usually constrain runner actions somehow (e.g. net damage on trashing things)
-
-#### Glacier
-
- - Build a giant remote and accept early agenda losses
- - Usually has some kind of ETR upgrades so that simple icebreakers will not work
-
-## ICE Placement Strategy
-
-**Rule of thumb priority order for ICE:**
-
-1. **R&D first** (most attacked server, protects future draws)
-2. **HQ second** (prevents agenda sniping from hand)
-3. **Scoring remote third** (when ready to score)
-4. **Archives last** (usually undefended unless running recursion)
-
-Note install cost + 1 per existing ICE. Final choice here depends on deck and what runner is doing.
-
-**ICE sequencing (outermost to innermost):**
-
-Ideally, try to ETR on inner ice and annoyance outside it. Don't assume ice will actually fire, it's a tax.
-
-**Installation cost:** Installing ICE costs 1 credit per ICE already protecting that server.
-- First ICE on server: 0 credits
-- Second ICE: 1 credit
-- Third ICE: 2 credits
-
-**You can trash existing ICE before installing** to reduce installation cost.
-
-### Rez Timing
-
-**CRITICAL: "Deferred rez" does NOT mean "maybe don't rez"**
-
-The point of installing ICE facedown is to rez it WHEN THE RUN MATTERS. A run on a 3-point agenda matters. That's the moment to rez.
-
-**When to rez ICE:**
-- **Cheap ICE (2-4 credits):** Rez immediately when approached (establish board presence)
-- **Expensive ICE (5+ credits):** Wait until Runner commits to run (they've spent clicks)
-- **Damage ICE:** Rez when Runner has small hand (lethal threat)
-- **When protecting something important:** REZ IT. Don't let a 6-credit ICE sit unrezzed while Runner steals a 3-point agenda.
-
-**Before rezzing, check:**
-```
-1. Can I afford the tempo hit? (Rezzing Brân for 6 when you have 7 = crippled next turn)
-2. What am I BUILDING toward? (Rez to create a reusable taxing server, not just to stop one run)
-3. Can Runner afford to break? (If not, rez is very valuable)
-4. Does the ICE generate value even if broken? (See Brân example below)
-```
-
-**Example: Paying the gold price for Brân**
-```
-You have: 12 credits, unrezzed Brân on asset server, Palisade in hand
-Runner runs. You rez Brân (now at 6 credits).
-
-Brân's first sub: "Install 1 ICE from HQ directly inward, ignoring all costs"
-→ Drop Palisade BEHIND Brân. Free install, still facedown.
-Subs 2-3: ETR, ETR. Run ends.
-
-Result: 2-ICE stack where inner ICE is mystery to Runner.
-Next turn: Install Regolith behind both, rez, start mining.
-Runner now faces Brân + ??? + economy engine.
-
-Even if Runner BREAKS the ETRs but lets sub 1 fire, you got a free ICE install.
-Brân generates value even when "broken."
-```
-
-**The key insight:** You don't pay 6 credits to stop ONE run. You pay it to BUILD a taxing server that will stop MANY runs. If you don't have follow-up (economy, more ICE, agenda to score), maybe don't rez yet - give up the access, save for a better moment.
-
-**Don't rez when:**
-- You can't afford it (need credits for other priorities)
-- Runner has breaker for that ice that's very cheap to use in the matchup
-- Run is on low-value server that you think it will be a mistake to access anyway
-- Server is empty or contains expendable asset
+**Core truth:** You score 7 points before Runner steals 7. Everything else is how.
 
 ---
 
-## Scoring Windows
+## The Shape of the Game
 
-**Identify and exploit these situations:**
+### The Go Analogy
 
-### 1. Runner Is Poor (< 5 credits)
-```
-Runner can't afford to break your ICE
-Action: Install agenda in remote, advance, score before they rebuild economy
-```
+Netrunner shares DNA with Go. If you know Go, let the concepts resonate:
 
-### 2. Runner Missing Breaker Type
-```
-Check Runner's rig (visible in board state)
-No X type breaker - (note some AI breakers break all ice)? Put agenda behind X ICE
-They can't contest without that breaker type if it ETRs
-```
+- **Influence:** An unrezzed ICE doesn't protect a server—it makes Runner *calculate*. The threat is the value. A card on the board projects force beyond its immediate position.
 
-### 3. Runner Has Small Hand (1-2 cards)
-```
-If you have damage ICE/traps:
-- Install and advance agenda in remote
-- If they run: Damage ICE can flatline them
-- If they don't run: You score
-Win-win situation
-```
+- **Aji (latent potential):** Every facedown card has aji. It could be Brân. It could be nothing. Runner must respect the possibility until proven otherwise.
 
-### Fast Advance
+- **Sente/Gote:** Who's dictating tempo? When you install-advance-advance, Runner must respond or concede the score. That's sente. When you're clicking for credits while Runner builds, that's gote.
 
-**Score agendas in one turn** (no response window for Runner):
+- **Thickness:** A three-ICE server isn't three times as strong as one ICE—it's exponentially more taxing. Depth compounds. ICE only taxes if you force runs through it via threat.
 
-**Seamless Launch pattern:**
-```
-Standard 3-cost agenda: 3 turns minimum
-  Turn 1: Install
-  Turn 2: Advance 3 times
-  Turn 3: Score
+- **Reading:** What is Runner *likely* to do, not what *could* they do? They saw economy in HQ—are they really coming back? They're missing a Fracter—what does that unlock?
 
-Fast advance with Seamless Launch: 1 turn
-  Same turn: Install, play Seamless Launch (+2 adv), advance (+1), score
-  Total: 1 turn, 3 clicks
-  Runner cannot respond
-```
+The fundamental insight: **every install reveals where you didn't install.** Runner will probe your gaps. Each of your ~20 installs per game shapes the entire board.
 
-**When to fast advance:**
-- Runner has complete rig (can contest any remote)
-- You need points urgently (behind on score)
-- HQ is flooded with agendas (need to score them quickly)
+### The Asymmetry
+
+**Runner's identity card says:** `Click: Run any server.`
+
+Always available. No setup. No cost. The threat is permanent and omnidirectional.
+
+**Your identity card:** Click for credit, draw, install, advance. No attack action. Everything you do builds toward a scoring window that Runner can disrupt at any time.
+
+**When both sides play poorly:** Runner wins by default. Their floor is "randomly check servers, eventually find 7 points." Your floor is "pray." You must actively create situations where their base action isn't good enough.
+
+### The Race
+
+Runner has statistical inevitability—roughly 17 random accesses finds 7 points. You're not trying to lock them out forever. You're trying to score faster than they can accumulate accesses.
+
+Your advantages:
+- **Information:** You know what's everywhere. They're guessing.
+- **Timing:** You choose when to advance, when to rez, when to score.
+- **Deferred costs:** Install now, pay later (maybe never, if they don't run).
+- **Lethality:** Damage > grip = instant win. They have no equivalent.
 
 ---
 
-## Economic Management
+## Thinking Tools
 
-**Your economy engine:**
+These aren't rules. They're lenses. Apply them and the right move often becomes visible.
 
-1. **Mandatory draw** (automatic every turn)
-2. **Economy Operations** (note min costs)
-3. **Economy assets** (note rez costs)
+### "What happens after?"
 
-**Never click for credits** unless desperate. Cards are 4-8× more efficient. But don't overdraw and agenda flood HQ.
+Before executing any plan, trace it forward one more turn.
 
-### Economy Assets: Worth Defending or Not
+The scoring line that leaves you at 2 credits with a dead Government Subsidy in hand isn't a win—it's a trap. The agenda point isn't worth the collapsed position.
 
-Economy assets fall into two categories based on click investment:
+Ask: "I score this. Then what? What do I do next turn? What does Runner do? Am I ahead or scrambling?"
 
-**Active Economy (DEFEND THIS)** - e.g., Regolith Mining License
-```
-Regolith: Rez 2, loads 15 credits. Click: Take 3 credits.
+### "Where would this ICE go ideally?"
 
-This is CLICK-BASED, not turn-based. One turn behind strong ICE:
-- Start of turn: Rez for 2 (loads 15)
-- Click 1: Take 3 (you're at +1 net, 12 remaining)
-- Click 2: Take 3 (you're at +4 net, 9 remaining)
-- Click 3: Take 3 (you're at +7 net, 6 remaining)
+When you draw ICE, picture the board. Where does this piece *want* to be?
 
-That's Hedge Fund value PLUS efficient clicking. And 6 credits still on it!
-Next turn: Take 6 more, install something good in same server.
+- Karunā wants to be outermost on a scoring remote—facecheck threat plus ETR if they're scared.
+- Whitespace wants to be where Runner is poor and testing early.
+- Brân wants to be where you'll have ICE in hand to install behind it.
 
-Put this behind your best ICE. You're going to be working it.
-Runner must click-through Brân (3 clicks) + pay 3 trash = entire turn + money.
-If they don't run, you get +13 net credits over 2 turns.
-```
+Protect where you need to. Don't protect where you don't. And don't expect the subs to fire—ICE is a tax, not a wall. That means that server reuse is vital, to extract that tax as many times as possible.
 
-**Passive Economy (EXPENDABLE)** - e.g., Nico Campaign
-```
-Nico: Rez 2, loads 9 credits. When your turn begins, take 3.
+### "What is Runner likely to do?"
 
-This is TURN-BASED. Zero clicks after install.
-Lower yield (+7 net + 1 card) but completely hands-off.
+Not what *could* they do. What *will* they probably do given what they know?
 
-Two uses:
-1. Drip server: Light ICE, taxing but not your main remote.
-   It ticks while you focus elsewhere.
-2. Bait: In scoring server, forces a decision:
-   - Runner runs → pays ICE tax + 2 trash, you install real agenda next turn
-   - Runner ignores → you rez, start collecting (behind turn 1, ahead by turn 3)
+They just checked HQ and saw two economy cards. Are they running HQ again? Probably not—they're looking elsewhere now. Don't waste Karunā protecting against a run that isn't coming.
 
-Only costs 1 click ever (the install). If Runner trashes it, you lost a click,
-they lost a run + 2 credits + ICE tax. Often a good trade for you.
-```
+They're missing a Fracter and have been drawing for two turns. Do they have it now? Maybe—but if they did, would they still be drawing? Read the behavior.
 
-**The key insight:** Active economy demands protection because you're investing clicks. Passive economy can be opportunistic - treat it as bait or background income.
+### "Where's the scoring window?"
 
-### Credit Planning
+A window is any situation where Runner can't profitably contest your remote:
+- They're poor (can't afford ICE tax)
+- They're missing a breaker type (can't get through)
+- Their grip is small (damage threatens flatline)
+- They're committed elsewhere (spent clicks on economy/rig)
 
-**Before rezzing ICE, remember you need to do things afterwards. Can you afford it in the big picture?**
+Windows open and close. When you see one, act. The next draw might give them what they need.
+
+### "Money is threat"
+
+Credits aren't just for paying costs. A rich Corp is terrifying.
+
+At 20 credits, every unrezzed ICE could be anything. Every remote could be defended. Runner has to guess what you'll rez and whether they can afford the break. The threat is real even if you never spend the money.
+
+A poor Corp is transparent. Runner knows what you can and can't do.
+
+Build economy not just to rez things, but to project uncertainty.
 
 ---
 
-## Agenda Management
+## Patterns Worth Knowing
 
-### The Draw Trap
+These aren't prescriptions. They're situations you'll recognize and possible responses.
 
-**Fast drawing:**
-- Good: Find agendas faster → score faster
-- Bad: Flood hand with agendas → Runner steals from HQ
+### The Jam
 
-**Hand size management:**
-```
-Max hand size: 5 cards
-Agendas in hand: 2
-Risk level: HIGH (40% of hand is agendas)
+You have ICE and an agenda. Runner is setting up.
 
-Options:
-1. Install both in different remotes (split Runner attention)
-2. Install one, keep one (still risky if HQ run)
-3. Score one immediately (requires scoring window)
-4. Fast advance (Seamless Launch)
-```
+Install agenda in remote, advance, advance. Now they have a decision: check it (pay the ICE tax, maybe hit a trap, definitely lose tempo) or let it sit (you might score).
 
-**If agenda flooded (3+ agendas in hand):**
-1. Install all agendas in remotes immediately
-2. ICE HQ heavily (prevent HQ runs)
-3. Accept some might be stolen (minimize damage). Force consecutive runs to open the scoring window.
-4. Worst case: consider bluffing Archives discard. V risky. If rich, icing Archives can make Runner check sometimes.
+Every install that could be an agenda forces this decision. That's the pressure. Install something every turn if you can—make them pay to verify.
 
-### When to Draw Beyond Mandatory
+### The Feint
 
-**Corp already gets 1 free draw per turn.** Additional draws are for specific purposes:
+You have economy and no agenda. Runner expects you to jam.
 
-**Draw extra when:**
-- Desperately need ICE (R&D undefended, Runner building rig)
-- Looking for fast-advance tools (Seamless Launch)
-- Need economy (poor, can't rez installs)
+Bait with assets or upgrades. If they don't run it, cash in if you can. If they do, tax them. Assets take up the scoring remote. Overwriting is possible and sometimes the right play - but you write off the investment. If you do it 3 turns in a row, does the runner check the remote *then*?
 
-**Drawing risky when:**
-- HQ has 2+ agendas (flooding risk)
-- About to score (use clicks for advancing, not fishing)
-- Runner pressuring HQ (drawing adds more agendas to vulnerable hand)
+When the agenda comes, they've already decided you'd have installed it if you had it. The bluff creates the window.
 
----
+### The Lock
 
-## The Bluff Game
+Runner is missing a breaker type. You have that ICE.
 
-**Every facedown card is Schrödinger's Agenda** (to Runner).
+Put your agenda behind the ICE they can't break. Simple, brutal, effective. Check their rig before every install—gaps are scoring windows.
 
-### Never-Advance Strategy
+Note: Bioroids can be clicked through. The lock is economic, not absolute.
 
-**Install agendas without advancing them:**
-```
-Turn 5: Install card in remote (0 counters)
-Turn 6: Play Seamless Launch (+2), advance (+1), score
-  Runner thought: "0 counters = probably asset, safe to ignore"
-  Reality: Scored in one turn, no warning
-```
+### The Pivot
 
-**Maintain the bluff:**
-- Advance assets occasionally (make them look like agendas)
-- Never-advance agendas (make them look like assets)
-- Install in same remote repeatedly (all installs ambiguous)
-- Use scoring window tactics even for assets
+Your scoring remote is compromised—they have all the breakers, the credits, the access.
 
-### Trap Play
+Don't feed it more agendas. Switch to fast advance if you have it, or build a new, more taxing remote if your ice is weak enough to not be worth reinforcing. A compromised remote is a trap for *you*.
 
-**Expect: typical traps do not kill the runner but act as a tempo hit and occasional free wins, forcing runss**
+### The Sacrifice
 
-**Advanced cards are a much bigger investment but will likely bait runs harder - a double advance threatens 5/3 score**
+Sometimes an agenda is worth less than the position it creates.
 
-## Turn Efficiency Patterns
+Send a Message lets you rez ICE for free when scored OR stolen. Install it, advance it, let them take it—get a free Brân rez. Now score the next agenda behind that rezzed Brân.
 
-**Corp turn structure:**
-``
-1. Gain clicks (usually 3)
-2. Mandatory draw (automatic)
-3. Take actions (install, advance, play operations)
-4. Discard to hand size (5 - their discards are face down unless Archives is run, so can be agendas)
-```
-
-* Have a plan at start of turn for all your clicks.
-* You are in a race against time. The runner will access but you need to win.
-* You win that race primarily by running them out of money.
+Only valid if you have follow-up. No follow-up = not a sacrifice, just a loss.
 
 ---
 
-## Win Conditions
+## Reading the Runner
 
-**Primary:** Score 7 agenda points before Runner steals 7. (6s in tutorial)
-
-**The race:**
-- You score from remotes (controlled timing)
-- Runner steals from centrals + remotes (volume)
-- You must score faster than they accumulate accesses
-
-**[Typically] Secondary: Flatline**
-
-Deal damage > Runner's hand size = instant win. Not all decks have this capability. 
-Unless the deck is dedicated to it, this is occasional free wins from Runner error but
-mostly tempo hit from card loss.
-
-**Tertiary: Deck Out**
-
-Corp draws from empty stack = instant win for runner.
-
----
-
-## Advanced Concepts
-
-### The Gambit: Trading Agenda for Position
-
-Some agendas have "when stolen" triggers that benefit you. Example: Send a Message lets you rez 1 ICE for free when scored OR stolen.
-
-**The King's Gambit pattern:**
-```
-Turn N: Install 5/3 agenda behind unrezzed Brân 1.0
-Turn N: Advance twice (signals "come get it")
-Runner runs, you DON'T rez (can't afford 6 credits, or choosing not to)
-Runner steals → Send a Message trigger → rez Brân for FREE
-
-Cost: 3 agenda points, ~5 credits (install + advances)
-Gain: 6-credit ICE rezzed, Runner spent a click
-```
-
-**THIS IS ONLY VALID IF YOU HAVE FOLLOW-UP:**
-```
-Turn N+1: Install Palisade on same server (Brân + Palisade stack)
-Turn N+1: Install 4/2 agenda, advance once
-Turn N+2: Advance twice, score
-
-Now Runner faces Brân (6+ credits or 3 clicks) PLUS Palisade (barrier ETR).
-You score 2 points back and have a reusable scoring remote.
-```
-
-**If you don't have follow-up, it's not a gambit - it's just losing.**
-
-The Corp agent in Autonomous Game 1 got a free Brân from Send a Message, then abandoned Server 1 and built naked remotes elsewhere. That's paying for dinner and leaving before eating.
-
-### Server Discipline
-
-**Build depth, not breadth.**
-
-```
-GOOD: Server 1 with Brân + Palisade (2 ICE stack, taxing)
-BAD: Server 1 with Brân, Server 2 with Tithe, Server 3 with Whitespace
-
-The first forces Runner to pay 9+ credits per access.
-The second gives Runner three servers to check for 1-3 credits each.
-```
-
-**Don't abandon good servers:**
-- If you have a rezzed Brân on Server 1, USE IT
-- Install your next agenda/asset behind the ICE you already paid for
-- Building a new remote means starting from scratch
-
-**When to make a new remote:**
-- Your scoring remote is compromised (Runner can break everything cheaply)
-- You need a drip server separate from scoring server
-- You're flooding and need to spread agendas (desperate)
-
----
-
-## Common Mistakes to Avoid
-
-1. **Drawing excessively**
-2. **Installing agendas without ICE** - Runner gets free steals
-3. **Not jamming enough** - Runner ignores remotes, builds rig safely, then pressures centrals
-4. **Overprotecting one server** - 4 ICE on HQ, 0 on R&D = Runner farms R&D freely
-5. **Rezzing ICE too early** - Rez when Runner commits to run, not during install
-6. **Clicking for credits repeatedly** - Play economy cards instead (4-8× better)
-7. **Not re-using servers** - Force re-runs (don't abandon rezzed ICE!)
-8. **Not using fast-advance**
-9. **Ignoring Runner's rig** - Esp. check what breakers they have, exploit missing types
-10. **Flooding HQ with agendas** - Install them immediately, don't let them accumulate
-11. **Not rezzing when it matters** - "Deferred rez" means rez when run matters, not "never rez"
-12. **Abandoning good positions** - If you have a taxing server, use it
-
----
-
-## Matchup-Specific Strategy
-
-### vs Aggressive Runner
-
-**Pattern:** Runner checks all remotes, runs early and often.
-
-**Counter:**
-- Install something every turn on a taxing remote.
-
-### vs Economic Runner
-
-**Pattern:** Runner builds credits, only runs when rich (10+ credits).
-
-**Counter:**
-- Rush early (score before they're ready) and build econ behind light ICE
-- Fast advance (Seamless Launch, can't be contested)
-- Tax heavily (expensive ICE on scoring server, drain credits)
-- Jam multiple remotes (can't afford to check all)
-- Consider point trade if ahead
-
-### vs Rig-Building Runner
-
-**Pattern:** Runner installs breakers for 3-4 turns before running.
-
-**Counter:**
-- Score aggressively during build phase
-- Install agendas in remotes early
-- Advance and score before rig complete
-- If they complete rig: Fast advance remaining agendas
-
----
-
-## Reading Runner Intent
-
-**Runner tells:**
+Runner behavior tells you things:
 
 **Not running for 2+ turns:**
-- Building rig (missing breakers)
-- Building economy (poor)
-- Action: Score now (they can't contest)
-
-**Running HQ repeatedly:**
-- Trying to steal from hand
-- Suspects agenda flood
-- Action: Install agendas in remotes, ICE HQ heavily
-
-**Running R&D with multi-access:**
-- Committed to R&D pressure strategy
-- Likely has complete rig
-- Action: Fast advance, score before they find agendas
-
-**Checking remotes aggressively:**
-- Afraid of you scoring
-- Has credits to contest
-- Action: Use traps to punish, or score in heavily ICE'd remote
+They're building—rig, economy, or both. This is your window. Score now while they can't contest.
 
 **Clicking for credits:**
-- Poor economy
-- Can't afford to run
-- Action: Scoring window, install and advance NOW
+They're poor. Window is open. Install-advance-advance before they rebuild.
+
+**Drawing repeatedly:**
+They're missing something—breaker, economy, or trick. If you know what, exploit the gap.
+
+**Checking every remote:**
+They're scared of you scoring. Good. Make them pay for every check. Or install a trap.
+
+**Pressuring one central:**
+They've committed to a strategy (R&D lock, HQ snipe). Fortify that server or fast-advance around them.
 
 ---
 
-**Scoring priority:**
-```
-Higher value = fewer scoring windows needed to win
-But: Lower cost = faster to score. 5/3 needs multiple fast-advances on one turn even if installed
-Note that scoring is a big tempo hit for you unless the agenda does something very good on score - don't forget economy
-Balance: Score what you can when windows appear
-```
+## Common Traps (For You)
 
-**Emergency situations:**
-```
-Runner at game point → They need 1 score to win, defend ALL servers that could have agendas
-HQ flooded (3+ agendas) → Install all, ICE HQ, score fastest
-Poor (< 3 credits) → Play economy cards, click for credits, can't rez ICE
-R&D naked + Runner has rig → ICE R&D immediately or lose to pressure
-```
+These aren't mistakes to avoid—they're attractors that pull you toward losing positions. Notice when you're drifting toward them.
 
+**The draw spiral:** Keep drawing to find "the answer." Meanwhile, HQ fills with agendas and Runner farms it.
 
-**Remember:** You control the tempo. Create scoring windows, exploit Runner weaknesses, and jam constantly.
+**The naked agenda:** Install without ICE because you need to score. Runner checks for free.
 
-Score fast → win before Runner's statistical advantage takes over.
+**The scattered board:** ICE on four servers, one deep each. Runner picks the cheapest. Build depth, not breadth. Check the board state if you're unsure.
+
+**The abandoned position:** Rezzed Brân on Server 1, but you're building Server 2. You already paid for that Brân—use it.
+
+**The credit click:** 1 click = 1 credit. If this is your turn, something went wrong. Economy cards exist.
+
+**The unrezzed scoring remote:** 3-point agenda, two unrezzed ICE, you have the credits. Runner runs. You don't rez because... why? Rez it. That's what it's for.
+
+**Advancement costs:** Your default win con. Be aware. 3/1 is scorable in 2 turns - install, leave alone like an asset, triple advance. 4/2 or bigger needs at least one advancement first and is a huge signal of agenda when you do. Stolen advancements are just lost.
+
+---
+
+## The Tempo of a Game
+
+**Early game:** Runner is poor, missing breakers. You're also poor, missing ICE. Both sides are building. The player who builds faster wins this phase—but "building" means different things. For you: get economy online and ICE on R&D. For them: find breakers and test your defenses.
+
+**Mid game:** They have some breakers, you have some servers. Now it's about windows. Can you score before they complete their rig? Can they steal before you stabilize? Scoring here is often correct—don't wait for the perfect fortress.
+
+**Late game:** Both sides are developed. The race is explicit: who gets to 7 first? This is where deep remotes matter, where every access is dangerous, where fast advance wins games.
+
+**Winning With Agendas**: Scoring itself is usually a tempo loss from the sheer expenditure. Each advancement click is -2 credits from simply clicking for a credit in opportunity cost.
+
+---
+
+## A Final Thought
+
+The Runner is playing a different game than you. They explore. You construct.
+
+Every turn, ask: "What am I building toward? What's my plan for scoring the next agenda? Am I creating threat, or reacting?"
+
+When you're creating threat, you're playing Corp.
+When you're reacting, they're playing you.
+
+Build. Threaten. Score.

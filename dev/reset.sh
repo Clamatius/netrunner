@@ -105,6 +105,7 @@ run_step "Bouncing AI clients" 1 "$SCRIPT_DIR/ai-bounce.sh"
 # Step 2: Create and join game
 run_step "Creating self-play game" 2 "$SCRIPT_DIR/ai-self-play.sh"
 
+
 # Step 3: Corp keeps hand
 run_step "Corp keeping hand" 3 "$SCRIPT_DIR/send_command corp keep-hand"
 

@@ -31,7 +31,7 @@ echo ""
 
 # Step 1: Corp creates a lobby
 echo "📋 Corp creating game lobby..."
-TIMEOUT=10 ./dev/ai-eval.sh corp 7890 '(ai-actions/create-lobby! "AI Self-Play Test")'
+TIMEOUT=10 ./dev/send_command corp create-game "AI Self-Play Test"
 sleep 2
 
 # Step 2: Get the game ID from Corp's state
@@ -48,7 +48,7 @@ echo ""
 
 # Step 3: Runner joins the game
 echo "🏃 Runner joining game..."
-TIMEOUT=10 ./dev/ai-eval.sh runner 7889 "(ai-actions/connect-game! \"$GAME_ID\" \"Runner\")"
+TIMEOUT=10 ./dev/send_command runner join "$GAME_ID" Runner
 sleep 3
 
 # Step 4: Start the game
@@ -58,26 +58,4 @@ echo "🎮 Starting game..."
 sleep 2
 
 echo ""
-echo "✅ Game started!"
-echo ""
-echo "Game ID: $GAME_ID"
-echo ""
-echo "Monitor game state:"
-echo "  Runner: ./dev/ai-eval.sh runner 7889 '(ai-actions/status)'"
-echo "  Corp:   ./dev/ai-eval.sh corp 7890 '(ai-actions/status)'"
-echo ""
-echo "View shared HUD: cat CLAUDE.local.md"
-echo ""
-echo "Next steps (manual):"
-echo "  1. Keep/mulligan hands for both players"
-echo "  2. Use ai-actions commands to play the game"
-echo ""
-echo "Example commands:"
-echo "  # Keep hands"
-echo "  ./dev/ai-eval.sh runner 7889 '(ai-actions/keep-hand)'"
-echo "  ./dev/ai-eval.sh corp 7890 '(ai-actions/keep-hand)'"
-echo ""
-echo "  # Show prompts"
-echo "  ./dev/ai-eval.sh runner 7889 '(ai-actions/show-prompt)'"
-echo "  ./dev/ai-eval.sh corp 7890 '(ai-actions/show-prompt)'"
-echo ""
+echo "✅ Game started - Game ID: $GAME_ID"

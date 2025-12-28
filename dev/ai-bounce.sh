@@ -86,12 +86,12 @@ if [ -n "$GAME_ID" ]; then
 
   # Resync both clients
   echo "   Resyncing Runner..."
-  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" runner $CLIENT_1_PORT "(ai-actions/resync-game! \"$GAME_ID\")" || true
+  TIMEOUT=10 "$SCRIPT_DIR/send_command" runner resync "$GAME_ID" || true
 
   sleep 2
 
   echo "   Resyncing Corp..."
-  TIMEOUT=10 "$SCRIPT_DIR/ai-eval.sh" corp $CLIENT_2_PORT "(ai-actions/resync-game! \"$GAME_ID\")" || true
+  TIMEOUT=10 "$SCRIPT_DIR/send_command" corp resync "$GAME_ID" || true
 
   sleep 2
 
