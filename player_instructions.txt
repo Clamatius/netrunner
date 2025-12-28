@@ -1,125 +1,5 @@
 \033[0;34mAI Player Command Interface\033[0m
 
-\033[1;33mMulti-Client Usage:\033[0m
-  ./send_command runner <action> [args...]  - Send command to Runner client (port 7889)
-  ./send_command corp <action> [args...]    - Send command to Corp client (port 7890)
-  ./send_command <action> [args...]         - Send to default client (backward compatible)
-
-\033[1;33mExamples:\033[0m
-  ./send_command runner status              - Check Runner's game status
-  ./send_command corp create-game "Test"    - Corp creates a game
-  ./send_command runner keep-hand           - Runner keeps mulligan
-  ./send_command corp start-game            - Corp starts the game
-
-\033[0;32mStatus Commands:\033[0m
-  status          - Show game state (turn, credits, clicks, hand size)
-  board           - Show full game board (servers, ICE, rigs)
-  hand            - Show cards in hand
-  prompt          - Show current prompt (if any)
-  credits         - Show current credits
-  clicks          - Show remaining clicks
-  archives        - Show Corp's Archives (faceup/facedown cards)
-  log [N]         - Show last N game log entries (default: 20)
-  card-text <name>   - Look up card information (type, cost, text)
-  abilities <name>   - Show abilities for installed card
-  list-playables  - List all currently playable actions (cards, abilities)
-
-\033[0;32mBasic Actions:\033[0m
-  start-turn      - Start your turn (gain clicks, Corp draws card)
-  indicate-action - Signal you want to use paid ability (pauses game)
-  take-credit     - Spend 1 click to gain 1 credit
-  draw            - Spend 1 click to draw 1 card
-  end-turn [--force] - End your turn (requires --force if clicks remain)
-  smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
-
-\033[0;32mMulligan & Hand Management:\033[0m
-  keep-hand       - Keep starting hand
-  mulligan        - Mulligan (redraw) starting hand
-  discard         - Auto-discard down to maximum hand size
-  discard <name>... - Discard specific cards by name (e.g., discard "Sure Gamble" "Diesel")
-  discard <N>...  - Discard specific cards by index (e.g., discard 0 2 4)
-
-\033[0;32mCard Actions:\033[0m
-  play <name>     - Play card by name (e.g., "Sure Gamble")
-  play-index <N>  - Play card by index (0-4)
-  use-ability <name> <N>  - Use installed card's ability N (e.g., "Smartware Distributor" 0)
-  use-runner-ability <name> <N> - Use runner ability on Corp card (e.g., "Brân 1.0" 0 for bioroid)
-  trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
-  rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
-  fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
-  auto-pass       - Toggle auto-pass priority during runs (Corp only)
-  advance <name>  - Advance installed card (Corp only: agendas, ICE, assets)
-  score <name>    - Score agenda with sufficient advancement counters (Corp only)
-
-\033[0;32mRunner Actions:\033[0m
-  run <server>    - Run on server (HQ, "R&D", Archives, remote1, etc.)
-  let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
-
-\033[0;32mPrompts:\033[0m
-  choose <N>      - Choose option N from current prompt (0, 1, 2...)
-  choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
-  choose-card <N> - Choose card N from select prompt (for card-targeting effects)
-  continue        - Continue/pass priority (for paid ability windows, run phases)
-  continue-run    - Smart run handler (auto-continues both players, stops at decisions)
-  jack-out        - Jack out of current run (end run unsuccessfully)
-  wait-for-diff [seconds] - Wait for game state change (shows recent log)
-  wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
-
-\033[0;32mLobby:\033[0m
-  create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
-  start-game      - Start game (after creating and opponent joins)
-  auto-start      - Auto-start game if lobby is ready (validates 2 players with valid decks)
-  leave-game      - Leave current game lobby
-  list-lobbies    - List available games to join
-  join <game-id> <side>  - Join game as Runner or Corp
-  resync <game-id>       - Rejoin already-started game
-  chat <message>         - Send chat message to game
-
-\033[0;32mInstallation:\033[0m
-  install <name> [server]  - Install card by name (Corp needs server: HQ, "R&D", "New remote")
-  install-index <N> [server] - Install card by index (Corp needs server)
-
-\033[0;32mConnection:\033[0m
-  connect         - Manually reconnect WebSocket to server
-
-\033[0;32mAdvanced:\033[0m
-  eval <expr>     - Execute arbitrary Clojure expression
-
-\033[1;33mTurn Timing Quick Reference:\033[0m
-  \033[0;34mCorp Turn:\033[0m gain clicks → draw card → take actions → discard to hand size
-    • Use 'continue' to advance through paid ability windows
-    • Clicks must be spent before end-turn
-    • Discard happens before turn formally ends
-
-  \033[0;34mRunner Turn:\033[0m gain clicks → take actions → discard to hand size
-    • No mandatory draw (unlike Corp)
-    • Use 'continue' to advance through paid ability windows
-    • Clicks must be spent before end-turn
-
-  \033[0;34mRun Sequence:\033[0m initiation → approach ice → encounter ice → movement → access/jack out
-    • Initiation: 'run <server>' then 'continue'
-    • Approach: Corp may rez ice, then 'continue'
-    • Encounter: Break subs with icebreakers, then 'continue'
-    • Movement: Can 'jack-out' here, otherwise 'continue' to next ice or server
-    • Access: 'choose-value steal/trash/"no action"' for each accessed card
-    • Use 'continue-run' for automated run handling (stops at decisions)
-
-  \033[0;34mCommon Stuck States:\033[0m
-    • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn
-    • Run stopped → Check 'prompt' to see what decision is needed
-    • Turn won't end → Check 'prompt' for blocking discard/ability prompts
-
-\033[1;33mExamples:\033[0m
-  ./send_command status
-  ./send_command list-lobbies
-  ./send_command take-credit
-  ./send_command play "Sure Gamble"
-  ./send_command install "Daily Casts"
-  ./send_command run "R&D"
-  ./send_command choose 0
-  ./send_command choose-value keep
-  ./send_command end-turn
-
 # AI Player Game Reference
 
 ## Overview
@@ -128,8 +8,9 @@ This document describes the command interface for controlling the AI player in N
 
 **Usage:**
 ```bash
-./dev/send_command <command> [arguments]
+./dev/send_command <side> <command> [arguments]
 ```
+If you don't already have the help for send_command in context, you will want to run send_command <side> help to make sure you have the latest version and avoid document drift.
 
 ## Core Concepts
 
