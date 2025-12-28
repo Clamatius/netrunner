@@ -542,7 +542,7 @@
 
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.
-   Searches Corp servers (ICE, content), Runner rig, and hands.
+   Searches Corp servers (ICE, content), Runner rig, hands, and play areas.
    Returns the card map or nil if not found."
   [cid]
   (let [gs (state/get-game-state)
@@ -556,8 +556,12 @@
         ;; Hands
         corp-hand (get-in gs [:corp :hand])
         runner-hand (get-in gs [:runner :hand])
+        ;; Play areas (for events like Overclock with active effects during runs)
+        corp-play-area (get-in gs [:corp :play-area])
+        runner-play-area (get-in gs [:runner :play-area])
         ;; All searchable cards
-        all-cards (concat all-ice all-content runner-cards corp-hand runner-hand)]
+        all-cards (concat all-ice all-content runner-cards corp-hand runner-hand
+                          corp-play-area runner-play-area)]
     (first (filter #(= cid (:cid %)) all-cards))))
 
 ;; ============================================================================

@@ -263,10 +263,12 @@
     (some #(= (:text %) indicate-pattern) (take 5 log))))
 
 (defn has-real-decision?
-  "True if prompt has 2+ meaningful choices (not just Done/Continue)"
+  "True if prompt has 2+ meaningful choices (not just Done/Continue),
+   or has 1+ selectable cards (for 'select' type prompts like credit sources)."
   [prompt]
   (when prompt
     (let [choices (:choices prompt)
+          selectable (:selectable prompt)
           non-trivial (remove (fn [choice]
                                (let [value (clojure.string/lower-case (:value choice ""))]
                                  (or (= value "continue")
@@ -274,7 +276,8 @@
                                      (= value "ok")
                                      (= value ""))))
                              choices)]
-      (>= (count non-trivial) 2))))
+      (or (>= (count non-trivial) 2)
+          (seq selectable)))))
 
 (defn corp-has-rez-opportunity?
   "True if corp is at a rez decision point (approach-ice with unrezzed ice)"
@@ -601,10 +604,21 @@
       (println (format "   Card: %s" card-title))
       ;; Show card text for first-seen cards (especially useful during access)
       (core/show-card-on-first-sight! card-title))
-    (let [choices (:choices my-prompt)]
-      (println (format "   Choices: %d options" (count choices)))
-      (doseq [[idx choice] (map-indexed vector choices)]
-        (println (format "     %d. %s" idx (:value choice)))))
+    ;; Display text choices if present
+    (let [choices (:choices my-prompt)
+          selectable (:selectable my-prompt)]
+      (when (seq choices)
+        (println (format "   Choices: %d options" (count choices)))
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (println (format "     %d. %s" idx (:value choice)))))
+      ;; Display selectable cards for "select" type prompts
+      (when (seq selectable)
+        (println (format "   Selectable cards: %d" (count selectable)))
+        (doseq [[idx cid] (map-indexed vector selectable)]
+          (if-let [card (core/find-card-by-cid cid)]
+            (println (format "     %d. %s" idx (:title card)))
+            (println (format "     %d. [unknown card: %s]" idx cid))))
+        (println "   → Use 'choose-card <index>' to select")))
     {:status :decision-required
      :prompt my-prompt}))
 
@@ -1381,9 +1395,7 @@
         (println "⚠️  No active run to monitor")
         {:status :no-run})
       (do
-        ;; Reset strategy from any previous run
-        (reset-strategy!)
-        ;; Parse and set new strategy flags if provided
+        ;; Merge new strategy flags if provided (preserves existing strategy from run start)
         (when (seq args)
           (let [{:keys [flags]} (parse-run-flags (vec args))]
             (set-strategy! flags)
