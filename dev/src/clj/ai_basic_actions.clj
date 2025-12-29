@@ -311,15 +311,30 @@
     {:status :error
      :reason "Failed to start turn"}))
 
+(defn- burn-clicks-for-credits!
+  "Spend all remaining clicks taking credits. Used by force-end-turn.
+   Returns the number of clicks burned."
+  [gameid clicks]
+  (when (> clicks 0)
+    (println (format "💰 Burning %d click(s) for credits..." clicks))
+    (dotimes [_ clicks]
+      (ws/send-message! :game/action
+                        {:gameid gameid
+                         :command "credit"
+                         :args nil})
+      (Thread/sleep core/quick-delay)))
+  clicks)
+
 (defn end-turn!
   "End turn (validates all clicks used unless forced).
    The game engine handles oversized hand by prompting for discard during end-turn.
 
    Options:
-     :force - If true, allows ending turn with clicks remaining
+     :force - If true, burns remaining clicks for credits then ends turn
+              (keeps game state consistent, unlike skipping clicks)
 
    Usage: (end-turn!)              ; Normal - errors if clicks remain
-          (end-turn! :force true)  ; Forced - allows clicks remaining"
+          (end-turn! :force true)  ; Forced - burns clicks, then ends"
   [& {:keys [force] :or {force false}}]
   (let [client-state @state/client-state
         side (:side client-state)
@@ -337,11 +352,27 @@
         (println "   Example: send_command end-turn --force")
         {:status :error :clicks-remaining clicks})
 
-      ;; OK: all validations passed or forced
+      ;; FORCE: burn remaining clicks as credits first
+      (and (> clicks 0) force)
+      (do
+        (burn-clicks-for-credits! gameid clicks)
+        (Thread/sleep core/standard-delay)
+        ;; Re-fetch state after burning clicks
+        (let [client-state @state/client-state
+              hand-size (count (get-in client-state [:game-state side-kw :hand]))]
+          (when (> hand-size max-hand-size)
+            (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
+          (ws/send-message! :game/action
+                            {:gameid gameid
+                             :command "end-turn"
+                             :args nil})
+          (Thread/sleep core/standard-delay)
+          (core/show-turn-indicator)
+          {:status :success :clicks-burned clicks}))
+
+      ;; OK: all clicks used
       :else
       (do
-        (when (and (> clicks 0) force)
-          (println (format "⚠️  FORCED: Ending turn with %d click(s) remaining" clicks)))
         (when (> hand-size max-hand-size)
           (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
         (ws/send-message! :game/action

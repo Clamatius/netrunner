@@ -310,52 +310,50 @@
   (and prompt
        (not (is-waiting-prompt? prompt))))
 
-(defn waiting-for-opponent?
-  "True if my side is waiting for opponent to make a decision"
+(defn should-i-act?
+  "True if it's my turn to act during a run.
+   Uses :no-action state - simpler and more reliable than prompt inference.
+
+   Priority model during runs:
+   - Runner is the active player (acts first in each phase)
+   - :no-action tracks who has passed:
+     - nil/false: Fresh phase, active player (Runner) should act
+     - \"runner\": Runner passed, Corp should act
+     - \"corp\": Corp passed, Runner should act (or phase advances)
+
+   Returns nil if not in a run."
   [state side]
-  (let [run-phase (get-in state [:game-state :run :phase])
-        my-prompt (get-in state [:game-state (keyword side) :prompt-state])
-        opp-side (core/other-side side)
-        opp-prompt (get-in state [:game-state (keyword opp-side) :prompt-state])
-        during-run? (some? run-phase)
-        ;; Treat "waiting" prompts as if we have no prompt
-        my-real-prompt? (has-actionable-prompt? my-prompt)]
-
+  (let [run (get-in state [:game-state :run])
+        no-action (:no-action run)
+        active-player "runner"]  ; During runs, Runner is always active player
     (cond
+      ;; No run = not applicable
+      (nil? run) nil
+
+      ;; I already passed → not my turn
+      (= no-action side) false
+
+      ;; Opponent passed → my turn
+      (= no-action (core/other-side side)) true
+
+      ;; Fresh phase (nil or false) → active player acts first
+      :else (= side active-player))))
+
+(defn waiting-for-opponent?
+  "True if my side is waiting for opponent to make a decision during a run.
+   Uses the simple :no-action heuristic for reliability."
+  [state side]
+  (let [run (get-in state [:game-state :run])]
+    (cond
+      ;; No active run - not waiting
+      (nil? run) false
+
       ;; CRITICAL: Opponent pressed WAIT button - ALWAYS pause
-      (opponent-indicated-action? state side)
-      true
+      (opponent-indicated-action? state side) true
 
-      ;; Runner waiting for corp rez decision
-      (and (= side "runner")
-           (= run-phase "approach-ice")
-           (not my-real-prompt?)  ; Runner has no real prompt
-           (corp-has-rez-opportunity? state))
-      true
-
-      ;; Corp waiting for runner break decision or other real decision
-      (and (= side "corp")
-           (= run-phase "encounter-ice")
-           (not my-real-prompt?)
-           (has-real-decision? opp-prompt))
-      true
-
-      ;; During run, only wait if opponent has a REAL decision
-      ;; (not just empty paid ability windows that they'll auto-pass)
-      (and during-run?
-           opp-prompt
-           (has-real-decision? opp-prompt)
-           (not my-real-prompt?))
-      true
-
-      ;; Generally waiting if opponent has real decision and I don't
-      (and opp-prompt
-           (has-real-decision? opp-prompt)
-           (not my-real-prompt?))
-      true
-
-      :else
-      false)))
+      ;; Use the simple :no-action heuristic
+      :else (let [my-turn? (should-i-act? state side)]
+              (not my-turn?)))))
 
 (defn waiting-reason
   "Returns human-readable reason for waiting"
@@ -374,36 +372,21 @@
       "Waiting for opponent action")))
 
 (defn can-auto-continue?
-  "True if can safely auto-continue (empty paid ability window, no decisions).
-   Now takes state to check ICE rezzed status and priority passing."
+  "True if can safely auto-continue (empty paid ability window, my turn to act).
+   Uses should-i-act? for reliable priority detection."
   [prompt run-phase side state]
   (and prompt
        (= (:prompt-type prompt) "run")
        (empty? (:choices prompt))
        (empty? (:selectable prompt))
-       ;; Don't auto-continue if we've already passed priority
-       ;; Trust :no-action state if set; only use log as backup when :no-action is nil/false
-       (let [run (get-in state [:game-state :run])
-             no-action (:no-action run)
-             already-passed-by-state? (= no-action side)
-             ;; Only check log if :no-action is nil/false (server didn't set it)
-             ;; This prevents stale log entries from blocking auto-continue
-             recently-passed-in-log? (when-not no-action
-                                       (let [log (get-in state [:game-state :log])
-                                             recent-entries (take 3 (reverse log))
-                                             side-name (if (= side "runner") "AI-runner" "AI-corp")
-                                             passed-pattern (re-pattern (str side-name " has no further action"))]
-                                         (some #(re-find passed-pattern (str (:text %))) recent-entries)))]
-         (not (or already-passed-by-state? recently-passed-in-log?)))
-       ;; Approach-ice: Corp needs explicit rez decision UNLESS ICE is already rezzed
-       ;; Encounter-ice: Runner with no choices (no icebreaker) can auto-continue
-       (let [corp-approach-unrezzed?
-             (and (= run-phase "approach-ice")
-                  (= side "corp")
-                  ;; Check if current ICE is unrezzed
-                  (let [current-ice (get-current-ice state)]
-                    (and current-ice (not (:rezzed current-ice)))))]
-         (not corp-approach-unrezzed?))))
+       ;; Must be my turn to act (not already passed)
+       (should-i-act? state side)
+       ;; Corp at approach-ice with unrezzed ICE should NOT auto-continue
+       ;; (rez decision is too important to auto-pass)
+       (not (and (= side "corp")
+                 (= run-phase "approach-ice")
+                 (let [current-ice (get-current-ice state)]
+                   (and current-ice (not (:rezzed current-ice))))))))
 
 ;; ============================================================================
 ;; Subroutine Fire Coordination (Runner <-> Corp handoff)
@@ -471,16 +454,24 @@
    :choice choice-value})
 
 (defn handle-force-mode
-  "Priority 0: --force flag bypasses ALL checks"
-  [{:keys [strategy gameid]}]
+  "Priority 0: --force flag bypasses ALL checks (but respects run completion)"
+  [{:keys [strategy gameid state]}]
   (when (:force strategy)
-    (println "⚡ FORCE mode - bypassing all checks, sending continue")
-    (ws/send-message! :game/action
-                     {:gameid gameid
-                      :command "continue"
-                      :args nil})
-    {:status :action-taken
-     :action :forced-continue}))
+    (let [run (get-in state [:game-state :run])]
+      (if (nil? run)
+        ;; Run is complete, don't send spurious continues
+        (do
+          (println "✅ Run complete (force mode)")
+          {:status :run-complete})
+        ;; Run is active, send continue
+        (do
+          (println "⚡ FORCE mode - bypassing all checks, sending continue")
+          (ws/send-message! :game/action
+                           {:gameid gameid
+                            :command "continue"
+                            :args nil})
+          {:status :action-taken
+           :action :forced-continue})))))
 
 (defn handle-opponent-wait
   "Priority 1: Opponent pressed WAIT button (indicate-action)"
@@ -1251,7 +1242,6 @@
                   handle-events
                   handle-access-display      ; Display accessed cards (returns nil to continue)
                   handle-auto-choice
-                  handle-recently-passed-in-log ; Log-based backup for :no-action
                   handle-auto-continue
                   handle-run-complete
                   handle-no-run]]
