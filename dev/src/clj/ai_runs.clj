@@ -840,6 +840,31 @@
            :unbroken-count sub-count
            :position position})))))
 
+(defn handle-corp-all-subs-resolved
+  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired).
+   If no actionable subs remain, just pass through to advance the phase."
+  [{:keys [side run-phase state gameid]}]
+  (when (and (= side "corp")
+             (= run-phase "encounter-ice"))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          ;; Subs that can still fire (not broken, not already fired)
+          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
+      ;; If ICE is rezzed but no actionable subs remain, just continue
+      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
+        (let [ice-title (:title current-ice "ICE")
+              all-broken? (every? :broken subroutines)]
+          (println (format "   → All subs %s on %s, Corp continuing"
+                          (if all-broken? "broken" "resolved") ice-title))
+          (send-continue! gameid))))))
+
 (defn handle-corp-waiting-after-subs-fired
   "Priority 1.75: Corp at encounter-ice after subs have fired.
    If Runner hasn't passed yet, wait. If Runner already passed, continue to advance phase."
@@ -1232,6 +1257,7 @@
                   handle-corp-rez-decision   ; Corp rez decision without strategy
                   handle-corp-fire-unbroken
                   handle-corp-fire-decision  ; Corp fire decision without strategy
+                  handle-corp-all-subs-resolved        ; Corp at encounter-ice, all subs broken/fired
                   handle-corp-waiting-after-subs-fired ; Corp waits for Runner after subs resolve
                   handle-paid-ability-window ; Wait after passing in any phase
                   handle-runner-approach-ice
