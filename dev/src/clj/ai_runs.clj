@@ -252,15 +252,57 @@
   [log-entries]
   (first (filter #(clojure.string/includes? (:text %) "rez") log-entries)))
 
+(defn normalize-side
+  "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
+  [side-value]
+  (cond
+    (nil? side-value) nil
+    (false? side-value) nil  ; false is treated as "no one passed"
+    (keyword? side-value) (name side-value)
+    (string? side-value) side-value
+    :else (str side-value)))
+
 (defn opponent-indicated-action?
-  "Check if opponent pressed indicate-action (WAIT button) in recent log"
+  "Check if opponent pressed indicate-action (WAIT button) in recent log.
+   The WAIT button signals 'I'm about to do something, don't auto-pass'.
+   Useful for both AI-vs-AI coordination and HITL (LLM thinking signal)."
   [state side]
   (let [log (get-in state [:game-state :log])
         opp-side (core/other-side side)
         opp-name (clojure.string/capitalize opp-side)
         ;; Look for "[!] Please pause, {Opponent} is acting."
-        indicate-pattern (str "[!] Please pause, " opp-name " is acting.")]
-    (some #(= (:text %) indicate-pattern) (take 5 log))))
+        indicate-pattern (str "[!] Please pause, " opp-name " is acting")
+        ;; Check LAST 5 entries (most recent)
+        recent-log (take-last 5 log)]
+    ;; Use includes? because log entries may have trailing punctuation
+    (some #(clojure.string/includes? (str (:text %)) indicate-pattern) recent-log)))
+
+(defn opponent-passed-priority?
+  "Check if opponent passed priority recently (via log).
+   Looks for 'AI-{opponent} has no further action' in recent log entries.
+   This provides a second source of truth when :no-action state hasn't synced yet."
+  [state side]
+  (let [log (get-in state [:game-state :log])
+        opp-side (core/other-side side)
+        ;; Log uses "AI-runner" or "AI-corp" format
+        opp-name (str "AI-" opp-side)
+        pass-pattern (str opp-name " has no further action")
+        ;; Check LAST 5 entries (most recent)
+        recent-log (take-last 5 log)]
+    ;; Use includes? because log entries may have trailing punctuation
+    (some #(clojure.string/includes? (str (:text %)) pass-pattern) recent-log)))
+
+(defn i-passed-priority?
+  "Check if I passed priority recently (via log).
+   Looks for 'AI-{my-side} has no further action' in recent log entries."
+  [state side]
+  (let [log (get-in state [:game-state :log])
+        my-name (str "AI-" side)
+        pass-pattern (str my-name " has no further action")
+        ;; Check LAST 5 entries (most recent)
+        recent-log (take-last 5 log)]
+    ;; Use includes? because log entries may have trailing punctuation
+    (some #(clojure.string/includes? (str (:text %)) pass-pattern) recent-log)))
 
 (defn has-real-decision?
   "True if prompt has 2+ meaningful choices (not just Done/Continue),
@@ -312,29 +354,30 @@
 
 (defn should-i-act?
   "True if it's my turn to act during a run.
-   Uses :no-action state - simpler and more reliable than prompt inference.
+   Uses :no-action state as source of truth.
 
    Priority model during runs:
    - Runner is the active player (acts first in each phase)
    - :no-action tracks who has passed:
      - nil/false: Fresh phase, active player (Runner) should act
-     - \"runner\": Runner passed, Corp should act
-     - \"corp\": Corp passed, Runner should act (or phase advances)
+     - :runner/\"runner\": Runner passed, Corp should act
+     - :corp/\"corp\": Corp passed, Runner should act (or phase advances)
 
    Returns nil if not in a run."
   [state side]
   (let [run (get-in state [:game-state :run])
         no-action (:no-action run)
+        no-action-str (normalize-side no-action)
         active-player "runner"]  ; During runs, Runner is always active player
     (cond
       ;; No run = not applicable
       (nil? run) nil
 
-      ;; I already passed → not my turn
-      (= no-action side) false
+      ;; State says I already passed → not my turn
+      (= no-action-str side) false
 
-      ;; Opponent passed → my turn
-      (= no-action (core/other-side side)) true
+      ;; State says opponent passed → my turn
+      (= no-action-str (core/other-side side)) true
 
       ;; Fresh phase (nil or false) → active player acts first
       :else (= side active-player))))
@@ -912,20 +955,17 @@
    Detects when we've passed priority but opponent hasn't yet.
    This enables AI-to-AI coordination without LLM turns.
 
-   The :no-action field in run state tracks who has passed:
-   - nil/false: No one has passed yet (active player should act or pass)
-   - \"runner\": Runner passed, Corp has priority
-   - \"corp\": Corp passed, Runner has priority
-   - When both pass, phase advances and :no-action resets"
+   Uses :no-action state as source of truth."
   [{:keys [side run-phase state]}]
   (let [run (get-in state [:game-state :run])
         no-action (:no-action run)
+        no-action-str (normalize-side no-action)
         my-side side
         opp-side (if (= side "runner") "corp" "runner")
-        ;; Check if we've passed (no-action equals our side)
-        we-passed? (= no-action my-side)
-        ;; Check if opponent passed (no-action equals their side)
-        opp-passed? (= no-action opp-side)]
+        ;; Check if we've passed - via state only
+        we-passed? (= no-action-str my-side)
+        ;; Check if opponent passed - via state only
+        opp-passed? (= no-action-str opp-side)]
     ;; Only pause if WE have passed but opponent hasn't yet
     ;; This creates the "baton pass" for AI-to-AI coordination
     (when (and we-passed? (not opp-passed?))
@@ -954,7 +994,8 @@
                    current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
                                  (nth ice-list ice-index nil))
                    no-action (:no-action run)
-                   corp-already-declined? (= no-action "corp")]
+                   no-action-str (normalize-side no-action)
+                   corp-already-declined? (= no-action-str "corp")]
                (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))))
     (let [run (get-in state [:game-state :run])
           server (:server run)
@@ -1075,9 +1116,10 @@
           subroutines (:subroutines current-ice)
           ;; Subs that haven't been broken AND haven't fired yet
           unfired-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          ;; Check if Corp has already declined to fire (no-action)
+          ;; Check if Corp has already declined to fire - via state only
           no-action (:no-action run)
-          corp-passed? (= no-action "corp")]
+          no-action-str (normalize-side no-action)
+          corp-passed? (= no-action-str "corp")]
       ;; Only wait if ICE is rezzed, has unfired subs, and Corp hasn't passed yet
       (when (and current-ice (:rezzed current-ice) (seq unfired-subs) (not corp-passed?))
         (let [ice-title (:title current-ice "ICE")
@@ -1363,15 +1405,17 @@
                    :iterations (inc iteration)
                    :elapsed-ms (- (System/currentTimeMillis) start-time))
 
-            ;; Waiting for opponent - use wait-for-relevant-diff to sleep efficiently
+            ;; Waiting for opponent - terminal status, stop loop
+            ;; The other client needs to run their own loop (e.g., Corp runs monitor-run!)
             (or (= status :waiting-for-opponent)
                 (= status :waiting-for-corp-rez)
                 (= status :waiting-for-corp-fire)
                 (= status :waiting-for-opponent-paid-abilities))
             (do
-              ;; Use wait-for-relevant-diff with short timeout - it will wake on any run state change
-              (core/wait-for-relevant-diff {:timeout 30 :verbose false})
-              (recur (inc iteration)))
+              (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
+              (assoc result
+                     :iterations (inc iteration)
+                     :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
             ;; Action taken - immediately continue
             (= status :action-taken)
