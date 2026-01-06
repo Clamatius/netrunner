@@ -147,21 +147,35 @@
                    ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
                    normalized-server (when server
                                       (:normalized (core/normalize-server-name server)))
+                   ;; Validate server name exists (Corp only - prevents "R" and invalid servers)
+                   server-validation-error (when (and server (core/side= "Corp" (:side client-state)))
+                                             (core/validate-server-name server))
                    ;; Validate Corp installs (baby-proofing) unless overwrite is requested
                    validation-error (when (and (core/side= "Corp" (:side client-state))
-                                               (not overwrite?))
+                                               (not overwrite?)
+                                               (not server-validation-error))
                                      (core/validate-corp-install card normalized-server))]
-               ;; Check validation before proceeding
-               (if validation-error
+               ;; Check server name validation first
+               (if server-validation-error
                  (do
-                   (println (str "⚠️  Blocked install: " (:reason validation-error)))
-                   (when-let [hint (:hint validation-error)]
+                   (println (str "❌ Invalid server: " (:reason server-validation-error)))
+                   (when-let [hint (:hint server-validation-error)]
                      (println (str "   💡 " hint)))
-                   (println "   Use --overwrite flag to proceed anyway")
                    (flush)
-                   {:status :blocked
-                    :reason (:reason validation-error)
-                    :hint "Use --overwrite to install anyway (will trash existing card)"})
+                   {:status :error
+                    :reason (:reason server-validation-error)
+                    :existing (:existing server-validation-error)})
+                 ;; Check install validation
+                 (if validation-error
+                   (do
+                     (println (str "⚠️  Blocked install: " (:reason validation-error)))
+                     (when-let [hint (:hint validation-error)]
+                       (println (str "   💡 " hint)))
+                     (println "   Use --overwrite flag to proceed anyway")
+                     (flush)
+                     {:status :blocked
+                      :reason (:reason validation-error)
+                      :hint "Use --overwrite to install anyway (will trash existing card)"})
                  ;; Valid install - proceed
                  (let [before-state (core/capture-state-snapshot)
                        before-clicks (get-in client-state [:game-state side :click])
@@ -213,7 +227,7 @@
                      (println (str "   Reason: " (:reason result)))
                      (core/show-turn-indicator)
                      (flush)
-                     result)))))) ; close case, let(result), let(before-state), if(validation), let(client-state)
+                     result))))))) ; close case, let(result), let(before-state), if(validation), if(server-validation), let(client-state)
              (do
                (println (str "❌ Card not found in hand: " name-or-index))
                (flush)
@@ -453,22 +467,46 @@
 (defn advance-card!
   "Advance an installed Corp card (agenda, ICE, or asset).
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
-   Costs 1 click and 1 credit per advancement counter
+   Costs 1 click and 1 credit per advancement counter.
+
+   By default, blocks advancing past the requirement (overadvancement).
+   Use {:overadvance true} to allow advancing past requirement.
 
    Usage: (advance-card! \"Project Vitruvius\")
-          (advance-card! \"Oaktown Renovation\")"
-  [card-name]
+          (advance-card! \"Oaktown Renovation\")
+          (advance-card! \"Send a Message\" {:overadvance true})"
+  ([card-name] (advance-card! card-name {}))
+  ([card-name opts]
   (when (basic/ensure-turn-started!)
     (let [client-state @state/client-state
-          side (:side client-state)]
+          side (:side client-state)
+          overadvance? (:overadvance opts)]
       (if (not (core/side= "Corp" side))
         (println "❌ Only Corp can advance cards")
         (let [card (core/find-installed-corp-card card-name)
               before-counters (or (:advance-counter card) 0)
               before-credits (get-in client-state [:game-state :corp :credit])
               before-clicks (get-in client-state [:game-state :corp :click])
-              advancement-requirement (:advancementcost card)]
-          (if card
+              advancement-requirement (:advancementcost card)
+              ;; Check for overadvancement (already at or past requirement)
+              would-overadvance? (and advancement-requirement
+                                      (>= before-counters advancement-requirement))]
+          (cond
+            ;; Card not found
+            (not card)
+            (println (str "❌ Card not found installed: " card-name))
+
+            ;; Would overadvance but flag not set
+            (and would-overadvance? (not overadvance?))
+            (do
+              (println (str "⚠️  Blocked: " card-name " already at " before-counters
+                           "/" advancement-requirement " counters (fully advanced)"))
+              (println "    Use --overadvance to advance past requirement")
+              (flush)
+              {:status :blocked :reason :overadvance})
+
+            ;; Proceed with advance
+            :else
             (let [gameid (:gameid client-state)
                   card-ref {:cid (:cid card)
                            :zone (:zone card)
@@ -507,8 +545,7 @@
                     (basic/check-auto-end-turn!))
                   (do
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))
-                    (flush)))))
-            (println (str "❌ Card not found installed: " card-name))))))))
+                    (flush))))))))))))
 
 (defn score-agenda!
   "Score an installed agenda (Corp only)

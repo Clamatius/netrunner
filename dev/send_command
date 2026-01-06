@@ -174,7 +174,9 @@ ${GREEN}Card Actions:${NC}
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
   auto-pass       - Toggle auto-pass priority during runs (Corp only)
-  advance <name>  - Advance installed card (Corp only: agendas, ICE, assets)
+  advance <name> [--overadvance]  - Advance installed card (Corp only)
+                     Blocks advancing past requirement by default
+                     Use --overadvance to force advancing past requirement
   score <name>    - Score agenda with sufficient advancement counters (Corp only)
 
 ${GREEN}Runner Actions:${NC}
@@ -206,10 +208,10 @@ ${GREEN}Prompts:${NC}
                      --raw     Raw WebSocket pass (debugging only)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
-  wait-for-relevant-diff [seconds] - Wait for relevant events only (model-vs-model coordination)
-                     Wakes on: runs starting, prompts needing response
-                     Ignores: opponent economy actions (credits, draws)
-                     Use case: Corp waits during Runner turn, wakes when run starts
+  wait-for-relevant-diff [seconds] - Wait for relevant game events (ignores opponent economy)
+                     Wakes on: runs starting/ending, prompts, your turn to act
+                     Ignores: opponent credits, draws, minor actions
+                     Works for: AI-vs-AI, HITL testing, script automation
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
 
 ${GREEN}Lobby:${NC}
@@ -223,8 +225,10 @@ ${GREEN}Lobby:${NC}
   chat <message>         - Send chat message to game
 
 ${GREEN}Installation:${NC}
-  install <name> [server] [--overwrite]  - Install card (Corp needs server: HQ, "R&D", "New remote")
-                                           Use --overwrite to replace existing asset/agenda
+  install <name> <server> [--overwrite]  - Install card to server
+                     Centrals: HQ, R&D, Archives (for ICE)
+                     Remotes: "new" creates new, "Server 1" etc. must exist
+                     Use --overwrite to replace existing asset/agenda
   install-index <N> [server] - Install card by index (Corp needs server)
 
 ${GREEN}Connection:${NC}
@@ -668,9 +672,21 @@ case "$COMMAND" in
     advance)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name>"
+        OVERADVANCE=false
+        shift 2>/dev/null || true
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --overadvance) OVERADVANCE=true ;;
+            esac
+            shift
+        done
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name> [--overadvance]"
         info "Advancing $CARD_NAME..."
-        execute "(ai-actions/advance-card! \"$CARD_NAME\")"
+        if [[ "$OVERADVANCE" == "true" ]]; then
+            execute "(ai-actions/advance-card! \"$CARD_NAME\" {:overadvance true})"
+        else
+            execute "(ai-actions/advance-card! \"$CARD_NAME\")"
+        fi
         ;;
 
     # Score agenda

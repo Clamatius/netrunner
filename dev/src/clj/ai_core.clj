@@ -407,7 +407,7 @@
 
 (defn- server-name->key
   "Convert server name string to keyword for state lookup.
-   'Server 1' -> :remote1, 'HQ' -> :hq, 'New' -> :remoteNew, etc."
+   'Server 1' -> :remote1, 'HQ' -> :hq, 'New remote' -> :remoteNew, etc."
   [server-name]
   (when server-name
     (let [lower (clojure.string/lower-case server-name)]
@@ -415,8 +415,8 @@
         (= lower "hq") :hq
         (= lower "r&d") :rd
         (= lower "archives") :archives
-        ;; Handle "New" server (first remote before renumbering)
-        (= lower "new") :remoteNew
+        ;; Handle "New remote" server (creates new remote)
+        (= lower "new remote") :remoteNew
         (re-matches #"server \d+" lower)
         (keyword (str "remote" (second (re-find #"server (\d+)" lower))))
         (re-matches #"remote\d+" lower)
@@ -442,6 +442,79 @@
       (->> content
            (filter #(root-card-type? (:type %)))
            first))))
+
+(defn get-existing-remote-names
+  "Returns a set of existing remote server names from game state.
+   Returns names like 'Server 1', 'Server 2', etc."
+  []
+  (let [servers (state/corp-servers)
+        remote-keys (filter #(clojure.string/starts-with? (name %) "remote") (keys servers))
+        ;; Convert :remote1 → 'Server 1', :remote2 → 'Server 2'
+        remote-names (map #(let [num (second (re-find #"remote(\d+)" (name %)))]
+                             (str "Server " num))
+                          remote-keys)]
+    (set remote-names)))
+
+;; Forward declaration for mutual dependencies
+(declare normalize-server-name)
+
+(defn validate-server-name
+  "Validate a server name is valid and exists.
+   Returns nil if valid, error map if invalid.
+
+   Rules:
+   - Central servers (HQ, R&D, Archives) are always valid
+   - 'New remote' is always valid (creates new remote)
+   - Remote server names must reference existing servers
+   - Rejects malformed names (single letters, invalid patterns)"
+  [server-name]
+  (let [normalized (:normalized (normalize-server-name server-name))
+        original-lower (clojure.string/lower-case (clojure.string/trim server-name))]
+    (cond
+      ;; Nil or empty - caller decides if this is ok
+      (or (nil? server-name) (clojure.string/blank? server-name))
+      nil
+
+      ;; Central servers - always valid
+      (central-server? normalized)
+      nil
+
+      ;; "New remote" - always valid (creates new remote)
+      (= normalized "New remote")
+      nil
+
+      ;; Check for obviously invalid names (single letter, etc.)
+      ;; These would pass through normalize-server-name unchanged
+      (and (< (count original-lower) 3)
+           (not (re-matches #"r\d+|s\d+" original-lower)))  ; Allow r1, s1 shorthand
+      {:error true
+       :reason (str "Invalid server name: '" server-name "'")
+       :hint (str "Valid servers: HQ, R&D, Archives, 'new', or existing remote (Server 1, Server 2...)")
+       :existing (get-existing-remote-names)}
+
+      ;; Remote server - check it exists
+      (re-matches #"Server \d+" normalized)
+      (let [existing (get-existing-remote-names)]
+        (if (contains? existing normalized)
+          nil  ; Server exists
+          {:error true
+           :reason (str "Server '" normalized "' does not exist")
+           :hint (str "Use 'new' to create a new remote, or choose existing: "
+                      (if (empty? existing)
+                        "(no remotes yet)"
+                        (clojure.string/join ", " (sort existing))))
+           :existing existing}))
+
+      ;; Unrecognized format that passed through normalize unchanged
+      ;; This catches things like "R" (from "R&D" parsing issue)
+      (= normalized server-name)
+      {:error true
+       :reason (str "Unrecognized server name: '" server-name "'")
+       :hint "Valid servers: HQ, R&D, Archives, 'new', or existing remote (Server 1, Server 2...)"
+       :existing (get-existing-remote-names)}
+
+      ;; Otherwise valid
+      :else nil)))
 
 (defn validate-corp-install
   "Validate a Corp install is legal. Returns nil if valid, error map if invalid.
@@ -577,7 +650,7 @@
    - 'rd', 'r&d', 'R&D' → 'R&D'
    - 'archives', 'Archives' → 'Archives'
    - 'remote1', 'remote 1', 'r1', 'server1', 'server 1' → 'Server 1'
-   - 'new', 'remotenew', 'server new' → 'New' (first remote before renumbering)
+   - 'new', 'remotenew', 'server new' → 'New remote' (create new remote server)
 
    Returns: {:normalized <game-name> :original <input> :changed? <bool>}"
   [server-input]
@@ -591,8 +664,8 @@
                      (or (= s "rd") (= s "r&d")) "R&D"
                      (= s "archives") "Archives"
 
-                     ;; 'New' server (first remote before it gets numbered)
-                     (re-matches new-pattern s) "New"
+                     ;; 'New' server - tells game to create new remote
+                     (re-matches new-pattern s) "New remote"
 
                      ;; Remote servers - handle various formats
                      ;; remote1, remote 1, r1, server1, server 1 → Server 1
