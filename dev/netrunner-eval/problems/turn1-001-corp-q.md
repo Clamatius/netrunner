@@ -14,31 +14,34 @@ Board: Empty
 
 ## Hand (6 cards)
 ```
-Hedge Fund
-Palisade
-Whitespace
-Whitespace
-Urtica Cipher
-Offworld Office
+[[Hedge Fund]]
+[[Palisade]]
+[[Whitespace]]
+[[Whitespace]]
+[[Urtica Cipher]]
+[[Offworld Office]]
 ```
 
-## Card Text
 
-**Hedge Fund** - Operation (Cost 5)
-Gain 9 credits.
+## Card Text (Auto-Generated)
 
-**Palisade** - ICE: Barrier (Rez 2, Strength 2)
-Palisade gets +2 strength while protecting a remote server.
-↳ End the run.
-
-**Whitespace** - ICE: Code Gate (Rez 2, Strength 3)
-↳ The Runner loses 3 credits. If the Runner has fewer than 6 credits, end the run.
-
-**Urtica Cipher** - Asset: Ambush (Rez 0, Trash 0)
-If Urtica Cipher is accessed while installed, do 2 net damage plus 1 net damage for each advancement counter on it.
+**Hedge Fund** - Operation: Transaction (Cost 5)
+Gain 9[credit].
 
 **Offworld Office** - Agenda: Expansion (Adv 4, Points 2)
-When you score this agenda, gain 7 credits.
+When you score this agenda, gain 7[credit].
+
+**Palisade** - ICE: Barrier (Rez 3, Strength 2)
+While this ice is protecting a remote server, it gets +2 strength.
+↳ End the run.
+
+**Urtica Cipher** - Asset: Ambush (Rez 0, Trash 2)
+You can advance this asset.
+When the Runner accesses this asset while it is installed, do 2 net damage plus 1 net damage for each hosted advancement counter.
+
+**Whitespace** - ICE: Code Gate (Rez 2, Strength 0)
+↳ The Runner loses 3[credit].
+↳ If the Runner has 6[credit] or less, end the run.
 
 ## Question
 What's your Turn 1 plan? Specify actions in order.

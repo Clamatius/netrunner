@@ -6,34 +6,34 @@ ID: The Catalyst (no special ability, 40 card min, 15 influence). Decide: keep o
 
 ## Hand (5 cards)
 ```
-Sure Gamble
-Smartware Distributor
-Cleaver
-Carmen
-Jailbreak
+[[Sure Gamble]]
+[[Smartware Distributor]]
+[[Cleaver]]
+[[Carmen]]
+[[Jailbreak]]
 ```
 
-## Card Text
 
-**Sure Gamble** - Event (Cost 5)
-Gain 9 credits.
+## Card Text (Auto-Generated)
 
-**Smartware Distributor** - Resource: Job (Install 1)
-When your turn begins, place 1 credit on this resource.
-Click: Take all credits from this resource.
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
 
-**Cleaver** - Program: Icebreaker, Fracter (Install 3, Strength 1, MU 1)
-Interface → 2 credits: Break up to 2 barrier subroutines.
-2 credits: +1 strength.
-
-**Carmen** - Program: Icebreaker, Killer (Install 4, Strength 0, MU 1)
-Whenever this program fully breaks a piece of ice, place 1 power counter on Carmen.
-Interface → 1 credit: Break 1 sentry subroutine.
-Hosted power counter: +3 strength.
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
 
 **Jailbreak** - Event: Run (Cost 0)
-Run HQ or R&D.
-If successful, draw 1 card and access 1 additional card.
+Run HQ or R&D. If successful, draw 1 card and when you breach the attacked server, access 1 additional card.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
 
 ## Question
 Keep or mulligan this hand?

@@ -15,33 +15,33 @@ Corp credits: 7
 
 ## Hand (5 cards)
 ```
-Sure Gamble
-Overclock
-Carmen
-Tread Lightly
-Smartware Distributor
+[[Sure Gamble]]
+[[Overclock]]
+[[Carmen]]
+[[Tread Lightly]]
+[[Smartware Distributor]]
 ```
 
-## Card Text
+
+## Card Text (Auto-Generated)
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Overclock** - Event: Run (Cost 1)
+Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
 
 **Sure Gamble** - Event (Cost 5)
-Gain 9 credits.
+Gain 9[credit].
 
-**Overclock** - Event: Run (Cost 0)
-Place 5 credits on this event, then run any server. When that run ends, trash Overclock.
-Use credits on Overclock during runs.
-
-**Carmen** - Program: Icebreaker, Killer (Install 4, Strength 0, MU 1)
-Whenever this program fully breaks a piece of ice, place 1 power counter on Carmen.
-Interface → 1 credit: Break 1 sentry subroutine.
-Hosted power counter: +3 strength.
-
-**Tread Lightly** - Event: Run (Cost 0)
-Run any server. The first time the Corp rezzes a piece of ice during this run, they must pay 3 credits more.
-
-**Smartware Distributor** - Resource: Job (Install 1)
-When your turn begins, place 1 credit on this resource.
-Click: Take all credits from this resource.
+**Tread Lightly** - Event: Run (Cost 1)
+Run any server. During that run, the rez cost of each piece of ice is increased by 3[credit].
 
 ## Question
 What's your Turn 1 plan? Specify actions in order.
