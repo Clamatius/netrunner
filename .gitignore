@@ -88,3 +88,8 @@ dev/.repl-counter
 dev/.error-state
 .env
 .forum/
+
+# Local/temp files
+forum
+dev/forum
+logs/
