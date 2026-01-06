@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+#
+# build-eval - Assemble Netrunner problem sets for evaluation
+#
+# Usage:
+#   ./build-eval --list                     # Show available problems
+#   ./build-eval --side corp                # All corp problems
+#   ./build-eval --category mull            # All mulligan problems
+#   ./build-eval --difficulty easy,medium   # Filter by difficulty
+#   ./build-eval --count 5                  # Random sample of N
+#   ./build-eval mull-001-corp turn1-002    # Specific problems (partial match)
+#   ./build-eval --answers                  # Include answer files
+#   ./build-eval --q-only                   # Questions only (default)
+#
+# Filters combine with AND. Output goes to stdout.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROBLEMS_DIR="$SCRIPT_DIR/problems"
+
+# Defaults
+LIST_MODE=false
+INCLUDE_ANSWERS=false
+SIDE_FILTER=""
+CATEGORY_FILTER=""
+DIFFICULTY_FILTER=""
+COUNT_LIMIT=""
+SPECIFIC_PROBLEMS=()
+
+# Colors (disabled if not tty)
+if [[ -t 1 ]]; then
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    GREEN='\033[32m'
+    YELLOW='\033[33m'
+    BLUE='\033[34m'
+    RESET='\033[0m'
+else
+    BOLD='' DIM='' GREEN='' YELLOW='' BLUE='' RESET=''
+fi
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [PROBLEM...]
+
+Assemble Netrunner problem sets for model evaluation.
+
+Options:
+  --list, -l          List available problems with metadata
+  --side SIDE         Filter by side: corp, runner
+  --category CAT      Filter by category: mull, turn1, ...
+  --difficulty DIFF   Filter by difficulty: easy, medium, hard (comma-separated)
+  --count N           Randomly sample N problems from filtered set
+  --answers, -a       Include answer files in output
+  --help, -h          Show this help
+
+Arguments:
+  PROBLEM...          Specific problem names (partial match OK)
+
+Examples:
+  $(basename "$0") --list
+  $(basename "$0") --side corp --difficulty easy
+  $(basename "$0") --category mull --answers
+  $(basename "$0") mull-001-corp turn1-002-corp
+  $(basename "$0") --side runner --count 3 > runner-eval.md
+
+Output is a single markdown file with mechanics, playbook, decklists, and problems.
+EOF
+}
+
+# Parse a problem file to extract metadata
+# Returns: category|number|side|difficulty
+parse_problem() {
+    local file="$1"
+    local basename=$(basename "$file" | sed 's/-q\.md$//')
+
+    # Extract parts from filename: category-number-side
+    local category=$(echo "$basename" | cut -d'-' -f1)
+    local number=$(echo "$basename" | cut -d'-' -f2)
+    local side=$(echo "$basename" | cut -d'-' -f3)
+
+    # Extract difficulty from file content (BSD grep compatible)
+    local difficulty=$(grep -oE '\[(Easy|Medium|Hard)\]' "$file" 2>/dev/null | head -1 | tr -d '[]' | tr '[:upper:]' '[:lower:]' || echo "unknown")
+    [[ -z "$difficulty" ]] && difficulty="unknown"
+
+    echo "${category}|${number}|${side}|${difficulty}"
+}
+
+# List all problems with metadata
+list_problems() {
+    echo -e "${BOLD}Available Problems${RESET}"
+    echo ""
+    printf "${DIM}%-20s %-10s %-8s %-10s${RESET}\n" "PROBLEM" "CATEGORY" "SIDE" "DIFFICULTY"
+    echo "----------------------------------------------------"
+
+    for qfile in "$PROBLEMS_DIR"/*-q.md; do
+        [[ -f "$qfile" ]] || continue
+        local basename=$(basename "$qfile" | sed 's/-q\.md$//')
+        local meta=$(parse_problem "$qfile")
+        IFS='|' read -r category number side difficulty <<< "$meta"
+
+        # Color difficulty
+        local diff_color=""
+        case "$difficulty" in
+            easy)   diff_color="$GREEN" ;;
+            medium) diff_color="$YELLOW" ;;
+            hard)   diff_color="$BLUE" ;;
+        esac
+
+        printf "%-20s %-10s %-8s ${diff_color}%-10s${RESET}\n" \
+            "$basename" "$category" "$side" "$difficulty"
+    done
+
+    echo ""
+    echo -e "${DIM}Total: $(ls "$PROBLEMS_DIR"/*-q.md 2>/dev/null | wc -l | tr -d ' ') problems${RESET}"
+}
+
+# Get list of problem basenames matching filters
+get_filtered_problems() {
+    local problems=()
+
+    for qfile in "$PROBLEMS_DIR"/*-q.md; do
+        [[ -f "$qfile" ]] || continue
+        local basename=$(basename "$qfile" | sed 's/-q\.md$//')
+        local meta=$(parse_problem "$qfile")
+        IFS='|' read -r category number side difficulty <<< "$meta"
+
+        # Apply filters
+        if [[ -n "$SIDE_FILTER" && "$side" != "$SIDE_FILTER" ]]; then
+            continue
+        fi
+
+        if [[ -n "$CATEGORY_FILTER" && "$category" != "$CATEGORY_FILTER" ]]; then
+            continue
+        fi
+
+        if [[ -n "$DIFFICULTY_FILTER" ]]; then
+            if ! echo ",$DIFFICULTY_FILTER," | grep -q ",$difficulty,"; then
+                continue
+            fi
+        fi
+
+        problems+=("$basename")
+    done
+
+    # Random sample if --count specified
+    if [[ -n "$COUNT_LIMIT" && ${#problems[@]} -gt 0 ]]; then
+        printf '%s\n' "${problems[@]}" | shuf -n "$COUNT_LIMIT"
+    else
+        printf '%s\n' "${problems[@]}"
+    fi
+}
+
+# Match specific problem names (partial match)
+match_specific_problems() {
+    local patterns=("$@")
+    local matched=()
+
+    for qfile in "$PROBLEMS_DIR"/*-q.md; do
+        [[ -f "$qfile" ]] || continue
+        local basename=$(basename "$qfile" | sed 's/-q\.md$//')
+
+        for pattern in "${patterns[@]}"; do
+            if [[ "$basename" == *"$pattern"* ]]; then
+                matched+=("$basename")
+                break
+            fi
+        done
+    done
+
+    printf '%s\n' "${matched[@]}"
+}
+
+# Determine which playbook to include based on problems
+get_playbook_for_problems() {
+    local problems=("$@")
+    local has_corp=false
+    local has_runner=false
+
+    for prob in "${problems[@]}"; do
+        if [[ "$prob" == *-corp ]]; then
+            has_corp=true
+        elif [[ "$prob" == *-runner ]]; then
+            has_runner=true
+        fi
+    done
+
+    if $has_corp && $has_runner; then
+        echo "both"
+    elif $has_corp; then
+        echo "corp"
+    elif $has_runner; then
+        echo "runner"
+    else
+        echo "both"
+    fi
+}
+
+# Build the output document
+build_output() {
+    local problems=("$@")
+
+    if [[ ${#problems[@]} -eq 0 ]]; then
+        echo "No problems match the specified filters." >&2
+        exit 1
+    fi
+
+    local playbook_side=$(get_playbook_for_problems "${problems[@]}")
+
+    # Header
+    cat <<EOF
+# Netrunner Reasoning Eval
+
+This document contains everything needed to evaluate strategic reasoning in Android: Netrunner.
+
+**Problems included:** ${#problems[@]}
+**Generated:** $(date -u +"%Y-%m-%d %H:%M UTC")
+
+---
+
+EOF
+
+    # Mechanics
+    echo "# Game Mechanics"
+    echo ""
+    cat "$SCRIPT_DIR/mechanics.md" | tail -n +2  # Skip title
+    echo ""
+    echo "---"
+    echo ""
+
+    # Decklists
+    echo "# Card Reference"
+    echo ""
+    cat "$SCRIPT_DIR/decklists.md" | tail -n +2
+    echo ""
+    echo "---"
+    echo ""
+
+    # Playbook(s)
+    if [[ "$playbook_side" == "corp" || "$playbook_side" == "both" ]]; then
+        echo "# Corp Playbook"
+        echo ""
+        cat "$SCRIPT_DIR/corp-playbook.md" | tail -n +2
+        echo ""
+        echo "---"
+        echo ""
+    fi
+
+    if [[ "$playbook_side" == "runner" || "$playbook_side" == "both" ]]; then
+        echo "# Runner Playbook"
+        echo ""
+        cat "$SCRIPT_DIR/runner-playbook.md" | tail -n +2
+        echo ""
+        echo "---"
+        echo ""
+    fi
+
+    # Problems
+    echo "# Problems"
+    echo ""
+
+    local i=1
+    for prob in "${problems[@]}"; do
+        echo "## Problem $i: $prob"
+        echo ""
+        cat "$PROBLEMS_DIR/${prob}-q.md"
+        echo ""
+
+        if $INCLUDE_ANSWERS && [[ -f "$PROBLEMS_DIR/${prob}-a.md" ]]; then
+            echo "### Reference Answer"
+            echo ""
+            cat "$PROBLEMS_DIR/${prob}-a.md" | tail -n +2  # Skip title
+            echo ""
+        fi
+
+        echo "---"
+        echo ""
+        ((i++))
+    done
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list|-l)
+            LIST_MODE=true
+            shift
+            ;;
+        --answers|-a)
+            INCLUDE_ANSWERS=true
+            shift
+            ;;
+        --side)
+            SIDE_FILTER="$2"
+            shift 2
+            ;;
+        --category)
+            CATEGORY_FILTER="$2"
+            shift 2
+            ;;
+        --difficulty)
+            DIFFICULTY_FILTER="$2"
+            shift 2
+            ;;
+        --count)
+            COUNT_LIMIT="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            SPECIFIC_PROBLEMS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Execute
+if $LIST_MODE; then
+    list_problems
+    exit 0
+fi
+
+# Get problems (portable, no mapfile)
+PROBLEMS=()
+if [[ ${#SPECIFIC_PROBLEMS[@]} -gt 0 ]]; then
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && PROBLEMS+=("$line")
+    done < <(match_specific_problems "${SPECIFIC_PROBLEMS[@]}")
+else
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && PROBLEMS+=("$line")
+    done < <(get_filtered_problems)
+fi
+
+# Sort problems for consistent output
+IFS=$'\n' PROBLEMS=($(printf '%s\n' "${PROBLEMS[@]}" | sort)); unset IFS
+
+# Build and output
+build_output "${PROBLEMS[@]}"
