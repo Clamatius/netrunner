@@ -128,7 +128,7 @@ Lose 1 click: Break 1 subroutine on this ice. Only the Runner can use this abili
 ↳ Install 1 ice from HQ or Archives directly inward from Brân 1.0, unrezzed.
 ↳ End the run.
 
-**Palisade** (3x) - Rez 2, Strength 2
+**Palisade** (3x) - Rez 3, Strength 2
 Palisade gets +2 strength while protecting a remote server.
 ↳ End the run.
 

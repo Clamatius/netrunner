@@ -3,8 +3,8 @@
 ## Expected Reasoning
 
 **Hand composition check:**
-- Economy: Hedge Fund (strong opener - 4 net credits)
-- ICE: Ice Wall (cheap barrier, 1 to rez), Enigma (cheap code gate, 3 to rez)
+- Economy: Hedge Fund (strong opener - net +4 credits)
+- ICE: Palisade (cheap barrier, rez 3), Whitespace (cheap code gate, rez 2)
 - Threat: Urtica Cipher (trap), Offworld Office (economy agenda)
 
 **Playbook concepts:**
@@ -14,18 +14,19 @@
 - Threat projection: Can install ICE + agenda/trap Turn 1
 
 **Turn 1 line available:**
-1. Hedge Fund (+4 net)
-2. Install Ice Wall on R&D
-3. Install Enigma on HQ OR install Urtica in remote
+1. Hedge Fund (+4 net, now at 9 credits)
+2. Install Palisade on R&D
+3. Install Whitespace on HQ OR install Urtica in remote
 
-This hand enables immediate tempo: economy, central protection, and remote threat with one more ice.
+This hand enables immediate tempo: economy, central protection, and remote threat option.
 
 ## Answer
 **KEEP**
 
 ## Notes
-- Offworld is a 4/2 - can't fast-advance, requires visible advancement to score. Jamming it early is risky; any anti-ICE trick takes it. Accept that HQ is vulnerable until remote established.
-- Sequencing within turn (Ice Ice Hedge vs Hedge Ice Ice) doesn't matter credit-wise, both end at 9.
+- Offworld is a 4/2 - can't fast-advance, requires visible advancement to score
+- Both ICE are cheap to rez (Palisade 3, Whitespace 2), affordable after Hedge Fund
+- Urtica in remote is a classic bluff that protects future agenda installs
 
 ## Common Mistakes
 - Mulling for "better" economy when Hedge Fund is already optimal
