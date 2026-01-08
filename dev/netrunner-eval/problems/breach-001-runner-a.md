@@ -2,15 +2,17 @@
 
 ## The Setup
 
-You have $4 and three cards: Sure Gamble, Overclock, Mayfly.
+You have $5 and three cards: Sure Gamble, Overclock, Mayfly.
 
-**First observation:** Sure Gamble costs $5. You have $4. It looks unplayable... *unless* you find another credit first.
+**First observation:** Sure Gamble costs $5. You have $5, but you'd drop to $0 with no way to play more cards. Not useful *unless* you can gain a credit first.
 
 **Second observation:** Manegarm accepts 2 clicks OR $5. This creates resource flexibility.
 
 **Third observation:** Brân can be clicked through (Bioroid) OR broken with Mayfly ($8).
 
-These three observations unlock three completely different paths.
+**Fourth observation:** Overclock costs $1 to play, then provides $5 during the run.
+
+These observations unlock three completely different paths.
 
 ---
 
@@ -27,10 +29,10 @@ These three observations unlock three completely different paths.
 
 | "Skip sub 1" attempt | Why it fails |
 |---------------------|--------------|
-| Break Karunā with Mayfly | Boost $2 + break $2 = $4. Pool left: $4. Manegarm needs $5. **$1 short!** |
+| Break Karunā with Mayfly | After Brân: $1 left. Karunā costs $2 to break. **$1 short!** |
 | Tank Karunā damage | 4 damage (2+2), grip is 2-3 cards. **Flatline!** |
 
-Karunā is precisely calibrated: expensive enough that you can't afford Manegarm after, lethal enough that you can't tank. All valid solutions must break sub 1.
+Karunā is precisely calibrated: expensive enough that you can't break it after Brân, lethal enough that you can't tank. All valid solutions must break sub 1.
 
 **Upgrade:**
 | Card | Trigger | Payment Options |
@@ -43,8 +45,8 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 | Step | Action | Clicks | Real $ | OC $ | Notes |
 |------|--------|--------|--------|------|-------|
-| Start | — | 4 | $4 | — | — |
-| Click 1 | **Overclock** | 3 | $4 | $5 | Run S1 |
+| Start | — | 4 | $5 | — | — |
+| Click 1 | **Overclock** ($1) | 3 | $4 | $5 | Run S1 |
 | — | Click-break sub 1 | 2 | $4 | $5 | Prevent install |
 | — | Click-break sub 2 | 1 | $4 | $5 | ETR avoided |
 | — | Click-break sub 3 | 0 | $4 | $5 | ETR avoided |
@@ -61,9 +63,9 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 | Step | Action | Clicks | Real $ | OC $ | Notes |
 |------|--------|--------|--------|------|-------|
-| Start | — | 4 | $4 | — | — |
-| Click 1 | **Install Mayfly** | 3 | $3 | — | Different! |
-| Click 2 | Overclock | 2 | $3 | $5 | Run S1 |
+| Start | — | 4 | $5 | — | — |
+| Click 1 | **Install Mayfly** ($1) | 3 | $4 | — | Different! |
+| Click 2 | Overclock ($1) | 2 | $3 | $5 | Run S1 |
 | — | Boost Mayfly +5 | 2 | $3 | $0 | 1→6 str |
 | — | Break 3 subs | 2 | $0 | $0 | $3 from pool |
 | — | Manegarm (2 clicks) | 0 | $0 | $0 | Pay with clicks! |
@@ -79,11 +81,11 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 | Step | Action | Clicks | $ | Notes |
 |------|--------|--------|---|-------|
-| Start | — | 4 | $4 | — |
-| Click 1 | **Take credit** | 3 | $5 | NOW SG IS PLAYABLE! |
-| Click 2 | Sure Gamble | 2 | $9 | The trap was a trick |
-| Click 3 | Install Mayfly | 1 | $8 | — |
-| Click 4 | Overclock | 0 | $8 + $5 = $13 | Run S1 |
+| Start | — | 4 | $5 | — |
+| Click 1 | **Take credit** | 3 | $6 | NOW SG IS USEFUL! |
+| Click 2 | Sure Gamble | 2 | $10 | $6 - $5 + $9 |
+| Click 3 | Install Mayfly | 1 | $9 | — |
+| Click 4 | Overclock ($1) | 0 | $8 + $5 = $13 | Run S1 |
 | — | Boost Mayfly +5 | 0 | $8 | From OC |
 | — | Break 3 subs | 0 | $5 | $3 from real pool |
 | — | Manegarm ($5) | 0 | $0 | Exact! |
@@ -111,7 +113,7 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 **Q2 insight:** Manegarm accepts clicks. Use credits for Brân (Mayfly), pay Manegarm with your remaining 2 clicks.
 
-**Q3 insight:** Sure Gamble isn't dead—it's *one credit away* from being playable. Taking a credit as Click 1 unlocks a completely different economy path that uses all three cards.
+**Q3 insight:** Sure Gamble is only useful if you can play cards afterward. Taking a credit first → play SG → fund everything with credits → use all three cards.
 
 ---
 
@@ -119,10 +121,10 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 | Mistake | Why It Fails |
 |---------|--------------|
-| "Sure Gamble is unplayable" | True at $4, false at $5 |
+| Not realizing Overclock costs $1 | Changes all math! |
 | Finding only one path | Misses resource fungibility |
 | Finding only two paths | Misses the "click for credit" unlock |
-| Skipping Brân sub 1 | Corp installs Karunā! $4 to break + $5 Manegarm = $9, have $8. Or tank 4 damage = flatline. |
+| Skipping Brân sub 1 | Corp installs Karunā! After breaking Brân subs 2&3: $1 left. Karunā costs $2. Flatline if you tank. |
 | Mixing resource allocations wrong | E.g., clicking 2 Brân subs + Mayfly 1 sub = not enough for Manegarm |
 
 ---
@@ -131,7 +133,7 @@ Karunā is precisely calibrated: expensive enough that you can't afford Manegarm
 
 **Hard.** This puzzle requires:
 
-1. Recognizing Sure Gamble is *conditionally* playable
+1. Recognizing Overclock costs $1 (not free!)
 2. Understanding Bioroid click-breaking
 3. Understanding Manegarm's OR (not AND)
 4. Finding three distinct resource allocations

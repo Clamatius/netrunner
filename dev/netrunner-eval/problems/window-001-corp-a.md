@@ -69,7 +69,7 @@ The key insight: **cards in HQ are shields for Send a Message**.
    - SaM now 1 in 5 instead of 1 in 3
 
 3. **Nico in Server 2 is a tempo test:**
-   - If they trash it ($3), they're down to $4, can't threaten Brân at all
+   - If they trash it ($2), they're down to $5, still can't threaten Brân
    - If they ignore it, you gain $9 over 3 turns
    - Either way, you win the exchange
 

@@ -9,7 +9,7 @@ You are the Runner. It is Turn 6. You are at 5 points. The Corp is at 5 points. 
 ## Board State
 
 **Runner:**
-- Credits: $4
+- Credits: $5
 - Clicks: 4 (start of turn)
 - Grip: [[Sure Gamble]], [[Overclock]], [[Mayfly]]
 - Rig: Empty (no programs installed)
@@ -30,23 +30,22 @@ Lose [click]: Break 1 subroutine on this ice. Only the Runner can use this abili
 ↳ End the run.
 ↳ End the run.
 
-**Manegarm Skunkworks** - Upgrade (Rez 2, Trash 3)
-Whenever the Runner approaches this server, end the run unless they either spend [click][click] or pay 5[credit].
-
-**Mayfly** - Icebreaker: AI (Install 1, Strength 1)
-Interface → 1[credit]: Break 1 subroutine.
-1[credit]: +1 strength.
-When this run ends, trash this program.
-
-**Overclock** - Event: Run (Cost 0)
-Place 5[credit] on this event, then run any server. When that run ends, trash Overclock. Use credits on Overclock during runs.
-
-**Sure Gamble** - Event (Cost 5)
-Gain 9[credit].
-
 **Karunā** - ICE: Sentry - AP (Rez 4, Strength 3)
 ↳ Do 2 net damage. The Runner may jack out.
 ↳ Do 2 net damage.
+
+**Manegarm Skunkworks** - Upgrade (Rez 2, Trash 3)
+Whenever the Runner approaches this server, end the run unless they either spend [click][click] or pay 5[credit].
+
+**Mayfly** - Icebreaker: AI (Install 1, Strength 1, 2 MU)
+Interface → 1[credit]: Break 1 subroutine. When this run ends, trash this program.
+1[credit]: +1 strength.
+
+**Overclock** - Event: Run (Cost 1)
+Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
 
 ## Questions
 
