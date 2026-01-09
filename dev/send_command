@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -233,6 +233,11 @@ ${GREEN}Installation:${NC}
 
 ${GREEN}Connection:${NC}
   connect         - Manually reconnect WebSocket to server
+
+${GREEN}AI Bot:${NC}
+  bot             - Corp: Make one heuristic decision and execute
+  bot-turn        - Corp: Play full turn with heuristic AI
+  bot-status      - Corp: Show decision-relevant state and next action
 
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
@@ -1051,7 +1056,32 @@ case "$COMMAND" in
         execute "$EXPR"
         ;;
 
-    # Unknown command
+    # AI Bot commands
+    bot)
+        ensure_connection
+        info "Heuristic Corp: Making one decision..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/play-turn))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-turn)
+        ensure_connection
+        info "Heuristic Corp: Playing full turn..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/play-full-turn))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-status)
+        ensure_connection
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/status))'
+        ;;
+
     *)
         error "Unknown command: $COMMAND"
         ;;
