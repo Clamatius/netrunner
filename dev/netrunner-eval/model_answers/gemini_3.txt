@@ -1,0 +1,213 @@
+# Netrunner Solutions
+
+## Problem 1: break-001-runner
+
+**Analysis:**
+The Runner needs to access Server 1, protected by Whitespace (outer) and Palisade (inner).
+- **Whitespace (Code Gate, Str 0):** Can be broken by Unity (Decoder). 
+  - Unity Install Cost: 3[credit]. 
+  - Break Cost: Unity Strength 1 (>= 0). 2 subs * 1[credit] = 2[credit].
+- **Palisade (Barrier, Str 2 + 2 remote = 4):** Can be broken by Cleaver (Fracter).
+  - Cleaver Install Cost: 3[credit].
+  - Break Cost: Requires +1 Strength (2[credit]) + Break (1[credit]) = 3[credit].
+- **Total Break Cost:** 5[credit].
+- **Total Install Cost:** 6[credit].
+- **Total Needed:** 11[credit].
+- **Current Funds:** 7[credit].
+- **Shortfall:** 4[credit].
+
+**Solution Line:**
+Using `Sure Gamble` provides the necessary economy.
+1.  **Click 1:** Play `Sure Gamble`. Cost 5[credit], Gain 9[credit]. (Credits: 7 - 5 + 9 = 11).
+2.  **Click 2:** Install `Cleaver`. Cost 3[credit]. (Credits: 11 - 3 = 8).
+3.  **Click 3:** Install `Unity`. Cost 3[credit]. (Credits: 8 - 3 = 5).
+4.  **Click 4:** Run Server 1.
+    - Encounter **Whitespace** (Str 0):
+        - Unity (Str 1) matches strength.
+        - Pay 2[credit] to break 2 subroutines. (Credits: 5 - 2 = 3).
+    - Encounter **Palisade** (Str 4):
+        - Cleaver (Str 3) needs +1 strength.
+        - Pay 2[credit] to pump Cleaver strength (+1). (Credits: 3 - 2 = 1).
+        - Pay 1[credit] to break End the Run. (Credits: 1 - 1 = 0).
+    - **Access Server.**
+
+**Answer:**
+1. Play Sure Gamble.
+2. Install Cleaver.
+3. Install Unity.
+4. Run Server 1. Break Whitespace (2cr) and Palisade (3cr). Access.
+
+---
+
+## Problem 2: midgame-001-runner
+
+**Analysis:**
+- **Remote:** `Brân 1.0` (Str 6, Bioroid) -> `Palisade` (Str 4). Unrezzed card with 2 advancements.
+- **Resources:** 2[credit], 4 clicks.
+- **The Threat:** The 2-advanced card is likely `Offworld Office`, `Send a Message`, or `Superconducting Hub`. `Urtica Cipher` is also possible (seen in HQ earlier), but an agenda is the high-risk read.
+- **Can we run it?**
+    - **Brân 1.0:** Too expensive to break with credits. Must use clicks (Bioroid ability).
+        - Cost: **3 clicks** to bypass all subs.
+    - **Palisade:** Requires `Cleaver`. Str 3 -> 4. Pump (2[credit]) + Break (1[credit]).
+        - Cost: **3[credit]**.
+    - **Total Run Cost:** 1 click (Run) + 3 clicks (Bran) = 4 clicks. + 3[credit] (Palisade).
+- **The Constraint:**
+    - We have **2[credit]** and **4 clicks**.
+    - We need **3[credit]** for Palisade.
+    - We need **4 clicks** for the Run and Bran.
+    - We have no way to generate the 3rd credit without spending a click (Telework/Pennyshaver require clicks).
+    - If spend a click for credit: We have 3 clicks left. Run takes 1. Bran takes 2. One Bran sub fires (Installation or End Run or End Run). Bran stops the run if subs fire (Subs 2 & 3 are ETR).
+- **Result:** It is mathematically impossible to break into the server this turn.
+
+**Answer:**
+The unrezzed card is likely an agenda or Urtica Cipher. **However, you cannot access it this turn.** Running would require 4 clicks and 3 credits; you only have 2 credits and cannot gain more without sacrificing the clicks needed to pass Brân.
+
+**Action:** Do not run. Spend the turn gaining credits (Telework) and preparing for next turn.
+
+---
+
+## Problem 3: mull-001-corp
+
+**Analysis:**
+- **Hand:** `Hedge Fund`, `Ice Wall`, `Enigma`, `Urtica Cipher`, `Offworld Office`.
+- **Econ:** Strong (`Hedge Fund`).
+- **ICE:** Good early defense (`Ice Wall`, `Enigma`). Covers two servers with ETR.
+- **Plan:** Hedge Fund T1. Install ICE on HQ/R&D.
+- **Verdict:** Solid keep.
+
+**Answer:** Keep.
+
+---
+
+## Problem 4: mull-002-corp
+
+**Analysis:**
+- **Hand:** `Superconducting Hub`, `Send a Message`, `Offworld Office`, `Government Subsidy`, `Brân 1.0`.
+- **Agendas:** 3 (Flood).
+- **Econ:** `Government Subsidy` costs 10[credit] to play. Starting credits 5. Unplayable.
+- **ICE:** `Brân 1.0` costs 6[credit] to rez. Starting credits 5. Unrezzed.
+- **Verdict:** Unplayable hand. No functional economy or defense Turn 1.
+
+**Answer:** Mulligan.
+
+---
+
+## Problem 5: mull-003-runner
+
+**Analysis:**
+- **Hand:** `Sure Gamble`, `Smartware Distributor`, `Cleaver`, `Carmen`, `Jailbreak`.
+- **Econ:** Excellent (`Sure Gamble`, `Smartware`).
+- **Rig:** Good start (`Cleaver`, `Carmen`). 2/3 breaker types.
+- **Pressure:** `Jailbreak` for early access.
+- **Verdict:** Excellent hand.
+
+**Answer:** Keep.
+
+---
+
+## Problem 6: mull-004-runner
+
+**Analysis:**
+- **Hand:** `Cleaver`, `Cleaver`, `Carmen`, `Unity`, `Overclock`.
+- **Rig:** Partial "God Rig" (all 3 breakers).
+- **Econ:** Non-existent. No `Sure Gamble`. `Overclock` is for runs only.
+- **Problem:** Installing Carmen (5), Cleaver (3), Unity (3) costs 11 credits. You have 5. Without economy cards, you are forced to slowly "click for credits" to install anything, surrendering massive tempo to the Corp.
+- **Verdict:** Trap hand. Too slow.
+
+**Answer:** Mulligan.
+
+---
+
+## Problem 7: score-001-corp
+
+**Analysis:**
+- **Situation:** Score 5-4. We need 7 points (or 6 if tutorial). Board is locked down with Sentry ICE (`Karunā`, `Tithe`).
+- **Runner State:** No Killer installed. 1 card in hand.
+- **Lethality:** Any run on a server with `Karunā` (4 net damage) or `Tithe` (1 net damage) flatlines the Runner (1 card vs >=1 damage). Runner effectively cannot run any server.
+- **Plan:** We can play greedily because the Runner is locked out of our servers until they draw/install a Killer.
+- **Lines:**
+    - **Safe:** Install `Superconducting Hub` (S1), Advance x2. (Hub 2/3). Score next turn. End: 10[credit].
+    - **Greedy:** Play `Government Subsidy` (+15[credit]). Install Hub (S1). Advance x1. (Hub 1/3). Next turn `Seamless Launch` (+2) -> Score. End: 16[credit].
+    - Both lines score next turn. The Subsidy line leaves us much richer.
+
+**Answer:**
+1. Play `Government Subsidy`.
+2. Install `Superconducting Hub` in Server 1.
+3. Advance `Superconducting Hub`.
+(Runner cannot contest due to lack of Killer and lethal ICE).
+
+---
+
+## Problem 8: turn1-001-corp
+
+**Analysis:**
+- **Hand:** `Hedge Fund`, `Palisade`, `Whitespace` x2, `Urtica`, `Offworld`.
+- **Goal:** Standard opening. Economy + Central Defense.
+- **Actions:**
+    1.  Play `Hedge Fund` (+4[credit]).
+    2.  Install `Whitespace` on HQ/R&D.
+    3.  Install `Whitespace` on the other central.
+    - `Palisade` is better for remotes (+2 Str), so save it. `Whitespace` taxes credits on centrals.
+
+**Answer:**
+1. Play `Hedge Fund`.
+2. Install `Whitespace` on HQ.
+3. Install `Whitespace` on R&D.
+
+---
+
+## Problem 9: turn1-002-corp
+
+**Analysis:**
+- **Hand:** `Gov Subsidy`, `Brân`, `Karunā`, `Send a Message`, `Seamless`, `Diviner`.
+- **Constraint:** Need 10[credit] for Subsidy. Have 5[credit]. `Brân` (6) and `Karunā` (4) are expensive. `Diviner` (2) is cheap.
+- **Strategy:** Defend R&D (Agenda ref) cheaply, then rush economy for Subsidy.
+- **Actions:**
+    1.  Install `Diviner` on R&D (Cheap, ETR on odd cost?). No, Diviner is "Do 1 net... ETR if odd cost trashed". It's porous but reliable tax/damage.
+    2.  Click for Credit (6).
+    3.  Click for Credit (7).
+    - Next turn: Credit x3 (10). Turn 3: Subsidy.
+
+**Answer:**
+1. Install `Diviner` on R&D.
+2. Click for Credit.
+3. Click for Credit.
+
+---
+
+## Problem 10: turn1-003-runner
+
+**Analysis:**
+- **Hand:** `Sure Gamble`, `Smartware`, `Cleaver`, `VRcation`, `Jailbreak`.
+- **Goal:** Econ setup + Pressure.
+- **Actions:**
+    1.  Play `Sure Gamble`. (Credits: 9).
+    2.  Install `Smartware Distributor` (Drip econ).
+    3.  Play `Jailbreak` on HQ. (Force rez / Facecheck / Access).
+    4.  Play `VRcation`. (Draw 4, lose remaining clicks - none left).
+
+**Answer:**
+1. Play `Sure Gamble`.
+2. Install `Smartware Distributor`.
+3. Play `Jailbreak` (HQ).
+4. Play `VRcation`.
+
+---
+
+## Problem 11: turn1-004-runner
+
+**Analysis:**
+- **State:** No ICE on board. Remote has unrezzed card.
+- **Goal:** Punish the lack of ICE. Check everything.
+- **Actions:**
+    1.  Play `Sure Gamble` (Funding).
+    2.  Run Server 1 (Force rez/trash/steal).
+    3.  Run R&D.
+    4.  Install `Smartware Distributor`.
+    - Note: Checking Remote and R&D is higher value than HQ T1 usually. `Smartware` gets the drip clock ticking.
+
+**Answer:**
+1. Play `Sure Gamble`.
+2. Run Server 1.
+3. Run R&D.
+4. Install `Smartware Distributor`.

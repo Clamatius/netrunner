@@ -1,4 +1,4 @@
-# Problem: servers-001-runner
+# Problem: servers-001-runner [Medium]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,18 +8,28 @@ You are the Runner, 4 clicks remaining at the start of your turn. You need infor
 
 ## Board State
 
-**Runner:**
-- Credits: $7
-- Points: 0
-- Grip: [[Carmen]], [[Jailbreak]]
-- Stack: Contains 2 more [[Jailbreak]] (among other cards)
-- Rig: [[Unity]]
-
-**Corp:**
-- Points: 3
-- HQ: [[Tithe]] (rezzed) - 5 cards in hand
-- R&D: [[Whitespace]] (rezzed)
-- Archives: unprotected
+```yaml
+corp:
+  credits: 5
+  points: 3
+  HQ:
+    ice:
+      - {card: Tithe, rezzed: true}
+    contents: 5  # 5 cards in hand
+  R&D:
+    ice:
+      - {card: Whitespace, rezzed: true}
+  Archives:
+    ice: []
+runner:
+  credits: 7
+  points: 0
+  clicks: 4
+  grip: [Carmen, Jailbreak]
+  stack_notes: "Contains 2 more Jailbreak (among other cards)"
+  rig:
+    - {card: Unity}
+```
 
 
 ## Card Text (Auto-Generated)

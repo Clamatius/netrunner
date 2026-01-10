@@ -1,4 +1,4 @@
-# Problem: breach-001-runner
+# Problem: breach-001-runner [Hard]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,19 +8,29 @@ You are the Runner. It is Turn 6. You are at 5 points. The Corp is at 5 points. 
 
 ## Board State
 
-**Runner:**
-- Credits: $5
-- Clicks: 4 (start of turn)
-- Grip: [[Sure Gamble]], [[Overclock]], [[Mayfly]]
-- Rig: Empty (no programs installed)
+```yaml
+corp:
+  credits: 10
+  HQ:
+    ice:
+      - {card: Karunā, rezzed: false}
+    cards: 1  # 1 asset in HQ
+  Server 1:
+    ice:
+      - {card: Brân 1.0, rezzed: true}
+    root:
+      - {card: Manegarm Skunkworks, rezzed: true}
+      - {card: Agenda, rezzed: false}  # Unknown agenda
 
-**Corp:**
-- Credits: $10
-- HQ: [[Karunā]], 1 asset
-- Server 1:
-  - [[Brân 1.0]] (rezzed)
-  - [[Manegarm Skunkworks]] (rezzed, in root)
-  - Agenda (unrezzed, installed)
+runner:
+  credits: 5
+  clicks: 4
+  grip:
+    - Sure Gamble
+    - Overclock
+    - Mayfly
+  rig: []  # No programs installed
+```
 
 ## Card Text (Auto-Generated)
 
@@ -45,7 +55,7 @@ Interface → 1[credit]: Break 1 subroutine. When this run ends, trash this prog
 Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
 
 **Sure Gamble** - Event (Cost 5)
-Gain 9[credit].
+2Gain 9[credit].
 
 ## Questions
 

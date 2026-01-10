@@ -8,23 +8,38 @@ You are the Corp, Turn 3, 3 clicks remaining. You have a scoring remote protecte
 
 ## Board State
 
-**Corp:**
-- Credits: $3
-- Points: 0
-- HQ: [[Whitespace]] (rezzed)
-- R&D: [[Whitespace]] (rezzed), [[Tithe]] (rezzed)
-- Server 1: [[Brân 1.0]] (rezzed), empty root
-
-**Hand:**
-- [[Seamless Launch]]
-- [[Regolith Mining License]]
-- [[Offworld Office]]
-
-**Runner:**
-- Credits: $6
-- Points: 0
-- Rig: [[Cleaver]], [[Unity]], [[Pennyshaver]]
-- No Killer installed
+```yaml
+corp:
+  credits: 3
+  points: 0
+  clicks: 3
+  HQ:
+    ice:
+      - {card: Whitespace, rezzed: true}
+    contents: [Seamless Launch, Regolith Mining License, Offworld Office]
+  R&D:
+    ice:
+      - {card: Whitespace, rezzed: true}
+      - {card: Tithe, rezzed: true}
+  Server 1:
+    ice:
+      - {card: Brân 1.0, rezzed: true}
+    root: null  # empty
+runner:
+  credits: 6
+  points: 0
+  grip:
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+  rig:
+    - {card: Cleaver}
+    - {card: Unity}
+    - {card: Pennyshaver}
+  notes: "No Killer installed"
+```
 
 
 ## Card Text (Auto-Generated)

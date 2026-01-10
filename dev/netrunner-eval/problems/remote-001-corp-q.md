@@ -1,4 +1,4 @@
-# Problem: remote-001-corp
+# Problem: remote-001-corp [Medium]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,19 +8,37 @@ You are the Corp, about to start your turn. You have Offworld Office in HQ and w
 
 ## Board State
 
-**Corp:**
-- Credits: $8
-- Points: 2
-- HQ: [[Karunā]] (rezzed) - contains [[Offworld Office]], [[Nico Campaign]]
-- R&D: [[Karunā]] (rezzed)
-- Server 1: [[Whitespace]] (rezzed, outer) → [[Tithe]] → [[Palisade]] → [[Palisade]] (inner) → [[Regolith Mining License]] ($3 remaining)
+```yaml
+corp:
+  credits: 8
+  points: 2
+  HQ:
+    ice:
+      - {card: Karunā, rezzed: true}
+    contents: [Offworld Office, Nico Campaign]
+  R&D:
+    ice:
+      - {card: Karunā, rezzed: true}
+  Server 1:
+    ice:
+      - {card: Whitespace, rezzed: true}   # outer
+      - {card: Tithe}                       # unrezzed
+      - {card: Palisade}                    # unrezzed
+      - {card: Palisade}                    # inner, unrezzed
+    root: {card: Regolith Mining License, credits: 3}
 
-**Runner:**
-- Credits: $2
-- Points: 0
-- Grip: 1 card (unknown)
-- Rig: [[Cleaver]], [[Pennyshaver]] ($2 on it), [[Red Team]] ($12 on it), [[Smartware Distributor]] ($3 on it)
-- No Killer or Decoder installed
+runner:
+  credits: 2
+  points: 0
+  grip:
+    - {card: Unknown, rezzed: false}
+  rig:
+    - {card: Cleaver}
+    - {card: Pennyshaver, credits: 2}
+    - {card: Red Team, credits: 12}
+    - {card: Smartware Distributor, credits: 3}
+  # No Killer or Decoder installed
+```
 
 
 ## Card Text (Auto-Generated)

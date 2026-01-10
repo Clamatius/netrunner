@@ -8,16 +8,26 @@ You are the Runner, 4 clicks remaining. There's an agenda in the remote that wil
 
 ## Board State
 
-**Runner:**
-- Credits: $7
-- Points: 4
-- Grip: 3 cards (nothing critical — you've already set up)
-- Rig: [[Carmen]], [[Cleaver]]
+```yaml
+corp:
+  credits: 5
+  points: 4
+  Server 1:
+    ice:
+      - {card: Karunā, rezzed: true}      # outer
+      - {card: Palisade, rezzed: true}    # inner
+    root: {card: Agenda}                   # unrezzed agenda
 
-**Corp:**
-- Credits: $5
-- Points: 4
-- Server 1: [[Karunā]] (rezzed, outer) → [[Palisade]] (rezzed, inner) → Agenda (unrezzed)
+runner:
+  credits: 7
+  points: 4
+  clicks: 4
+  grip:
+    - {card: Carmen}
+  rig:
+    - {card: Carmen}
+    - {card: Cleaver}
+```
 
 
 ## Card Text (Auto-Generated)

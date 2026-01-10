@@ -7,22 +7,38 @@ ID: Pravdivost Consulting (no special ability, 45 card min)
 
 ## Board State
 
-**Corp ($12):**
-- Server 1: [[Whitespace]] (rezzed) → [[Karunā]] (rezzed)
-- R&D: [[Brân 1.0]] (rezzed) → [[Karunā]] (rezzed)
-- HQ: [[Tithe]] (rezzed) → [[Tithe]] (rezzed)
+```yaml
+corp:
+  credits: 12
+  points: 5
+  HQ:
+    ice:
+      - {card: Tithe, rezzed: true}       # outer
+      - {card: Tithe, rezzed: true}       # inner
+    contents:
+      - Regolith Mining License
+      - Seamless Launch
+      - Government Subsidy
+      - Superconducting Hub
+      - Palisade
+  R&D:
+    ice:
+      - {card: Brân 1.0, rezzed: true}    # outer
+      - {card: Karunā, rezzed: true}      # inner
+  Server 1:
+    ice:
+      - {card: Whitespace, rezzed: true}  # outer
+      - {card: Karunā, rezzed: true}      # inner
 
-**Runner ($4, 1 card in grip):**
-- Rig: [[Cleaver]], [[Unity]]
-- No Killer installed
-
-**Your HQ (5 cards):**
-```
-[[Regolith Mining License]]
-[[Seamless Launch]]
-[[Government Subsidy]]
-[[Superconducting Hub]]
-[[Palisade]]
+runner:
+  credits: 4
+  points: 4
+  grip:
+    - {card: Unknown, rezzed: false}
+  rig:
+    - {card: Cleaver}
+    - {card: Unity}
+  # No Killer installed
 ```
 
 ## Card Text (Auto-Generated)

@@ -7,23 +7,36 @@ ID: The Catalyst (no special ability, 40 card min, 1 link)
 
 ## Board State
 
-**Corp ($5, 4 cards in HQ):**
-- Server 1: [[Brân 1.0]] (rezzed, outermost) → [[Palisade]] (rezzed) → unrezzed card with 2 advancement counters
+```yaml
+corp:
+  credits: 5
+  points: 3  # Offworld Office + Superconducting Hub
+  HQ:
+    cards: 4  # Urtica Cipher, Nico Campaign, Palisade, Whitespace
+  Server 1:
+    ice:
+      - {card: Brân 1.0, rezzed: true}   # Outermost
+      - {card: Palisade, rezzed: true}   # Innermost
+    root: {adv: 2}  # Unknown card with 2 advancement counters
 
-**Runner ($2):**
-- Rig: [[Cleaver]], [[Unity]], [[Carmen]]
-- [[Pennyshaver]] (2 credits hosted)
-- [[Docklands Pass]]
-- [[Telework Contract]] (6 credits remaining)
-- [[Smartware Distributor]] (1 credit hosted)
-
-**Your Grip (5 cards):**
-```
-[[VRcation]]
-[[Telework Contract]]
-[[Red Team]]
-[[Verbal Plasticity]]
-[[Carmen]]
+runner:
+  credits: 2
+  points: 3  # Offworld Office + Superconducting Hub
+  clicks: 4
+  grip:
+    - VRcation
+    - Telework Contract
+    - Red Team
+    - Verbal Plasticity
+    - Carmen
+  rig:
+    - Cleaver
+    - Unity
+    - Carmen
+    - {card: Pennyshaver, credits: 2}
+    - Docklands Pass
+    - {card: Telework Contract, credits: 6}
+    - {card: Smartware Distributor, credits: 1}
 ```
 
 **Known Information:**

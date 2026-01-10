@@ -7,21 +7,27 @@ ID: The Catalyst (no special ability, 40 card min, 1 link)
 
 ## Board State
 
-**Corp ($8):**
-- Server 1: [[Whitespace]] (rezzed, outermost) → [[Palisade]] (rezzed) → card with 2 advancement counters
-
-**Runner ($7):**
-- Rig: Empty
-
-**Your Grip (5 cards):**
+```yaml
+corp:
+  credits: 8
+  points: 0
+  Server 1:
+    ice:
+      - {card: Whitespace, rezzed: true}
+      - {card: Palisade, rezzed: true}
+    root: {adv: 2}
+runner:
+  credits: 7
+  points: 0
+  clicks: 4
+  grip:
+    - {card: Sure Gamble}
+    - {card: Cleaver}
+    - {card: Unity}
+    - {card: Carmen}
+    - {card: Docklands Pass}
+  rig: []
 ```
-[[Sure Gamble]]
-[[Cleaver]]
-[[Unity]]
-[[Carmen]]
-[[Docklands Pass]]
-```
-
 
 ## Card Text (Auto-Generated)
 

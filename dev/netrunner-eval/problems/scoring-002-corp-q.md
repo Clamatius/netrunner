@@ -1,4 +1,4 @@
-# Problem: scoring-002-corp
+# Problem: scoring-002-corp [Medium]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,21 +8,44 @@ You are the Corp, 3 clicks remaining at the start of your turn (after mandatory 
 
 ## Board State
 
-**Corp:**
-- Credits: $5
-- Points: 3
-- HQ: [[Send a Message]], [[Seamless Launch]], [[Seamless Launch]], [[Regolith Mining License]], [[Manegarm Skunkworks]]
+```yaml
+corp:
+  credits: 5
+  points: 3
+  clicks: 3    # after mandatory draw
+  HQ:
+    ice:
+      - {card: Tithe, rezzed: true}        # outer
+      - {card: Whitespace, rezzed: true}   # inner
+    contents:
+      - Send a Message
+      - Seamless Launch
+      - Seamless Launch
+      - Regolith Mining License
+      - Manegarm Skunkworks
+  R&D:
+    ice:
+      - {card: Karunā, rezzed: true}       # outer
+      - {card: Brân 1.0, rezzed: true}     # inner
+  Server 1:
+    ice:
+      - {card: Tithe, rezzed: true}        # outer
+      - {card: Brân 1.0, rezzed: true}     # middle
+      - {card: Palisade, rezzed: true}     # inner
 
-**Servers (all ICE rezzed):**
-- HQ: [[Tithe]] (outer), [[Whitespace]] (inner)
-- R&D: [[Brân 1.0]] (inner), [[Karunā]] (outer)
-- Server 1: [[Palisade]] (inner), [[Brân 1.0]] (middle), [[Tithe]] (outer)
-
-**Runner:**
-- Credits: $2
-- Points: 3
-- Grip: 2 cards (unknown)
-- Rig: [[Unity]], [[Cleaver]], [[Carmen]], [[Pennyshaver]] ($2 on it), [[Docklands Pass]]
+runner:
+  credits: 2
+  points: 3
+  grip:
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+  rig:
+    - {card: Unity}
+    - {card: Cleaver}
+    - {card: Carmen}
+    - {card: Pennyshaver, credits: 2}
+    - {card: Docklands Pass}
+```
 
 
 ## Card Text (Auto-Generated)

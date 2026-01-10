@@ -1,4 +1,4 @@
-# Problem: lethal-001-runner
+# Problem: lethal-001-runner [Hard]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,17 +8,30 @@ You are the Runner, 4 clicks remaining. Corp has an un-stealable agenda in a rem
 
 ## Board State
 
-**Runner:**
-- Credits: $13
-- Points: 5 (one agenda away from winning!)
-- Grip: [[Carmen]], 2 other cards (3 cards total in grip)
-- Rig: [[Unity]]
+```yaml
+corp:
+  credits: 0  # Not specified, assume minimal
+  points: 5
+  HQ:
+    ice:
+      - {card: Karunā, rezzed: true}
+    cards: 2  # 1 agenda, 1 Manegarm Skunkworks
+  R&D:
+    ice: []
+  Archives:
+    ice: []
 
-**Corp:**
-- Points: 5
-- HQ: [[Karunā]] (rezzed) - contains exactly 2 cards: 1 agenda, 1 [[Manegarm Skunkworks]]
-- R&D: unprotected
-- Archives: unprotected
+runner:
+  credits: 13
+  points: 5
+  clicks: 4
+  grip: 
+    - Carmen
+    - Carmen
+    - Unity
+  rig:
+    - Unity
+```
 
 
 ## Card Text (Auto-Generated)

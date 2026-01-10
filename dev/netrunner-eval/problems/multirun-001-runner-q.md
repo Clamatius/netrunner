@@ -1,4 +1,4 @@
-# Problem: multirun-001-runner
+# Problem: multirun-001-runner [Medium]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,16 +8,34 @@ You are the Runner, 4 clicks remaining at the start of your turn.
 
 ## Board State
 
-**Runner:**
-- Credits: $9
-- Grip: [[Carmen]], [[Docklands Pass]], [[Unity]]
-- Rig: [[Cleaver]], [[Pennyshaver]] ($1 credit on it), [[Smartware Distributor]] ($0 credits on it)
+```yaml
+corp:
+  credits: 0  # Not specified
+  HQ:
+    ice:
+      - {card: Karunā, rezzed: true}
+  R&D:
+    ice:
+      - {card: Brân 1.0, rezzed: true}
+  Archives:
+    ice: []
+    cards: 4  # 4 face-up economy cards (no agendas)
+  Server 1:
+    ice:
+      - {card: Palisade, rezzed: true}
 
-**Corp:**
-- HQ: [[Karunā]] (rezzed)
-- R&D: [[Brân 1.0]] (rezzed)
-- Archives: 4 face-up economy cards (no agendas)
-- Server 1: [[Palisade]] (rezzed, protecting remote)
+runner:
+  credits: 9
+  clicks: 4
+  grip:
+    - Carmen
+    - Docklands Pass
+    - Unity
+  rig:
+    - Cleaver
+    - {card: Pennyshaver, credits: 1}
+    - {card: Smartware Distributor, credits: 0}
+```
 
 
 ## Card Text (Auto-Generated)

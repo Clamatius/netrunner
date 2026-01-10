@@ -1,4 +1,4 @@
-# Problem: window-001-corp
+# Problem: window-001-corp [Medium]
 
 > **Note:** Tutorial games are played to **6 points** (not the standard 7).
 
@@ -8,27 +8,39 @@ You are the Corp, 3 clicks remaining at the start of your turn. The Runner has b
 
 ## Board State
 
-**Corp:**
-- Credits: $11
-- Points: 3
-- HQ: [[Palisade]] (rezzed) - 5 cards in hand
-- R&D: [[Whitespace]] (rezzed)
-- Server 1: [[Brân 1.0]] (rezzed), empty root
-- Server 2: empty (no ICE, no root)
-
-**HQ Contents (5 cards):**
-- [[Send a Message]]
-- [[Superconducting Hub]]
-- [[Nico Campaign]]
-- [[Urtica Cipher]]
-- [[Hedge Fund]]
-
-**Runner:**
-- Credits: $7
-- Points: 2
-- Grip: 4 cards
-- Rig: [[Cleaver]], [[Unity]], [[Pennyshaver]] ($2 on it)
-- No Killer installed
+```yaml
+corp:
+  credits: 11
+  points: 3
+  clicks: 3
+  HQ:
+    ice:
+      - {card: Palisade, rezzed: true}
+    contents: [Send a Message, Superconducting Hub, Nico Campaign, Urtica Cipher, Hedge Fund]
+  R&D:
+    ice:
+      - {card: Whitespace, rezzed: true}
+  Server 1:
+    ice:
+      - {card: Brân 1.0, rezzed: true}
+    root: null  # empty
+  Server 2:
+    ice: []
+    root: null  # empty
+runner:
+  credits: 7
+  points: 2
+  grip:
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+    - {card: Unknown, rezzed: false}
+  rig:
+    - {card: Cleaver}
+    - {card: Unity}
+    - {card: Pennyshaver, credits: 2}
+  notes: "No Killer installed"
+```
 
 ## Card Text (Auto-Generated)
 
