@@ -1,0 +1,1742 @@
+# Netrunner Reasoning Eval
+
+This document contains everything needed to evaluate strategic reasoning in Android: Netrunner.
+
+**Problems included:** 11
+**Generated:** 2026-01-07 00:48 UTC
+
+---
+
+# Game Mechanics
+
+
+Android: Netrunner is an asymmetric two-player card game. The **Corporation (Corp)** protects servers and scores agendas. The **Runner** breaks into servers and steals agendas.
+
+## Win Conditions
+
+**Corp wins by:**
+- Scoring 7 agenda points (6 in tutorial games)
+- Flatline: Dealing damage when Runner has no cards in hand (grip)
+
+**Runner wins by:**
+- Stealing 7 agenda points (6 in tutorial games)
+- Corp drawing from empty deck (R&D)
+
+## Resources
+
+### Credits
+- Universal currency for both sides
+- Start: 5 credits each
+- Basic action: Spend 1 click, gain 1 credit (inefficient)
+
+### Clicks
+- Action points per turn
+- Corp: 3 clicks per turn
+- Runner: 4 clicks per turn
+- Most actions cost 1 click
+
+### Cards
+- Corp deck: R&D (draw pile), HQ (hand), Archives (discard)
+- Runner deck: Stack (draw pile), Grip (hand), Heap (discard)
+- Hand size limit: 5 cards (discard at end of turn if over)
+
+## Corp Basics
+
+### Servers
+Corp has servers that Runner can attack:
+
+**Central Servers (always exist):**
+- **HQ** - Corp's hand. Runner accesses 1 random card.
+- **R&D** - Corp's deck. Runner accesses top card.
+- **Archives** - Corp's discard. Runner accesses all cards (facedown cards flip faceup on breach).
+
+**Remote Servers (Corp creates):**
+- Created by installing cards
+- Can contain 1 agenda or asset, plus any number of upgrades
+- Protected by ICE installed in front
+- No limit to number, and no cost to create more via new installs
+
+### Installing (Corp)
+- Install costs 1 click (cards themselves install for free unless stated)
+- Cards install facedown (hidden from Runner). They're always installed into just one server.
+- ICE installs in front of servers, protecting them
+  - ICE install cost: 1 credit per ICE already protecting that server
+- Agendas/assets/upgrades install IN servers (root)
+
+### Card Types (Corp)
+
+**Agendas** - Score these to win
+- Have advancement requirement (e.g., "Adv 3" = needs 3 advancement counters)
+- Have point value (e.g., "Points 2")
+- Score when counters ≥ requirement (free action, no click cost, Corp turn only)
+- If Runner accesses an agenda, they MUST steal it (mandatory)
+
+**ICE** - Protects servers
+- Installs in front of servers
+- Starts unrezzed (facedown, inactive)
+- Corp rezzes (flips faceup, pays rez cost) when Runner approaches
+- Has subroutines (↳) that fire if not broken
+- Has strength (Runner must match to break)
+- Types: Barrier, Code Gate, Sentry (each broken by specific breaker types Fracter, Decoder, Killer respectively)
+
+**Assets** - Economy, utility, traps
+- Install in remote servers
+- Must rez to use abilities
+- Runner can trash if they access and pay trash cost
+
+**Operations** - One-time effects
+- Play from hand, pay cost, resolve, goes to Archives
+- Example: Hedge Fund (cost 5, gain 9 = net +4)
+
+**Upgrades** - Enhance servers
+- Install in any server (central or remote)
+- Can coexist with agendas/assets
+
+### Advancing
+- Action: Spend 1 click, pay 1 credit, place 1 advancement counter
+- Primarily used on agendas
+- Some traps can be advanced (to bluff as agendas)
+
+### Rezzing
+- Flip card faceup, pay rez cost
+- ICE: Rez when Runner approaches (before they can break)
+- Assets/Upgrades: Rez at almost any time
+- Once rezzed, stays rezzed
+
+## Runner Basics
+
+### The Rig
+Runner's installed cards:
+- **Programs** - Icebreakers and utilities (limited by Memory Units, default 4)
+- **Hardware** - Permanent upgrades
+- **Resources** - Economy, connections, tools
+
+### Icebreakers
+Programs that break ICE subroutines:
+- **Fracter** - Breaks Barriers
+- **Decoder** - Breaks Code Gates
+- **Killer** - Breaks Sentries
+
+To break ICE:
+1. Boost breaker strength ≥ ICE strength
+2. Pay to break subroutines
+
+### Running
+Runner's core action - attacking a server.
+
+**Run structure:**
+1. Declare target server
+2. Approach each ICE (outermost first)
+   - Corp may rez ICE
+   - If rezzed: Runner may break subroutines, then unbroken subs fire
+   - After passing ICE: Runner may jack out (can't jack out before first ICE)
+3. If Runner passes all ICE: Breach server, and access server contents
+
+**Subroutine effects (common):**
+- "End the run" - Run fails, no access
+- "Do X <type> damage" - Runner discards X random cards
+- "The Runner loses X credits" - Economic damage
+
+**Accessing:**
+- HQ: Access 1 random card from Corp hand
+- R&D: Access top card of deck
+- Remote: Access all cards in server
+- Agenda accessed = stolen (Runner takes it)
+- Asset/Upgrade accessed = may pay trash cost to trash, goes faceup to Archives
+
+### Card Types (Runner)
+
+**Events** - One-time effects
+- Play from hand, pay cost, resolve, goes to Heap
+- Example: Sure Gamble (cost 5, gain 9 = net +4)
+
+**Programs** - Icebreakers and tools
+- Install cost paid once
+- Use Memory Units (MU) - typically 4 MU available initially
+- Persist until trashed
+
+**Hardware** - Permanent upgrades
+- Install once, persist until trashed
+
+**Resources** - Economy and utility
+- Install once, some have ongoing effects
+- Can be trashed if Runner is tagged (not in tutorial): Corp spends click and 2 credits to trash Resource of tagged Runner.
+
+## Game structure
+
+- Corp chooses to mulligan their hand or keep
+- Then runner makes mulligan choice for their grip
+- Corp takes initial turn, and then players alternate
+
+### Mulligan
+- At game start, draw 5 cards
+- May shuffle back and draw 5 new cards (once only)
+
+## Turn Structure
+
+### Corp Turn
+0. **End of Opponent Turn** - Paid effects, like rezzes
+1. **Mandatory draw** - Draw 1 card (not a click)
+2. **Action phase** - Spend 3 clicks on:
+   - Draw 1 card
+   - Gain 1 credit
+   - Install 1 card
+   - Play 1 operation
+   - Advance 1 card
+   - Paid effects, like rezzes and card abilities. Paid effects that do not take a click can be played between actions that do.
+   - Score agenda (if fully advanced)
+3. **Discard phase** - Discard to hand size (5). Corp discards are initially face down in Archives.
+
+### Runner Turn
+1. **Action phase** - Spend 4 clicks on:
+   - Draw 1 card
+   - Gain 1 credit
+   - Install 1 card
+   - Play 1 event
+   - Run any server
+2. **Discard phase** - Discard to hand size (5)
+
+## Damage
+
+**Net damage** - Discard cards randomly from grip
+- Common source: ICE subroutines, traps
+- If damage ≥ cards in grip: Flatline (Corp wins)
+
+**Survival:** Always maintain grip size > expected damage - grip is akin to health of runner
+
+## Basic Tactical Concepts
+
+### Facedown Information
+- Installed Corp cards are facedown until rezzed or accessed
+- Corp knows all their cards; Runner must guess/probe
+- Unrezzed ICE could be anything - the threat has value
+
+### Economy
+- Clicks are the fundamental currency of the game, with an initial basic ability trade of 1:1 for credits.
+- Both players typically find ways to do better than 1:1
+- Credits enable everything
+- Clicking for 1 credit is inefficient (operation/event economy is better)
+- Corp needs credits to rez ICE
+- Runner needs credits to break ICE and trash assets
+
+### Tempo
+- Who is dictating the pace of the game?
+- Installing/advancing creates pressure (Runner must respond or Corp scores), but typically loses tempo for Corp when scored due to advancement costs
+- Building rig takes time but enables efficient runs later
+
+### Mulligan
+- When making this choice, consider your plan for turn 1 given what you know and eval how strong
+
+---
+
+# Card Reference
+
+
+## Runner: The Catalyst
+
+**Identity:** The Catalyst: Convention Breaker
+- No special ability (tutorial ID)
+- 40 card minimum, 15 influence
+
+### Events (14)
+
+**Creative Commission** (2x) - Cost 0
+Gain 4 credits. You cannot play another copy of Creative Commission this turn.
+
+**Jailbreak** (3x) - Cost 0, Run
+Run HQ or R&D. If successful, draw 1 card and access 1 additional card.
+
+**Overclock** (2x) - Cost 0, Run
+Place 5 credits on this event, then run any server. When that run ends, trash Overclock. Use credits on Overclock during runs.
+
+**Sure Gamble** (3x) - Cost 5
+Gain 9 credits.
+
+**Tread Lightly** (2x) - Cost 0, Run
+Run any server. The first time the Corp rezzes a piece of ice during this run, they must pay 3 credits more.
+
+**VRcation** (2x) - Cost 1
+Draw 4 cards. If you have any clicks remaining, lose 1 click.
+
+### Hardware (2)
+
+**Docklands Pass** (1x) - Install 2
+The first time you breach HQ each turn, access 1 additional card.
+
+**Pennyshaver** (1x) - Install 3
+Whenever you make a successful run, place 1 credit on this hardware.
+Click: Take all credits from this hardware.
+
+### Resources (6)
+
+**Red Team** (1x) - Install 3
+When you install this resource, load 12 credits onto it.
+Click: Take 3 credits from this resource and run HQ, R&D, or Archives. When it is empty, trash it.
+
+**Smartware Distributor** (2x) - Install 1
+When your turn begins, place 1 credit on this resource.
+Click: Take all credits from this resource.
+
+**Telework Contract** (2x) - Install 1
+When you install this resource, load 9 credits onto it.
+Click: Take 3 credits from this resource. When it is empty, trash it.
+
+**Verbal Plasticity** (1x) - Install 1
+The first time you draw a card each turn (including your mandatory draw), draw 1 additional card.
+
+### Icebreakers (8)
+
+**Carmen** (2x) - Install 4, Strength 0, MU 1, Killer
+Whenever this program fully breaks a piece of ice, place 1 power counter on Carmen.
+Interface → 1 credit: Break 1 sentry subroutine.
+Hosted power counter: +3 strength.
+
+**Cleaver** (2x) - Install 3, Strength 1, MU 1, Fracter
+Interface → 2 credits: Break up to 2 barrier subroutines.
+2 credits: +1 strength.
+
+**Mayfly** (2x) - Install 1, Strength 1, MU 1, All-types
+Interface → 1 credit: Break 1 subroutine.
+1 credit: +1 strength.
+When this run ends, trash this program.
+
+**Unity** (2x) - Install 1, Strength 1, MU 1, Decoder
+Interface → 1 credit: Break 1 code gate subroutine.
+1 credit: +1 strength for each installed icebreaker (including Unity).
+
+---
+
+## Corp: The Syndicate
+
+**Identity:** The Syndicate: Profit over Principle
+- No special ability (tutorial ID)
+- 45 card minimum, 3 influence
+
+### Agendas (7)
+
+**Offworld Office** (3x) - Advancement 4, Points 2
+When you score this agenda, gain 7 credits.
+
+**Send a Message** (2x) - Advancement 3, Points 1
+When this agenda is scored or stolen, you may rez 1 piece of ice, ignoring all costs.
+
+**Superconducting Hub** (2x) - Advancement 3, Points 1
+When you score this agenda, draw 2 cards.
+
+### Assets (6)
+
+**Nico Campaign** (2x) - Rez 0, Trash 3
+When you rez this asset, load 9 credits onto it.
+When your turn begins, take 3 credits from this asset. When it is empty, trash it.
+
+**Regolith Mining License** (2x) - Rez 1, Trash 3
+When you rez this asset, load 15 credits onto it.
+Click: Take 3 credits from this asset. When it is empty, trash it.
+
+**Urtica Cipher** (2x) - Rez 0, Trash 0, Ambush
+If Urtica Cipher is accessed while installed, do 2 net damage plus 1 net damage for each advancement counter on it.
+
+### Operations (7)
+
+**Government Subsidy** (2x) - Cost 6
+Gain 15 credits.
+
+**Hedge Fund** (3x) - Cost 5
+Gain 9 credits.
+
+**Seamless Launch** (2x) - Cost 1
+Place 2 advancement counters on 1 installed card that you did not install this turn.
+
+### Upgrades (1)
+
+**Manegarm Skunkworks** (1x) - Rez 2, Trash 4
+Whenever the Runner approaches this server, they must either pay 2 credits and spend 1 click or end the run.
+
+### ICE - Barriers (5)
+
+**Brân 1.0** (2x) - Rez 6, Strength 6, Bioroid
+Lose 1 click: Break 1 subroutine on this ice. Only the Runner can use this ability.
+↳ The Runner cannot pass Brân 1.0 this run.
+↳ Install 1 ice from HQ or Archives directly inward from Brân 1.0, unrezzed.
+↳ End the run.
+
+**Palisade** (3x) - Rez 2, Strength 2
+Palisade gets +2 strength while protecting a remote server.
+↳ End the run.
+
+### ICE - Code Gates (4)
+
+**Diviner** (2x) - Rez 2, Strength 2, AP
+↳ Do 1 net damage.
+↳ End the run.
+
+**Whitespace** (2x) - Rez 2, Strength 3
+↳ The Runner loses 3 credits. If the Runner has fewer than 6 credits, end the run.
+
+### ICE - Sentries (4)
+
+**Karunā** (2x) - Rez 4, Strength 3, AP
+↳ Do 2 net damage. The Runner may jack out.
+↳ Do 2 net damage.
+
+**Tithe** (2x) - Rez 1, Strength 2
+↳ Gain 1 credit.
+↳ End the run.
+
+---
+
+# Corp Playbook
+
+
+**Purpose:** Strategic guidance for Corp play. Assumes rules knowledge (see `netrunner-complete-mechanics.md`).
+
+**Core truth:** You score 7 points before Runner steals 7. Everything else is how.
+
+---
+
+## The Shape of the Game
+
+### The Go Analogy
+
+Netrunner shares DNA with Go. If you know Go, let the concepts resonate:
+
+- **Influence:** An unrezzed ICE doesn't protect a server—it makes Runner *calculate*. The threat is the value. A card on the board projects force beyond its immediate position.
+
+- **Aji (latent potential):** Every facedown card has aji. It could be Brân. It could be nothing. Runner must respect the possibility until proven otherwise.
+
+- **Sente/Gote:** Who's dictating tempo? When you install-advance-advance, Runner must respond or concede the score. That's sente. When you're clicking for credits while Runner builds, that's gote.
+
+- **Thickness:** A three-ICE server isn't three times as strong as one ICE—it's exponentially more taxing. Depth compounds. ICE only taxes if you force runs through it via threat.
+
+- **Reading:** What is Runner *likely* to do, not what *could* they do? They saw economy in HQ—are they really coming back? They're missing a Fracter—what does that unlock?
+
+The fundamental insight: **every install reveals where you didn't install.** Runner will probe your gaps. Each of your ~20 installs per game shapes the entire board.
+
+### The Asymmetry
+
+**Runner's identity card says:** `Click: Run any server.`
+
+Always available. No setup. No cost. The threat is permanent and omnidirectional.
+
+**Your identity card:** Click for credit, draw, install, advance. No attack action. Everything you do builds toward a scoring window that Runner can disrupt at any time.
+
+**When both sides play poorly:** Runner wins by default. Their floor is "randomly check servers, eventually find 7 points." Your floor is "pray." You must actively create situations where their base action isn't good enough.
+
+### The Race
+
+Runner has statistical inevitability—roughly 17 random accesses finds 7 points. You're not trying to lock them out forever. You're trying to score faster than they can accumulate accesses.
+
+Your advantages:
+- **Information:** You know what's everywhere. They're guessing.
+- **Timing:** You choose when to advance, when to rez, when to score.
+- **Deferred costs:** Install now, pay later (maybe never, if they don't run).
+- **Lethality:** Damage > grip = instant win. They have no equivalent.
+
+---
+
+## Thinking Tools
+
+These aren't rules. They're lenses. Apply them and the right move often becomes visible.
+
+### "What happens after?"
+
+Before executing any plan, trace it forward one more turn.
+
+The scoring line that leaves you at 2 credits with a dead Government Subsidy in hand isn't a win—it's a trap. The agenda point isn't worth the collapsed position.
+
+Ask: "I score this. Then what? What do I do next turn? What does Runner do? Am I ahead or scrambling?"
+
+### "Where would this ICE go ideally?"
+
+When you draw ICE, picture the board. Where does this piece *want* to be?
+
+- Karunā wants to be outermost on a scoring remote—facecheck threat plus ETR if they're scared.
+- Whitespace wants to be where Runner is poor and testing early.
+- Brân wants to be where you'll have ICE in hand to install behind it.
+
+Protect where you need to. Don't protect where you don't. And don't expect the subs to fire—ICE is a tax, not a wall. That means that server reuse is vital, to extract that tax as many times as possible.
+
+### "What is Runner likely to do?"
+
+Not what *could* they do. What *will* they probably do given what they know?
+
+They just checked HQ and saw two economy cards. Are they running HQ again? Probably not—they're looking elsewhere now. Don't waste Karunā protecting against a run that isn't coming.
+
+They're missing a Fracter and have been drawing for two turns. Do they have it now? Maybe—but if they did, would they still be drawing? Read the behavior.
+
+### "Where's the scoring window?"
+
+A window is any situation where Runner can't profitably contest your remote:
+- They're poor (can't afford ICE tax)
+- They're missing a breaker type (can't get through)
+- Their grip is small (damage threatens flatline)
+- They're committed elsewhere (spent clicks on economy/rig)
+
+Windows open and close. When you see one, act. The next draw might give them what they need.
+
+### "Money is threat"
+
+Credits aren't just for paying costs. A rich Corp is terrifying.
+
+At 20 credits, every unrezzed ICE could be anything. Every remote could be defended. Runner has to guess what you'll rez and whether they can afford the break. The threat is real even if you never spend the money.
+
+A poor Corp is transparent. Runner knows what you can and can't do.
+
+Build economy not just to rez things, but to project uncertainty.
+
+---
+
+## Patterns Worth Knowing
+
+These aren't prescriptions. They're situations you'll recognize and possible responses.
+
+### The Jam
+
+You have ICE and an agenda. Runner is setting up.
+
+Install agenda in remote, advance, advance. Now they have a decision: check it (pay the ICE tax, maybe hit a trap, definitely lose tempo) or let it sit (you might score).
+
+Every install that could be an agenda forces this decision. That's the pressure. Install something every turn if you can—make them pay to verify.
+
+### The Feint
+
+You have economy and no agenda. Runner expects you to jam.
+
+Bait with assets or upgrades. If they don't run it, cash in if you can. If they do, tax them. Assets take up the scoring remote. Overwriting is possible and sometimes the right play - but you write off the investment. If you do it 3 turns in a row, does the runner check the remote *then*?
+
+When the agenda comes, they've already decided you'd have installed it if you had it. The bluff creates the window.
+
+### The Lock
+
+Runner is missing a breaker type. You have that ICE.
+
+Put your agenda behind the ICE they can't break. Simple, brutal, effective. Check their rig before every install—gaps are scoring windows.
+
+Note: Bioroids can be clicked through. The lock is economic, not absolute.
+
+### The Pivot
+
+Your scoring remote is compromised—they have all the breakers, the credits, the access.
+
+Don't feed it more agendas. Switch to fast advance if you have it, or build a new, more taxing remote if your ice is weak enough to not be worth reinforcing. A compromised remote is a trap for *you*.
+
+### The Sacrifice
+
+Sometimes an agenda is worth less than the position it creates.
+
+Send a Message lets you rez ICE for free when scored OR stolen. Install it, advance it, let them take it—get a free Brân rez. Now score the next agenda behind that rezzed Brân.
+
+Only valid if you have follow-up. No follow-up = not a sacrifice, just a loss.
+
+---
+
+## Reading the Runner
+
+Runner behavior tells you things:
+
+**Not running for 2+ turns:**
+They're building—rig, economy, or both. This is your window. Score now while they can't contest.
+
+**Clicking for credits:**
+They're poor. Window is open. Install-advance-advance before they rebuild.
+
+**Drawing repeatedly:**
+They're missing something—breaker, economy, or trick. If you know what, exploit the gap.
+
+**Checking every remote:**
+They're scared of you scoring. Good. Make them pay for every check. Or install a trap.
+
+**Pressuring one central:**
+They've committed to a strategy (R&D lock, HQ snipe). Fortify that server or fast-advance around them.
+
+---
+
+## Common Traps (For You)
+
+These aren't mistakes to avoid—they're attractors that pull you toward losing positions. Notice when you're drifting toward them.
+
+**The draw spiral:** Keep drawing to find "the answer." Meanwhile, HQ fills with agendas and Runner farms it.
+
+**The naked agenda:** Install without ICE because you need to score. Runner checks for free.
+
+**The scattered board:** ICE on four servers, one deep each. Runner picks the cheapest. Build depth, not breadth. Check the board state if you're unsure.
+
+**The abandoned position:** Rezzed Brân on Server 1, but you're building Server 2. You already paid for that Brân—use it.
+
+**The credit click:** 1 click = 1 credit. If this is your turn, something went wrong. Economy cards exist.
+
+**The unrezzed scoring remote:** 3-point agenda, two unrezzed ICE, you have the credits. Runner runs. You don't rez because... why? Rez it. That's what it's for.
+
+**Advancement costs:** Your default win con. Be aware. 3/1 is scorable in 2 turns - install, leave alone like an asset, triple advance. 4/2 or bigger needs at least one advancement first and is a huge signal of agenda when you do. Stolen advancements are just lost.
+
+---
+
+## The Tempo of a Game
+
+**Early game:** Runner is poor, missing breakers. You're also poor, missing ICE. Both sides are building. The player who builds faster wins this phase—but "building" means different things. For you: get economy online and ICE on R&D. For them: find breakers and test your defenses.
+
+**Mid game:** They have some breakers, you have some servers. Now it's about windows. Can you score before they complete their rig? Can they steal before you stabilize? Scoring here is often correct—don't wait for the perfect fortress.
+
+**Late game:** Both sides are developed. The race is explicit: who gets to 7 first? This is where deep remotes matter, where every access is dangerous, where fast advance wins games.
+
+**Winning With Agendas**: Scoring itself is usually a tempo loss from the sheer expenditure. Each advancement click is -2 credits from simply clicking for a credit in opportunity cost.
+
+---
+
+## A Final Thought
+
+The Runner is playing a different game than you. They explore. You construct.
+
+Every turn, ask: "What am I building toward? What's my plan for scoring the next agenda? Am I creating threat, or reacting?"
+
+When you're creating threat, you're playing Corp.
+When you're reacting, they're playing you.
+
+Build. Threaten. Score.
+
+---
+
+# Runner Playbook
+
+
+**Purpose:** Strategic guidance for Runner play in Netrunner. Assumes you know the rules (see `netrunner-complete-mechanics.md`) and commands (see `send_command help`).
+
+**Core objective:** Find 7 agenda points before Corp scores 7 (6s in tutorial game). Do this through volume of accesses.
+
+**Golden Rule:** Netrunner is a dynamic game and boardstate can override rules, never mind strategies - so strats here are heuristics at best.
+
+## Fundamental Principles
+
+### The Click Economy
+
+**Clicks are your most valuable resource.** Credits can be gained; clicks cannot by default.
+
+**Click efficiency ratings:**
+- 1 click → 1 credit = **BAD** (basic action, last resort)
+- 1 click → 4 credits = **GOOD** (Sure Gamble)
+- 1 click → 3 cards = **EXCELLENT** (Diesel)
+- 1 click → multiple accesses = **EXCELLENT** (running)
+
+**The 2-click tax:** Every card costs ~2 clicks (1 to draw, 1 to install/play). Every card must provide more than 2 clicks of value.
+
+### The Statistical Reality
+
+**You need ~mean 17 *random* accesses to win** (varies by agenda density and luck).
+
+This means:
+- Runner has inevitable late-game advantage (volume wins)
+- Corp is racing against this statistical clock
+- Your goal: Complete rig while applying relentless pressure to keep corp from scores → win through volume
+
+---
+
+## Rig Building Priority
+
+**Essential components (install in this order):**
+  - Economy. 
+  - Drip pays off over time - the earlier the better. You take a tempo hit to do it.
+
+2. **First breaker** (Turn 2-3)
+   - Tempo hit to install so ideally only install the revealed type needed
+   - Lets you start running protected servers
+   - Don't wait for "perfect" rig
+
+3. **Complete breaker suite** (Turn 3-5)
+   - Must have all 3 types to ensure access given enough $
+
+4. **Multi-access tools** (Turn 6+)
+   - R&D Interface, The Maker's Eye, Jailbreak
+   - Only install after complete rig + stable economy
+   - Requirement: 10+ credits, all breakers installed
+
+---
+
+## The Draw Decision
+
+**Early game (Turns 1-5): Draw for rig pieces**
+
+```
+Missing breakers? → Draw until you find them
+Missing economy? → Draw until you find Sure Gamble
+Have rig + economy? → Stop drawing, start running
+```
+
+**Pattern:** Draw before installing (see more options before committing).
+
+Example:
+```
+Hand: Cleaver, Daily Casts, Overclock (3 cards)
+Plan: Install 2 cards this turn
+
+Better: Draw first (see 4 cards), THEN install best 2
+Worse: Install immediately (might draw better cards after)
+```
+
+**Mid game (Turns 6-10): Draw selectively**
+
+```
+if need_specific_card AND useful_cards_in_stack > 50%:
+    draw
+else:
+    run_instead
+```
+
+**Late game (Turns 10+): Probability poker**
+
+Simple heuristic: `if useful_cards / stack_size > 0.5: draw, else run`
+
+**Survival draws (against damage decks):**
+
+Always draw before running if facing damage:
+```
+Damage per run: 2 (from ICE/traps)
+Runs planned: 2
+Current hand: 3
+Minimum safe: 2 + 2 = 4
+
+Draws needed: 4 - 3 = 1 draw before running
+```
+
+**Rule:** Hand size must be > expected damage + 2 buffer.
+
+---
+
+## Running Decisions
+
+### Should I Run This Server?
+
+**Pre-run checklist:**
+
+1. **Do I have breakers for all ICE types?**
+   - Check board for rezzed ICE
+   - Code Gate? Need Unity
+   - Barrier? Need Cleaver
+   - Sentry? Need Carmen
+   - Missing type? Don't run OR accept letting subs fire
+
+2. **Can I afford break costs + trash costs?**
+   - Calculate: ICE break costs + potential trash (3-5 credits)
+   - Keep credit buffer for surprises if possible
+   - Have a plan for after the run
+   - Can't afford? Build economy first
+
+3. **What's the expected value?**
+   - R&D: Always valuable (random agenda access)
+   - HQ: Valuable if Corp drew many cards (see Drawn estimate)
+   - Remote with 3+ counters: Must contest (scoreable agenda)
+   - Remote with 0 counters: Unknown (could be anything)
+
+### ICE Breaking
+
+**Type matching is mandatory:**
+**Always check ICE type first:**
+```
+./send_command card-text "Palisade"
+Output: ICE - Barrier
+Conclusion: Need Cleaver to break
+```
+
+**Bioroid bypass (critical optimization):**
+
+Bioroid ICE allows spending clicks instead of credits, e.g.:
+```
+Brân 1.0 (Bioroid, 3 subs):
+- Break with Cleaver: 8 credits
+- Bypass with clicks: 3 clicks (1 per sub for full break)
+
+Almost always bypass: Clicks are cheaper than 8 credits unless you are very rich
+```
+
+**When to break instead of bypass:**
+- Insufficient clicks to spend but need access
+- Have free credits (Overclock, temporary funds)
+- Subroutines are harmless (some just install ICE)
+
+### Server Priority
+
+**Early game (Turns 1-5):**
+1. HQ runs (force ICE rezzes, check for agendas in hand)
+2. Facecheck remotes (deny economy assets)
+3. R&D if desperate (Corp hasn't drawn much yet)
+
+**Mid game (Turns 6-10):**
+1. R&D multi-access (primary win condition)
+2. Remote when obvious (Corp advancing = must contest)
+3. HQ pressure (keep them honest)
+
+**Late game (Turns 10+):**
+1. R&D relentlessly (statistical inevitability)
+2. Ignore heavily-defended remote unless affordable
+3. HQ only if R&D is impossible
+
+---
+
+## Agenda Tracking
+
+Your status display shows real-time agenda tracking:
+```
+Agenda Points: 0 / 7  │  Missing: 18 (Drawn: ~8, HQ: 5, R&D: 29, Remotes: 2/1)
+```
+
+**What it means:**
+- `Missing: 18` - Unaccounted agenda points (total - scored - stolen)
+- `Drawn: ~8` - Expected agenda points drawn from R&D (turn-based estimate)
+- `HQ: 5` - Cards in Corp hand (hidden, could contain agendas)
+- `R&D: 29` - Cards remaining in deck
+- `Remotes: 2/1` - Unrezzed remote cards / cards with advancement counters
+
+**Strategic use:**
+
+**Expected Draw Math:**
+```
+Drawn: ~8 agenda points expected in drawn cards
+Scored: 2 (Corp score area)
+Stolen: 3 (your score area)
+Unaccounted: 8 - 2 - 3 = 3 points
+
+Where are those 3 points?
+- In HQ (stuck in hand)
+- In remotes (facedown)
+- In Archives facedown
+```
+
+**Remote Interpretation:**
+```
+Remotes: 0/0  → No remote pressure, focus R&D/HQ
+Remotes: 3/0  → 3 never-advance cards (agenda/asset/trap unknown)
+Remotes: 2/1  → 1 card has counters (likely agenda or trap)
+Remotes: 1/3  → 1 card with 3+ counters (URGENT: scoreable or lethal)
+```
+
+**Advancement counter signals:**
+- **0 counters (never-advance):** Could be agenda (Seamless Launch threat), asset, or trap
+  - Corp can score without advancing using fast-advance tools
+  - Check if suspicious (multiple turns idle, Corp at scoring range)
+- **1-2 counters:** Probably 3-cost agenda (needs 1 more turn) or building trap
+  - Corp invested tempo, not an idle asset
+  - Contest before it reaches 3+ counters
+- **3+ counters:** Scoreable agenda OR lethal trap
+  - Corp heavily committed (3+ clicks spent)
+  - Contest NOW or accept they score/you risk flatline
+- **5+ counters:** Extreme danger (overadvanced trap)
+  - Overadvanced traps: Urtica Cipher at 5 counters = 7 net damage (2 base + 5)
+  - Chain-score strategy: Corp scores agendas that deal 1 damage each, then kills with trap
+  - Check hand size vs expected damage before running
+
+**Pressure Target Selection:**
+```
+if Remotes: X/3+:
+    contest_remote_immediately  # Scoreable agenda or lethal trap
+elif Drawn > (Scored + Stolen + 4):
+    pressure_HQ  # Agendas stuck in hand
+elif R&D > 20 AND Missing > 10:
+    multiaccess_RD  # High agenda density
+else:
+    default_RD_pressure  # Standard strategy
+```
+
+---
+
+## Damage Management
+
+**Damage = random discard from hand.** Hand size functions as health.
+
+**Damage types (all work the same for Runner):**
+- Net damage: From traps, ICE, agendas - typically more damage per advancement on traps
+- Meat damage: From operations, tags (not in tutorial decks)
+- Brain damage: Random discard + permanent -1 max hand size (avoid at ALL costs)
+
+**Flatline condition:** Hand size < damage amount → instant loss
+
+**Survival strategy:**
+```
+Before running damage servers:
+1. Count expected damage (ICE subs + trap potential)
+2. Draw to buffer: hand_size = expected_damage + 2
+3. Run only when safe
+4. Rebuild hand after taking damage
+```
+
+**Example:**
+```
+Planning to run remote with Diviner (1 net damage per run)
+Current hand: 3 cards
+Runs planned: 2
+
+Damage total: 2 × 1 = 2 damage
+Safe hand size: 2 + 2 = 4 minimum
+
+Action: Draw 1 card first, THEN run twice
+```
+
+**When to tank damage:**
+- Stealing game-winning agenda (need 3 points, have 4)
+- Denying critical economy asset early game
+- Accessing R&D with multi-access when ahead
+
+**When to avoid damage:**
+- Hand size ≤ expected damage (flatline risk)
+- Already behind on tempo (can't afford rebuild time)
+- Brain damage (permanent penalty)
+
+## Common Patterns
+
+**Facecheck:** Run into unrezzed ICE without appropriate breaker.
+
+**When to facecheck (Turns 1-4):**
+```
+if Corp_credits < (likely_ICE_rez_cost + 5):
+    facecheck  # They probably can't afford rez
+elif rezzed Corp_installed_economy_asset and can_afford_trash_cost:
+    facecheck  # Deny snowball or Corp gets rich
+elif turn_number <= 3:
+    facecheck  # Deny early economy setup
+```
+
+**Facecheck benefits:**
+- Force rezzes (Corp poverty - they cannot afford good defenses everywhere)
+- Deny economy assets
+- Information gathering, e.g. know what breaker to install
+
+**Facecheck costs:**
+- Damage (need to rebuild hand)
+- ETR subroutines (wasted click, no access)
+- Tags (Corp can trash your resources)
+
+**Rule of thumb:** Facecheck when Corp credits < (likely rez cost + 5).
+
+### Remote Pressure Timing
+
+**When Corp installs in remote:**
+```
+Turn 1 install → Probably economy asset
+  Action: Check if you can afford trash cost
+
+Turn 2-3 install → Could be economy or naked agenda
+  Action: Check if Corp is rich/poor (gambling indicator)
+
+Turn N install + advance → AGENDA LIKELY
+  Action: Count advancement counters
+  3+ counters → Must contest next turn or they score
+
+Turn N install + multiple advances same turn → FAST ADVANCE
+  Action: Check if scoreable now (2-cost = 2 adv)
+  If scoreable, too late; if needs 1 more, contest immediately
+```
+
+**ICE on remote:**
+```
+0 ICE → Run immediately (free access)
+1 ICE → Run if you can break that type
+2 ICE → Calculate full break cost, run if affordable
+3+ ICE → Corp committed to defending this
+  Check: Is there an agenda? (advancement counters?)
+  If yes + affordable: Contest
+  If no or too expensive: Pressure R&D instead
+```
+
+### The Never-Advance Bluff
+
+Corp can score agendas without advancing them:
+
+**Seamless Launch pattern:**
+```
+Turn 5: Corp installs in remote (0 counters)
+Turn 6: Corp plays Seamless Launch (+2 adv)
+        Corp advances (+1 adv)
+        Corp scores (3 counters total)
+
+Runner thought: "0 counters = safe to ignore"
+Reality: Scored in one turn, no response window
+```
+
+**Defense:**
+- Always check remotes, even 0-counter cards
+- Especially when Corp has credits for Seamless Launch
+- Especially when Corp needs 1-2 points to win
+- Accept you can't check everything (choose highest priority)
+
+---
+
+## Turn Patterns
+
+### Basic Runner Turn
+
+```
+Turn start: Gain 4 clicks
+
+Option A (Building): Draw → Install → Install → Credit
+Option B (Running): Draw → Run R&D → Run HQ → Credit
+Option C (Pressure): Run R&D → Run R&D → Run remote → Credit
+
+Turn end: Discard to hand size if needed
+```
+
+**Early game focus:**
+```
+Turns 1-2: Economy + first breaker
+Turn 3-4: Complete breaker suite
+Turn 5+: Begin running pressure
+```
+
+**Mid game focus:**
+```
+Install multi-access (R&D Interface)
+Run R&D every turn (2 accesses per run)
+Contest obvious remote scoring attempts
+```
+
+**Late game focus:**
+```
+Run R&D multiple times per turn
+Ignore remotes unless critical
+Maintain hand size > 3 (flatline prevention)
+```
+
+## Economic Warfare
+
+### Credit Types and Payment
+
+**Temporary credit effects:**
+- Provide credits for current run/action only
+- Automatically offered in payment prompts during runs
+- Game uses temporary credits first, then normal pool
+- Check card text for phrases like "gain X credits to spend during this run"
+
+**Hosted credits (on installed cards):**
+- Credits stored on the card itself (shown as counters on the card)
+- Must manually use card ability to transfer to your credit pool
+- NOT automatically offered in payment prompts
+- Check card text for the transfer ability (usually requires a click)
+- **Use ability BEFORE running** if you need those credits for break/trash costs
+
+**Credit planning before runs:**
+```
+Target: Remote with 2 ICE (Palisade + Brân 1.0)
+
+Break costs:
+  Palisade (Barrier): 3 credits (Cleaver)
+  Brân 1.0 (Bioroid): 0 credits (bypass with 3 clicks)
+
+Trash cost:
+  Unknown asset: Assume 3-5 credits
+
+Total needed: 3 + 0 + 3 = 6 credits minimum
+Buffer: +2 credits
+Target credits: 8 before running
+```
+
+**Common mistake:** Breaking through expensive ICE, then unable to afford trash. Always plan the full sequence.
+
+**When poor (< 5 credits):**
+1. Play economy, use installs or draw for it
+2. Click for credit as last resort
+3. Don't run expensive servers until rebuilt
+4. Remember being rich threatens remote access
+
+---
+
+## Win Conditions
+
+**Primary:** Steal 7 agenda points through volume of accesses.
+
+**The math:**
+- mean random ~17 accesses needed
+- R&D multi-access = 2 accesses per run
+- 9 runs with multi-access = 18 accesses = likely win
+
+**Secondary scenarios:**
+- HQ flood steal (Corp drew many agendas, stuck in hand)
+- Remote snipes (stealing before Corp can score)
+- Corp deck-out (Corp draws from empty R&D = loss)
+
+**You lose if:**
+- Corp scores 7 agenda points first (6 in tutorial game)
+- Flatlined (damage > hand size)
+
+**Endgame (Missing < 5 points):**
+- Every agenda is critical
+- Contest remotes when possible (can't let Corp score)
+- Maximum R&D pressure (find agendas before Corp draws them)
+- Keep safe hand size (don't die to damage)
+
+---
+
+## Quick Reference
+
+**Status interpretation:**
+```
+Clicks: 4, Credits: 5  → Can afford 1-2 runs
+Clicks: 1, Credits: 12 → End turn (can't run effectively)
+Hand: 2 cards          → DANGER: Draw before running
+Remotes: 2/3           → URGENT: 3+ counters = contest now
+Drawn: 10, Scored: 2   → 8 points unaccounted = HQ or remotes
+```
+
+**Decision flowchart:**
+```
+Start of turn:
+├─ Missing breakers? → Draw/install rig
+├─ Remotes X/3+? → Contest remote immediately
+├─ Poor (< 5 credits)? → Build economy
+├─ Complete rig? → Run R&D with multi-access
+└─ Default → Run R&D, contest remotes as needed
+```
+
+**Emergency situations:**
+```
+Corp at game point → Contest ALL remotes, can't let them score
+Hand size < 3 → Draw immediately (flatline danger)
+```
+
+---
+tl;dr pressure cheaply while building economy & rig → win through volume.
+
+---
+
+# Problems
+
+## Problem 1: break-001-runner
+
+# Problem: break-001-runner [Easy]
+
+## Situation
+Turn 4. You're Runner.
+Score: Corp 0, Runner 0
+ID: The Catalyst (no special ability, 40 card min, 1 link)
+
+## Board State
+
+**Corp ($8):**
+- Server 1: [[Whitespace]] (rezzed, outermost) → [[Palisade]] (rezzed) → card with 2 advancement counters
+
+**Runner ($7):**
+- Rig: Empty
+
+**Your Grip (5 cards):**
+```
+[[Sure Gamble]]
+[[Cleaver]]
+[[Unity]]
+[[Carmen]]
+[[Docklands Pass]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Docklands Pass** - Hardware (Cost 2)
+The first time each turn you breach HQ, access 1 additional card.
+
+**Palisade** - ICE: Barrier (Rez 3, Strength 2)
+While this ice is protecting a remote server, it gets +2 strength.
+↳ End the run.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
+
+**Unity** - Icebreaker: Decoder (Install 3, Strength 1, 1 MU)
+Interface → 1[credit]: Break 1 code gate subroutine.
+1[credit]: +X strength. X is equal to the number of installed icebreakers (including this one).
+
+**Whitespace** - ICE: Code Gate (Rez 2, Strength 0)
+↳ The Runner loses 3[credit].
+↳ If the Runner has 6[credit] or less, end the run.
+
+## Question
+Access the card in Server 1 this turn. Show your sequencing and credit math.
+
+---
+
+## Problem 2: midgame-001-runner
+
+# Problem: midgame-001-runner [Hard]
+
+## Situation
+Turn 8. You're Runner.
+Score: Corp 3, Runner 3 (both scored [[Offworld Office]] + [[Superconducting Hub]])
+ID: The Catalyst (no special ability, 40 card min, 1 link)
+
+## Board State
+
+**Corp ($5, 4 cards in HQ):**
+- Server 1: [[Brân 1.0]] (rezzed, outermost) → [[Palisade]] (rezzed) → unrezzed card with 2 advancement counters
+
+**Runner ($2):**
+- Rig: [[Cleaver]], [[Unity]], [[Carmen]]
+- [[Pennyshaver]] (2 credits hosted)
+- [[Docklands Pass]]
+- [[Telework Contract]] (6 credits remaining)
+- [[Smartware Distributor]] (1 credit hosted)
+
+**Your Grip (5 cards):**
+```
+[[VRcation]]
+[[Telework Contract]]
+[[Red Team]]
+[[Verbal Plasticity]]
+[[Carmen]]
+```
+
+**Known Information:**
+Last turn you ran HQ with Docklands Pass and saw all 4 cards: [[Urtica Cipher]], [[Nico Campaign]], [[Palisade]], [[Whitespace]]
+
+**What could be in the remote with 2 advancement counters?**
+From the tutorial Corp decklist, cards that can be advanced:
+- [[Send a Message]] (5 advancements to score, worth 3 points)
+- [[Offworld Office]] (4 advancements to score, worth 2 points - already scored)
+- [[Superconducting Hub]] (3 advancements to score, worth 1 point - already scored)
+- [[Urtica Cipher]] (ambush, already seen in HQ)
+
+
+## Card Text (Auto-Generated)
+
+**Brân 1.0** - ICE: Barrier - Bioroid (Rez 6, Strength 6)
+Lose [click]: Break 1 subroutine on this ice. Only the Runner can use this ability.
+↳ You may install 1 piece of ice from HQ or Archives directly inward from this ice, ignoring all costs.
+↳ End the run.
+↳ End the run.
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Docklands Pass** - Hardware (Cost 2)
+The first time each turn you breach HQ, access 1 additional card.
+
+**Nico Campaign** - Asset: Advertisement (Rez 2, Trash 2)
+When you rez this asset, load 9[credit] onto it. When it is empty, trash it and draw 1 card.
+When your turn begins, take 3[credit] from this asset.
+
+**Offworld Office** - Agenda: Expansion (Adv 4, Points 2)
+When you score this agenda, gain 7[credit].
+
+**Palisade** - ICE: Barrier (Rez 3, Strength 2)
+While this ice is protecting a remote server, it gets +2 strength.
+↳ End the run.
+
+**Pennyshaver** - Hardware: Console (Cost 3)
++1[mu]
+Whenever you make a successful run, place 1[credit] on this hardware.
+[click]: Place 1[credit] on this hardware, then take all credits from it.
+Limit 1 console per player.
+
+**Red Team** - Resource: Job (Cost 5)
+When you install this resource, load 12[credit] onto it. When it is empty, trash it.
+[click]: Run a central server you have not run this turn. If successful, take 3[credit] from this resource.
+
+**Send a Message** - Agenda: Security (Adv 5, Points 3)
+When this agenda is scored or stolen, you may rez 1 installed piece of ice, ignoring all costs.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
+
+**Superconducting Hub** - Agenda: Expansion (Adv 3, Points 1)
+When you score this agenda, you may draw 2 cards.
+You get +2 maximum hand size.
+
+**Telework Contract** - Resource: Job (Cost 1)
+When you install this resource, load 9[credit] onto it. When it is empty, trash it.
+Once per turn → [click]: Take 3[credit] from this resource.
+
+**Unity** - Icebreaker: Decoder (Install 3, Strength 1, 1 MU)
+Interface → 1[credit]: Break 1 code gate subroutine.
+1[credit]: +X strength. X is equal to the number of installed icebreakers (including this one).
+
+**Urtica Cipher** - Asset: Ambush (Rez 0, Trash 2)
+You can advance this asset.
+When the Runner accesses this asset while it is installed, do 2 net damage plus 1 net damage for each hosted advancement counter.
+
+**Verbal Plasticity** - Resource: Genetics (Cost 3)
+The first time each turn you take the basic action to draw 1 card, instead draw 2 cards.
+
+**VRcation** - Event (Cost 1)
+Draw 4 cards. If you have any [click] remaining, lose [click].
+
+**Whitespace** - ICE: Code Gate (Rez 2, Strength 0)
+↳ The Runner loses 3[credit].
+↳ If the Runner has 6[credit] or less, end the run.
+
+## Question
+Plan your turn. The unrezzed card has 2 advancements - what could it be, and what do you do about it?
+
+---
+
+## Problem 3: mull-001-corp
+
+# Problem: mull-001-corp [Easy]
+
+## Situation
+Game start. You're Corp.
+ID: Pravdivost Consulting (no special ability, 45 card min, 3 influence). Decide: keep or mulligan?
+
+## Hand (5 cards)
+```
+[[Hedge Fund]]
+[[Ice Wall]]
+[[Enigma]]
+[[Urtica Cipher]]
+[[Offworld Office]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Enigma** - ICE: Code Gate (Rez 3, Strength 2)
+↳ The Runner loses [click].
+↳ End the run.
+
+**Hedge Fund** - Operation: Transaction (Cost 5)
+Gain 9[credit].
+
+**Ice Wall** - ICE: Barrier (Rez 1, Strength 1)
+You can advance this ice. It gets +1 strength for each hosted advancement counter.
+↳ End the run.
+
+**Offworld Office** - Agenda: Expansion (Adv 4, Points 2)
+When you score this agenda, gain 7[credit].
+
+**Urtica Cipher** - Asset: Ambush (Rez 0, Trash 2)
+You can advance this asset.
+When the Runner accesses this asset while it is installed, do 2 net damage plus 1 net damage for each hosted advancement counter.
+
+## Question
+Keep or mulligan this hand?
+
+---
+
+## Problem 4: mull-002-corp
+
+# Problem: mull-002-corp [Easy]
+
+## Situation
+Game start. You're Corp.
+ID: Pravdivost Consulting (no special ability, 45 card min, 3 influence). Decide: keep or mulligan?
+
+## Hand (5 cards)
+```
+[[Superconducting Hub]]
+[[Send a Message]]
+[[Offworld Office]]
+[[Government Subsidy]]
+[[Brân 1.0]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Brân 1.0** - ICE: Barrier - Bioroid (Rez 6, Strength 6)
+Lose [click]: Break 1 subroutine on this ice. Only the Runner can use this ability.
+↳ You may install 1 piece of ice from HQ or Archives directly inward from this ice, ignoring all costs.
+↳ End the run.
+↳ End the run.
+
+**Government Subsidy** - Operation: Transaction (Cost 10)
+Gain 15[credit].
+
+**Offworld Office** - Agenda: Expansion (Adv 4, Points 2)
+When you score this agenda, gain 7[credit].
+
+**Send a Message** - Agenda: Security (Adv 5, Points 3)
+When this agenda is scored or stolen, you may rez 1 installed piece of ice, ignoring all costs.
+
+**Superconducting Hub** - Agenda: Expansion (Adv 3, Points 1)
+When you score this agenda, you may draw 2 cards.
+You get +2 maximum hand size.
+
+## Question
+Keep or mulligan this hand?
+
+---
+
+## Problem 5: mull-003-runner
+
+# Problem: mull-003-runner [Easy]
+
+## Situation
+Game start. You're Runner.
+ID: The Catalyst (no special ability, 40 card min, 15 influence). Decide: keep or mulligan?
+
+## Hand (5 cards)
+```
+[[Sure Gamble]]
+[[Smartware Distributor]]
+[[Cleaver]]
+[[Carmen]]
+[[Jailbreak]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Jailbreak** - Event: Run (Cost 0)
+Run HQ or R&D. If successful, draw 1 card and when you breach the attacked server, access 1 additional card.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
+
+## Question
+Keep or mulligan this hand?
+
+---
+
+## Problem 6: mull-004-runner
+
+# Problem: mull-004-runner [Easy]
+
+## Situation
+Game start. You're Runner.
+ID: The Catalyst (no special ability, 40 card min, 15 influence). Decide: keep or mulligan?
+
+## Hand (5 cards)
+```
+[[Cleaver]]
+[[Cleaver]]
+[[Carmen]]
+[[Unity]]
+[[Overclock]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Overclock** - Event: Run (Cost 1)
+Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
+
+**Unity** - Icebreaker: Decoder (Install 3, Strength 1, 1 MU)
+Interface → 1[credit]: Break 1 code gate subroutine.
+1[credit]: +X strength. X is equal to the number of installed icebreakers (including this one).
+
+## Question
+Keep or mulligan this hand?
+
+---
+
+## Problem 7: score-001-corp
+
+# Problem: score-001-corp [Easy]
+
+## Situation
+Turn 9. You're Corp.
+Score: Corp 5, Runner 4
+ID: Pravdivost Consulting (no special ability, 45 card min)
+
+## Board State
+
+**Corp ($12):**
+- Server 1: [[Whitespace]] (rezzed) → [[Karunā]] (rezzed)
+- R&D: [[Brân 1.0]] (rezzed) → [[Karunā]] (rezzed)
+- HQ: [[Tithe]] (rezzed) → [[Tithe]] (rezzed)
+
+**Runner ($4, 1 card in grip):**
+- Rig: [[Cleaver]], [[Unity]]
+- No Killer installed
+
+**Your HQ (5 cards):**
+```
+[[Regolith Mining License]]
+[[Seamless Launch]]
+[[Government Subsidy]]
+[[Superconducting Hub]]
+[[Palisade]]
+```
+
+## Card Text (Auto-Generated)
+
+**Brân 1.0** - ICE: Barrier - Bioroid (Rez 6, Strength 6)
+Lose [click]: Break 1 subroutine on this ice. Only the Runner can use this ability.
+↳ You may install 1 piece of ice from HQ or Archives directly inward from this ice, ignoring all costs.
+↳ End the run.
+↳ End the run.
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Government Subsidy** - Operation: Transaction (Cost 10)
+Gain 15[credit].
+
+**Karunā** - ICE: Sentry - AP (Rez 4, Strength 3)
+↳ Do 2 net damage. The Runner may jack out.
+↳ Do 2 net damage.
+
+**Palisade** - ICE: Barrier (Rez 3, Strength 2)
+While this ice is protecting a remote server, it gets +2 strength.
+↳ End the run.
+
+**Regolith Mining License** - Asset (Rez 2, Trash 3)
+When you rez this asset, load 15[credit] onto it. When it is empty, trash it.
+[click]: Take 3[credit] from this asset.
+
+**Seamless Launch** - Operation (Cost 1)
+Place 2 advancement counters on 1 installed card that you did not install this turn.
+
+**Superconducting Hub** - Agenda: Expansion (Adv 3, Points 1)
+When you score this agenda, you may draw 2 cards.
+You get +2 maximum hand size.
+
+**Tithe** - ICE: Sentry - AP (Rez 1, Strength 1)
+↳ Do 1 net damage.
+↳ Gain 1[credit].
+
+**Unity** - Icebreaker: Decoder (Install 3, Strength 1, 1 MU)
+Interface → 1[credit]: Break 1 code gate subroutine.
+1[credit]: +X strength. X is equal to the number of installed icebreakers (including this one).
+
+**Whitespace** - ICE: Code Gate (Rez 2, Strength 0)
+↳ The Runner loses 3[credit].
+↳ If the Runner has 6[credit] or less, end the run.
+
+## Question
+It's the start of your turn. What's your best line?
+
+---
+
+## Problem 8: turn1-001-corp
+
+# Problem: turn1-001-corp [Easy]
+
+## Situation
+Turn 1, Corp.
+ID: Pravdivost Consulting (no special ability) You kept your hand and drew for mandatory draw. Plan your turn.
+
+## State
+```
+Credits: 5
+Clicks: 3
+Runner: Starting position (5 credits, no installs)
+Board: Empty
+```
+
+## Hand (6 cards)
+```
+[[Hedge Fund]]
+[[Palisade]]
+[[Whitespace]]
+[[Whitespace]]
+[[Urtica Cipher]]
+[[Offworld Office]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Hedge Fund** - Operation: Transaction (Cost 5)
+Gain 9[credit].
+
+**Offworld Office** - Agenda: Expansion (Adv 4, Points 2)
+When you score this agenda, gain 7[credit].
+
+**Palisade** - ICE: Barrier (Rez 3, Strength 2)
+While this ice is protecting a remote server, it gets +2 strength.
+↳ End the run.
+
+**Urtica Cipher** - Asset: Ambush (Rez 0, Trash 2)
+You can advance this asset.
+When the Runner accesses this asset while it is installed, do 2 net damage plus 1 net damage for each hosted advancement counter.
+
+**Whitespace** - ICE: Code Gate (Rez 2, Strength 0)
+↳ The Runner loses 3[credit].
+↳ If the Runner has 6[credit] or less, end the run.
+
+## Question
+What's your Turn 1 plan? Specify actions in order.
+
+---
+
+## Problem 9: turn1-002-corp
+
+# Problem: turn1-002-corp [Medium]
+
+## Situation
+Turn 1, Corp.
+ID: Pravdivost Consulting (no special ability) You kept your hand and drew for mandatory draw. Plan your turn.
+
+## State
+```
+Credits: 5
+Clicks: 3
+Runner: Starting position (5 credits, no installs)
+Board: Empty
+```
+
+## Hand (6 cards)
+```
+[[Government Subsidy]]
+[[Brân 1.0]]
+[[Karunā]]
+[[Send a Message]]
+[[Seamless Launch]]
+[[Diviner]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Brân 1.0** - ICE: Barrier - Bioroid (Rez 6, Strength 6)
+Lose [click]: Break 1 subroutine on this ice. Only the Runner can use this ability.
+↳ You may install 1 piece of ice from HQ or Archives directly inward from this ice, ignoring all costs.
+↳ End the run.
+↳ End the run.
+
+**Diviner** - ICE: Code Gate - AP (Rez 2, Strength 3)
+↳ Do 1 net damage. If you trash a card this way with a printed play or install cost that is an odd number, end the run. (0 is not odd.)
+
+**Government Subsidy** - Operation: Transaction (Cost 10)
+Gain 15[credit].
+
+**Karunā** - ICE: Sentry - AP (Rez 4, Strength 3)
+↳ Do 2 net damage. The Runner may jack out.
+↳ Do 2 net damage.
+
+**Seamless Launch** - Operation (Cost 1)
+Place 2 advancement counters on 1 installed card that you did not install this turn.
+
+**Send a Message** - Agenda: Security (Adv 5, Points 3)
+When this agenda is scored or stolen, you may rez 1 installed piece of ice, ignoring all costs.
+
+## Question
+What's your Turn 1 plan? Specify actions in order.
+
+---
+
+## Problem 10: turn1-003-runner
+
+# Problem: turn1-003-runner [Medium]
+
+## Situation
+Turn 1, Runner.
+ID: The Catalyst (no special ability) Corp just ended Turn 1 with: install ICE on R&D, install ICE on HQ, credit (6 credits). Plan your turn.
+
+## State
+```
+Credits: 5
+Clicks: 4
+Board: Empty
+Corp board: 1 unrezzed ICE on R&D, 1 unrezzed ICE on HQ, no remotes
+Corp credits: 7
+```
+
+## Hand (5 cards)
+```
+[[Sure Gamble]]
+[[Smartware Distributor]]
+[[Cleaver]]
+[[VRcation]]
+[[Jailbreak]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Cleaver** - Icebreaker: Fracter (Install 3, Strength 3, 1 MU)
+Interface → 1[credit]: Break up to 2 barrier subroutines.
+2[credit]: +1 strength.
+
+**Jailbreak** - Event: Run (Cost 0)
+Run HQ or R&D. If successful, draw 1 card and when you breach the attacked server, access 1 additional card.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
+
+**VRcation** - Event (Cost 1)
+Draw 4 cards. If you have any [click] remaining, lose [click].
+
+## Question
+What's your Turn 1 plan? Specify actions in order.
+
+---
+
+## Problem 11: turn1-004-runner
+
+# Problem: turn1-004-runner [Medium]
+
+## Situation
+Turn 1, Runner.
+ID: The Catalyst (no special ability) Corp just ended Turn 1 with: install card in remote (no advancement), credit, credit (7 credits). No ICE installed anywhere. Plan your turn.
+
+## State
+```
+Credits: 5
+Clicks: 4
+Board: Empty
+Corp board: 1 facedown card in Server 1 (0 advancement counters), NO ICE anywhere
+Corp credits: 7
+```
+
+## Hand (5 cards)
+```
+[[Sure Gamble]]
+[[Overclock]]
+[[Carmen]]
+[[Tread Lightly]]
+[[Smartware Distributor]]
+```
+
+
+## Card Text (Auto-Generated)
+
+**Carmen** - Icebreaker: Killer (Install 5, Strength 2, 1 MU)
+If you made a successful run this turn, this program costs 2[credit] less to install.
+Interface → 1[credit]: Break 1 sentry subroutine.
+2[credit]: +3 strength.
+
+**Overclock** - Event: Run (Cost 1)
+Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
+
+**Smartware Distributor** - Resource: Connection (Cost 0)
+[click]: Place 3[credit] on this resource.
+When your turn begins, take 1[credit] from this resource.
+
+**Sure Gamble** - Event (Cost 5)
+Gain 9[credit].
+
+**Tread Lightly** - Event: Run (Cost 1)
+Run any server. During that run, the rez cost of each piece of ice is increased by 3[credit].
+
+## Question
+What's your Turn 1 plan? Specify actions in order.
+
+---
+
