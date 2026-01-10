@@ -6,8 +6,9 @@
    2. Protect unprotected agenda with ICE
    3. Install agenda to protected/empty remote
    4. Play economy if credits low (before advancing - prevents stranding broke)
+   4.5. Use rezzed click assets when low (Regolith gives 3¢, better than advancing)
    5. Advance installed agenda (smart: won't strand at scorable with 0 clicks)
-   6. Use rezzed asset abilities (Regolith click ability, etc.)
+   6. Use rezzed asset abilities (drain Regolith even when not low)
    7. Rez CLICK assets (Regolith) - rez before using, minimize exposure
       (Drip assets like PAD Campaign should rez at opponent EOT - TODO)
    8. Install economy assets to remotes
@@ -347,6 +348,15 @@
           (log-decision "ECON FIRST: Playing" (:title op) "(credits low:" credits ")")
           {:action :play :args {:card-name (:title op)}})
 
+        ;; 4.5. Use rezzed click assets when low on credits (Regolith gives 3¢)
+        ;; This is better than taking 1¢ or advancing (costs 1¢)
+        (and (< credits (:min-credits config))
+             (seq (rezzed-assets-with-click-abilities)))
+        (let [asset (first (rezzed-assets-with-click-abilities))
+              ability-idx (:ability-idx asset)]
+          (log-decision "USE ASSET (low credits):" (:title asset) "ability" ability-idx)
+          {:action :use-ability :args {:card-name (:title asset) :ability-idx ability-idx}})
+
         ;; 5. Advance installed agenda (with smart click management)
         (should-advance? clicks credits)
         (let [agenda (should-advance? clicks credits)]
@@ -356,6 +366,7 @@
           {:action :advance :args {:card-name (:title agenda)}})
 
         ;; 6. Use rezzed asset abilities (like Regolith click ability)
+        ;; Even when not low on credits - draining Regolith is still good
         (seq (rezzed-assets-with-click-abilities))
         (let [asset (first (rezzed-assets-with-click-abilities))
               ability-idx (:ability-idx asset)]
