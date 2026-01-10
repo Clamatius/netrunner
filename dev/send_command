@@ -238,6 +238,8 @@ ${GREEN}AI Bot:${NC}
   bot             - Corp: Make one heuristic decision and execute
   bot-turn        - Corp: Play full turn with heuristic AI
   bot-status      - Corp: Show decision-relevant state and next action
+  bot-respond     - Corp: Respond to active run (rez/fire decisions)
+  bot-watch       - Corp: Continuously watch for and respond to runs
 
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
@@ -1080,6 +1082,23 @@ case "$COMMAND" in
         execute '(do
                    (require (quote [ai-heuristic-corp :as bot]))
                    (bot/status))'
+        ;;
+
+    bot-respond)
+        ensure_connection
+        info "Heuristic Corp: Responding to active run..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/respond-to-run!))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-watch)
+        ensure_connection
+        info "Heuristic Corp: Watching for runs (Ctrl+C to stop)..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/watch-for-runs!))'
         ;;
 
     *)

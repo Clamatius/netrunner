@@ -17,15 +17,22 @@
    12. Draw if hand is small
    13. Default: take credit
 
+   Run Response (during Runner's turn):
+   - respond-to-run! monitors active runs and makes rez/fire decisions
+   - Heuristic: rez ICE if protecting valuable content and affordable
+   - Always fire unbroken subroutines (for tutorial decks)
+
    Usage:
      (require '[ai-heuristic-corp :as bot])
      (bot/play-turn)      ; Make one decision and execute
-     (bot/play-full-turn) ; Play until no clicks remain"
+     (bot/play-full-turn) ; Play until no clicks remain
+     (bot/respond-to-run!) ; React to Runner's run (call during their turn)"
   (:require [ai-state :as state]
             [ai-core :as core]
             [ai-card-actions :as cards]
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
+            [ai-runs :as runs]
             [clojure.string :as str]))
 
 ;; ============================================================================
@@ -185,17 +192,22 @@
 
 (defn rezzed-assets-with-click-abilities
   "Find rezzed assets that have usable click abilities.
-   Returns assets with :ability-idx for the first playable click ability."
+   Returns assets with :ability-idx for the first playable click ability.
+
+   Note: Server sends :cost-label like '[Click]' rather than structured data.
+   We detect click abilities by checking if cost-label contains '[Click]'."
   []
   (for [asset (installed-assets)
         :when (:rezzed asset)
         :let [abilities (:abilities asset)
-              ;; Find first playable ability that costs a click
+              ;; Find first ability that costs a click
+              ;; Check cost-label for [Click] since :action isn't always present
               click-ability-idx (first
                                   (keep-indexed
                                     (fn [idx ab]
-                                      (when (and (:playable ab)
-                                                 (:action ab))  ; :action means costs click
+                                      (when (let [cost-label (str (:cost-label ab ""))
+                                                  has-click-cost (str/includes? cost-label "[Click]")]
+                                              has-click-cost)
                                         idx))
                                     abilities))]
         :when click-ability-idx]
@@ -579,3 +591,183 @@
   (println "Unprotected agendas in:" (map name (unprotected-remotes-with-agendas)))
   (println "Central ICE:" (central-ice-counts))
   (println "\nDecision:" (decide-action)))
+
+;; ============================================================================
+;; Run Response (During Runner's Turn)
+;; ============================================================================
+
+(defn get-run-server
+  "Get the server being run on, or nil if no active run"
+  []
+  (let [run (get-in @state/client-state [:game-state :run])]
+    (when run
+      (let [server (:server run)]
+        ;; Server is like ["HQ"] or ["Server" "1"]
+        (if (= 1 (count server))
+          (keyword (str/lower-case (first server)))
+          (keyword (str "remote" (second server))))))))
+
+(defn get-run-ice
+  "Get list of ICE on the server being run"
+  []
+  (when-let [server-key (get-run-server)]
+    (state/server-ice server-key)))
+
+(defn get-current-run-ice
+  "Get the ICE currently being approached/encountered"
+  []
+  (let [run (get-in @state/client-state [:game-state :run])
+        server-key (get-run-server)]
+    (when (and run server-key)
+      (let [position (:position run)
+            ice-list (state/server-ice server-key)
+            ice-count (count ice-list)
+            ;; Position counts from server outward (1 = outermost)
+            ;; ice-list is indexed 0 = innermost
+            ice-index (- ice-count position)]
+        (when (and (pos? position) (<= position ice-count))
+          (nth ice-list ice-index nil))))))
+
+(defn server-has-agenda?
+  "Check if a server has an agenda installed"
+  [server-key]
+  (let [content (server-content server-key)]
+    (some #(= "Agenda" (:type %)) content)))
+
+(defn server-has-valuable-content?
+  "Check if server has valuable content worth protecting.
+   Agendas are always valuable. Unrezzed assets might be too."
+  [server-key]
+  (let [content (server-content server-key)]
+    (or (some #(= "Agenda" (:type %)) content)
+        ;; Unrezzed assets could be valuable (or bluffs)
+        (some #(and (= "Asset" (:type %)) (not (:rezzed %))) content))))
+
+(defn should-rez-ice?
+  "Heuristic: should we rez this ICE?
+
+   Currently simple logic for tutorial decks:
+   - Always rez if we can afford it and server has valuable content
+   - Don't rez if server is empty/only rezzed assets
+   - Don't rez if we can't afford it
+
+   Future improvements:
+   - Consider runner's credits vs rez cost
+   - Consider ICE quality (ETR vs taxing)
+   - Consider if runner can break it"
+  [ice]
+  (let [credits (my-credits)
+        rez-cost (or (:cost ice) 0)
+        can-afford? (>= credits rez-cost)
+        server-key (get-run-server)
+        has-value? (when server-key (server-has-valuable-content? server-key))
+        ;; Central servers are always worth protecting
+        is-central? (contains? #{:hq :rd :archives} server-key)]
+    (cond
+      ;; Already rezzed - nothing to decide
+      (:rezzed ice)
+      false
+
+      ;; Can't afford - don't rez
+      (not can-afford?)
+      (do
+        (log-decision "REZ DECISION: Can't afford" (:title ice) "(" rez-cost "¢, have" credits "¢)")
+        false)
+
+      ;; Central servers - always rez if affordable
+      is-central?
+      (do
+        (log-decision "REZ DECISION: Rezing" (:title ice) "protecting central")
+        true)
+
+      ;; Remote with valuable content - rez
+      has-value?
+      (do
+        (log-decision "REZ DECISION: Rezing" (:title ice) "protecting valuable remote")
+        true)
+
+      ;; Empty remote - don't waste credits
+      :else
+      (do
+        (log-decision "REZ DECISION: Declining rez on" (:title ice) "(server has no value)")
+        false))))
+
+(defn calculate-rez-strategy
+  "Calculate which ICE to rez on the current run.
+   Returns a set of ICE titles to rez, or nil for --no-rez."
+  []
+  (let [ice-list (get-run-ice)]
+    (if (empty? ice-list)
+      nil  ; No ICE, nothing to decide
+      (let [ice-to-rez (->> ice-list
+                            (filter #(not (:rezzed %)))
+                            (filter should-rez-ice?)
+                            (map :title)
+                            set)]
+        (if (empty? ice-to-rez)
+          :no-rez  ; Don't rez anything
+          ice-to-rez)))))
+
+(defn respond-to-run!
+  "React to an active run. Call this during Runner's turn.
+
+   Monitors the run and makes rez/fire decisions based on heuristics.
+   Uses the existing monitor-run! infrastructure with calculated strategy.
+
+   Returns when run ends or no active run.
+
+   Usage:
+     ;; In a loop during Runner's turn:
+     (while (has-active-run?)
+       (respond-to-run!)
+       (Thread/sleep 500))"
+  []
+  (let [run (get-in @state/client-state [:game-state :run])]
+    (if (nil? run)
+      (do
+        (println "🤖 No active run to respond to")
+        {:status :no-run})
+      (let [rez-strategy (calculate-rez-strategy)]
+        (println "\n" (str/join "" (repeat 50 "-")))
+        (println "🤖 HEURISTIC CORP - Responding to Run")
+        (println (str/join "" (repeat 50 "-")))
+        (println "Server:" (get-run-server))
+        (println "ICE:" (count (get-run-ice)) "installed")
+        (println "Strategy:" (if (= :no-rez rez-strategy)
+                               "no-rez (decline all)"
+                               (str "rez " (str/join ", " rez-strategy))))
+
+        ;; Build flags for monitor-run!
+        (let [args (cond
+                     (= :no-rez rez-strategy)
+                     ["--no-rez" "--fire-unbroken"]
+
+                     (set? rez-strategy)
+                     (concat (mapcat (fn [title] ["--rez" title]) rez-strategy)
+                             ["--fire-unbroken"])
+
+                     :else
+                     ["--fire-unbroken"])]
+          (println "Flags:" (str/join " " args))
+          (apply runs/monitor-run! args))))))
+
+(defn has-active-run?
+  "Check if there's an active run in progress"
+  []
+  (some? (get-in @state/client-state [:game-state :run])))
+
+(defn watch-for-runs!
+  "Continuously monitor for runs and respond to them.
+   Blocks until interrupted or game ends.
+
+   Usage:
+     ;; In a separate thread or background process:
+     (future (watch-for-runs!))"
+  []
+  (println "🤖 HEURISTIC CORP - Watching for runs...")
+  (loop []
+    (when (has-active-run?)
+      (respond-to-run!)
+      (Thread/sleep 200))
+    (Thread/sleep 300)  ; Poll interval when no run
+    (recur)))

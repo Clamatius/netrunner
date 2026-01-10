@@ -4,6 +4,9 @@
 - **Corp heuristic player working** (`ai_heuristic_corp.clj`)
 - Plays tutorial deck competently against goldfish
 - Scores agendas, protects remotes, manages economy
+- **Run responses working** - Corp can rez ICE and fire subs during Runner's turn
+  - `bot-respond` command for one-shot run response
+  - `bot-watch` command for continuous monitoring
 
 ## Development Methodology
 **"Watch the goldfish fall in holes"**
@@ -48,6 +51,8 @@
 ./dev/reset.sh                    # Fresh game
 ./dev/send_command corp bot-turn  # Corp plays full turn
 ./dev/send_command corp bot-status # Show decision state
+./dev/send_command corp bot-respond # Corp responds to active run
+./dev/send_command corp bot-watch # Corp continuously monitors for runs
 
 # Goldfish runner
 ./dev/send_command runner start-turn && \
@@ -55,6 +60,12 @@
 ./dev/send_command runner take-credit && \
 ./dev/send_command runner take-credit && \
 ./dev/send_command runner take-credit
+
+# Test run response (Runner runs, Corp responds)
+./dev/send_command runner run "Server 1"  # Runner initiates run
+./dev/send_command corp bot-respond       # Corp makes rez/fire decisions
+./dev/send_command runner continue        # Runner continues
+./dev/send_command corp continue --fire-unbroken  # Corp fires subs
 ```
 
 ## Architecture Notes
@@ -62,5 +73,9 @@
 - State queries in helper functions (scorable-agendas, etc.)
 - Action execution via existing `ai_card_actions` functions
 - Prompt handling in `handle-prompt-if-needed`
+- Run response in `respond-to-run!` function
+  - `should-rez-ice?` heuristic: rez if protecting valuable content and affordable
+  - `calculate-rez-strategy` builds --rez flags for monitor-run
+  - Uses existing `ai_runs/monitor-run!` infrastructure
 
 All changes should be isolated to `ai_heuristic_corp.clj` - no changes needed to core game code.
