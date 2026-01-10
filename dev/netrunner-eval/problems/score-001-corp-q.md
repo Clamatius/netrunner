@@ -16,11 +16,11 @@ corp:
       - {card: Tithe, rezzed: true}       # outer
       - {card: Tithe, rezzed: true}       # inner
     contents:
-      - Regolith Mining License
-      - Seamless Launch
-      - Government Subsidy
-      - Superconducting Hub
-      - Palisade
+      - {card: Regolith Mining License}
+      - {card: Seamless Launch}
+      - {card: Government Subsidy}
+      - {card: Superconducting Hub}
+      - {card: Palisade}
   R&D:
     ice:
       - {card: Brân 1.0, rezzed: true}    # outer

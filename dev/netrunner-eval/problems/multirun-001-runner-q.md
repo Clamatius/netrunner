@@ -28,11 +28,11 @@ runner:
   credits: 9
   clicks: 4
   grip:
-    - Carmen
-    - Docklands Pass
-    - Unity
+    - {card: Carmen}
+    - {card: Docklands Pass}
+    - {card: Unity}
   rig:
-    - Cleaver
+    - {card: Cleaver}
     - {card: Pennyshaver, credits: 1}
     - {card: Smartware Distributor, credits: 0}
 ```

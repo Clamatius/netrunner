@@ -24,17 +24,17 @@ runner:
   points: 3  # Offworld Office + Superconducting Hub
   clicks: 4
   grip:
-    - VRcation
-    - Telework Contract
-    - Red Team
-    - Verbal Plasticity
-    - Carmen
+    - {card: VRcation}
+    - {card: Telework Contract}
+    - {card: Red Team}
+    - {card: Verbal Plasticity}
+    - {card: Carmen}
   rig:
-    - Cleaver
-    - Unity
-    - Carmen
+    - {card: Cleaver}
+    - {card: Unity}
+    - {card: Carmen}
     - {card: Pennyshaver, credits: 2}
-    - Docklands Pass
+    - {card: Docklands Pass}
     - {card: Telework Contract, credits: 6}
     - {card: Smartware Distributor, credits: 1}
 ```

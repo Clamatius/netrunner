@@ -26,9 +26,9 @@ runner:
   credits: 5
   clicks: 4
   grip:
-    - Sure Gamble
-    - Overclock
-    - Mayfly
+    - {card: Sure Gamble}
+    - {card: Overclock}
+    - {card: Mayfly}
   rig: []  # No programs installed
 ```
 

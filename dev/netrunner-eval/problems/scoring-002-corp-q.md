@@ -18,11 +18,11 @@ corp:
       - {card: Tithe, rezzed: true}        # outer
       - {card: Whitespace, rezzed: true}   # inner
     contents:
-      - Send a Message
-      - Seamless Launch
-      - Seamless Launch
-      - Regolith Mining License
-      - Manegarm Skunkworks
+      - {card: Send a Message}
+      - {card: Seamless Launch}
+      - {card: Seamless Launch}
+      - {card: Regolith Mining License}
+      - {card: Manegarm Skunkworks}
   R&D:
     ice:
       - {card: Karunā, rezzed: true}       # outer

@@ -26,11 +26,11 @@ runner:
   points: 5
   clicks: 4
   grip: 
-    - Carmen
-    - Carmen
-    - Unity
+    - {card: Carmen}
+    - {card: Carmen}
+    - {card: Unity}
   rig:
-    - Unity
+    - {card: Unity}
 ```
 
 
