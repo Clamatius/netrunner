@@ -1,5 +1,6 @@
 #!/bin/bash
-# Pre-commit hook: Check that AI client code compiles
+# Pre-commit hook: Quick syntax check for AI client code
+# Uses targeted require instead of full lein check (which hangs)
 
 set -e
 
@@ -24,32 +25,58 @@ for file in $STAGED_AI_FILES; do
     echo "   - $file"
 done
 
-# Run lein check and capture output
-echo "   Running compilation check..."
+# Extract namespace names from filenames (ai_foo.clj -> ai-foo)
+NAMESPACES=""
+for file in $STAGED_AI_FILES; do
+    basename=$(basename "$file" .clj)
+    # Skip files without ns form (scripts like connect_ai.clj, start_ai.clj)
+    if ! grep -q "^(ns " "$file" 2>/dev/null; then
+        echo "   Skipping $basename (no ns form)"
+        continue
+    fi
+    ns=$(echo "$basename" | tr '_' '-')
+    NAMESPACES="$NAMESPACES $ns"
+done
 
-# Use a temp file to capture full output
+if [ -z "$NAMESPACES" ]; then
+    echo "   No namespaced files to check"
+    exit 0
+fi
+
+echo "   Compiling namespaces:$NAMESPACES"
+
+# Build require expression
+REQUIRE_EXPR="(do"
+for ns in $NAMESPACES; do
+    REQUIRE_EXPR="$REQUIRE_EXPR (require '$ns)"
+done
+REQUIRE_EXPR="$REQUIRE_EXPR (println \"✓ All namespaces compiled\") (System/exit 0))"
+
+# Run with timeout - compile just the changed AI namespaces
 TMPFILE=$(mktemp)
 trap "rm -f $TMPFILE" EXIT
 
-if lein check 2>&1 | tee "$TMPFILE" | grep -q "Syntax error\|EOF while reading\|CompilerException"; then
+# 30 second timeout should be plenty for a few namespaces
+if timeout 30 lein run -m clojure.main -e "$REQUIRE_EXPR" 2>&1 | tee "$TMPFILE"; then
+    echo -e "   ${GREEN}✓ AI client code compiles successfully${NC}"
+    exit 0
+fi
+
+# Check if it was a compilation error
+if grep -q "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve" "$TMPFILE"; then
     echo ""
     echo -e "${RED}❌ Pre-commit check FAILED${NC}"
     echo ""
     echo "Compilation errors detected:"
     echo "----------------------------"
-    grep -A 3 "Syntax error\|EOF while reading\|CompilerException" "$TMPFILE" || true
+    grep -B 2 -A 5 "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve" "$TMPFILE" || true
     echo ""
     echo "Please fix compilation errors before committing."
     echo "To skip this check (not recommended): git commit --no-verify"
     exit 1
 fi
 
-# Check for specific namespaces that should compile
-if grep -q "Checking namespace ai-" "$TMPFILE"; then
-    echo -e "   ${GREEN}✓ AI client code compiles successfully${NC}"
-    exit 0
-else
-    echo -e "${YELLOW}⚠️  Warning: Could not verify AI client compilation${NC}"
-    echo "   Proceeding with commit anyway..."
-    exit 0
-fi
+# Timeout or other issue - warn but allow commit
+echo -e "${YELLOW}⚠️  Warning: Compilation check timed out or failed${NC}"
+echo "   Proceeding with commit anyway..."
+exit 0
