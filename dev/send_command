@@ -332,7 +332,7 @@ execute() {
     else
         # Suppress all status map noise - we print human-readable messages instead
         # Filter out any line starting with {:status (success, error, waiting, etc.)
-        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$'
+        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$' || true
     fi
 
     return $RET
@@ -857,6 +857,23 @@ case "$COMMAND" in
                         (Thread/sleep 500)
                         (println "🚪 Jacked out of run"))
                       (println "❌ Not in a run"))))'
+        ;;
+
+    concede)
+        ensure_connection
+        info "Conceding game..."
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (require (quote [ai-websocket-client-v2 :as ws]))
+                  (let [s @state/client-state
+                        gameid (:gameid s)]
+                    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                 (java.util.UUID/fromString gameid)
+                                 gameid)
+                       :command "concede"
+                       :args nil})
+                    (println "🏳️ Conceded game")))'
         ;;
 
     wait-for-diff)

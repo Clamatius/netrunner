@@ -6,6 +6,7 @@
 # Example: ./start-ai-client-repl.sh runner 7889
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."  # Ensure we are in project root for lein and relative paths
 source "$SCRIPT_DIR/load-env.sh"
 
 CLIENT_NAME=${1:-fixed-id}
@@ -27,6 +28,7 @@ echo ""
 # AI code loaded via load-file in ai_client_init.clj (not via source-paths)
 # Pass client name via environment variable (simpler than JVM prop through lein)
 export AI_CLIENT_NAME=$CLIENT_NAME
+export AI_DEBUG_LEVEL=${AI_DEBUG_LEVEL:-false}
 nohup lein with-profile ai-client run -m nrepl.cmdline \
   --port $REPL_PORT \
   > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &
@@ -69,13 +71,13 @@ fi
 
 # Now load the initialization code via nREPL
 echo "Loading AI client initialization..."
-if TIMEOUT=15 ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file "dev/src/clj/ai_client_init.clj")'; then
+if TIMEOUT=15 "$SCRIPT_DIR/ai-eval.sh" $CLIENT_NAME $REPL_PORT '(load-file "dev/src/clj/ai_client_init.clj")'; then
     echo ""
     echo "✅ AI Client REPL ready for '$CLIENT_NAME'!"
     echo ""
-    echo "To stop: ./dev/stop-ai-client.sh $CLIENT_NAME"
+    echo "To stop: $SCRIPT_DIR/stop-ai-client.sh $CLIENT_NAME"
     echo "To view logs: tail -f /tmp/ai-client-${CLIENT_NAME}.log"
-    echo "To send commands: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
+    echo "To send commands: $SCRIPT_DIR/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
     echo ""
 else
     echo ""
@@ -84,8 +86,8 @@ else
     echo ""
     echo "Troubleshooting:"
     echo "  1. Check REPL log: tail -20 /tmp/ai-client-${CLIENT_NAME}.log"
-    echo "  2. Manually load init: ./dev/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file \"dev/src/clj/ai_client_init.clj\")'"
-    echo "  3. Stop and restart: ./dev/stop-ai-client.sh $CLIENT_NAME && ./dev/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
+    echo "  2. Manually load init: $SCRIPT_DIR/ai-eval.sh $CLIENT_NAME $REPL_PORT '(load-file \"dev/src/clj/ai_client_init.clj\")'"
+    echo "  3. Stop and restart: $SCRIPT_DIR/stop-ai-client.sh $CLIENT_NAME && $SCRIPT_DIR/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
     echo ""
     exit 1
 fi

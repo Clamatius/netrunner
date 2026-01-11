@@ -24,7 +24,7 @@
   [msg]
   (try
     (let [data (if (string? msg)
-                 (edn/read-string msg)
+                 (edn/read-string {:readers {'time/instant #(java.time.Instant/parse %)}} msg)
                  msg)]
       (debug/debug "🔍 RAW RECEIVED:" (pr-str data))
 
