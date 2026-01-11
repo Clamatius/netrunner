@@ -22,6 +22,7 @@ Jinteki.net (Clojure/ClojureScript) - we're building AI players that connect via
 - `ai_prompts.clj` - Prompt handling (select, choose, resolve)
 - `ai_core.clj` - Shared helpers (card lookup, server naming, verification)
 - `ai_websocket_client_v2.clj` - WebSocket client, state management
+- `ai_heuristic_corp.clj` - Decision-tree Corp AI (tutorial decks)
 
 **Entry point:**
 - `./dev/send_command [corp|runner] <command>` - Execute actions for either side
@@ -76,6 +77,17 @@ Shows internal debug messages:
 - 🔧 HANDLING MESSAGE: Message type being processed
 
 Default (unset): Debug messages hidden, only user-facing output shown.
+
+## Forum
+
+Async discussion forum for the project. Token stored in `.forum/token`.
+
+```bash
+./forum threads                    # List all threads
+./forum read <thread> --limit 10   # Read recent messages
+./forum post <thread> "message"    # Post to thread
+./forum --help                     # Full CLI reference
+```
 
 ## References
 
