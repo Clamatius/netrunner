@@ -782,3 +782,43 @@
       (Thread/sleep 200))
     (Thread/sleep 300)  ; Poll interval when no run
     (recur)))
+
+(defn start-autonomous!
+  "Main autonomous loop for Match Orchestration.
+   Handles both playing turns and responding to runs."
+  []
+  (println "🤖 HEURISTIC CORP - Starting autonomous loop")
+  (loop []
+    (try
+      (let [game-state @state/client-state
+            my-turn? (= "corp" (:active-player (:game-state game-state)))]
+
+        ;; 1. Handle Prompts (Priority)
+        (when (handle-prompt-if-needed)
+          (Thread/sleep 500))
+
+        ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
+        (let [start-check (actions/can-start-turn?)]
+          (when (:can-start start-check)
+            (println "🤖 HEURISTIC CORP - Auto-starting turn")
+            (actions/start-turn!)
+            (Thread/sleep 500)))
+
+        ;; 2. If my turn, play
+        (when (and my-turn? (not (state/get-prompt)))
+          ;; Make moves if we have clicks
+          (when (pos? (my-clicks))
+            (play-turn)))
+
+        ;; 3. If opponent turn, watch for runs
+        (when (and (not my-turn?) (has-active-run?))
+          (respond-to-run!)
+          (Thread/sleep 500))
+
+        ;; Sleep
+        (Thread/sleep 500))
+      (catch Exception e
+        (println "❌ HEURISTIC CORP ERROR:" (.getMessage e))
+        (.printStackTrace e)
+        (Thread/sleep 5000)))
+    (recur)))

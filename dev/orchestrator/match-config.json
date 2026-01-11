@@ -1,0 +1,13 @@
+{
+  "match_id": "test-match-001",
+  "description": "System Gateway Beginner - Heuristic vs Goldfish",
+  "rounds": 1,
+  "decks": {
+    "corp": "system-gateway-beginner-corp",
+    "runner": "system-gateway-beginner-runner"
+  },
+  "agents": {
+    "corp": "heuristic",
+    "runner": "passive"
+  }
+}
