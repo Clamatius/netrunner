@@ -5,7 +5,8 @@
   (:require [ai-state :as state]
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [clojure.string :as str]))
 
 (defn play-turn
   "Play a simple turn: Start, Take Credits/Draw, End."
@@ -48,29 +49,35 @@
   []
   (println "🐟 GOLDFISH - Starting autonomous loop")
   (loop []
-    (try
-      (let [game-state @state/client-state
-            my-turn? (= "runner" (:active-player (:game-state game-state)))]
-        
-        ;; Handle Prompts (always priority)
-        (when (state/get-prompt)
-          (handle-prompts)
-          (Thread/sleep 500))
-          
-        ;; Auto-start turn if valid
-        (let [start-check (actions/can-start-turn?)]
-          (when (:can-start start-check)
-            (println "🐟 GOLDFISH - Auto-starting turn")
-            (actions/start-turn!)
-            (Thread/sleep 500)))
+    (let [continue? (try
+                      (let [game-state @state/client-state
+                            winner (get-in game-state [:game-state :winner])]
+                        (if winner
+                          (do
+                            (println "🐟 GOLDFISH - Game over (Winner:" winner ") - Stopping loop.")
+                            false)
+                          (let [my-turn? (= "runner" (:active-player (:game-state game-state)))]
+                            ;; Handle Prompts
+                            (when (state/get-prompt)
+                              (handle-prompts)
+                              (Thread/sleep 500))
 
-        ;; Play Turn
-        (when (and my-turn? (not (state/get-prompt)))
-          (play-turn))
-          
-        ;; Sleep
-        (Thread/sleep 1000))
-      (catch Exception e
-        (println "❌ GOLDFISH ERROR:" (.getMessage e))
-        (Thread/sleep 5000)))
-    (recur)))
+                            ;; Auto-start turn
+                            (let [start-check (actions/can-start-turn?)]
+                              (when (:can-start start-check)
+                                (println "🐟 GOLDFISH - Auto-starting turn")
+                                (actions/start-turn!)
+                                (Thread/sleep 500)))
+
+                            ;; Play Turn
+                            (when (and my-turn? (not (state/get-prompt)))
+                              (play-turn))
+
+                            true))) ;; Continue loop
+                      (catch Exception e
+                        (println "❌ GOLDFISH ERROR:" (.getMessage e))
+                        (Thread/sleep 5000)
+                        true))] ;; Continue loop on error
+      (when continue?
+        (Thread/sleep 1000)
+        (recur)))))

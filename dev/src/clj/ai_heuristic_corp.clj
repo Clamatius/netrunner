@@ -789,36 +789,44 @@
   []
   (println "🤖 HEURISTIC CORP - Starting autonomous loop")
   (loop []
-    (try
-      (let [game-state @state/client-state
-            my-turn? (= "corp" (:active-player (:game-state game-state)))]
+    (let [continue? (try
+                      (let [game-state @state/client-state
+                            winner (get-in game-state [:game-state :winner])]
 
-        ;; 1. Handle Prompts (Priority)
-        (when (handle-prompt-if-needed)
-          (Thread/sleep 500))
+                        (if winner
+                          (do
+                            (println "🤖 HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
+                            false)
+                          (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
 
-        ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
-        (let [start-check (actions/can-start-turn?)]
-          (when (:can-start start-check)
-            (println "🤖 HEURISTIC CORP - Auto-starting turn")
-            (actions/start-turn!)
-            (Thread/sleep 500)))
+                            ;; 1. Handle Prompts (Priority)
+                            (when (handle-prompt-if-needed)
+                              (Thread/sleep 500))
 
-        ;; 2. If my turn, play
-        (when (and my-turn? (not (state/get-prompt)))
-          ;; Make moves if we have clicks
-          (when (pos? (my-clicks))
-            (play-turn)))
+                            ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
+                            (let [start-check (actions/can-start-turn?)]
+                              (when (:can-start start-check)
+                                (println "🤖 HEURISTIC CORP - Auto-starting turn")
+                                (actions/start-turn!)
+                                (Thread/sleep 500)))
 
-        ;; 3. If opponent turn, watch for runs
-        (when (and (not my-turn?) (has-active-run?))
-          (respond-to-run!)
-          (Thread/sleep 500))
+                            ;; 2. If my turn, play
+                            (when (and my-turn? (not (state/get-prompt)))
+                              ;; Make moves if we have clicks
+                              (when (pos? (my-clicks))
+                                (play-turn)))
 
-        ;; Sleep
-        (Thread/sleep 500))
-      (catch Exception e
-        (println "❌ HEURISTIC CORP ERROR:" (.getMessage e))
-        (.printStackTrace e)
-        (Thread/sleep 5000)))
-    (recur)))
+                            ;; 3. If opponent turn, watch for runs
+                            (when (and (not my-turn?) (has-active-run?))
+                              (respond-to-run!)
+                              (Thread/sleep 500))
+
+                            true))) ;; Continue loop
+                      (catch Exception e
+                        (println "❌ HEURISTIC CORP ERROR:" (.getMessage e))
+                        (.printStackTrace e)
+                        (Thread/sleep 5000)
+                        true))] ;; Continue loop on error
+      (when continue?
+        (Thread/sleep 500)
+        (recur)))))

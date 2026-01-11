@@ -28,7 +28,7 @@ echo ""
 # AI code loaded via load-file in ai_client_init.clj (not via source-paths)
 # Pass client name via environment variable (simpler than JVM prop through lein)
 export AI_CLIENT_NAME=$CLIENT_NAME
-export AI_DEBUG_LEVEL=true
+export AI_DEBUG_LEVEL=${AI_DEBUG_LEVEL:-false}
 nohup lein with-profile ai-client run -m nrepl.cmdline \
   --port $REPL_PORT \
   > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &

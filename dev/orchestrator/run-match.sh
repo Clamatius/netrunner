@@ -77,8 +77,47 @@ sleep 5 # Extra buffer for initialization
 # 2. Parse Config (Simple grep/sed for now, JSON parsing later)
 MATCH_ID=$(grep "match_id" "$CONFIG_FILE" | cut -d '"' -f 4)
 ROUNDS=$(grep "rounds" "$CONFIG_FILE" | cut -d ':' -f 2 | tr -d ' ,')
+
+# Extract agents block to parse specific agent types
+AGENTS_BLOCK=$(grep -A 4 '"agents":' "$CONFIG_FILE")
+CORP_AGENT=$(echo "$AGENTS_BLOCK" | grep '"corp":' | cut -d '"' -f 4)
+RUNNER_AGENT=$(echo "$AGENTS_BLOCK" | grep '"runner":' | cut -d '"' -f 4)
+
 echo "🆔 Match ID: $MATCH_ID"
 echo "🔄 Rounds: $ROUNDS"
+echo "🤖 Agents: Corp=$CORP_AGENT, Runner=$RUNNER_AGENT"
+
+# Helper to load agent code
+load_agent() {
+    local side=$1
+    local port=$2
+    local agent_type=$3
+    
+    echo "      Injecting $side agent ($agent_type)..."
+    
+    if [ "$side" == "corp" ]; then
+        case "$agent_type" in
+            "heuristic")
+                "$DEV_DIR/ai-eval.sh" corp "$port" '(do (load-file "dev/src/clj/ai_heuristic_corp.clj") (require (quote [ai-heuristic-corp :as bot])) (future (bot/start-autonomous!)))' > /dev/null
+                ;;
+            *)
+                echo "      ⚠️  Unknown Corp agent '$agent_type', defaulting to heuristic"
+                "$DEV_DIR/ai-eval.sh" corp "$port" '(do (load-file "dev/src/clj/ai_heuristic_corp.clj") (require (quote [ai-heuristic-corp :as bot])) (future (bot/start-autonomous!)))' > /dev/null
+                ;;
+        esac
+    elif [ "$side" == "runner" ]; then
+        case "$agent_type" in
+            "passive"|"goldfish")
+                "$DEV_DIR/ai-eval.sh" runner "$port" '(do (load-file "dev/src/clj/ai_goldfish_runner.clj") (require (quote [ai-goldfish-runner :as bot])) (future (bot/loop!)))' > /dev/null
+                ;;
+            *)
+                echo "      ⚠️  Unknown Runner agent '$agent_type', defaulting to goldfish"
+                "$DEV_DIR/ai-eval.sh" runner "$port" '(do (load-file "dev/src/clj/ai_goldfish_runner.clj") (require (quote [ai-goldfish-runner :as bot])) (future (bot/loop!)))' > /dev/null
+                ;;
+        esac
+    fi
+}
+
 
 # 3. Match Loop
 for ((i=1; i<=ROUNDS; i++)); do
@@ -134,7 +173,7 @@ for ((i=1; i<=ROUNDS; i++)); do
             # echo "DEBUG: Scraped ID: '$GAME_ID_RAW'"
 
             if [ -n "$GAME_ID_RAW" ] && [ "$GAME_ID_RAW" != "" ] && [[ "$GAME_ID_RAW" != *"DEBUG"* ]]; then
-                 echo "      (Found via server log scrape)"
+                 echo "      ⚠️  (Found via server log scrape - this is brittle!)"
                  break
             fi
         fi
@@ -161,13 +200,8 @@ for ((i=1; i<=ROUNDS; i++)); do
 
     # Inject Brains (Autonomous Loops)
     echo "   🧠 Injecting brains..."
-    # Corp: Heuristic
-    "$DEV_DIR/ai-eval.sh" corp 7890 '(do (load-file "dev/src/clj/ai_heuristic_corp.clj") (require (quote [ai-heuristic-corp :as bot])) (future (bot/start-autonomous!)))' > /dev/null
-    echo "      Corp: Heuristic AI activated"
-    
-    # Runner: Goldfish
-    "$DEV_DIR/ai-eval.sh" runner 7889 '(do (load-file "dev/src/clj/ai_goldfish_runner.clj") (require (quote [ai-goldfish-runner :as bot])) (future (bot/loop!)))' > /dev/null
-    echo "      Runner: Goldfish AI activated"
+    load_agent "corp" 7890 "$CORP_AGENT"
+    load_agent "runner" 7889 "$RUNNER_AGENT"
     
     # Monitor Loop
     echo "   Monitoring..."

@@ -44,7 +44,9 @@ elif grep -q "flatline" "$LOG_FILE"; then
     WIN_CONDITION="flatline"
 elif grep -q "decked" "$LOG_FILE" || grep -q "mill" "$LOG_FILE"; then
     WIN_CONDITION="decking"
-elif grep -q "agenda" "$LOG_FILE" || grep -q "points" "$LOG_FILE"; then
+elif [ "$WINNER" != "unknown" ]; then
+    # If a winner exists but no other condition matched, assume agenda victory.
+    # This avoids false positives from grepping "agenda" or "points" which appear in normal play.
     WIN_CONDITION="agenda"
 fi
 
