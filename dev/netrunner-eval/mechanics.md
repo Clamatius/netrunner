@@ -190,7 +190,7 @@ Runner's core action - attacking a server.
 
 **Net damage** - Discard cards randomly from grip
 - Common source: ICE subroutines, traps
-- If damage ≥ cards in grip: Flatline (Corp wins)
+- If damage > cards in grip: Flatline (Corp wins)
 
 **Survival:** Always maintain grip size > expected damage - grip is akin to health of runner
 
