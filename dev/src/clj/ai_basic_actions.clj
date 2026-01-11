@@ -168,7 +168,7 @@
         (println "❌ ERROR: It's not your turn")
         (println "   Corp always goes first in turn 1")
         (println "   Wait for Corp to start and complete their turn")
-        {:status :error :reason :not-your-turn :expected-side "corp"})
+        (core/with-cursor {:status :error :reason :not-your-turn :expected-side "corp"}))
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?
@@ -189,21 +189,21 @@
             (when (> after-hand before-hand)
               (println (str "🃏 Drew: " card-title))
               (core/show-card-on-first-sight! card-title))))
-        {:status :success})
+        (core/with-cursor {:status :success}))
 
       ;; ERROR: Already have clicks (turn already started)
       (> my-clicks 0)
       (do
         (println (format "❌ ERROR: Turn already started (%d clicks remaining)" my-clicks))
         (println "   Complete your turn before starting a new one")
-        {:status :error :reason :turn-already-started :clicks my-clicks})
+        (core/with-cursor {:status :error :reason :turn-already-started :clicks my-clicks}))
 
       ;; ERROR: Opponent hasn't ended turn yet
       (> opp-clicks 0)
       (do
         (println (format "❌ ERROR: Opponent still has %d click(s)" opp-clicks))
         (println (format "   Wait for %s to finish their turn first" (name opp-side)))
-        {:status :error :reason :opponent-has-clicks :opp-clicks opp-clicks})
+        (core/with-cursor {:status :error :reason :opponent-has-clicks :opp-clicks opp-clicks}))
 
       ;; ERROR: Opponent end-turn not in recent log
       (not opp-ended?)
@@ -211,7 +211,7 @@
         (println "❌ ERROR: Opponent hasn't ended their turn yet")
         (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
         (println "   Wait for opponent to complete their turn")
-        {:status :error :reason :opponent-not-ended})
+        (core/with-cursor {:status :error :reason :opponent-not-ended}))
 
       ;; OK: All validations passed
       ;; Note: We don't check active-player because it doesn't switch until start-turn succeeds.
@@ -236,7 +236,7 @@
               (when (> after-hand before-hand)
                 (println (str "🃏 Drew: " card-title))
                 (core/show-card-on-first-sight! card-title))))
-          {:status :success})))))
+          (core/with-cursor {:status :success}))))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -271,13 +271,13 @@
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (core/show-turn-indicator)
         (check-auto-end-turn!)
-        {:status :success
-         :data {:before-credits before-credits
-                :after-credits after-credits
-                :before-clicks before-clicks
-                :after-clicks after-clicks}}))
-    {:status :error
-     :reason "Failed to start turn"}))
+        (core/with-cursor
+          {:status :success
+           :data {:before-credits before-credits
+                  :after-credits after-credits
+                  :before-clicks before-clicks
+                  :after-clicks after-clicks}})))
+    (core/with-cursor {:status :error :reason "Failed to start turn"})))
 
 (defn draw-card!
   "Draw a card (shows before/after).
@@ -307,9 +307,8 @@
         (core/show-card-on-first-sight! card-title)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
         (check-auto-end-turn!)
-        nil))
-    {:status :error
-     :reason "Failed to start turn"}))
+        (core/with-cursor {:status :success :card-drawn card-title})))
+    (core/with-cursor {:status :error :reason "Failed to start turn"})))
 
 (defn- burn-clicks-for-credits!
   "Spend all remaining clicks taking credits. Used by force-end-turn.
@@ -350,7 +349,7 @@
         (println (format "❌ ERROR: You still have %d click(s) remaining!" clicks))
         (println "   Use all clicks before ending turn, or use --force flag")
         (println "   Example: send_command end-turn --force")
-        {:status :error :clicks-remaining clicks})
+        (core/with-cursor {:status :error :clicks-remaining clicks}))
 
       ;; FORCE: burn remaining clicks as credits first
       (and (> clicks 0) force)
@@ -368,7 +367,7 @@
                              :args nil})
           (Thread/sleep core/standard-delay)
           (core/show-turn-indicator)
-          {:status :success :clicks-burned clicks}))
+          (core/with-cursor {:status :success :clicks-burned clicks})))
 
       ;; OK: all clicks used
       :else
@@ -381,7 +380,7 @@
                            :args nil})
         (Thread/sleep core/standard-delay)
         (core/show-turn-indicator)
-        {:status :success}))))
+        (core/with-cursor {:status :success})))))
 
 (defn check-auto-end-turn!
   "Proactively check if turn should auto-end after an action.

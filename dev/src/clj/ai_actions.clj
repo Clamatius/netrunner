@@ -44,6 +44,8 @@
 (def wait-for-relevant-diff core/wait-for-relevant-diff)
 (def wait-for-log-past core/wait-for-log-past)
 (def other-side core/other-side)
+(def get-cursor core/get-cursor)
+(def with-cursor core/with-cursor)
 
 ;; ============================================================================
 ;; Re-exported functions from ai-connection

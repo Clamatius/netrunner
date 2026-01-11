@@ -208,11 +208,14 @@ ${GREEN}Prompts:${NC}
                      --raw     Raw WebSocket pass (debugging only)
   jack-out        - Jack out of current run (end run unsuccessfully)
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
-  wait-for-relevant-diff [seconds] - Wait for relevant game events (ignores opponent economy)
+  wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
                      Wakes on: runs starting/ending, prompts, your turn to act
                      Ignores: opponent credits, draws, minor actions
+                     --since N: Pass cursor from previous action; returns immediately
+                               if state already advanced (fixes race conditions)
                      Works for: AI-vs-AI, HITL testing, script automation
   wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
+  get-cursor          - Get current state cursor (for --since parameter)
 
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
@@ -865,9 +868,31 @@ case "$COMMAND" in
 
     wait-for-relevant-diff)
         ensure_connection
-        TIMEOUT="${1:-300}"
-        info "Waiting for relevant events (timeout: ${TIMEOUT}s)..."
-        execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
+        TIMEOUT="300"
+        SINCE=""
+        # Parse args
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --since)
+                    SINCE="$2"
+                    shift 2
+                    ;;
+                *)
+                    # Assume it's timeout if numeric
+                    if [[ "$1" =~ ^[0-9]+$ ]]; then
+                        TIMEOUT="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+        if [[ -n "$SINCE" ]]; then
+            info "Waiting for relevant events (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
+            execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})"
+        else
+            info "Waiting for relevant events (timeout: ${TIMEOUT}s)..."
+            execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
+        fi
         ;;
 
     wait-for-log-past)
@@ -880,6 +905,11 @@ case "$COMMAND" in
         TIMEOUT="${2:-60}"
         info "Waiting for log entries past marker: \"${MARKER}\"..."
         execute "(ai-actions/wait-for-log-past \"$MARKER\" $TIMEOUT)"
+        ;;
+
+    get-cursor)
+        ensure_connection
+        execute "(ai-actions/get-cursor)"
         ;;
 
     # Lobby

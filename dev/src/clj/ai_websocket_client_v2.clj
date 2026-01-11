@@ -85,7 +85,9 @@
       (hud/update-hud-section "Game Status"
                          (str "Game starting...\nGameID: " (:gameid state)))
       (state/set-full-state! state)
-      (swap! state/client-state assoc :gameid (state/normalize-gameid (:gameid state))))
+      (swap! state/client-state assoc :gameid (state/normalize-gameid (:gameid state)))
+      ;; Bump cursor for wait synchronization
+      (state/bump-cursor!))
 
     :game/diff
     (let [diff-data (if (string? data)
@@ -112,6 +114,8 @@
           (hud/announce-revealed-archives diff)
           ;; Auto-update game log HUD
           (hud/write-game-log-to-hud 30)
+          ;; Bump cursor for wait synchronization
+          (state/bump-cursor!)
           (println "   ✓ Diff applied successfully"))
         ;; Diff doesn't match our game - we might be stale
         (do
@@ -123,7 +127,9 @@
                   (json/parse-string data true)
                   data)]
       (println "🔄 Game resync")
-      (state/set-full-state! state))
+      (state/set-full-state! state)
+      ;; Bump cursor for wait synchronization
+      (state/bump-cursor!))
 
     :game/error
     (println "❌ Server error!")

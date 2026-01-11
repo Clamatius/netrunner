@@ -478,3 +478,31 @@
   "Reset seen cards tracking (e.g., for new game session)."
   []
   (reset! seen-cards #{}))
+
+;; ============================================================================
+;; State Cursor (for race-condition-free waiting)
+;; ============================================================================
+;; Monotonically increasing counter that bumps on relevant state changes.
+;; Used by wait commands to detect if state has already advanced past
+;; a known point, avoiding race conditions in model-vs-model play.
+;;
+;; The cursor is opaque to callers - they just pass it through.
+;; This allows us to change the implementation without breaking callers.
+
+(defonce state-cursor (atom 0))
+
+(defn get-cursor
+  "Get current state cursor value. Opaque to callers."
+  []
+  @state-cursor)
+
+(defn bump-cursor!
+  "Increment state cursor. Called when relevant state changes occur.
+   Returns the new cursor value."
+  []
+  (swap! state-cursor inc))
+
+(defn reset-cursor!
+  "Reset cursor to 0 (e.g., for new game session)."
+  []
+  (reset! state-cursor 0))

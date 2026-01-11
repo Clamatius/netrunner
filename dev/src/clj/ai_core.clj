@@ -876,6 +876,24 @@
           (recur))))))
 
 ;; ============================================================================
+;; Cursor Helpers (for race-condition-free waiting)
+;; ============================================================================
+
+(defn with-cursor
+  "Enrich a status map with the current cursor value.
+   Use this when returning from action functions to enable
+   cursor-based waiting.
+
+   Usage: (with-cursor {:status :success :data foo})"
+  [status-map]
+  (assoc status-map :cursor (state/get-cursor)))
+
+(defn get-cursor
+  "Get current state cursor. Delegates to ai-state."
+  []
+  (state/get-cursor))
+
+;; ============================================================================
 ;; Relevant Diff Waiting (for model-vs-model coordination)
 ;; ============================================================================
 
@@ -951,9 +969,15 @@
 
    Sleeps through opponent economy/draw actions that don't affect us.
 
+   The :since option enables race-condition-free waiting:
+   - Pass the cursor from a previous action's response
+   - If state has already advanced past that cursor, returns immediately
+   - This prevents the 'waiting for opponent who already acted' problem
+
    Usage: (wait-for-relevant-diff)           ;; default 300s timeout
           (wait-for-relevant-diff 60)        ;; custom timeout
-          (wait-for-relevant-diff {:timeout 120 :verbose true})"
+          (wait-for-relevant-diff {:timeout 120 :verbose true})
+          (wait-for-relevant-diff {:since 847})  ;; cursor-based wait"
   ([]
    (wait-for-relevant-diff 300))
   ([timeout-or-opts]
@@ -961,59 +985,79 @@
                 {:timeout timeout-or-opts :verbose true}
                 (merge {:timeout 300 :verbose true} timeout-or-opts))
          timeout-seconds (:timeout opts)
-         side (:side @state/client-state)
-         deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
-         initial-run-active? (run-active? @state/client-state)
-         initial-log-count (count (get-in @state/client-state [:game-state :log]))]
+         since-cursor (:since opts)
+         current-cursor (state/get-cursor)
+         side (:side @state/client-state)]
 
-     (when (:verbose opts)
-       (println (format "💤 Waiting for relevant events (timeout: %ds)..." timeout-seconds))
-       (when initial-run-active?
-         (println "   ⚡ Run already active - watching closely")))
-
-     (loop [last-log-count initial-log-count]
-       (Thread/sleep polling-delay)
+     ;; Fast path: if cursor has advanced past :since, return immediately
+     (if (and since-cursor (> current-cursor since-cursor))
        (let [current-state @state/client-state
-             current-log (get-in current-state [:game-state :log])
-             current-log-count (count current-log)
-             new-entries (when (> current-log-count last-log-count)
-                          (take (- current-log-count last-log-count) current-log))
-             reason (relevance-reason current-state side initial-run-active?)]
+             reason (relevance-reason current-state side false)]
+         (when (:verbose opts)
+           (println (format "⚡ Cursor advanced (%d → %d), returning immediately"
+                           since-cursor current-cursor)))
+         {:status :already-advanced
+          :reason (or reason :cursor-advanced)
+          :cursor current-cursor
+          :run-active? (run-active? current-state)
+          :has-prompt? (has-prompt? current-state side)})
 
-         (cond
-           ;; Found something relevant
-           reason
-           (do
-             (when (:verbose opts)
-               (println (format "⚡ Woke up: %s" (name reason)))
-               (when (seq new-entries)
-                 (doseq [entry (take 3 new-entries)]
-                   (println (format "  • %s" (:text entry))))))
-             {:status :relevant-change
-              :reason reason
-              :new-log-entries new-entries
-              :run-active? (run-active? current-state)
-              :has-prompt? (has-prompt? current-state side)})
+       ;; Normal path: wait for state change
+       (let [deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
+             initial-run-active? (run-active? @state/client-state)
+             initial-log-count (count (get-in @state/client-state [:game-state :log]))]
 
-           ;; Timeout
-           (> (System/currentTimeMillis) deadline)
-           (do
-             (when (:verbose opts)
-               (println "⏱️  Timeout - no relevant events"))
-             {:status :timeout})
+         (when (:verbose opts)
+           (println (format "💤 Waiting for relevant events (timeout: %ds, cursor: %d)..."
+                           timeout-seconds current-cursor))
+           (when initial-run-active?
+             (println "   ⚡ Run already active - watching closely")))
 
-           ;; State changed but not relevant - keep waiting
-           (> current-log-count last-log-count)
-           (do
-             (when (:verbose opts)
-               (let [text (or (-> new-entries first :text) "")
-                     truncated (subs text 0 (min 60 (count text)))]
-                 (println (format "   💤 Ignoring: %s" truncated))))
-             (recur current-log-count))
+         (loop [last-log-count initial-log-count]
+           (Thread/sleep polling-delay)
+           (let [current-state @state/client-state
+                 current-log (get-in current-state [:game-state :log])
+                 current-log-count (count current-log)
+                 new-entries (when (> current-log-count last-log-count)
+                              (take (- current-log-count last-log-count) current-log))
+                 reason (relevance-reason current-state side initial-run-active?)]
 
-           ;; No change yet
-           :else
-           (recur last-log-count)))))))
+             (cond
+               ;; Found something relevant
+               reason
+               (do
+                 (when (:verbose opts)
+                   (println (format "⚡ Woke up: %s" (name reason)))
+                   (when (seq new-entries)
+                     (doseq [entry (take 3 new-entries)]
+                       (println (format "  • %s" (:text entry))))))
+                 {:status :relevant-change
+                  :reason reason
+                  :cursor (state/get-cursor)
+                  :new-log-entries new-entries
+                  :run-active? (run-active? current-state)
+                  :has-prompt? (has-prompt? current-state side)})
+
+               ;; Timeout
+               (> (System/currentTimeMillis) deadline)
+               (do
+                 (when (:verbose opts)
+                   (println "⏱️  Timeout - no relevant events"))
+                 {:status :timeout
+                  :cursor (state/get-cursor)})
+
+               ;; State changed but not relevant - keep waiting
+               (> current-log-count last-log-count)
+               (do
+                 (when (:verbose opts)
+                   (let [text (or (-> new-entries first :text) "")
+                         truncated (subs text 0 (min 60 (count text)))]
+                     (println (format "   💤 Ignoring: %s" truncated))))
+                 (recur current-log-count))
+
+               ;; No change yet
+               :else
+               (recur last-log-count)))))))))
 
 ;; ============================================================================
 ;; Run Helper Functions
