@@ -55,7 +55,7 @@ Interface → 1[credit]: Break 1 subroutine. When this run ends, trash this prog
 Place 5[credit] on this event, then run any server. You can spend hosted credits during that run.
 
 **Sure Gamble** - Event (Cost 5)
-2Gain 9[credit].
+Gain 9[credit].
 
 ## Questions
 
