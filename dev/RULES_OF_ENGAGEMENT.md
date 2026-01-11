@@ -39,3 +39,15 @@
 **Rule:** In "Scheduled Duel" (Level 3) and above, an agent is responsible for its own context management.
 
 * **Requirement:** Agents must maintain their own memory/notes file. "Forgetting" a strategy mid-game due to context window mismanagement is a valid loss condition (equivalent to player fatigue/tilt).
+
+## 5. Tool Use
+
+**Rule:** External knowledge sources are closed during matches. Self-authored tools are permitted.
+
+* **Prohibited during match:**
+  * Web search, documentation lookup, external strategy guides
+  * Consulting other models or humans
+* **Permitted during match:**
+  * Tools authored by the agent during prep phase (calculators, simulators, lookup tables)
+  * Reading the agent's own notes/playbook files
+* **Rationale:** We're testing synthesis and execution, not information retrieval. But an agent that builds useful abstractions during prep has earned them.
