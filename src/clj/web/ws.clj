@@ -20,13 +20,16 @@
 (let [chsk-server (sente/make-channel-socket-server!
                     (get-sch-adapter)
                     {:user-id-fn (fn [ring-req]
-                                   ;; Allow both regular users (with session) and AI players (with client-id param)
-                                   (or (-> ring-req :session :uid)
+                                   ;; Priority order for user identification:
+                                   ;; 1. User authenticated via wrap-user (from session token or cookie)
+                                   ;; 2. Session uid from previous login
+                                   ;; 3. AI player client-id param (fallback for dev)
+                                   (or (-> ring-req :user :username)
+                                       (-> ring-req :session :uid)
                                        (-> ring-req :params :client-id)
                                        (:client-id ring-req)))
-                     ;; TEMP: Disable CSRF and auth checks for AI player development
-                     ;; TODO: Implement proper authentication for AI player
-                     :csrf-token-fn nil  ; Completely disable CSRF checking
+                     ;; TEMP: Disable CSRF checks for AI player development
+                     :csrf-token-fn nil
                      :authorized?-fn (constantly true)})
       {:keys [ch-recv send-fn connected-uids
               ajax-post-fn ajax-get-or-ws-handshake-fn private]} chsk-server

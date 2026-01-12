@@ -15,12 +15,13 @@
     (.printStackTrace e)
     (throw e)))
 
-(println "Loading WebSocket client...")
-;; Load the websocket client
+(println "Loading WebSocket client and auth...")
+;; Load the websocket client and auth module
 (try
   (load-file "dev/src/clj/ai_websocket_client_v2.clj")
+  (load-file "dev/src/clj/ai_auth.clj")
   (catch Exception e
-    (println "❌ FATAL ERROR loading ai_websocket_client_v2.clj:")
+    (println "❌ FATAL ERROR loading ai_websocket_client_v2.clj or ai_auth.clj:")
     (println (.getMessage e))
     (.printStackTrace e)
     (throw e)))
@@ -50,27 +51,72 @@
 (in-ns 'user)
 (require '[ai-state :as state])
 (require '[ai-websocket-client-v2 :as ws])
+(require '[ai-auth :as auth])
 (require '[ai-actions])
 (require '[ai-actions :as ai])
 
 ;; Stay in user namespace so evals work correctly
 ;; (REPL evals will be in whatever namespace is current when init finishes)
 
-(println "Setting client id")
-;; Set client-id from environment variable or use default
-;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation in web.auth
-(let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")
-      client-id (str "ai-client-" client-name)]
-  (println (str "Client name: " client-name))
-  (swap! ai-state/client-state assoc :client-id client-id))
+;; ============================================================================
+;; Authentication Configuration
+;; ============================================================================
+;; Authentication mode:
+;; - If AI_USERNAME is set: Use proper auth (register/login, then connect)
+;; - Otherwise: Fall back to client-id hack (for backwards compatibility)
+;;
+;; Environment variables:
+;;   AI_USERNAME  - Username for AI player account
+;;   AI_PASSWORD  - Password (defaults to AI_USERNAME + "_pass" if not set)
+;;   AI_BASE_URL  - Server URL (defaults to http://localhost:1042)
+;;   AI_CLIENT_NAME - Fallback client-id suffix (if not using proper auth)
 
-;; Get CSRF token from the main page
-(println "\nGetting CSRF token...")
-(ai-websocket-client-v2/get-csrf-token!)
+(let [username (System/getenv "AI_USERNAME")
+      password (or (System/getenv "AI_PASSWORD") (when username (str username "_pass")))
+      base-url (or (System/getenv "AI_BASE_URL") "http://localhost:1042")
+      ws-url (str (clojure.string/replace base-url #"^http" "ws") "/chsk")]
 
-(println "Connecting to ws://localhost:1042/chsk...")
-(ai-websocket-client-v2/connect! "ws://localhost:1042/chsk")
-(Thread/sleep 2000)
+  (if username
+    ;; === Proper Authentication Mode ===
+    (do
+      (println "\n🔐 Authenticating as:" username)
+      (println "   Server:" base-url)
+
+      ;; Get CSRF token first (needed for both login and WebSocket)
+      (println "   Getting CSRF token...")
+      (ai-websocket-client-v2/get-csrf-token!)
+
+      ;; Authenticate (will auto-register if needed)
+      (let [auth-result (ai-auth/ensure-authenticated!
+                          {:username username
+                           :password password
+                           :base-url base-url})]
+        (if (= :success (:status auth-result))
+          (do
+            (println "   Connecting WebSocket...")
+            (ai-websocket-client-v2/connect! ws-url)
+            (Thread/sleep 2000))
+          (println "❌ Authentication failed:" (:message auth-result)))))
+
+    ;; === Fallback: Client-ID Mode (requires server hack) ===
+    (do
+      (println "\n⚠️  No AI_USERNAME set - using client-id auth (fallback mode)")
+      (println "   Set AI_USERNAME and AI_PASSWORD for proper auth")
+
+      ;; Set client-id from environment variable or use default
+      ;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation
+      (let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")
+            client-id (str "ai-client-" client-name)]
+        (println (str "   Client name: " client-name))
+        (swap! ai-state/client-state assoc :client-id client-id))
+
+      ;; Get CSRF token from the main page
+      (println "   Getting CSRF token...")
+      (ai-websocket-client-v2/get-csrf-token!)
+
+      (println "   Connecting WebSocket...")
+      (ai-websocket-client-v2/connect! ws-url)
+      (Thread/sleep 2000))))
 
 (if (ai-websocket-client-v2/connected?)
   (do

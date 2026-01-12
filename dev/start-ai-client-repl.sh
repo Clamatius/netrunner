@@ -29,6 +29,11 @@ echo ""
 # Pass client name via environment variable (simpler than JVM prop through lein)
 export AI_CLIENT_NAME=$CLIENT_NAME
 export AI_DEBUG_LEVEL=${AI_DEBUG_LEVEL:-false}
+
+# Auth credentials (proper login flow)
+# If not set externally, use client-name-based defaults for local dev
+export AI_USERNAME=${AI_USERNAME:-"ai-$CLIENT_NAME"}
+export AI_PASSWORD=${AI_PASSWORD:-"dev-password-$CLIENT_NAME"}
 nohup lein with-profile ai-client run -m nrepl.cmdline \
   --port $REPL_PORT \
   > /tmp/ai-client-${CLIENT_NAME}.log 2>&1 &

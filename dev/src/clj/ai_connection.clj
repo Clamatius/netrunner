@@ -68,6 +68,28 @@
                        password (assoc :password password)))
     (println "🎮 Attempting to join game" gameid "as" request-side)))
 
+(defn watch-game!
+  "Join a game as a spectator
+   Options:
+     :gameid      - game ID to watch
+     :perspective - \"Corp\", \"Runner\", or nil for neutral view
+     :password    - optional password if game is password-protected
+
+   Spectators receive game state updates but cannot take actions.
+   With a perspective, you see that side's hidden information."
+  [{:keys [gameid perspective password]}]
+  (let [uuid-gameid (state/normalize-gameid gameid)]
+    (ws/send-message! :lobby/watch
+                      (cond-> {:gameid uuid-gameid}
+                        perspective (assoc :request-side perspective)
+                        password (assoc :password password)))
+    (swap! state/client-state assoc
+           :gameid uuid-gameid
+           :spectator true
+           :spectator-perspective perspective)
+    (println "👁️  Spectating game" uuid-gameid
+             (if perspective (str "(" perspective " perspective)") "(neutral view)"))))
+
 (defn resync-game!
   "Request full game state resync (for reconnecting to started games)
    Usage: (resync-game! gameid)"

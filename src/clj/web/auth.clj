@@ -54,17 +54,18 @@
   (fn [{db :system/db
         auth :system/auth
         :keys [cookies params] :as req}]
-    (let [user (some-> (get cookies "session")
-                       (:value)
+    ;; Session token comes from Cookie header (set by wrap-session middleware)
+    (let [session-token (get-in cookies ["session" :value])
+          user (some-> session-token
                        (->> (unsign-token auth))
                        (#(mc/find-one-as-map db "users" {:_id (->object-id (:_id %))
                                                          :emailhash (:emailhash %)}))
                        (select-keys user-keys)
                        (update :_id str))
-          ;; TEMP: Allow AI players without authentication
+          ;; TEMP: Allow AI players without authentication (fallback for dev)
           ;; Create a fake user for client-ids that start with "ai-client-"
           client-id (:client-id params)
-          ai-user (when (and client-id (str/starts-with? (str client-id) "ai-client-"))
+          ai-user (when (and (not user) client-id (str/starts-with? (str client-id) "ai-client-"))
                     (let [client-suffix (subs (str client-id) 10)]
                       {:username (str "AI-" client-suffix)
                        :emailhash "ai"

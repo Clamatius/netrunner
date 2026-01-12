@@ -206,7 +206,13 @@
 ;; ============================================================================
 
 (defn connect!
-  "Connect to WebSocket server"
+  "Connect to WebSocket server.
+
+   Authentication modes:
+   1. If :session-token is set in state, use proper cookie-based auth
+   2. Otherwise fall back to client-id auth (requires server-side hack)
+
+   The session token is obtained by calling ai-auth/login! before connect."
   [url]
   (println "🔌 Connecting to" url "...")
   (try
@@ -225,45 +231,48 @@
         (catch Exception e
           (println "⚠️  Error stopping old client:" (.getMessage e)))))
 
-    ;; Reuse existing client-id if available, otherwise generate new one
-    (let [existing-id (:client-id @state/client-state)
-          client-id (or existing-id (str "ai-client-" (java.util.UUID/randomUUID)))
+    ;; Authentication: Match web client behavior
+    ;; - client-id and csrf-token go in URL params
+    ;; - session cookie goes in Cookie header (like browser sends automatically)
+    (let [session-token (:session-token @state/client-state)
           csrf-token (:csrf-token @state/client-state)
-          ;; Add client-id as query parameter for Sente handshake
-          ;; If we have a CSRF token, also add it to URL
-          full-url (if csrf-token
-                     (str url "?client-id=" client-id
-                          "&csrf-token=" (URLEncoder/encode csrf-token "UTF-8"))
-                     (str url "?client-id=" client-id))
+          ;; Always generate a client-id (web client does this too)
+          existing-id (:client-id @state/client-state)
+          client-id (or existing-id (str "ai-client-" (java.util.UUID/randomUUID)))
+          _ (swap! state/client-state assoc :client-id client-id)
+          ;; Build URL with client-id and csrf-token (like web client)
+          full-url (str url "?client-id=" client-id
+                        (when csrf-token
+                          (str "&csrf-token=" (URLEncoder/encode csrf-token "UTF-8"))))
           ;; Create custom WebSocket client with longer idle timeout (10 minutes instead of 5)
-          ;; This prevents connection drops when there's no activity
           ws-client (if (.startsWith url "wss://")
                       (WebSocketClient. (SslContextFactory.))
                       (WebSocketClient.))
           _ (doto (.getPolicy ws-client)
-              ;; Set idle timeout to 10 minutes (600000 ms) to prevent timeouts
-              ;; Server sends pings every ~30 seconds, so this gives plenty of buffer
               (.setIdleTimeout 600000))
           _ (.start ws-client)
+          ;; Build headers - include session cookie if authenticated
+          headers (when session-token
+                    {"Cookie" (str "session=" session-token)})
           ;; Prepare connection options
-          conn-opts {:on-receive on-receive
-                     :on-connect (fn [& _args]
-                                  (println "⏳ WebSocket connected, waiting for handshake..."))
-                     :on-close (fn [& args]
-                                (println "❌ Disconnected:" (first args))
-                                (.stop ws-client)  ; Clean up custom client
-                                (swap! state/client-state assoc :connected false))
-                     :on-error (fn [& args]
-                                (println "❌ Error:" (first args)))
-                     :client ws-client}  ; Pass custom client to gniazdo
+          conn-opts (cond-> {:on-receive on-receive
+                             :on-connect (fn [& _args]
+                                           (println "⏳ WebSocket connected, waiting for handshake..."))
+                             :on-close (fn [& args]
+                                         (println "❌ Disconnected:" (first args))
+                                         (.stop ws-client)
+                                         (swap! state/client-state assoc :connected false))
+                             :on-error (fn [& args]
+                                         (println "❌ Error:" (first args)))
+                             :client ws-client}
+                      headers (assoc :headers headers))
           socket (ws/connect full-url conn-opts)]
       (swap! state/client-state assoc
              :socket socket
-             :ws-client ws-client  ; Store ws-client so we can clean it up later
-             :client-id client-id)
-      (if existing-id
-        (println "✨ WebSocket reconnected with existing client-id:" client-id)
-        (println "✨ WebSocket connection initiated with new client-id:" client-id))
+             :ws-client ws-client)
+      (if session-token
+        (println "✨ WebSocket connected with session auth (user:" (:username @state/client-state) ")")
+        (println "✨ WebSocket connected with client-id auth (fallback mode)"))
       socket)
     (catch Exception e
       (println "❌ Connection failed:" (.getMessage e))

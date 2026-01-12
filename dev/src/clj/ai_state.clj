@@ -17,7 +17,13 @@
          :socket nil
          :lobby-list nil
          :client-id nil
-         :csrf-token nil}))
+         :csrf-token nil
+         ;; Authentication (proper login)
+         :session-token nil    ; JWT from /login endpoint
+         :username nil
+         ;; Spectator mode
+         :spectator false
+         :spectator-perspective nil}))
 
 ;; ============================================================================
 ;; Gameid Normalization
