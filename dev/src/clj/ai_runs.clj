@@ -29,6 +29,39 @@
 ;; Reset when run ends or new ICE encountered
 (defonce signaled-fire-position (atom nil))
 
+;; Debug chat mode - when enabled, announces waits/actions in game chat
+;; Enable with: (reset! ai-runs/chat-debug-mode true)
+;; Or via env: CHAT_DEBUG=true
+(defonce chat-debug-mode
+  (atom (= "true" (System/getenv "CHAT_DEBUG"))))
+
+;; Track last chat debug message to avoid spam
+(defonce last-chat-debug (atom nil))
+
+;; Prefix for debug chat messages (used to filter in wait functions)
+(def debug-chat-prefix "🤖 ")
+
+(defn debug-chat!
+  "Send a debug message to game chat (if debug mode enabled).
+   Includes timestamp and robot emoji prefix.
+   Deduplicates repeated messages.
+   Note: Messages start with debug-chat-prefix so wait functions can filter them."
+  [msg]
+  (when @chat-debug-mode
+    (let [timestamp (-> (java.time.LocalTime/now)
+                        (.format (java.time.format.DateTimeFormatter/ofPattern "HH:mm:ss")))
+          ;; Prefix with robot emoji so wait functions can filter these out
+          full-msg (str debug-chat-prefix "[" timestamp "] " msg)]
+      ;; Only send if different from last message
+      (when (not= @last-chat-debug msg)
+        (reset! last-chat-debug msg)
+        (let [gameid (:gameid @state/client-state)]
+          (when gameid
+            (ws/send-message! :game/action
+                             {:gameid gameid
+                              :command "say"
+                              :args {:user "AI-debug" :msg full-msg}})))))))
+
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
   []
@@ -496,10 +529,23 @@
    :action :auto-choice
    :choice choice-value})
 
+;; Track if we've warned about --force this session
+(defonce force-warning-shown (atom false))
+
 (defn handle-force-mode
-  "Priority 0: --force flag bypasses ALL checks (but respects run completion)"
+  "Priority 0: --force flag bypasses ALL checks (but respects run completion)
+   ⚠️  WARNING: --force is for AI-vs-AI testing ONLY!
+   In HITL games, it will break game state by passing when you should wait."
   [{:keys [strategy gameid state]}]
   (when (:force strategy)
+    ;; Show warning once per session
+    (when-not @force-warning-shown
+      (reset! force-warning-shown true)
+      (println "")
+      (println "⚠️  WARNING: --force is for AI-vs-AI testing ONLY!")
+      (println "⚠️  In HITL games, this WILL break game state by passing")
+      (println "⚠️  when you should wait for opponent.")
+      (println ""))
     (let [run (get-in state [:game-state :run])]
       (if (nil? run)
         ;; Run is complete, don't send spurious continues
@@ -681,7 +727,8 @@
             already-printed? (= @last-waiting-status status-key)]
         (when-not already-printed?
           (reset! last-waiting-status status-key)
-          (println (format "⏸️  Waiting for opponent: %s" reason)))
+          (println (format "⏸️  Waiting for opponent: %s" reason))
+          (debug-chat! (format "WAIT: %s" reason)))
         {:status :waiting-for-opponent
          :message reason}))))
 
@@ -974,7 +1021,8 @@
         (when-not already-printed?
           (reset! last-waiting-status status-key)
           (println (format "⏸️  Waiting for %s paid abilities (%s phase)"
-                          (clojure.string/capitalize opp-side) run-phase)))
+                          (clojure.string/capitalize opp-side) run-phase))
+          (debug-chat! (format "WAIT: %s paid abilities @ %s" opp-side run-phase)))
         {:status :waiting-for-opponent-paid-abilities
          :message (format "Waiting for %s to pass or use paid abilities" opp-side)
          :phase run-phase
@@ -1012,7 +1060,8 @@
       (when-not already-printed?
         (reset! last-waiting-status status-key)
         (println "⏸️  Waiting for corp rez decision")
-        (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count)))
+        (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count))
+        (debug-chat! (format "WAIT: Corp rez decision on %s" ice-title)))
       {:status :waiting-for-corp-rez
        :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
        :ice ice-title
@@ -1047,6 +1096,16 @@
               ;; Find icebreakers with playable abilities
               runner-rig (get-in state [:game-state :runner :rig])
               all-programs (get runner-rig :program [])
+
+              ;; DEBUG: Log what we see during encounter-ice
+              _ (println (format "🔍 DEBUG --full-break: phase=%s ice=%s (rezzed=%s, %d unbroken subs)"
+                                run-phase ice-title (:rezzed current-ice) (count unbroken-subs)))
+              _ (doseq [p all-programs]
+                  (println (format "🔍 DEBUG   %s abilities:" (:title p)))
+                  (doseq [[idx ab] (map-indexed vector (:abilities p))]
+                    (println (format "🔍 DEBUG     [%d] %s | playable=%s dynamic=%s"
+                                    idx (:label ab) (:playable ab) (:dynamic ab)))))
+
               ;; Look for playable dynamic abilities (auto-pump-and-break)
               breakable-abilities
               (for [program all-programs

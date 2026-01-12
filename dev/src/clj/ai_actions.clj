@@ -108,6 +108,7 @@
 (def take-credits basic/take-credits)
 (def draw-card basic/draw-card)
 (def end-turn basic/end-turn)
+(def fix-credits! basic/fix-credits!)
 
 ;; ============================================================================
 ;; Re-exported functions from ai-prompts

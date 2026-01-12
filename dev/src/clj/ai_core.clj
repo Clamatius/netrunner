@@ -1018,8 +1018,10 @@
            (let [current-state @state/client-state
                  current-log (get-in current-state [:game-state :log])
                  current-log-count (count current-log)
-                 new-entries (when (> current-log-count last-log-count)
-                              (take (- current-log-count last-log-count) current-log))
+                 ;; Filter out AI debug chat messages (start with robot emoji)
+                 new-entries-raw (when (> current-log-count last-log-count)
+                                   (take (- current-log-count last-log-count) current-log))
+                 new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
                  reason (relevance-reason current-state side initial-run-active?)]
 
              (cond

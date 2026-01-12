@@ -533,3 +533,77 @@
 
 (defn end-turn []
   (end-turn!))
+
+;; ============================================================================
+;; Emergency Game State Fix (CHEATING - Use Only for Broken States!)
+;; ============================================================================
+
+(defn fix-credits!
+  "⚠️  CHEATING: Manually adjust credits for either side.
+
+   THIS IS ONLY FOR FIXING ACCIDENTALLY BROKEN GAME STATES!
+   Using this during normal play is cheating.
+
+   Usage:
+     (fix-credits! 5)       ; Set YOUR credits to 5
+     (fix-credits! -2)      ; Subtract 2 from YOUR credits (delta mode)
+     (fix-credits! +3)      ; Add 3 to YOUR credits (delta mode)
+     (fix-credits! \"corp\" 10)   ; Set Corp's credits to 10
+     (fix-credits! \"runner\" 5)  ; Set Runner's credits to 5
+
+   Args:
+     amount - Target credit value OR delta (+N/-N as string)
+     side   - Optional: \"corp\" or \"runner\" (defaults to your side)"
+  ([amount]
+   (fix-credits! nil amount))
+  ([side-arg amount]
+   (println "")
+   (println "⚠️  ============================================================")
+   (println "⚠️  WARNING: CHEATING - MANUAL CREDIT ADJUSTMENT")
+   (println "⚠️  This command is ONLY for fixing accidentally broken game states!")
+   (println "⚠️  Using this during normal play is cheating.")
+   (println "⚠️  ============================================================")
+   (println "")
+   (let [client-state @state/client-state
+         gameid (:gameid client-state)
+         my-side (:side client-state)
+         ;; Determine target side
+         target-side (cond
+                      (nil? side-arg) my-side
+                      (string? side-arg) (clojure.string/lower-case side-arg)
+                      :else my-side)
+         ;; Get current credits for target
+         current-credits (get-in client-state [:game-state (keyword target-side) :credit] 0)
+         ;; Parse amount - could be absolute or delta
+         [delta-mode? delta-amount]
+         (cond
+           ;; String starting with + or - is delta mode
+           (and (string? amount) (re-matches #"[+-]\d+" amount))
+           [true (Integer/parseInt amount)]
+           ;; Number is absolute mode (calculate delta)
+           (number? amount)
+           [false (- amount current-credits)]
+           ;; String number is absolute
+           (string? amount)
+           [false (- (Integer/parseInt amount) current-credits)]
+           :else
+           [false 0])]
+     (println (format "   Target: %s (currently %d credits)" target-side current-credits))
+     (println (format "   Change: %s%d credits" (if (pos? delta-amount) "+" "") delta-amount))
+     (println (format "   Result: %d credits" (+ current-credits delta-amount)))
+     (println "")
+     ;; Send the change command
+     (ws/send-message! :game/action
+                       {:gameid gameid
+                        :command "change"
+                        :args {:key :credit
+                               :delta delta-amount}})
+     ;; Wait for state update
+     (Thread/sleep 500)
+     (let [new-credits (get-in @state/client-state [:game-state (keyword target-side) :credit] 0)]
+       (println (format "✅ Credits adjusted: %d → %d" current-credits new-credits))
+       {:status :success
+        :side target-side
+        :old-credits current-credits
+        :new-credits new-credits
+        :delta delta-amount}))))
