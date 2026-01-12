@@ -86,6 +86,22 @@ else:
 
 Simple heuristic: `if useful_cards / stack_size > 0.5: draw, else run`
 
+### The Millstone Trap
+
+A common beginner error: **treating cards you'll never see as different from cards that don't exist.**
+
+**The trap:** "I'll only play Wildcat Strike when my hand is nearly empty, so if I draw 4, I won't have to discard."
+
+**The reality:** Discarding from overdraw is **filtering, not loss**. Those discarded cards are statistically equivalent to cards at the bottom of your deck - cards you were never going to draw. The difference:
+- You now have **information** (you know what's gone)
+- You had **choice** (you picked what to discard)
+
+Waiting for "perfect" hand size is pure downside. You delayed a strong card for a "cost" that isn't real.
+
+**The heuristic:** Cards you were never going to draw don't exist. Overdraw filtering is free. A turn of draw-draw-draw-draw, discard 4 is completely legitimate if those were the right draws.
+
+**Application to multi-access:** You're not "wasting" accesses on non-agendas. You're gaining previously hidden info. Each non-agenda access from R&D increases agenda density in what's left and means when they drew it, you know they didn't draw an agenda. Each card accessed from R&D or HQ has to go _somewhere_.
+
 **Survival draws (against damage decks):**
 
 Always draw before running if facing damage:
