@@ -1,11 +1,11 @@
 #!/bin/bash
 # Error log watcher for Claude Code dev loop
-# Monitors dev/repl-errors.log and maintains deduplicated error list in CLAUDE.local.md
+# Monitors dev/repl-errors.log and maintains deduplicated error list
 
 set -e
 
 LOG_FILE="dev/repl-errors.log"
-CLAUDE_MD="CLAUDE.local.md"
+REPL_ERRORS="dev/repl-errors.md"
 ERROR_STATE="dev/.error-state"
 MAX_ERRORS=10
 
@@ -17,9 +17,9 @@ if [ ! -f "$ERROR_STATE" ]; then
   echo "{}" > "$ERROR_STATE"
 fi
 
-# Initialize CLAUDE.local.md if it doesn't exist
-if [ ! -f "$CLAUDE_MD" ]; then
-  cat > "$CLAUDE_MD" << 'EOF'
+# Initialize if it doesn't exist
+if [ ! -f "$REPL_ERRORS" ]; then
+  cat > "$REPL_ERRORS" << 'EOF'
 # Claude Code Dev Loop - Error Log
 
 **🔔 CHECK THIS FILE FOR RECENT ERRORS** - Updated automatically when errors occur in the REPL.
@@ -31,7 +31,7 @@ EOF
 fi
 
 echo "👁️  Watching $LOG_FILE for errors..."
-echo "📝 Deduped errors will be shown in $CLAUDE_MD"
+echo "📝 Deduped errors will be shown in $REPL_ERRORS"
 
 # Track the last position in the log file to only show new errors
 LAST_POS=0
@@ -59,7 +59,7 @@ extract_error_info() {
   echo -e "${signature}\t${exception_type}\t${location}\t${message}"
 }
 
-# Function to update CLAUDE.local.md with deduplicated errors
+# Function to update with deduplicated errors
 update_claude_md() {
   local timestamp="$1"
   local sig="$2"
@@ -90,8 +90,8 @@ update_claude_md() {
   # Write back to state file
   printf "%s\n" "${errors[@]:0:$keep_count}" > "$ERROR_STATE"
 
-  # Rebuild CLAUDE.local.md from scratch
-  cat > "$CLAUDE_MD" << 'HEADER'
+  # Rebuild REPL_ERRORS from scratch
+  cat > "$REPL_ERRORS" << 'HEADER'
 # Claude Code Dev Loop - Error Log
 
 **🔔 CHECK THIS FILE FOR RECENT ERRORS** - Updated automatically when errors occur in the REPL.
@@ -107,7 +107,7 @@ HEADER
   for error_line in "${errors[@]:0:$keep_count}"; do
     IFS='|' read -r s t e l m <<< "$error_line"
 
-    cat >> "$CLAUDE_MD" << EOF
+    cat >> "$REPL_ERRORS" << EOF
 
 ## Error #$idx - Last seen: $t
 
@@ -124,7 +124,7 @@ EOF
   done
 
   if [ $keep_count -eq 0 ]; then
-    echo "_No errors yet._" >> "$CLAUDE_MD"
+    echo "_No errors yet._" >> "$REPL_ERRORS"
   fi
 }
 
