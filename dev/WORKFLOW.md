@@ -53,7 +53,7 @@ Quick reference for AI player development and testing workflows.
 ```
 
 **What it does:**
-1. Detects game ID from HUD (`CLAUDE.local.md`)
+1. Detects game ID from HUD (`REPL_ERRORS`)
 2. Bounces both AI clients (full REPL reload)
 3. Reconnects both to existing game
 4. Verifies connection
@@ -68,7 +68,7 @@ Quick reference for AI player development and testing workflows.
 - Turn 8 with 879 virus counters, don't want to reset!
 
 **Auto-detection sources (in order):**
-1. `CLAUDE.local.md` HUD file
+1. `REPL_ERRORS` HUD file
 2. Runner client state (if running)
 3. Corp client state (if running)
 
@@ -130,7 +130,7 @@ cat logs/reset-*.log        # Read full log
 
 ```bash
 # End of day - note game ID
-cat CLAUDE.local.md         # Shows: GameID: 6e849fda-...
+cat REPL_ERRORS         # Shows: GameID: 6e849fda-...
 
 # Next morning - resume where you left off
 ./dev/resume.sh 6e849fda-c813-409b-8c8c-0896ceca4663
@@ -197,13 +197,13 @@ lsof -i :7890   # Corp REPL
 
 ### Get game ID quickly
 ```bash
-grep GameID CLAUDE.local.md
+grep GameID REPL_ERRORS
 ```
 
 ### Monitor game in real-time
 ```bash
 # In separate terminal, watch HUD
-watch -n 1 cat CLAUDE.local.md
+watch -n 1 cat REPL_ERRORS
 
 # Or tail logs
 tail -f logs/reset-*.log
@@ -251,7 +251,7 @@ Clean up with: `./dev/clean-logs.sh`
 ## Troubleshooting
 
 ### "Could not auto-detect game ID"
-- Check `cat CLAUDE.local.md` for game ID
+- Check log / game lobby list for game ID
 - Provide explicit game ID: `./dev/resume.sh [game-id]`
 - Or start fresh: `./dev/reset.sh`
 
