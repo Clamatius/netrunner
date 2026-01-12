@@ -77,7 +77,6 @@ if TIMEOUT=15 "$SCRIPT_DIR/ai-eval.sh" $CLIENT_NAME $REPL_PORT '(load-file "dev/
     echo ""
     echo "To stop: $SCRIPT_DIR/stop-ai-client.sh $CLIENT_NAME"
     echo "To view logs: tail -f /tmp/ai-client-${CLIENT_NAME}.log"
-    echo "To send commands: $SCRIPT_DIR/ai-eval.sh $CLIENT_NAME $REPL_PORT '<expression>'"
     echo ""
 else
     echo ""
