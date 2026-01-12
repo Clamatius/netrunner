@@ -47,7 +47,7 @@ trap cleanup SIGINT SIGTERM EXIT
 
 echo "🚀 Starting Netrunner REPL with output logging..."
 echo "📝 REPL output (with timestamps): $REPL_OUTPUT"
-echo "📝 Server errors: dev/repl-errors.log → CLAUDE.local.md"
+echo "📝 Server errors: dev/repl-errors.log"
 echo ""
 
 # Start error watcher in background
