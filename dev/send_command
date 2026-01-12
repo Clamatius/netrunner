@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -157,6 +157,8 @@ ${GREEN}Basic Actions:${NC}
   draw            - Spend 1 click to draw 1 card
   end-turn [--force] - End your turn (requires --force if clicks remain - typically breaks the gamestate)
   smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
+  fix-credits <N> - ⚠️  CHEATING: Manually set credits (ONLY for broken game states!)
+                     Use absolute value (10) or delta (+5, -3)
 
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
@@ -194,7 +196,7 @@ ${GREEN}Run Automation:${NC}
     --fire-unbroken  Corp: auto-fire unbroken subroutines
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start (single-step mode)
-    --force          Bypass smart checks (force continue even at decision points)
+    --force          ⚠️  TEST ONLY: Bypass ALL checks (breaks game state in HITL!)
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from current prompt (0, 1, 2...)
@@ -246,6 +248,8 @@ ${GREEN}AI Bot:${NC}
 
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
+  debug-chat [on|off] - Toggle debug chat mode (waits announced in game chat)
+                     Useful for HITL debugging - shows what AI is waiting for
 
 ${YELLOW}Turn Timing Quick Reference:${NC}
   ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
@@ -502,6 +506,14 @@ case "$COMMAND" in
         ensure_connection
         info "Smart end-turn (auto-detects if safe)..."
         execute '(ai-actions/smart-end-turn!)'
+        ;;
+
+    fix-credits)
+        ensure_connection
+        AMOUNT="${1:-}"
+        [[ -z "$AMOUNT" ]] && error "Usage: send_command fix-credits <amount>\n  Example: fix-credits 10 (set to 10)\n  Example: fix-credits +5 (add 5)\n  Example: fix-credits -3 (subtract 3)"
+        warn "CHEATING: This is ONLY for fixing broken game states!"
+        execute "(ai-actions/fix-credits! $AMOUNT)"
         ;;
 
     # Dev/Testing commands
@@ -1103,6 +1115,24 @@ case "$COMMAND" in
         EXPR="${1:-}"
         [[ -z "$EXPR" ]] && error "Usage: send_command eval '<clojure-expression>'"
         execute "$EXPR"
+        ;;
+
+    debug-chat)
+        ensure_connection
+        MODE="${1:-status}"
+        case "$MODE" in
+            on|true|1)
+                info "Enabling debug chat mode..."
+                execute '(do (reset! ai-runs/chat-debug-mode true) (println "✅ Debug chat ENABLED - waits will be announced in game chat"))'
+                ;;
+            off|false|0)
+                info "Disabling debug chat mode..."
+                execute '(do (reset! ai-runs/chat-debug-mode false) (println "✅ Debug chat DISABLED"))'
+                ;;
+            *)
+                execute '(println (str "Debug chat mode: " (if @ai-runs/chat-debug-mode "ENABLED" "DISABLED")))'
+                ;;
+        esac
         ;;
 
     # AI Bot commands
