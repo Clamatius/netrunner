@@ -160,7 +160,7 @@ GAME_ID=$(./dev/ai-eval.sh corp 7890 '(str (:gameid @ai-state/client-state))' | 
 
 ### Shared Game Log HUD
 
-When running multiple clients, they share a single `CLAUDE.local.md` file with sections for each client:
+When running multiple clients, they share a single log file with sections for each client:
 
 ```markdown
 # Game Log HUD
