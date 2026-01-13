@@ -254,6 +254,60 @@ else:
 
 ---
 
+## R&D Physicality
+
+**R&D is an ordered deck.** Cards don't shuffle between accesses. Understanding this prevents wasted runs.
+
+**Core mechanics:**
+- Top card stays on top until Corp draws (mandatory draw or click action)
+- Corp's mandatory draw happens at turn start (before their first click)
+- Click-to-draw is optional (costs 1 click)
+
+**Practical implications:**
+
+**Same card twice = Corp hasn't drawn:**
+```
+Turn 5: Access R&D → see Hedge Fund
+Turn 5: Access R&D again → see Hedge Fund again
+
+Conclusion: Corp didn't draw between runs. STOP running R&D this turn.
+Next access will show same card until Corp draws.
+```
+
+**Depth prediction:**
+```
+Access shows card at depth:
+- Depth 0 (top): Corp draws it next turn (mandatory)
+- Depth 1: Corp draws it turn after next
+- Depth 2+: Accessible via multi-access, but not drawn soon
+
+Exception: Corp click-to-draw accelerates this
+```
+
+**Information flow:**
+```
+R&D (ordered) → HQ (drawn) → Installed/Scored/Archives
+
+When you see a card in R&D:
+- If junk: Stop running R&D until Corp draws
+- If agenda: Run again! Corp might draw it and score from hand
+- If trap: Note position, avoid multi-access that hits it
+```
+
+**Efficient R&D pressure:**
+```
+if accessed_same_card_twice:
+    stop_running_RD  # Wait for Corp to draw
+elif top_card_is_junk AND no_multi_access:
+    pressure_HQ_instead  # Fresh cards there
+elif top_card_is_agenda:
+    run_repeatedly  # Deny Corp the draw
+```
+
+**Why this matters:** In our test game, we ran R&D multiple times seeing the same Whitespace on top. Each run cost 2 credits (Unity break cost) for zero new information. Recognizing "same card = Corp hasn't drawn" saves clicks and credits.
+
+---
+
 ## Damage Management
 
 **Damage = random discard from hand.** Hand size functions as health.

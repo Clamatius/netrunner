@@ -234,6 +234,131 @@ Legal jack-out windows:
 - `run.phase` = "movement" (between ICE) → jack-out LEGAL
 - Server should enforce this, but worth validating before sending command
 
+### Breaking ICE - Complete Guide
+
+Breaking ICE is the core Runner skill. This section explains how breaker abilities work.
+
+#### Breaker Types Must Match ICE Types
+
+**The three types:**
+| ICE Type   | Breaker Type | Example Breakers |
+|------------|--------------|------------------|
+| Barrier    | Fracter      | Cleaver, Paperclip |
+| Code Gate  | Decoder      | Unity, Gordian Blade |
+| Sentry     | Killer       | Carmen, Bukhgalter |
+
+**AI breakers** (like Mayfly) can break any ICE type, but usually have a drawback (trash after use).
+
+**Critical rule:** A Fracter cannot break Code Gates. A Killer cannot break Barriers. If you run with the wrong breaker, you cannot break the ICE.
+
+#### Ability Indices During Encounters
+
+When you encounter ICE, use `abilities "<breaker>"` to see available actions:
+
+```bash
+./send_command abilities "Cleaver"
+```
+
+**Outside a run (or wrong ICE type):**
+```
+[0] Break up to 2 Barrier subroutines  (1¢)
+[1] Add 1 strength                      (2¢)
+```
+
+**During encounter with matching ICE type:**
+```
+[0] Break up to 2 Barrier subroutines  (1¢)
+[1] Add 1 strength                      (2¢)
+[2] Fully break Palisade               (1¢)   ← USE THIS
+```
+
+**During encounter when under-strength:**
+```
+[0] Break 1 subroutine                 (1¢)
+[1] Add 1 strength                      (1¢)
+[2] Match strength and fully break X   (2¢)   ← USE THIS
+[3] Match strength of X                (1¢)
+```
+
+**Key insight:** If ability [2] doesn't appear, either:
+1. You're not in an encounter phase, OR
+2. Your breaker can't break this ICE type, OR
+3. You can't afford the full break cost
+
+**Cost gating:** The "Fully break" ability only appears if you can afford it. If it costs 3¢ and you have 2¢, the ability won't show - even if 2¢ would cover a partial break with ability [0]. Plan your credits before running.
+
+#### The Recommended Workflow
+
+**ALWAYS use the "Fully break" ability [2] when available:**
+
+```bash
+# 1. Start run
+./send_command run "R&D"
+
+# 2. Approach ICE (Corp may rez)
+./send_command continue
+
+# 3. Encounter ICE - CHECK ABILITIES
+./send_command abilities "Cleaver"
+# Look for "[2] Fully break <ICE>"
+
+# 4. Use full break ability
+./send_command use-ability "Cleaver" 2
+
+# 5. Continue to pass priority
+./send_command continue
+```
+
+This is cleaner, faster, and avoids timing issues.
+
+#### Manual Breaking (Advanced/Situational)
+
+Manual breaking is useful when you only want to break some subroutines (e.g., break "End the run" but let "Trace 2" fire because you're tagged anyway).
+
+**Workflow:**
+```bash
+# 1. Boost strength if needed
+./send_command use-ability "Mayfly" 1      # +1 strength
+
+# 2. Use base break ability
+./send_command use-ability "Mayfly" 0      # "Break 1 subroutine"
+
+# 3. Prompt appears: "Break a subroutine"
+./send_command choose 0                     # Break first sub
+
+# 4. If more subs to break, repeat steps 2-3
+# 5. Continue to pass priority
+./send_command continue
+```
+
+**Warning:** Manual breaking is error-prone. In our test game, using manual breaking led to Corp firing subs before all breaks were complete (timing issue). Use "Fully break" unless you have a specific reason.
+
+#### Pre-Run Checklist
+
+Before running, verify:
+
+1. **What ICE is rezzed?**
+   ```bash
+   ./send_command board
+   ```
+
+2. **What type is each ICE?**
+   ```bash
+   ./send_command card-text "Palisade"
+   # Output: ICE - Barrier
+   ```
+
+3. **Do I have matching breakers installed?**
+   - Barrier → need Fracter
+   - Code Gate → need Decoder
+   - Sentry → need Killer
+
+4. **Is my breaker strong enough?**
+   - Breaker strength must be >= ICE strength
+   - Check during encounter: abilities will show "Match strength" options if needed
+
+---
+
 #### ICE Breaking Examples
 
 **Full Break (Unity vs Whitespace - Code Gate):**

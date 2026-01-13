@@ -245,13 +245,13 @@
   []
   (let [lobby-list (:lobby-list @state/client-state)
         ;; Get our expected username from current state
-        ;; The username format is 'AI-{side}' e.g., 'AI-runner', 'AI-corp'
+        ;; The username format is 'ai-{side}' e.g., 'ai-runner', 'ai-corp' (all lowercase)
         my-side (:side @state/client-state)
-        my-name (when my-side (str "AI-" (clojure.string/lower-case my-side)))]
+        my-name (when my-side (str "ai-" (clojure.string/lower-case my-side)))]
     (when (and lobby-list my-name)
       (->> lobby-list
            (filter (fn [game]
-                    ;; Player structure is {:user {:username "AI-corp" ...} :side "Corp" ...}
+                    ;; Player structure is {:user {:username "ai-corp" ...} :side "Corp" ...}
                     (some #(= my-name (get-in % [:user :username]))
                           (:players game))))
            first
