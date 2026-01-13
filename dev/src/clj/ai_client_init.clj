@@ -52,6 +52,7 @@
 (require '[ai-state :as state])
 (require '[ai-websocket-client-v2 :as ws])
 (require '[ai-auth :as auth])
+(require '[ai-connection])
 (require '[ai-actions])
 (require '[ai-actions :as ai])
 

@@ -7,6 +7,7 @@
 ;; Forward declaration for function used in take-credit! and draw-card!
 (declare check-auto-end-turn!)
 (declare start-turn!)
+(declare turn-started-since-last-opp-end?)
 
 ;; ============================================================================
 ;; Auto-Start Turn Helpers
@@ -21,6 +22,8 @@
 
    Reasons:
    - :turn-already-started - we already have clicks
+   - :turn-already-played - we already started/played this turn (checked via logs)
+   - :opponent-restarted - opponent started a new turn after ending (we missed window)
    - :not-first-player - Runner trying to start first turn (Corp goes first)
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
@@ -34,22 +37,56 @@
         opp-clicks (get-in client-state [:game-state opp-side :click])
         turn-number (get-in client-state [:game-state :turn] 0)
         log (get-in client-state [:game-state :log])
-        recent-log (take-last 5 log)
+        recent-log (vec (take-last 100 log)) ; Increased to 100 for safety
         my-uid (:uid client-state)
-        opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
-                               (not (clojure.string/includes? (:text %) my-uid)))
-                        recent-log)
+        
+        ;; Analyze log for opponent status
+        opp-end-indices (keep-indexed (fn [idx entry]
+                                        (when (and (clojure.string/includes? (:text entry) "is ending")
+                                                   (not (clojure.string/includes? (:text entry) my-uid)))
+                                          idx))
+                                      recent-log)
+        last-opp-end-idx (last opp-end-indices)
+        
+        opp-start-indices (keep-indexed (fn [idx entry]
+                                          (when (and (clojure.string/includes? (:text entry) "started their turn")
+                                                     (not (clojure.string/includes? (:text entry) my-uid)))
+                                            idx))
+                                        recent-log)
+        last-opp-start-idx (last opp-start-indices)
+        
+        ;; Check if opponent started AGAIN after ending
+        ;; e.g. Runner ended Turn 14 (idx 10), Corp played, Corp ended, Runner started Turn 15 (idx 30)
+        ;; If we are Corp, last-opp-end-idx is 10. last-opp-start-idx is 30.
+        ;; 30 > 10 -> Runner is playing again. We should NOT start.
+        opp-restarted? (and last-opp-end-idx 
+                            last-opp-start-idx
+                            (> last-opp-start-idx last-opp-end-idx))
+
         is-first-turn? (and (= turn-number 0)
                            (or (nil? my-clicks) (= my-clicks 0))
                            (or (nil? opp-clicks) (= opp-clicks 0))
-                           (not opp-ended?))]
+                           (empty? opp-end-indices))
+        
+        ;; Check if we effectively already played this turn
+        already-played? (turn-started-since-last-opp-end?)]
+    
     (cond
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
 
+      ;; Already played this turn (0 clicks but log shows we started)
+      already-played?
+      {:can-start false :reason :turn-already-played}
+      
+      ;; Opponent started a new turn after ending the previous one
+      opp-restarted?
+      {:can-start false :reason :opponent-restarted}
+
       ;; First turn for Runner - can't start (Corp goes first)
-      (and is-first-turn? (= my-side :runner))
+      (and is-first-turn?
+           (= my-side :runner))
       {:can-start false :reason :not-first-player}
 
       ;; First turn for Corp - can start
@@ -61,7 +98,7 @@
       {:can-start false :reason :opponent-has-clicks}
 
       ;; Opponent hasn't ended
-      (not opp-ended?)
+      (empty? opp-end-indices)
       {:can-start false :reason :opponent-not-ended}
 
       ;; All checks passed
@@ -122,6 +159,54 @@
         false))))
 
 ;; ============================================================================
+;; Turn Status Helper
+;; ============================================================================
+
+(defn turn-started-since-last-opp-end?
+  "Check if we have effectively started our turn since the last time the opponent ended theirs.
+   Crucial for distinguishing '0 clicks because turn hasn't started' vs '0 clicks because I spent them'.
+   
+   Logic:
+   1. Find the most recent 'Opponent is ending their turn' message in logs.
+   2. Look for 'I started my turn' message AFTER that point.
+   3. ALSO check for 'I started their turn [Current Turn]' anywhere in recent logs (handles log ordering races).
+   4. If no opponent end found (e.g. Corp Turn 1), just check for 'I started my turn'."
+  []
+  (let [client-state @state/client-state
+        turn-number (get-in client-state [:game-state :turn])
+        log (get-in client-state [:game-state :log])
+        recent-log (vec (take-last 100 log))
+        my-uid (:uid client-state)
+        
+        ;; Check if we explicitly started THIS turn
+        ;; Handles cases where "Corp ended" message arrives/logs *after* "Runner started" message
+        started-current-turn? (some #(and (clojure.string/includes? (:text %) (str "started their turn " turn-number))
+                                          (clojure.string/includes? (:text %) my-uid))
+                                    recent-log)
+        
+        ;; Find LAST index where opponent ended
+        opp-end-indices (keep-indexed (fn [idx entry]
+                                        (when (and (clojure.string/includes? (:text entry) "is ending")
+                                                   (not (clojure.string/includes? (:text entry) my-uid)))
+                                          idx))
+                                      recent-log)
+        last-opp-end-idx (last opp-end-indices)]
+
+    (or (boolean started-current-turn?)
+        (if last-opp-end-idx
+          ;; Check for my start AFTER that index
+          (let [logs-after (subvec recent-log (inc last-opp-end-idx))
+                my-start (some #(and (clojure.string/includes? (:text %) "started their turn")
+                                     (clojure.string/includes? (:text %) my-uid))
+                               logs-after)]
+            (boolean my-start))
+          
+          ;; No opponent end found (Turn 1 Corp case)
+          (boolean (some #(and (clojure.string/includes? (:text %) "started their turn")
+                               (clojure.string/includes? (:text %) my-uid))
+                         recent-log))))))
+
+;; ============================================================================
 ;; Basic Actions
 ;; ============================================================================
 
@@ -146,7 +231,7 @@
         active-player (get-in client-state [:game-state :active-player])
         turn-number (get-in client-state [:game-state :turn] 0)
         log (get-in client-state [:game-state :log])
-        recent-log (take-last 5 log)
+        recent-log (take-last 50 log)
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
         ;; This prevents Corp from ending and immediately starting again
         my-uid (:uid client-state)
@@ -452,11 +537,13 @@
   "Smart end-turn that checks if it's safe to end turn automatically.
 
    ✅ AUTO END-TURN when:
+   - Turn has actually started (prevents premature end before start)
    - 0 clicks remaining
    - No active prompts (already handled mandatory discard, etc.)
    - No visible EOT triggers in installed cards
 
    ⚠️ PAUSE when:
+   - Turn hasn't started yet
    - Active prompts (discard, ability choices)
    - Installed cards with end-of-turn effects
    - Credits/cards changed recently (possible EOT trigger)
@@ -470,6 +557,17 @@
         hand-size (get-in client-state [:game-state side :hand-count])
         max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
         installed (get-in client-state [:game-state side :installed])
+        log (get-in client-state [:game-state :log])
+        recent-log (take-last 3 log)
+        my-uid (:uid client-state)
+
+        ;; Check if we've actually started our turn
+        turn-started? (turn-started-since-last-opp-end?)
+
+        ;; Check if WE already ended (not opponent) - prevents double auto-end
+        already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
+                                   (clojure.string/includes? (:text %) my-uid))
+                            recent-log)
 
         ;; Check for EOT-related conditions
         has-prompt? (some? prompt)
@@ -487,12 +585,24 @@
                               (vals installed))]
 
     (cond
+      ;; Can't end: Turn hasn't started yet
+      (not turn-started?)
+      (do
+        (println "⚠️  Cannot auto-end: Turn hasn't started yet")
+        (core/with-cursor {:status :turn-not-started}))
+
+      ;; Already ended (avoid double send)
+      already-ended?
+      (do
+        (println "⚠️  Already ended turn (found in recent log)")
+        (core/with-cursor {:status :already-ended}))
+
       ;; Can't end: clicks remaining
       (> clicks 0)
       (do
         (println "⚠️  Cannot auto-end: you still have clicks")
         (println (format "   %d click(s) remaining - use them or end-turn --force" clicks))
-        {:status :clicks-remaining :clicks clicks})
+        (core/with-cursor {:status :clicks-remaining :clicks clicks}))
 
       ;; Pause: active prompt (discard, choices, etc.)
       has-prompt?
@@ -500,7 +610,7 @@
         (println "⚠️  Cannot auto-end: active prompt")
         (println (format "   Prompt: %s" (:msg prompt)))
         (println "   Resolve the prompt first, then end-turn manually")
-        {:status :has-prompt :prompt prompt})
+        (core/with-cursor {:status :has-prompt :prompt prompt}))
 
       ;; Pause: over hand size (should have discard prompt, but just in case)
       over-hand-size?
@@ -508,7 +618,7 @@
         (println "⚠️  Cannot auto-end: over hand size")
         (println (format "   Hand: %d cards (max %d)" hand-size max-hand-size))
         (println "   Discard cards first")
-        {:status :over-hand-size :hand-size hand-size :max max-hand-size})
+        (core/with-cursor {:status :over-hand-size :hand-size hand-size :max max-hand-size}))
 
       ;; Warn: possible EOT trigger
       has-eot-trigger?

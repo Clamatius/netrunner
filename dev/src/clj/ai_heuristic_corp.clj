@@ -812,9 +812,11 @@
 
                             ;; 2. If my turn, play
                             (when (and my-turn? (not (state/get-prompt)))
-                              ;; Make moves if we have clicks
-                              (when (pos? (my-clicks))
-                                (play-turn)))
+                              (if (pos? (my-clicks))
+                                (play-turn)
+                                (do
+                                  (println "🤖 HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn")
+                                  (actions/smart-end-turn!))))
 
                             ;; 3. If opponent turn, watch for runs
                             (when (and (not my-turn?) (has-active-run?))

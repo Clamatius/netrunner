@@ -17,8 +17,11 @@
     (if prompt
       (do
         (ws/choose! choice)
-        (Thread/sleep core/quick-delay))
-      (println "⚠️  No active prompt"))))
+        (Thread/sleep core/quick-delay)
+        (core/with-cursor {:status :success}))
+      (do
+        (println "⚠️  No active prompt")
+        (core/with-cursor {:status :error :reason "No active prompt"})))))
 
 (defn choose-option!
   "Choose from prompt by index (side-aware)"
@@ -36,8 +39,11 @@
                           {:gameid gameid
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
-        (Thread/sleep core/standard-delay))
-      (println (str "❌ Invalid choice index: " index)))))
+        (Thread/sleep core/standard-delay)
+        (core/with-cursor {:status :success :choice choice}))
+      (do
+        (println (str "❌ Invalid choice index: " index))
+        (core/with-cursor {:status :error :reason "Invalid choice index"})))))
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring match).
@@ -66,7 +72,8 @@
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")
         (doseq [[idx choice] (map-indexed vector choices)]
-          (println (str "  " idx ". " (core/format-choice choice))))))))
+          (println (str "  " idx ". " (core/format-choice choice))))
+        (core/with-cursor {:status :error :reason "No matching choice"})))))
 
 (defn choose-card!
   "Choose a card from selectable cards in current prompt by index.
@@ -85,14 +92,19 @@
       (do
         (println "❌ No select prompt active")
         (when prompt
-          (println (format "   Current prompt type: %s" (:prompt-type prompt)))))
+          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
+        (core/with-cursor {:status :error :reason "No select prompt"}))
 
       (empty? selectable)
-      (println "❌ No selectable cards in current prompt")
+      (do
+        (println "❌ No selectable cards in current prompt")
+        (core/with-cursor {:status :error :reason "No selectable cards"}))
 
       (not (< -1 index (count selectable)))
-      (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
-                      index (count selectable) (dec (count selectable))))
+      (do
+        (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
+                        index (count selectable) (dec (count selectable))))
+        (core/with-cursor {:status :error :reason "Invalid index"}))
 
       :else
       (let [cid-or-card (nth selectable index)
@@ -104,8 +116,11 @@
           (do
             (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
             (ws/select-card! card eid)
-            (Thread/sleep core/short-delay))
-          (println (format "❌ Could not resolve card at index %d" index)))))))
+            (Thread/sleep core/short-delay)
+            (core/with-cursor {:status :success :card card}))
+          (do
+            (println (format "❌ Could not resolve card at index %d" index))
+            (core/with-cursor {:status :error :reason "Card resolution failed"})))))))
 
 (defn- find-card-in-selectable
   "Find a card in the selectable list by name (case-insensitive substring match).
@@ -145,19 +160,19 @@
         (println "❌ No select prompt active")
         (when prompt
           (println (format "   Current prompt type: %s" (:prompt-type prompt))))
-        {:status :error :reason "No select prompt active"})
+        (core/with-cursor {:status :error :reason "No select prompt active"}))
 
       (empty? selectable)
       (do
         (println "❌ No selectable cards in current prompt")
-        {:status :error :reason "No selectable cards"})
+        (core/with-cursor {:status :error :reason "No selectable cards"}))
 
       (empty? card-refs)
       (do
         (println "❌ No cards specified")
         (println "   Usage: (multi-choose! \"Card Name\" \"Another Card\" ...)")
         (println "      or: (multi-choose! 0 1 2 ...)  ; by index")
-        {:status :error :reason "No cards specified"})
+        (core/with-cursor {:status :error :reason "No cards specified"}))
 
       :else
       (let [;; Resolve selectable CIDs to cards upfront for name matching
@@ -198,7 +213,7 @@
         (if (empty? cards-to-select)
           (do
             (println "❌ No valid cards found to select")
-            {:status :error :reason "No valid cards found"})
+            (core/with-cursor {:status :error :reason "No valid cards found"}))
           (do
             (println (format "📇 Selecting %d card(s)..." (count cards-to-select)))
             (doseq [{:keys [card ref]} cards-to-select]
@@ -206,7 +221,7 @@
               (ws/select-card! card eid)
               (Thread/sleep core/short-delay))
             (println "✅ Selection complete")
-            {:status :success :selected (count cards-to-select)}))))))
+            (core/with-cursor {:status :success :selected (count cards-to-select)})))))))
 
 ;; ============================================================================
 ;; Mulligan
@@ -230,12 +245,14 @@
         (doseq [card hand]
           (core/show-card-on-first-sight! (:title card)))
         (choose-option! 0)
-        {:status :success
-         :data {:action :keep-hand}})
+        (core/with-cursor
+          {:status :success
+           :data {:action :keep-hand}}))
       (do
         (println "⚠️  No mulligan prompt active")
-        {:status :error
-         :reason "No mulligan prompt active"}))))
+        (core/with-cursor
+          {:status :error
+           :reason "No mulligan prompt active"})))))
 
 (defn mulligan
   "Mulligan (redraw) hand"
@@ -257,12 +274,14 @@
         (let [new-hand (get-in @state/client-state [:game-state side :hand])]
           (doseq [card new-hand]
             (core/show-card-on-first-sight! (:title card))))
-        {:status :success
-         :data {:action :mulligan}})
+        (core/with-cursor
+          {:status :success
+           :data {:action :mulligan}}))
       (do
         (println "⚠️  No mulligan prompt active")
-        {:status :error
-         :reason "No mulligan prompt active"}))))
+        (core/with-cursor
+          {:status :error
+           :reason "No mulligan prompt active"})))))
 
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"
@@ -307,10 +326,10 @@
         (doseq [card valid-cards]
           (ws/select-card! card (:eid prompt))
           (Thread/sleep core/quick-delay))
-        (count valid-cards))
+        (core/with-cursor {:status :success :discarded (count valid-cards)}))
       (do
         (println "❌ No discard prompt active or no indices provided")
-        0))))
+        (core/with-cursor {:status :error :reason "No discard prompt or no indices"})))))
 
 (defn discard-by-names!
   "Discard specific cards by their names
@@ -341,13 +360,13 @@
               (ws/select-card! card (:eid prompt))
               (Thread/sleep core/quick-delay))
             (println "✅ Discarded" (count cards-to-discard) "card(s)")
-            (count cards-to-discard))
+            (core/with-cursor {:status :success :discarded (count cards-to-discard)}))
           (do
             (println "❌ No matching cards found in hand for:" (clojure.string/join ", " names-vec))
-            0)))
+            (core/with-cursor {:status :error :reason "No matching cards found"}))))
       (do
         (println "❌ No discard prompt active or no card names provided")
-        0))))
+        (core/with-cursor {:status :error :reason "No discard prompt or no card names"})))))
 
 ;; ============================================================================
 ;; Auto-resolve Info Prompts
@@ -366,8 +385,9 @@
   "Auto-resolve any 'OK-only' info prompt (like trash confirmation).
    Returns true if a prompt was resolved, false otherwise."
   []
-  (when (ok-only-prompt?)
+  (if (ok-only-prompt?)
     (let [prompt (state/get-prompt)]
       (println (str "   ℹ️  " (:msg prompt)))
       (choose-option! 0)
-      true)))
+      (core/with-cursor {:status :success :resolved true}))
+    (core/with-cursor {:status :no-op :resolved false})))

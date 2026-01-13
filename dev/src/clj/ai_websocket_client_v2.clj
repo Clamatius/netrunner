@@ -132,7 +132,9 @@
       (state/bump-cursor!))
 
     :game/error
-    (println "❌ Server error!")
+    (do
+      (println "❌ SERVER ERROR RECEIVED!")
+      (println "   Data:" (pr-str data)))
 
     :lobby/list
     (do
