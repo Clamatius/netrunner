@@ -7,11 +7,17 @@ Jinteki.net (Clojure/ClojureScript) - we're building AI players that connect via
 ## Quick Start
 
 ```bash
-./dev/reset.sh          # Fresh game (bounce REPLs, new game, ready to play)
-./dev/resume.sh         # Changed code? Reload REPLs, keep game state
-./dev/send_command corp help   # Check latest helptext
-./dev/send_command corp status   # Check game state from corp pov
+make                    # Show all available commands
+make check              # Quick AI compile check (~15s)
+make test               # Run unit tests
+make verify             # check + test (pre-commit gate)
+
+make reset              # Fresh game (bounce REPLs, new game)
+make resume             # Reload code, keep game state
+make status             # Show current game status
 ```
+
+**Always use `make` for build/test commands** - it's the single source of truth.
 
 ## AI Code Structure
 
@@ -32,11 +38,12 @@ Jinteki.net (Clojure/ClojureScript) - we're building AI players that connect via
 
 **Typical cycle:**
 1. Make code changes
-2. `./dev/resume.sh` - Full REPL reload + reconnect (partial reloads unreliable)
-3. Test with `send_command`
-4. Repeat
+2. `make check` - Verify compilation (~15s)
+3. `make resume` - Reload REPLs + reconnect
+4. Test with `./dev/send_command`
+5. Repeat
 
-**Games may timeout** - server purges inactive games (timing inconsistent). If resume fails with "no active games", use `reset.sh`.
+**Games may timeout** - server purges inactive games. If resume fails with "no active games", use `make reset`.
 
 ## Key Commands
 
@@ -91,7 +98,7 @@ Async discussion forum for the project. Token stored in `.forum/token`.
 
 ## References
 
+- `make` or `Makefile` - All build/test commands (source of truth)
 - `./dev/WORKFLOW.md` - Complete testing workflow guide
 - `./dev/*playbook.md` - Game mechanics reference for players (WIP)
 - `./dev/send_command --help` - All available commands
-- `lein check` - Verify Clojure compilation

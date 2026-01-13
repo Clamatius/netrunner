@@ -272,26 +272,35 @@
                             winner (get-in game-state [:game-state :winner])]
                         (if winner
                           (do (println "Runner Loop Ends - Winner:" winner) false)
-                          (let [my-turn? (= "runner" (:active-player (:game-state game-state)))]
-                            
-                            (when (handle-prompt-if-needed)
-                              (Thread/sleep 500))
+                          (let [my-turn? (= "runner" (:active-player (:game-state game-state)))
+                                in-run? (state/current-run)]
 
-                            (let [start-check (actions/can-start-turn?)]
-                              (when (:can-start start-check)
-                                (actions/start-turn!)
-                                (Thread/sleep 500)))
+                            ;; Priority 1: Handle active runs FIRST (runs create prompts)
+                            ;; continue-run! handles run-related prompts internally
+                            (if in-run?
+                              (do
+                                (println "🏃 HEURISTIC RUNNER - In run, continuing...")
+                                (runs/continue-run!)
+                                (Thread/sleep 500))
 
-                            (when (and my-turn? (not (state/get-prompt)))
-                              (if (state/current-run)
-                                (do
-                                  (println "🏃 HEURISTIC RUNNER - In run, continuing...")
-                                  (runs/continue-run!))
-                                (if (pos? (my-clicks))
-                                  (play-turn)
-                                  (do
-                                    (println "🏃 HEURISTIC RUNNER - 0 clicks detected in loop, attempting end-turn")
-                                    (actions/smart-end-turn!)))))
+                              ;; Priority 2: Handle non-run prompts
+                              (do
+                                (when (handle-prompt-if-needed)
+                                  (Thread/sleep 500))
+
+                                ;; Priority 3: Auto-start turn if needed
+                                (let [start-check (actions/can-start-turn?)]
+                                  (when (:can-start start-check)
+                                    (actions/start-turn!)
+                                    (Thread/sleep 500)))
+
+                                ;; Priority 4: Take actions if it's our turn
+                                (when (and my-turn? (not (state/get-prompt)))
+                                  (if (pos? (my-clicks))
+                                    (play-turn)
+                                    (do
+                                      (println "🏃 HEURISTIC RUNNER - 0 clicks, ending turn")
+                                      (actions/smart-end-turn!))))))
 
                             true)))
                       (catch Exception e
