@@ -6,7 +6,7 @@
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
             [ai-runs :as runs]
-            [ai-core :as core]))
+            [clojure.string :as str]))
 
 (defn play-turn
   "Play a simple turn: Start, Take Credits x3, End."
@@ -32,11 +32,7 @@
   (let [game-state @state/client-state]
     (when (runs/should-i-act? game-state "corp")
       (println "🐠 GOLDFISH CORP - Passing priority/declining rez in run")
-      (runs/continue-run! :gameid (:gameid game-state)
-                          :side "corp"
-                          :state game-state
-                          :strategy {:no-rez true}
-                          :my-prompt (get-in game-state [:game-state :corp :prompt-state]))
+      (runs/continue-run! "--no-rez")
       (Thread/sleep 500))))
 
 (defn handle-prompts
@@ -46,7 +42,7 @@
     (println "🐠 GOLDFISH CORP - Handling prompt:" (:msg prompt))
     (cond
       ;; Discard: Just pick first card
-      (clojure.string/includes? (:msg prompt) "Discard")
+      (str/includes? (:msg prompt) "Discard")
       (prompts/discard-to-hand-size!)
 
       ;; Run: Handle run response (rez/pass)

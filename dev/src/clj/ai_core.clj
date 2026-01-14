@@ -1,10 +1,9 @@
 (ns ai-core
   "Core utility functions for AI player - shared helpers used across modules"
-  (:require [ai-websocket-client-v2 :as ws]
-            [ai-state :as state]
+  (:require [ai-state :as state]
             [jinteki.cards :refer [all-cards]]
             [clj-http.client :as http]
-            [cheshire.core :as json]))
+            [clojure.string :as str]))
 
 ;; ============================================================================
 ;; Timing Constants
@@ -12,24 +11,24 @@
 
 ;; Delay constants (milliseconds)
 (def polling-delay
-  "Very brief delay for polling loops (200ms)"
-  200)
+  "Very brief delay for polling loops (100ms)"
+  100)
 
 (def quick-delay
-  "Quick delay for UI responsiveness (500ms)"
-  500)
+  "Quick delay for UI responsiveness (200ms)"
+  200)
 
 (def short-delay
-  "Short delay for waiting on state changes (1s)"
-  1000)
+  "Short delay for waiting on state changes (500ms)"
+  500)
 
 (def medium-delay
-  "Medium delay for card actions to process (1.5s)"
-  1500)
+  "Medium delay for card actions to process (750ms)"
+  750)
 
 (def standard-delay
-  "Standard delay for most game actions (2s)"
-  2000)
+  "Standard delay for most game actions (1s)"
+  1000)
 
 ;; Timeout constants (milliseconds)
 (def action-timeout
@@ -94,8 +93,8 @@
    Usage: (side= \"Corp\" side)
           (side= \"Runner\" side)"
   [expected-side actual-side]
-  (= (clojure.string/lower-case expected-side)
-     (clojure.string/lower-case (or actual-side ""))))
+  (= (str/lower-case expected-side)
+     (str/lower-case (or actual-side ""))))
 
 ;; ============================================================================
 ;; Error Response Helpers
@@ -212,7 +211,7 @@
                             ;; Check if log entry mentions the card
                             card-in-log (let [recent-log (take-last 5 log)]
                                          (some #(when (string? (:text %))
-                                                 (clojure.string/includes? (:text %) card-name))
+                                                 (str/includes? (:text %) card-name))
                                               recent-log))]
 
                         (cond
@@ -275,7 +274,7 @@
                              ;; Only check NEW log entries (added after initial-size)
                              new-entries (drop initial-size log)
                              card-in-new-entries (some #(when (string? (:text %))
-                                                          (clojure.string/includes? (:text %) card-name))
+                                                          (str/includes? (:text %) card-name))
                                                        new-entries)]
                          (cond
                            ;; Card name in NEW log entries = success
@@ -410,7 +409,7 @@
    'Server 1' -> :remote1, 'HQ' -> :hq, 'New remote' -> :remoteNew, etc."
   [server-name]
   (when server-name
-    (let [lower (clojure.string/lower-case server-name)]
+    (let [lower (str/lower-case server-name)]
       (cond
         (= lower "hq") :hq
         (= lower "r&d") :rd
@@ -448,7 +447,7 @@
    Returns names like 'Server 1', 'Server 2', etc."
   []
   (let [servers (state/corp-servers)
-        remote-keys (filter #(clojure.string/starts-with? (name %) "remote") (keys servers))
+        remote-keys (filter #(str/starts-with? (name %) "remote") (keys servers))
         ;; Convert :remote1 → 'Server 1', :remote2 → 'Server 2'
         remote-names (map #(let [num (second (re-find #"remote(\d+)" (name %)))]
                              (str "Server " num))
@@ -469,10 +468,10 @@
    - Rejects malformed names (single letters, invalid patterns)"
   [server-name]
   (let [normalized (:normalized (normalize-server-name server-name))
-        original-lower (clojure.string/lower-case (clojure.string/trim server-name))]
+        original-lower (str/lower-case (str/trim server-name))]
     (cond
       ;; Nil or empty - caller decides if this is ok
-      (or (nil? server-name) (clojure.string/blank? server-name))
+      (or (nil? server-name) (str/blank? server-name))
       nil
 
       ;; Central servers - always valid
@@ -502,7 +501,7 @@
            :hint (str "Use 'new' to create a new remote, or choose existing: "
                       (if (empty? existing)
                         "(no remotes yet)"
-                        (clojure.string/join ", " (sort existing))))
+                        (str/join ", " (sort existing))))
            :existing existing}))
 
       ;; Unrecognized format that passed through normalize unchanged
@@ -543,7 +542,7 @@
 
         ;; Check if "New remote" - always allowed
         (and server-name
-             (= "New remote" (clojure.string/trim server-name)))
+             (= "New remote" (str/trim server-name)))
         nil
 
         ;; Check if remote already has a root card
@@ -694,7 +693,7 @@
   (let [status (state/get-turn-status)
         emoji (:status-emoji status)
         text (:status-text status)
-        turn-num (:turn-number status)
+        _ (:turn-number status)
         in-run (:in-run? status)
         run-server (:run-server status)
         clicks (state/my-clicks)]
@@ -768,7 +767,7 @@
                              (when (not= installed-diff 0)
                                (str "📊 " (:installed-count before) "→" (:installed-count after)))])]
          (when (seq changes)
-           (println (clojure.string/join "  " changes))))))))
+           (println (str/join "  " changes))))))))
 
 ;; ============================================================================
 ;; Wait Helpers

@@ -2,16 +2,31 @@
   "Turn management and basic game actions (credit, draw, end turn)"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [clojure.string :as str]))
 
 ;; Forward declaration for function used in take-credit! and draw-card!
 (declare check-auto-end-turn!)
 (declare start-turn!)
 (declare turn-started-since-last-opp-end?)
+(declare get-my-username)
 
 ;; ============================================================================
 ;; Auto-Start Turn Helpers
 ;; ============================================================================
+
+(defn- get-my-username
+  "Get the username for the current side from game state.
+   Falls back to UID if game state/username is missing.
+   Crucial for correctly identifying own log messages."
+  []
+  (let [client-state @state/client-state
+        side (:side client-state)
+        uid (:uid client-state)]
+    (if (and side (:game-state client-state))
+      (or (get-in client-state [:game-state (keyword side) :user :username])
+          uid)
+      uid)))
 
 (defn can-start-turn?
   "Check if we CAN legally start our turn right now.
@@ -38,20 +53,26 @@
         turn-number (get-in client-state [:game-state :turn] 0)
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log)) ; Increased to 100 for safety
-        my-uid (:uid client-state)
+        my-username (get-my-username)
         
         ;; Analyze log for opponent status
         opp-end-indices (keep-indexed (fn [idx entry]
-                                        (when (and (clojure.string/includes? (:text entry) "is ending")
-                                                   (not (clojure.string/includes? (:text entry) my-uid)))
-                                          idx))
+                                        (let [text (:text entry)]
+                                          (when (and text
+                                                     (str/includes? text "is ending")
+                                                     (or (nil? my-username)
+                                                         (not (str/includes? text my-username))))
+                                            idx)))
                                       recent-log)
         last-opp-end-idx (last opp-end-indices)
         
         opp-start-indices (keep-indexed (fn [idx entry]
-                                          (when (and (clojure.string/includes? (:text entry) "started their turn")
-                                                     (not (clojure.string/includes? (:text entry) my-uid)))
-                                            idx))
+                                          (let [text (:text entry)]
+                                            (when (and text
+                                                       (str/includes? text "started their turn")
+                                                       (or (nil? my-username)
+                                                           (not (str/includes? text my-username))))
+                                              idx)))
                                         recent-log)
         last-opp-start-idx (last opp-start-indices)
         
@@ -158,57 +179,83 @@
           (println "❌ Cannot perform action: Turn not ready"))
         false))))
 
-;; ============================================================================
-;; Turn Status Helper
-;; ============================================================================
+(defn- extract-turn-from-log
+  "Extract turn number from log text like 'started their turn 5'"
+  [text]
+  (when text
+    (let [match (re-find #"turn (\d+)" text)]
+      (when match
+        (Integer/parseInt (second match))))))
 
 (defn turn-started-since-last-opp-end?
   "Check if we have effectively started our turn since the last time the opponent ended theirs.
-   Crucial for distinguishing '0 clicks because turn hasn't started' vs '0 clicks because I spent them'.
-   
-   Logic:
-   1. Find the most recent 'Opponent is ending their turn' message in logs.
-   2. Look for 'I started my turn' message AFTER that point.
-   3. ALSO check for 'I started their turn [Current Turn]' anywhere in recent logs (handles log ordering races).
-   4. If no opponent end found (e.g. Corp Turn 1), just check for 'I started my turn'."
+   Uses robust log index and turn number comparison to handle:
+   - Corp/Runner turn structure asymmetry
+   - Async log ordering race conditions"
   []
   (let [client-state @state/client-state
-        turn-number (get-in client-state [:game-state :turn])
+        my-side (keyword (:side client-state))
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
-        my-uid (:uid client-state)
+        my-username (get-my-username)
         
-        ;; Check if we explicitly started THIS turn
-        ;; Handles cases where "Corp ended" message arrives/logs *after* "Runner started" message
-        started-current-turn? (some #(and (clojure.string/includes? (:text %) (str "started their turn " turn-number))
-                                          (clojure.string/includes? (:text %) my-uid))
-                                    recent-log)
-        
-        ;; Find LAST index where opponent ended
+        ;; Find LAST Opponent End
         opp-end-indices (keep-indexed (fn [idx entry]
-                                        (when (and (clojure.string/includes? (:text entry) "is ending")
-                                                   (not (clojure.string/includes? (:text entry) my-uid)))
-                                          idx))
+                                        (let [text (:text entry)]
+                                          (when (and text
+                                                     (str/includes? text "is ending")
+                                                     (or (nil? my-username)
+                                                         (not (str/includes? text my-username))))
+                                            idx)))
                                       recent-log)
-        last-opp-end-idx (last opp-end-indices)]
+        last-opp-end-idx (last opp-end-indices)
+        last-opp-end-turn (when last-opp-end-idx 
+                            (extract-turn-from-log (:text (get recent-log last-opp-end-idx))))
 
-    (or (boolean started-current-turn?)
-        (if last-opp-end-idx
-          ;; Check for my start AFTER that index
-          (let [logs-after (subvec recent-log (inc last-opp-end-idx))
-                my-start (some #(and (clojure.string/includes? (:text %) "started their turn")
-                                     (clojure.string/includes? (:text %) my-uid))
-                               logs-after)]
-            (boolean my-start))
+        ;; Find LAST My Start
+        my-start-indices (keep-indexed (fn [idx entry]
+                                         (let [text (:text entry)]
+                                           (when (and text
+                                                      (str/includes? text "started their turn")
+                                                      (or (nil? my-username)
+                                                          (str/includes? text my-username)))
+                                             idx)))
+                                       recent-log)
+        last-my-start-idx (last my-start-indices)
+        last-my-start-turn (when last-my-start-idx
+                             (extract-turn-from-log (:text (get recent-log last-my-start-idx))))]
+
+    (cond
+      ;; No opponent end found (e.g. Game Start, Corp Turn 1)
+      (nil? last-opp-end-idx)
+      (boolean last-my-start-idx)
+
+      ;; No start found at all?
+      (nil? last-my-start-idx)
+      false
+
+      ;; Normal case: Start is after End
+      (> last-my-start-idx last-opp-end-idx)
+      true
+
+      ;; Async/Edge case: Start is before End (in logs)
+      (< last-my-start-idx last-opp-end-idx)
+      (if (nil? last-my-start-turn)
+        false 
+        (cond
+          ;; I started a later turn (Async race: Start T2 logged before Opp End T1)
+          (> last-my-start-turn last-opp-end-turn)
+          true
           
-          ;; No opponent end found (Turn 1 Corp case)
-          (boolean (some #(and (clojure.string/includes? (:text %) "started their turn")
-                               (clojure.string/includes? (:text %) my-uid))
-                         recent-log))))))
+          ;; Same turn numbers
+          (= last-my-start-turn last-opp-end-turn)
+          (if (= my-side :runner)
+            true  ; Runner: Corp End T1 -> I Start T1. My Start T1 is "since" Corp End T1.
+            false) ; Corp: I Start T1 -> Runner End T1. My Start T1 is NOT "since" Runner End T1.
+            
+          :else
+          false)))))
 
-;; ============================================================================
-;; Basic Actions
-;; ============================================================================
 
 (defn start-turn!
   "Start your turn (gains clicks, Corp draws mandatory card).
@@ -228,15 +275,17 @@
         opp-side (if (= my-side :runner) :corp :runner)
         my-clicks (get-in client-state [:game-state my-side :click])
         opp-clicks (get-in client-state [:game-state opp-side :click])
-        active-player (get-in client-state [:game-state :active-player])
         turn-number (get-in client-state [:game-state :turn] 0)
         log (get-in client-state [:game-state :log])
         recent-log (take-last 50 log)
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
         ;; This prevents Corp from ending and immediately starting again
-        my-uid (:uid client-state)
-        opp-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
-                               (not (clojure.string/includes? (:text %) my-uid)))
+        my-username (get-my-username)
+        opp-ended? (some #(let [text (:text %)]
+                            (and text
+                                 (str/includes? text "is ending")
+                                 (or (nil? my-username)
+                                     (not (str/includes? text my-username)))))
                         recent-log)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
@@ -488,10 +537,12 @@
         max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
         log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
-        my-uid (:uid client-state)
+        my-username (get-my-username)
         ;; Check if WE already ended (not opponent) - prevents double auto-end
-        already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
-                                   (clojure.string/includes? (:text %) my-uid))
+        already-ended? (some #(let [text (:text %)]
+                                (and text
+                                     (str/includes? text "is ending")
+                                     (and my-username (str/includes? text my-username))))
                             recent-log)
         ;; Check for scorable agendas (Corp only)
         scorable-agendas (core/find-scorable-agendas)]
@@ -554,19 +605,21 @@
         side (keyword (:side client-state))
         clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
-        hand-size (get-in client-state [:game-state side :hand-count])
-        max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
+        hand-size (or (get-in client-state [:game-state side :hand-count]) 0)
+        max-hand-size (or (get-in client-state [:game-state side :hand-size :total]) 5)
         installed (get-in client-state [:game-state side :installed])
         log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
-        my-uid (:uid client-state)
+        my-username (get-my-username)
 
         ;; Check if we've actually started our turn
         turn-started? (turn-started-since-last-opp-end?)
 
         ;; Check if WE already ended (not opponent) - prevents double auto-end
-        already-ended? (some #(and (clojure.string/includes? (:text %) "is ending")
-                                   (clojure.string/includes? (:text %) my-uid))
+        already-ended? (some #(let [text (:text %)]
+                                (and text
+                                     (str/includes? text "is ending")
+                                     (and my-username (str/includes? text my-username))))
                             recent-log)
 
         ;; Check for EOT-related conditions
@@ -685,7 +738,7 @@
          ;; Get current credits for target
          current-credits (get-in client-state [:game-state (keyword target-side) :credit] 0)
          ;; Parse amount - could be absolute or delta
-         [delta-mode? delta-amount]
+         [_ delta-amount]
          (cond
            ;; String starting with + or - is delta mode
            (and (string? amount) (re-matches #"[+-]\d+" amount))

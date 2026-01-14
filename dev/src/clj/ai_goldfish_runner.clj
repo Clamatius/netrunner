@@ -5,7 +5,6 @@
   (:require [ai-state :as state]
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
-            [ai-core :as core]
             [clojure.string :as str]))
 
 (defn play-turn
@@ -71,7 +70,11 @@
 
                             ;; Play Turn
                             (when (and my-turn? (not (state/get-prompt)))
-                              (play-turn))
+                              (if (pos? (state/runner-clicks))
+                                (play-turn)
+                                (do
+                                  (println "🐟 GOLDFISH - 0 clicks, ending turn")
+                                  (actions/smart-end-turn!))))
 
                             true))) ;; Continue loop
                       (catch Exception e
