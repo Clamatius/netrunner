@@ -16,7 +16,6 @@
    5. Pressure Centrals (R&D default)
    6. Draw (if looking for pieces)"
   (:require [ai-state :as state]
-            [ai-core :as core]
             [ai-card-actions :as cards]
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
@@ -123,8 +122,9 @@
         card (first content)] ; Usually only one card in root
     (or (:advance-counter card) 0)))
 
-(defn dangerous-remote? []
+(defn dangerous-remote?
   "Find a remote with 3+ advancements (likely agenda)"
+  []
   (let [remotes (keys (state/corp-servers))]
     (some (fn [k]
             (when (and (str/starts-with? (name k) "remote")
@@ -143,8 +143,6 @@
         missing (missing-breakers)
         threat (dangerous-remote?)]
     
-    (log-decision "DEBUG: Clicks:" clicks "Credits:" credits "Hand:" hand-size "Missing:" missing "Threat:" threat)
-
     (when (pos? clicks)
       (cond
         ;; 1. Safety First: Draw if low on cards (vs damage)
@@ -177,7 +175,6 @@
         (and (seq missing)
              (some #(breaker-in-hand-for? %) missing))
         (let [breaker (some #(breaker-in-hand-for? %) missing)]
-          (log-decision "DEBUG: Found breaker in hand:" (:title breaker) "Cost:" (:cost breaker) "Credits:" credits)
           (if (>= credits (:cost breaker))
             (do
               (log-decision "RIG: Installing" (:title breaker))
@@ -220,8 +217,14 @@
 
 (defn handle-prompt-if-needed []
   (when-let [prompt (state/get-prompt)]
-    (let [msg (:msg prompt)]
+    (let [msg (:msg prompt)
+          prompt-type (:prompt-type prompt)]
       (cond
+        ;; Ignore Run and Waiting prompts (handled by runs/continue-run! or just waiting)
+        (or (= prompt-type "run") 
+            (= prompt-type "waiting"))
+        false
+
         ;; Brân 1.0 click ability (Runner Playbook: "Almost always bypass")
         (str/includes? msg "Lose [Click]")
         (do
@@ -274,24 +277,28 @@
                           (do (println "Runner Loop Ends - Winner:" winner) false)
                           (let [my-turn? (= "runner" (:active-player (:game-state game-state)))]
                             
-                            (when (handle-prompt-if-needed)
-                              (Thread/sleep 500))
+                            ;; 1. Handle Prompts (Priority)
+                            (if (handle-prompt-if-needed)
+                              (Thread/sleep 500)
+                              ;; If no special prompt handled, check other states
+                              (do
+                                ;; 2. Auto-start turn
+                                (let [start-check (actions/can-start-turn?)]
+                                  (when (:can-start start-check)
+                                    (actions/start-turn!)
+                                    (Thread/sleep 500)))
 
-                            (let [start-check (actions/can-start-turn?)]
-                              (when (:can-start start-check)
-                                (actions/start-turn!)
-                                (Thread/sleep 500)))
-
-                            (when (and my-turn? (not (state/get-prompt)))
-                              (if (state/current-run)
-                                (do
-                                  (println "🏃 HEURISTIC RUNNER - In run, continuing...")
-                                  (runs/continue-run!))
-                                (if (pos? (my-clicks))
-                                  (play-turn)
-                                  (do
-                                    (println "🏃 HEURISTIC RUNNER - 0 clicks detected in loop, attempting end-turn")
-                                    (actions/smart-end-turn!)))))
+                                ;; 3. Handle Active Run
+                                (if (state/current-run)
+                                  (runs/continue-run!)
+                                  
+                                  ;; 4. Play Turn (only if no prompt and my turn)
+                                  (when (and my-turn? (not (state/get-prompt)))
+                                    (if (pos? (my-clicks))
+                                      (play-turn)
+                                      (do
+                                        (println "🏃 HEURISTIC RUNNER - 0 clicks detected in loop, attempting end-turn")
+                                        (actions/smart-end-turn!)))))))
 
                             true)))
                       (catch Exception e

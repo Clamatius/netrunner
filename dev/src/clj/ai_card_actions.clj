@@ -246,7 +246,7 @@
               (flush)
               (core/with-cursor
                 {:status :error
-                 :reason "Failed to start turn"})))))))
+                 :reason "Failed to start turn"}))))))))
 (defn use-ability!
   "Use an installed card's ability. Returns status map:
    - {:status :success} - ability fired
