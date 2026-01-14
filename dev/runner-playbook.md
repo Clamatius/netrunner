@@ -50,6 +50,13 @@ This means:
    - Don't wait for "perfect" rig
    - Killer typically protects you from damage, Fracter and Decoder from End The Run
 
+**Sandbagging breakers:** Consider keeping breakers in hand instead of installing immediately.
+- Corp sees empty rig → thinks remote is safe → installs agenda → you surprise-install and steal
+- Mayfly + Overclock from hand = 6¢ to crack almost any single-ICE remote
+- AI breakers (Mayfly) are brutal surprise plays: raw credits → stolen agenda
+- Tradeoff: risk losing sandbagged breakers to net damage (Diviner, traps)
+- Best against glacier Corps building "safe" remotes; worse against damage-heavy Corps
+
 3. **Complete breaker suite** (Turn 3-5)
    - Must have all 3 types covered (one breaker per ICE type) to ensure access given enough $
 
@@ -196,6 +203,30 @@ Almost always bypass: Clicks are cheaper than 8 credits unless you are [effectiv
 1. R&D relentlessly (statistical inevitability)
 2. Ignore heavily-defended remote unless affordable
 3. HQ only if R&D is impossible
+
+### HQ Dynamics
+
+**HQ value is dynamic** - it depends on whether Corp can safely install agendas.
+
+**HQ is empty when:**
+- Corp is aggressively installing and advancing (agendas go to remotes as drawn)
+- You just stole from remotes (Corp's hand was drained to refill the remote)
+- Corp has weak/no remote ICE and keeps trying anyway
+
+**HQ is full when:**
+- You credibly threaten the remote (breakers + credits ready)
+- Corp is scared to install because you'll steal
+- Agendas pile up in hand waiting for a safe scoring window
+
+**The play pattern:**
+1. Build rig that threatens remote (breakers + credits)
+2. Corp sees threat, holds agendas instead of installing into certain death
+3. Agendas accumulate in HQ
+4. Hit HQ before Corp finds a scoring window (more ICE, econ burst, etc.)
+
+**Key insight:** HQ pressure is a *consequence* of remote threat, not a substitute for it. Make the remote scary first, then cash in on the flooded HQ.
+
+**After early remote steals:** R&D is usually richer than HQ. Corp draws agendas to install them, not hold them. If you just stole from a remote, Corp's hand is likely ICE/econ, not more agendas. Diversify to R&D or set up instead of hammering empty HQ.
 
 ---
 
