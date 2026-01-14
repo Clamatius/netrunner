@@ -36,6 +36,8 @@
             [ai-runs :as runs]
             [clojure.string :as str]))
 
+(declare keep-or-mull)
+
 ;; ============================================================================
 ;; Configuration
 ;; ============================================================================
@@ -46,9 +48,14 @@
    :central-ice-target 1   ; Desired ICE per central
    :log-decisions true})   ; Print decision reasoning
 
+(defn log-message [& args]
+  (let [msg (str "🤖 " (str/join " " args))]
+    (.println System/out msg)
+    (println msg)))
+
 (defn log-decision [& args]
   (when (:log-decisions config)
-    (apply println "🤖" args)))
+    (apply log-message args)))
 
 ;; ============================================================================
 ;; State Query Helpers
@@ -476,6 +483,13 @@
           (prompts/choose-card! 0)
           true)
 
+        ;; Keep/Mulligan prompt
+        (or (str/includes? msg "Keep hand")
+            (str/includes? msg "Mulligan"))
+        (do
+          (keep-or-mull)
+          true)
+
         ;; Regular choice prompts
         (seq choices)
         (do
@@ -561,18 +575,17 @@
   "Decide whether to keep or mulligan based on hand contents.
    Simple heuristic: keep if we have at least 1 ICE and 1 economy card."
   []
-  (let [hand (my-hand)
-        has-ice (seq (ice-in-hand))
+  (let [has-ice (seq (ice-in-hand))
         has-econ (or (seq (economy-operations))
                      (>= (my-credits) 5))
         has-agenda (seq (agendas-in-hand))]
     (if (and has-ice (or has-econ has-agenda))
       (do
         (log-decision "KEEP: Have ICE and economy/agenda")
-        (prompts/choose! "Keep"))
+        (prompts/choose-by-value! "Keep"))
       (do
         (log-decision "MULLIGAN: Missing ICE or economy")
-        (prompts/choose! "Mulligan")))))
+        (prompts/choose-by-value! "Mulligan")))))
 
 ;; ============================================================================
 ;; Convenience/Debug
@@ -787,15 +800,22 @@
   "Main autonomous loop for Match Orchestration.
    Handles both playing turns and responding to runs."
   []
-  (println "🤖 HEURISTIC CORP - Starting autonomous loop")
-  (loop []
+  (log-message "HEURISTIC CORP - Starting autonomous loop")
+  (loop [iter 0]
+    (when (zero? (mod iter 10))
+      (let [gs (:game-state @state/client-state)]
+        (log-message (str "💓 Corp Loop | Turn: " (:turn gs)
+                      " | Active: " (:active-player gs)
+                      " | Clicks: " (my-clicks)
+                      " | Credits: " (my-credits)))))
+
     (let [continue? (try
                       (let [game-state @state/client-state
                             winner (get-in game-state [:game-state :winner])]
 
                         (if winner
                           (do
-                            (println "🤖 HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
+                            (log-message "HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
                             false)
                           (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
 
@@ -806,7 +826,7 @@
                             ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
                             (let [start-check (actions/can-start-turn?)]
                               (when (:can-start start-check)
-                                (println "🤖 HEURISTIC CORP - Auto-starting turn")
+                                (log-message "HEURISTIC CORP - Auto-starting turn")
                                 (actions/start-turn!)
                                 (Thread/sleep 500)))
 
@@ -815,7 +835,9 @@
                               (if (pos? (my-clicks))
                                 (play-turn)
                                 (do
-                                  (println "🤖 HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn")
+                                  ;; Only log this occasionally to reduce spam
+                                  (when (zero? (mod iter 20))
+                                    (log-message "HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn"))
                                   (actions/smart-end-turn!))))
 
                             ;; 3. If opponent turn, watch for runs
@@ -825,10 +847,10 @@
 
                             true))) ;; Continue loop
                       (catch Exception e
-                        (println "❌ HEURISTIC CORP ERROR:" (.getMessage e))
+                        (log-message "❌ HEURISTIC CORP ERROR:" (.getMessage e))
                         (.printStackTrace e)
                         (Thread/sleep 5000)
                         true))] ;; Continue loop on error
       (when continue?
         (Thread/sleep 500)
-        (recur)))))
+        (recur (inc iter))))))
