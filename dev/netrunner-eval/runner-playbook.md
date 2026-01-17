@@ -29,6 +29,47 @@ This means:
 - Corp is racing against this statistical clock
 - Your goal: Complete rig while applying relentless pressure to keep corp from scores → win through volume
 
+### Card Text: Cost vs Effect
+
+**Understanding card structure is critical for optimal play.**
+
+Every card has:
+- **Cost**: What you pay to play it (credits, clicks) - listed before the effect
+- **Effect**: What happens when you play it - the card text
+
+**Key insight:** Conditional click loss in the *effect* (not cost) means you can avoid it with timing.
+
+**Example: VRcation**
+```
+Cost: 1 credit
+Effect: Draw 4 cards. If you have any [click] remaining, lose [click].
+```
+
+The "lose click" is part of the EFFECT, not the cost:
+- Play click 1-3: Draw 4 cards, lose a click (3 clicks total)
+- Play click 4: Draw 4 cards, no clicks to lose (1 click total) ← **optimal**
+
+If it said "Pay [click]: Draw 4 cards" then click 4 would do nothing.
+
+**Example: Creative Commission**
+```
+Cost: 1 credit
+Effect: Gain 5 credits. If you have any [click] remaining, lose [click].
+```
+
+- Play click 1-3: Net +4 credits, costs 2 clicks
+- Play click 4: Net +4 credits, costs 1 click ← **optimal** (Same as Sure Gamble but for 1 credit!)
+
+**Tutorial deck cards with this pattern:**
+- VRcation → always play click 4
+- Creative Commission → always play click 4
+
+**Turn sequencing implication:**
+```
+Bad:  VRcation → Install → Install → Credit  (lost a click to VRcation)
+Good: Install → Install → Credit → VRcation  (full value from VRcation)
+```
+
 ---
 
 ## Rig Building Priority
@@ -481,6 +522,38 @@ Target credits: 8 before running
 - Contest remotes when possible (can't let Corp score)
 - Maximum R&D pressure (find agendas before Corp draws them)
 - Keep safe hand size (don't die to damage)
+
+---
+
+## The Go Analogy
+
+Netrunner shares DNA with Go. If you know Go, let the concepts resonate:
+
+- **Influence:** Your credit pool projects force across the entire board. $15 and a Cleaver doesn't break anything *yet*—but Corp must calculate before every install-advance. The threat is the value. You don't have to run to exert pressure.
+
+- **Aji (latent potential):** Your grip has aji. Corp doesn't know if you're holding Sure Gamble, Overclock, or Mayfly. They must respect the possibility. A $2 credit pool with 5 cards might explode into $13 next turn—or it might be five programs.
+
+- **Sente/Gote:** Who's dictating tempo? When you run and force ICE rezzes, that's sente—Corp must respond or lose assets. When you're clicking for credits while Corp scores agendas, that's gote. Early facechecks seize sente by forcing awkward rez decisions.
+
+- **Thickness:** A full rig (all 3 breakers + economy) creates thickness. You can threaten *any* server. Corp can't leave gaps. Conversely, missing a Decoder means every Code Gate is a wall—you have a thin position with exploitable weaknesses.
+
+- **Reading:** What is Corp *likely* to do? They installed in a remote behind 2 ICE—agenda or trap? They're clicking for credits—poor or sandbagging? They just drew 2 cards off Superconducting Hub—what changed in HQ?
+
+**The fundamental insight: Credits present threat.**
+
+In a rich-vs-rich endgame, Runner is favored:
+- ICE stacking has diminishing returns (each piece costs install + rez)
+- Runner with full rig + $20 can access *anywhere*
+- Corp sitting on $20 can't safely install-advance—you might have Mayfly
+
+Your credit pool threatens access even when you're not running. Corp must ask "can they get in?" before every play. This is why **Don't Be Poor** matters:
+
+```
+You at $2  → Corp knows they have a window → installs agenda freely
+You at $10 → Corp hesitates → maybe doesn't install → you dictate tempo
+```
+
+Going broke removes your influence from the board. You're not threatening anything. Corp plays freely.
 
 ---
 
