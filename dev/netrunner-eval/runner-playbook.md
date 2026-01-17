@@ -127,6 +127,27 @@ Draws needed: 4 - 3 = 1 draw before running
    - Remote with 3+ counters: Must contest (scoreable agenda)
    - Remote with 0 counters: Unknown (could be anything)
 
+### Central Server Access Mechanics
+
+**⚠️ Critical: How access works determines run efficiency**
+
+| Server | What You Access | Key Insight |
+|--------|-----------------|-------------|
+| R&D | Top card(s) of deck | **Deck doesn't shuffle** - running twice sees same card! |
+| HQ | Random card(s) from hand | Can randomly hit same card twice, or miss agendas entirely |
+| Archives | All cards (faceup visible, facedown hidden until access) | Agendas score when accessed |
+
+**Common mistake:** Running R&D twice in a row without multi-access. You see the exact same card both times - wasted click!
+
+**When repeated runs ARE useful:**
+- HQ: Random selection means you might hit different cards (but might not)
+- R&D after Corp draws: Top card changed because Corp drew
+- R&D with multi-access: See 2+ cards per run, worth repeating
+
+**When repeated runs are WASTEFUL:**
+- R&D twice without multi-access (same card)
+- HQ when Corp has only 1-2 cards (limited pool)
+
 ### ICE Breaking
 
 **Type matching is mandatory:**

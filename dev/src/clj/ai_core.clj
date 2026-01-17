@@ -303,7 +303,7 @@
             (Thread/sleep polling-delay)
             (recur))
           {:status :error
-           :reason "Ability not confirmed in game log (timeout)"
+           :reason "Ability not confirmed in game log (timeout). Check card text for restrictions (once per turn, cost requirements, etc.)"
            :card-name card-name})))))
 
 ;; ============================================================================

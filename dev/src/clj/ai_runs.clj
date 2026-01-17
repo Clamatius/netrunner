@@ -220,6 +220,13 @@
                                                     (name k)))
                                                 (dissoc flags :no-continue))))))
 
+      ;; Show server access reminder (helps avoid mistakes like running R&D twice)
+      (case normalized
+        "R&D" (println "📚 R&D: Access top of Corp deck. Deck does NOT shuffle between runs!")
+        "HQ"  (println "🃏 HQ: Access random card from Corp hand.")
+        "Archives" (println "📦 Archives: Access all cards (facedown revealed on access).")
+        nil)  ; Remote servers - no special reminder needed
+
       (ws/send-message! :game/action
                         {:gameid gameid
                          :command "run"
@@ -973,15 +980,18 @@
           subroutines (:subroutines current-ice)
           ;; Subs that can still fire (not broken, not already fired)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          ;; Check if at least one sub has fired (meaning we're past the fire phase)
-          any-fired? (some :fired subroutines)]
-      ;; If no actionable subs AND at least one sub fired
-      (when (and current-ice (empty? actionable-subs) any-fired?)
-        (let [ice-title (:title current-ice "ICE")
-              ;; Check if Runner already passed (via log, since :no-action is unreliable)
-              log (get-in state [:game-state :log])
+          ;; Check if subs have fired (via log, since :fired doesn't sync from server)
+          log (get-in state [:game-state :log])
+          recent-log (take 10 (reverse log))
+          ice-title (:title current-ice "ICE")
+          subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
+                                         (str (:text %)))
+                               recent-log)]
+      ;; If subs have been resolved (via log check)
+      (when (and current-ice subs-resolved?)
+        (let [;; Check if Runner already passed (via log, since :no-action is unreliable)
               recent-entries (take 5 (reverse log))
-              runner-passed? (some #(re-find #"AI-runner has no further action" (str (:text %))) recent-entries)]
+              runner-passed? (some #(re-find #"(?i)ai-runner has no further action" (str (:text %))) recent-entries)]
           (if runner-passed?
             ;; Runner already passed - Corp should continue to advance the phase
             (do
@@ -1160,10 +1170,13 @@
 
 (defn handle-runner-encounter-ice
   "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
-   Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff."
-  [{:keys [side run-phase state gameid]}]
+   Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff.
+   NOTE: Skip signal when --full-break is active (we're trying to break, not let fire)."
+  [{:keys [side run-phase state gameid strategy]}]
   (when (and (= side "runner")
-             (= run-phase "encounter-ice"))
+             (= run-phase "encounter-ice")
+             ;; Don't signal fire when --full-break is active - we're trying to break!
+             (not (:full-break strategy)))
     (let [run (get-in state [:game-state :run])
           server (:server run)
           position (:position run)
@@ -1202,6 +1215,58 @@
            :ice ice-title
            :unbroken-count sub-count
            :position position})))))
+
+(defn handle-runner-pass-broken-ice
+  "Priority 2.6: Runner at encounter-ice when all subs are broken.
+   If no actionable subs remain, continue to pass the ICE.
+   This handles the case where Runner broke all subs with --full-break
+   and needs to advance past the ICE."
+  [{:keys [side run-phase state gameid]}]
+  (when (and (= side "runner")
+             (= run-phase "encounter-ice"))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          subroutines (:subroutines current-ice)
+          ;; Subs that can still fire (not broken, not already fired)
+          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
+      ;; If ICE is rezzed, has subs, but no actionable subs remain - pass it
+      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
+        (let [ice-title (:title current-ice "ICE")]
+          (println (format "   → All subs broken on %s, Runner passing ICE" ice-title))
+          (send-continue! gameid))))))
+
+(defn handle-runner-pass-fired-ice
+  "Priority 2.7: Runner at encounter-ice after subs have fired.
+   Check the log for 'resolves ... subroutines' to detect fired subs
+   (since :fired flag doesn't sync from server)."
+  [{:keys [side run-phase state gameid]}]
+  (when (and (= side "runner")
+             (= run-phase "encounter-ice"))
+    (let [run (get-in state [:game-state :run])
+          server (:server run)
+          position (:position run)
+          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+          ice-count (count ice-list)
+          ice-index (- ice-count position)
+          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+                        (nth ice-list ice-index nil))
+          ice-title (:title current-ice "ICE")
+          ;; Check if subs have fired (via log, since :fired doesn't sync)
+          log (get-in state [:game-state :log])
+          recent-log (take 10 (reverse log))
+          subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
+                                         (str (:text %)))
+                               recent-log)]
+      ;; If subs have been resolved, Runner should pass the ICE
+      (when (and current-ice (:rezzed current-ice) subs-resolved?)
+        (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
+        (send-continue! gameid)))))
 
 (defn handle-events
   "Priority 4: Pause for important events (rez, abilities, subs, damage)"
@@ -1364,6 +1429,8 @@
                   handle-runner-approach-ice
                   handle-runner-full-break   ; Runner auto-break with --full-break
                   handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
+                  handle-runner-pass-broken-ice ; Runner passes ICE after all subs broken
+                  handle-runner-pass-fired-ice  ; Runner passes ICE after subs fired
                   handle-waiting-for-opponent
                   handle-real-decision
                   handle-events
@@ -1514,7 +1581,10 @@
         (println "⚠️  No active run to monitor")
         {:status :no-run})
       (do
-        ;; Merge new strategy flags if provided (preserves existing strategy from run start)
+        ;; Reset strategy at start of monitoring (Corp has separate atom from Runner)
+        ;; This prevents stale --rez sets from previous runs
+        (reset-strategy!)
+        ;; Apply new strategy flags if provided
         (when (seq args)
           (let [{:keys [flags]} (parse-run-flags (vec args))]
             (set-strategy! flags)
