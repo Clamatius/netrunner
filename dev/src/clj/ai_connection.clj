@@ -127,6 +127,21 @@
             (Thread/sleep core/polling-delay)
             (recur (+ waited 200)))))))
 
+(defn- in-lobby-players?
+  "Check if our username appears in the lobby-state's players list"
+  []
+  (let [lobby-state (:lobby-state @state/client-state)
+        my-username (:username @state/client-state)
+        players (:players lobby-state)]
+    (when (and my-username players)
+      (some #(= my-username (get-in % [:user :username])) players))))
+
+(defn- wait-for-in-lobby
+  "Wait until we appear in the lobby's players list (event-driven, not time-based).
+   Returns true if we're in the lobby, false on timeout."
+  [timeout-ms]
+  (wait-for-condition in-lobby-players? timeout-ms "lobby confirmation"))
+
 ;; ============================================================================
 ;; Game Connection (Higher-Level)
 ;; ============================================================================
@@ -288,14 +303,20 @@
         (println "   Rejoining game:" target-gameid)
         ;; Rejoin the game
         (join-game! {:gameid target-gameid :side my-side})
-        (Thread/sleep 500)
-        ;; Request full state resync
-        (resync-game! target-gameid)
-        (Thread/sleep 1000)
-        ;; Clear staleness flags
-        (state/clear-stale-flag!)
-        (println "✅ Resynced successfully")
-        true)
+        ;; Wait for server to confirm we're in the lobby (event-driven, not time-based)
+        ;; This prevents a race condition where resync arrives before join is processed
+        (if (wait-for-in-lobby 5000)
+          (do
+            ;; Now safe to request full state resync
+            (resync-game! target-gameid)
+            (Thread/sleep 1000)
+            ;; Clear staleness flags
+            (state/clear-stale-flag!)
+            (println "✅ Resynced successfully")
+            true)
+          (do
+            (println "❌ Join succeeded but not confirmed in lobby - resync skipped")
+            false)))
       (do
         (println "❌ Could not find any game to rejoin")
         (println "   Try: list-lobbies + join + resync manually")
