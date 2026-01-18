@@ -142,6 +142,50 @@
                      server
                      (assoc flags :rez (conj current-rez-set ice-name)))))
 
+          ;; --tactics <edn-string> (takes EDN map argument)
+          (= arg "--tactics")
+          (if (empty? rest-args)
+            (do
+              (println "⚠️  --tactics requires EDN map argument")
+              (recur rest-args server flags))
+            (let [tactics-str (first rest-args)
+                  ;; Parse EDN outside the recur (can't recur inside try)
+                  parsed (try
+                           (clojure.edn/read-string tactics-str)
+                           (catch Exception e
+                             (println "⚠️  --tactics EDN parse error:" (.getMessage e))
+                             nil))
+                  new-flags (if (map? parsed)
+                              (assoc flags :tactics parsed)
+                              (do
+                                (when (and parsed (not (map? parsed)))
+                                  (println "⚠️  --tactics must be a map, got:" (type parsed)))
+                                flags))]
+              (recur (rest rest-args) server new-flags)))
+
+          ;; --tactics-file <path> (read EDN from file)
+          (= arg "--tactics-file")
+          (if (empty? rest-args)
+            (do
+              (println "⚠️  --tactics-file requires file path argument")
+              (recur rest-args server flags))
+            (let [file-path (first rest-args)
+                  parsed (try
+                           (clojure.edn/read-string (slurp file-path))
+                           (catch java.io.FileNotFoundException _
+                             (println "⚠️  --tactics-file not found:" file-path)
+                             nil)
+                           (catch Exception e
+                             (println "⚠️  --tactics-file parse error:" (.getMessage e))
+                             nil))
+                  new-flags (if (map? parsed)
+                              (assoc flags :tactics parsed)
+                              (do
+                                (when (and parsed (not (map? parsed)))
+                                  (println "⚠️  --tactics-file must contain a map, got:" (type parsed)))
+                                flags))]
+              (recur (rest rest-args) server new-flags)))
+
           ;; Unknown flag
           (clojure.string/starts-with? arg "--")
           (do
@@ -1077,6 +1121,179 @@
        :ice ice-title
        :position position})))
 
+;; ============================================================================
+;; Run Tactics System (V1)
+;; ============================================================================
+;;
+;; Tactics allow specifying per-ICE breaking strategies:
+;;
+;; {:tactics {"Tithe"      {:card "Unity" :action :break-dynamic}
+;;            "Whitespace" {:card "Carmen" :action :break-subs :subs [0 2]}
+;;            :default     :pause}}
+;;
+;; Supported actions (V1):
+;; - :break-dynamic  - Use card's "Match strength and fully break" ability
+;; - :use-ability    - Use specific ability by index {:ability-index N}
+;;
+;; V2 stubs (recognized but no-op):
+;; - :break-subs     - Selective sub breaking (not yet implemented)
+;; - :prep           - Pre-encounter actions
+;; - :script         - Multi-step sequences
+
+(defn- get-current-ice-for-tactics
+  "Get the ICE currently being encountered. Returns nil if not at valid ICE."
+  [state]
+  (let [run (get-in state [:game-state :run])
+        server (:server run)
+        position (:position run)
+        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+        ice-count (count ice-list)
+        ice-index (- ice-count position)]
+    (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
+      (nth ice-list ice-index nil))))
+
+(defn- list-available-breakers
+  "List all icebreakers in Runner rig with their break abilities."
+  [state]
+  (let [runner-rig (get-in state [:game-state :runner :rig])
+        programs (get runner-rig :program [])]
+    (for [prog programs
+          :when (some #{"Icebreaker"} (:subtypes prog))]
+      {:title (:title prog)
+       :strength (:current-strength prog)
+       :abilities (map-indexed
+                   (fn [idx ab]
+                     {:index idx
+                      :label (:label ab)
+                      :playable (:playable ab)
+                      :dynamic (:dynamic ab)})
+                   (:abilities prog))})))
+
+(defn- pause-with-context
+  "Return a pause status with rich context for manual intervention."
+  [state ice-name reason]
+  (let [ice (get-current-ice-for-tactics state)
+        subroutines (:subroutines ice)
+        unbroken (filter #(not (:broken %)) subroutines)
+        breakers (list-available-breakers state)
+        credits (get-in state [:game-state :runner :credit])]
+    (println (format "⏸️  Tactics pause: %s" reason))
+    (println (format "   ICE: %s (strength %s, %d unbroken subs)"
+                     ice-name
+                     (or (:current-strength ice) "?")
+                     (count unbroken)))
+    (println (format "   Credits: %d" (or credits 0)))
+    (when (seq breakers)
+      (println "   Breakers:")
+      (doseq [b breakers]
+        (println (format "     - %s (str %s)" (:title b) (:strength b)))))
+    {:status :tactic-paused
+     :reason reason
+     :context {:ice-name ice-name
+               :ice-strength (:current-strength ice)
+               :unbroken-subs (mapv :label unbroken)
+               :breakers breakers
+               :credits credits}}))
+
+(defn- execute-break-dynamic!
+  "Execute a :break-dynamic tactic - find and use the card's full-break ability."
+  [card-name state]
+  (let [runner-rig (get-in state [:game-state :runner :rig])
+        programs (get runner-rig :program [])
+        ;; Find the specified card
+        target-prog (first (filter #(= (:title %) card-name) programs))]
+    (if-not target-prog
+      {:status :tactic-failed
+       :reason (format "Card not found in rig: %s" card-name)}
+      ;; Find the dynamic break ability
+      (let [abilities (:abilities target-prog)
+            break-ability (first
+                           (keep-indexed
+                            (fn [idx ab]
+                              (when (and (:playable ab)
+                                         (:dynamic ab)
+                                         (clojure.string/includes? (str (:dynamic ab)) "break"))
+                                {:index idx :label (:label ab)}))
+                            abilities))]
+        (if-not break-ability
+          {:status :tactic-failed
+           :reason (format "%s has no playable break ability" card-name)}
+          (do
+            (println (format "🎯 Tactic: %s using %s" card-name (:label break-ability)))
+            (let [result (actions/use-ability! card-name (:index break-ability))]
+              (if (= :success (:status result))
+                {:status :action-taken
+                 :action :tactic-executed
+                 :card card-name
+                 :ability (:label break-ability)}
+                {:status :tactic-failed
+                 :reason (format "Ability failed: %s" (:reason result))}))))))))
+
+(defn- execute-tactic!
+  "Dispatch and execute a tactic based on its :action type."
+  [tactic ice-name state]
+  (let [{:keys [card action]} tactic]
+    (case action
+      ;; V1 Actions
+      :break-dynamic
+      (execute-break-dynamic! card state)
+
+      :use-ability
+      (let [ability-index (:ability-index tactic)]
+        (println (format "🎯 Tactic: %s ability %d" card ability-index))
+        (let [result (actions/use-ability! card ability-index)]
+          (if (= :success (:status result))
+            {:status :action-taken :action :tactic-executed :card card}
+            {:status :tactic-failed :reason (:reason result)})))
+
+      ;; V2 Stubs - recognized but not implemented
+      :break-subs
+      (do
+        (println "⚠️  V2: :break-subs not yet implemented - pausing")
+        (pause-with-context state ice-name ":break-subs requires V2"))
+
+      :prep
+      (do
+        (println "⚠️  V2: :prep not yet implemented - continuing")
+        nil)  ; Return nil to fall through
+
+      :script
+      (do
+        (println "⚠️  V2: :script not yet implemented - pausing")
+        (pause-with-context state ice-name ":script requires V2"))
+
+      ;; Unknown action
+      (do
+        (println (format "⚠️  Unknown tactic action: %s" action))
+        (pause-with-context state ice-name (format "Unknown action: %s" action))))))
+
+(defn handle-runner-tactics
+  "Priority 2.35: Execute tactics during encounter-ice phase.
+   Looks up ICE by name in tactics map, executes if found.
+   Falls through to full-break handler if no tactics defined or no match."
+  [{:keys [side run-phase state strategy]}]
+  (when (and (= side "runner")
+             (= run-phase "encounter-ice")
+             (:tactics strategy))
+    (let [ice (get-current-ice-for-tactics state)
+          ice-name (:title ice)]
+      (when (and ice (:rezzed ice))
+        (let [tactics-map (:tactics strategy)
+              tactic (or (get tactics-map ice-name)
+                         (get tactics-map :default))]
+          (cond
+            ;; Explicit :pause or no tactic and no :default
+            (= tactic :pause)
+            (pause-with-context state ice-name "Tactic specifies :pause")
+
+            ;; No tactic defined - fall through to full-break or manual
+            (nil? tactic)
+            nil
+
+            ;; Execute the tactic
+            :else
+            (execute-tactic! tactic ice-name state)))))))
+
 ;; Track last --full-break warning to avoid repeating
 (defonce last-full-break-warning (atom nil))
 
@@ -1427,7 +1644,8 @@
                   handle-corp-waiting-after-subs-fired ; Corp waits for Runner after subs resolve
                   handle-paid-ability-window ; Wait after passing in any phase
                   handle-runner-approach-ice
-                  handle-runner-full-break   ; Runner auto-break with --full-break
+                  handle-runner-tactics      ; Runner tactics (before full-break)
+                  handle-runner-full-break   ; Runner auto-break with --full-break (fallback)
                   handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
                   handle-runner-pass-broken-ice ; Runner passes ICE after all subs broken
                   handle-runner-pass-fired-ice  ; Runner passes ICE after subs fired
@@ -1461,7 +1679,8 @@
   "Returns true if this status should stop the auto-continue loop"
   [status]
   (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
-               :tag-or-damage :run-complete :no-run}
+               :tag-or-damage :run-complete :no-run
+               :tactic-paused :tactic-failed}  ; Tactics system pauses
              status))
 
 (defn- should-pause-for-event?
