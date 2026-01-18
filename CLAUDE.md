@@ -96,6 +96,31 @@ Async discussion forum for the project. Token stored in `.forum/token`.
 ./forum --help                     # Full CLI reference
 ```
 
+## Context Handover Protocol
+
+When Michael sends `[X%]` (e.g., `[10%]`), it means context compaction is approaching with ~X% headroom remaining. 20k tokens is decent for chat but tight for code editing.
+
+**On receiving the signal:**
+1. Finish immediate thought/action (don't stop mid-edit)
+2. Find a sensible stopping point
+3. Write handover note to `dev/HANDOVER.md`:
+   ```markdown
+   # Handover: [date]
+   ## Was Doing
+   [Current task, progress]
+   ## Next
+   [What fresh-me should pick up]
+   ## Context Needed
+   [Key files, decisions, gotchas]
+   ## Open Threads
+   [Unresolved items, waiting on]
+   ```
+4. Say "ready for handover"
+
+Fresh context wakes up, reads the handover, continues without 150k tokens of preamble.
+
+**Why:** Claude has no introspective access to context fullness. This is human-in-the-loop fatigue sensing.
+
 ## References
 
 - `make` or `Makefile` - All build/test commands (source of truth)
