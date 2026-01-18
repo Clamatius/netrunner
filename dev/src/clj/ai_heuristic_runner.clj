@@ -244,6 +244,15 @@
           (log-decision "DECISION: Staying in run")
           (prompts/choose! "No") ; Usually stay unless critical
           true)
+
+        ;; Access decision (e.g. steal/trash)
+        (str/includes? msg "You accessed")
+        (do
+          (log-decision "ACCESS: Deciding on accessed card")
+          ;; Default to first option (often Steal or Pay to Trash)
+          ;; TODO: Add smarter trash logic based on credits/card type
+          (prompts/choose! 0)
+          true)
           
         :else
         (do
@@ -283,7 +292,11 @@
                             (if in-run?
                               (do
                                 (println "🏃 HEURISTIC RUNNER - In run, continuing...")
-                                (runs/continue-run!)
+                                (let [result (runs/continue-run!)]
+                                  ;; If continue-run! returns :decision-required, we MUST handle the prompt
+                                  (when (= (:status result) :decision-required)
+                                    (println "🏃 HEURISTIC RUNNER - Decision required during run, handling prompt...")
+                                    (handle-prompt-if-needed)))
                                 (Thread/sleep 500))
 
                               ;; Priority 2: Handle non-run prompts

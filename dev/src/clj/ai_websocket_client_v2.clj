@@ -15,6 +15,8 @@
            [org.eclipse.jetty.websocket.client WebSocketClient]
            [org.eclipse.jetty.util.ssl SslContextFactory]))
 
+(declare ensure-connected!)
+
 ;; ============================================================================
 ;; Message Handling
 ;; ============================================================================
@@ -301,21 +303,35 @@
 ;; ============================================================================
 
 (defn send-message!
-  "Send a message to server"
+  "Send a message to server.
+   Auto-reconnects if disconnected or send fails."
   [event-type data]
-  (if-let [socket (:socket @state/client-state)]
-    (try
-      ;; Sente expects double-wrapped messages: [[:event-type data]]
-      (let [msg (pr-str [[event-type data]])]
-        (ws/send-msg socket msg)
-        true)
-      (catch Exception e
-        (println "❌ Send failed:" (.getMessage e))
-        (.printStackTrace e)
-        false))
-    (do
-      (println "❌ Not connected")
-      false)))
+  ;; Ensure connected before sending
+  (when (ensure-connected!)
+    (if-let [socket (:socket @state/client-state)]
+      (try
+        ;; Sente expects double-wrapped messages: [[:event-type data]]
+        (let [msg (pr-str [[event-type data]])]
+          (ws/send-msg socket msg)
+          true)
+        (catch Exception e
+          (println "❌ Send failed:" (.getMessage e))
+          ;; Try one reconnect and retry
+          (println "♻️  Attempting reconnect and retry...")
+          (when (ensure-connected!)
+            (if-let [new-socket (:socket @state/client-state)]
+              (try
+                (let [msg (pr-str [[event-type data]])]
+                  (ws/send-msg new-socket msg)
+                  (println "✅ Retry successful")
+                  true)
+                (catch Exception e2
+                  (println "❌ Retry failed:" (.getMessage e2))
+                  false))
+              false))))
+      (do
+        (println "❌ Not connected (after ensure-connected!)")
+        false))))
 
 (defn send-action!
   "Send a game action"

@@ -31,7 +31,7 @@ if ! lsof -i :1042 > /dev/null; then
     # Wait for server
     echo "   Waiting for game server to listen on 1042..."
     MAX_WAIT_SERVER=120
-    for i in $(seq 1 $MAX_WAIT_SERVER); do
+    for ((i=1; i<=MAX_WAIT_SERVER; i++)); do
         if lsof -i :1042 > /dev/null; then
             echo "   ✅ Game Server ready!"
             break
@@ -61,7 +61,7 @@ fi
 # Wait for clients to be ready
 echo "   Waiting for clients to listen..."
 MAX_WAIT=60
-for i in $(seq 1 $MAX_WAIT); do
+for ((i=1; i<=MAX_WAIT; i++)); do
     if lsof -i :7889 > /dev/null && lsof -i :7890 > /dev/null; then
         echo "   ✅ Clients ready!"
         break
@@ -77,6 +77,8 @@ sleep 5 # Extra buffer for initialization
 # 2. Parse Config (Simple grep/sed for now, JSON parsing later)
 MATCH_ID=$(grep "match_id" "$CONFIG_FILE" | cut -d '"' -f 4)
 ROUNDS=$(grep "rounds" "$CONFIG_FILE" | cut -d ':' -f 2 | tr -d ' ,')
+
+echo "DEBUG: Raw ROUNDS value: '$ROUNDS'"
 
 # Extract agents block
 AGENTS_BLOCK=$(grep -A 4 '"agents":' "$CONFIG_FILE")
@@ -103,24 +105,52 @@ restart_clients() {
     "$DEV_DIR/stop-ai-client.sh" runner > /dev/null 2>&1
     sleep 2
     
+    # Aggressive cleanup: Kill anything holding the ports
+    for port in 7890 7889; do
+        if lsof -i :$port -t >/dev/null; then
+            echo "   ⚠️  Port $port still in use, force killing..."
+            lsof -i :$port -t | xargs kill -9 || true
+        fi
+    done
+
     "$DEV_DIR/start-ai-client-repl.sh" corp 7890 > /tmp/ai-client-corp.log 2>&1 &
     "$DEV_DIR/start-ai-client-repl.sh" runner 7889 > /tmp/ai-client-runner.log 2>&1 &
     
     # Wait for clients
     echo "   Waiting for clients to listen..."
     MAX_WAIT=60
-    for i in $(seq 1 $MAX_WAIT); do
+    for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
         if lsof -i :7889 > /dev/null && lsof -i :7890 > /dev/null; then
-            echo "   ✅ Clients ready!"
+            echo "   ✅ Clients listening on ports!"
             break
         fi
-        if [ $i -eq $MAX_WAIT ]; then
+        if [ $wait_i -eq $MAX_WAIT ]; then
             echo "   ❌ Timeout waiting for clients"
             exit 1
         fi
         sleep 1
     done
-    sleep 5 # Buffer for init
+    
+    # Wait for WebSocket connection
+    echo "   Waiting for WebSocket connections..."
+    for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
+        CORP_OK=$("$DEV_DIR/ai-eval.sh" corp 7890 "(ai-websocket-client-v2/connected?)" 2>/dev/null || echo "false")
+        RUNNER_OK=$("$DEV_DIR/ai-eval.sh" runner 7889 "(ai-websocket-client-v2/connected?)" 2>/dev/null || echo "false")
+        
+        if [[ "$CORP_OK" == "true" ]] && [[ "$RUNNER_OK" == "true" ]]; then
+            echo "   ✅ Clients fully connected!"
+            break
+        fi
+        
+        if [ $wait_i -eq $MAX_WAIT ]; then
+            echo "   ❌ Timeout waiting for WebSocket connection"
+            echo "   Corp: $CORP_OK, Runner: $RUNNER_OK"
+            exit 1
+        fi
+        sleep 1
+    done
+    
+    sleep 2 # Buffer for init
 }
 
 # Helper to load agent code
@@ -175,7 +205,11 @@ run_game() {
     # Create Game
     LOBBY_TITLE="Match ${MATCH_ID} R${round}${game_suffix}"
     echo "   Creating lobby: $LOBBY_TITLE..."
-    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" > /dev/null
+    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" > /tmp/create-game.log 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ Failed to create game. Output:"
+        cat /tmp/create-game.log
+    fi
     sleep 2
     
     # Retry loop for Game ID (Search by Title)
