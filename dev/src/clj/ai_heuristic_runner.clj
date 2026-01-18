@@ -229,7 +229,7 @@
         (str/includes? msg "Lose [Click]")
         (do
           (log-decision "BIROID: Clicking through (Bypass)")
-          (prompts/choose! "Yes")
+          (prompts/choose-by-value! "Yes")
           true)
         
         ;; Discard
@@ -242,7 +242,7 @@
         (str/includes? msg "Jack out")
         (do
           (log-decision "DECISION: Staying in run")
-          (prompts/choose! "No") ; Usually stay unless critical
+          (prompts/choose-by-value! "No") ; Usually stay unless critical
           true)
 
         ;; Access decision (e.g. steal/trash)
@@ -251,13 +251,13 @@
           (log-decision "ACCESS: Deciding on accessed card")
           ;; Default to first option (often Steal or Pay to Trash)
           ;; TODO: Add smarter trash logic based on credits/card type
-          (prompts/choose! 0)
+          (prompts/choose-by-index! 0)
           true)
-          
+
         :else
         (do
           (log-decision "PROMPT: Choosing first option for" msg)
-          (prompts/choose! 0)
+          (prompts/choose-by-index! 0)
           true)))))
 
 ;; ============================================================================

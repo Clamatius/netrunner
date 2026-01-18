@@ -495,7 +495,7 @@
         (do
           (log-decision "PROMPT: Handling" msg)
           ;; Simple heuristic: choose first option
-          (prompts/choose! 0)
+          (prompts/choose-by-index! 0)
           true)
 
         ;; Select prompt without discard message - pick first

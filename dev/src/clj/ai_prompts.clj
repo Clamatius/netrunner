@@ -8,10 +8,12 @@
 ;; Prompts & Choices
 ;; ============================================================================
 
-(defn choose!
-  "Make a choice from current prompt
-   Usage: (choose! 0) ; choose first option
-          (choose! \"uuid\") ; choose by UUID"
+(defn choose-by-index!
+  "Make a choice from current prompt by index or UUID.
+   Usage: (choose-by-index! 0)        ; choose first option
+          (choose-by-index! \"uuid\")  ; choose by UUID
+
+   For choosing by value text (e.g. \"Keep\", \"Steal\"), use choose-by-value! instead."
   [choice]
   (let [prompt (state/get-prompt)]
     (if prompt

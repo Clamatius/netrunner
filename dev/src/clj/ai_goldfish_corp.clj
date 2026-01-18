@@ -51,7 +51,7 @@
       
       ;; Default: Choose first option
       :else
-      (prompts/choose! 0))))
+      (prompts/choose-by-index! 0))))
 
 (defn start-autonomous!
   "Main autonomous loop."

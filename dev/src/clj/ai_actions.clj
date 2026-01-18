@@ -114,7 +114,7 @@
 ;; Re-exported functions from ai-prompts
 ;; ============================================================================
 
-(def choose! prompts/choose!)
+(def choose-by-index! prompts/choose-by-index!)
 (def choose-option! prompts/choose-option!)
 (def choose-by-value! prompts/choose-by-value!)
 (def choose-card! prompts/choose-card!)
