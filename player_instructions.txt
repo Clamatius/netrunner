@@ -133,8 +133,8 @@ Score agenda when it has sufficient advancement counters
 **Important Scoring Rules:**
 - ⚠️ **Corp turn only** - Cannot score on Runner's turn (prevents "bait and score" strategies)
 - ⚠️ **Does NOT cost a click** - Scoring happens at the end of a click action (e.g., after final advance)
-- A 2-cost agenda can be fast-advanced in one turn: install-advance-advance-score (3 clicks)
-- A 3-cost agenda requires 2 turns minimum (install + 3 advances) or effects (e.g. operations) that cheat advancement
+- A 2 cost agenda can be fast-advanced in one turn: install-advance-advance-score (3 clicks)
+- A 3+ cost agenda requires 2 turns minimum (install + <cost> advances) or effects (e.g. operations) that cheat advancement
 - Some agendas have scoring effects that trigger prompts (e.g., "Send a Message" offers optional ICE rez)
 
 ---
@@ -289,7 +289,7 @@ When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 
 #### The Recommended Workflow
 
-**ALWAYS use the "Fully break" ability [2] when available:**
+**ALWAYS use the "Fully break" ability [2] when available UNLESS there are subroutines that you don't want to break**
 
 ```bash
 # 1. Start run
@@ -331,8 +331,6 @@ Manual breaking is useful when you only want to break some subroutines (e.g., br
 ./send_command continue
 ```
 
-**Warning:** Manual breaking is error-prone. In our test game, using manual breaking led to Corp firing subs before all breaks were complete (timing issue). Use "Fully break" unless you have a specific reason.
-
 #### Pre-Run Checklist
 
 Before running, verify:
@@ -356,6 +354,9 @@ Before running, verify:
 4. **Is my breaker strong enough?**
    - Breaker strength must be >= ICE strength
    - Check during encounter: abilities will show "Match strength" options if needed
+
+5. **Do I think I'll have enough $ afterwards?
+   - Dipping too low on credits gives the opponent opportunity to act while you are weak
 
 ---
 
@@ -404,24 +405,22 @@ Before running, verify:
 ### Damage Mechanics
 
 The Runner should consider their current handsize as akin to current health.
-The Runner can take three types of damage:
+The Runner can take three types of damage. For all types, if they must discard
+but cannot, they flatline and lose.
 
 **Net Damage:**
 - Common source: Accessing traps and certain agendas
 - Effect: Runner discards N cards at random from hand
-- If unable to discard enough cards, Runner flatlines (loses game)
 - Example: Urtica Cipher deals 2 net damage on access
 
 **Meat Damage:**
 - Common source: Corp operations and certain card abilities
 - Effect: Identical to net damage (random discard)
-- If unable to discard enough cards, Runner flatlines (loses game)
 
-**Brain Damage:**
+**Core Damage:**
 - Common source: Specific ICE subroutines and Corp cards
 - Effect: Random discard PLUS permanent max hand size reduction
-- Each point of brain damage permanently reduces max hand size by 1
-- If unable to discard enough cards, Runner flatlines (loses game)
+- Each point of core damage permanently reduces max hand size by 1
 
 **Key Differences from End-of-Turn Discard:**
 - Damage = **random discard** (no player choice)
@@ -476,37 +475,40 @@ Used in:
 ./send_command mulligan
 ```
 
-### Basic Runner Turn
+### Example Runner Turn
 
 ```bash
 ./send_command start-turn
 
-# Play economy card
-./send_command play "Sure Gamble"
+# Draw to get more options
+./send_command draw
+
+# Play economy event card
+./send_command play "<title>"
 
 # Install program/resource
-./send_command install "Daily Casts"
+./send_command install "<title>"
 
-# Spend remaining clicks
-./send_command take-credit
-./send_command take-credit
+./send_command run "<server>"
+
+After the run,
 
 ./send_command end-turn
 ```
 
-### Basic Corp Turn
+### Example Corp Turn
 
 ```bash
 ./send_command start-turn
 # (Automatically drew mandatory card)
 
 # Install ICE
-./send_command install "Palisade" "HQ"
+./send_command install "<title>" "<server>"
 
-# Install agenda
-./send_command install "Project Atlas" "New remote"
+# Install agenda/asset/upgrade
+./send_command install "<title>" "Server <n>"
 
-# Spend remaining clicks
+# No good options for final click
 ./send_command take-credit
 
 ./send_command end-turn
@@ -517,7 +519,7 @@ Used in:
 ```bash
 # Check board state first
 ./send_command board
-./send_command card-text "Tithe"  # Check ICE type if unknown
+./send_command card-text "Palisade"  # Check ICE type if unknown
 
 # Start run
 ./send_command run "R&D"
@@ -549,13 +551,21 @@ Used in:
 
 ---
 
+## Synchronization
+
+- Race conditions are possible between you and your opponent
+- wait-for-relevant-diff <seconds> --since N avoids races since the cursor means the wait returns immediately if condition already met
+- Agent turns can be slow so patience is essential
+- You are likely running in a window, so either a human will have hidden the window to avoid cheating or an opposing agent will not know if you have stopped
+- Hence stopping taking turns is a last resort - use game chat to send a "ping" message if necessary and use long wait-for-relevant diffs instead
+- Humans invariably use the Jinteki web UI to play instead of send_command
+
 ## Technical Notes
 
 ### Server Name Format
 Always use exact game format:
 - **Central servers:** `"HQ"`, `"R&D"`, `"Archives"`
 - **Remote servers:** `"Server 1"`, `"Server 2"`, `"Server 3"`, etc.
-- **Install targets:** `"New remote"` to create new remote
 
 ### Timing
 Commands are sent to a persistent REPL maintaining WebSocket connection. Allow 1-2 seconds for server responses between commands in rapid sequences.
