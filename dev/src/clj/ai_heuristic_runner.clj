@@ -207,7 +207,7 @@
 
 (defn execute-decision [{:keys [action args]}]
   (case action
-    :run     (runs/run! (:server args))
+    :run     (runs/run! (:server args) "--full-break")
     :play    (cards/play-card! (:card-name args))
     :install (cards/install-card! (:card-name args))
     :credit  (actions/take-credit!)

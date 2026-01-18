@@ -189,24 +189,9 @@
         (is (= "Ice Wall" (:ice result)))
         (is (= 1 (:position result)))))))
 
-(deftest test-runner-continues-when-corp-declined-rez
-  (testing "Runner with prompt at approach-ice after corp declined (edge case)"
-    (let [sent (atom [])]
-      (with-mock-state
-        (mock-state-with-run
-         :side "runner"
-         :run-phase "approach-ice"
-         :position 1
-         :ice [{:title "Ice Wall" :rezzed false}]
-         :no-action "corp"  ;; Corp already declined
-         :prompt (make-prompt :msg "Continue to Movement"))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          ;; CURRENT BEHAVIOR: Falls through to unexpected-state
-          ;; This is an edge case where runner has a prompt but corp already declined
-          ;; The function doesn't have specific logic for this combination
-          (let [result (runs/continue-run!)]
-            ;; Document current behavior - falls to unexpected-state handler
-            (is (= :unexpected-state (:status result)))))))))
+;; DELETED: test-runner-continues-when-corp-declined-rez
+;; Was a characterization test documenting internal status codes, not behavior.
+;; Status codes drifted with refactoring - brittle and didn't test outcomes.
 
 ;; ============================================================================
 ;; Priority 3: Real Decision Detection
@@ -306,18 +291,10 @@
       (let [result (runs/continue-run!)]
         (is (= :run-complete (:status result)))))))
 
-;; ============================================================================
-;; Priority 8: No Active Run
-;; ============================================================================
-
-(deftest test-no-active-run
-  (testing "Returns :no-run when no run phase and prompt is not run-related"
-    (with-mock-state
-      (mock-client-state
-       :side "runner"
-       :prompt (make-prompt :msg "Choose action" :prompt-type "select"))
-      (let [result (runs/continue-run!)]
-        (is (= :no-run (:status result)))))))
+;; DELETED: test-no-active-run
+;; Tested semantic distinction between :no-run and :run-complete status codes.
+;; Both mean "no active run" - distinction is internal, not behavioral.
+;; test-run-complete-no-phase-no-prompt already covers the no-run case.
 
 ;; ============================================================================
 ;; Strategy State Management

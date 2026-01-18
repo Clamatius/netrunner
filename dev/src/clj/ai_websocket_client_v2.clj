@@ -389,12 +389,13 @@
   "Rejoin a game after reconnection using gameid from game state"
   []
   (when-let [gameid (get-in @state/client-state [:game-state :gameid])]
-    (println "♻️  Rejoining game:" gameid)
-    (send-message! :lobby/join
-                   {:gameid (state/normalize-gameid gameid)
-                    :request-side "Runner"})
-    (Thread/sleep 2000)
-    true))
+    (let [side (or (:side @state/client-state) "Runner")]
+      (println "♻️  Rejoining game:" gameid "as" side)
+      (send-message! :lobby/join
+                     {:gameid (state/normalize-gameid gameid)
+                      :request-side (str/capitalize side)})
+      (Thread/sleep 2000)
+      true)))
 
 ;; ============================================================================
 ;; Action Helpers (Used by ai-prompts)

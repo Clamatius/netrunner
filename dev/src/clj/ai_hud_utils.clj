@@ -1,5 +1,5 @@
 (ns ai-hud-utils
-  "HUD file management utilities for multi-client safe updates to CLAUDE.local.md"
+  "HUD file management utilities for multi-client safe updates to hud_file.txt"
   (:require [ai-state :as state]
             [clojure.string :as str])
   (:import [java.nio.channels FileChannel FileLock]
@@ -28,7 +28,7 @@
   "Update a specific section in the shared HUD file with file locking.
    Reads entire file, updates the section for this client, writes back atomically."
   [section-name content]
-  (let [hud-path "CLAUDE.local.md"
+  (let [hud-path "hudfile.txt"
         client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")]
     (with-file-lock hud-path
       (fn []
@@ -94,7 +94,7 @@
                               " (" subtitle ")")))))))))))
 
 (defn write-game-log-to-hud
-  "Write game log to CLAUDE.local.md for HUD visibility (multi-client safe)"
+  "Write game log to hudfile.txt for HUD visibility (multi-client safe)"
   ([] (write-game-log-to-hud 30))
   ([n]
    (if-let [log (get-in @state/client-state [:game-state :log])]
@@ -108,5 +108,5 @@
                                log-text
                                "\n\n---\n"
                                "Updated: " (java.time.Instant/now)))
-       (println "✅ Game log written to CLAUDE.local.md"))
+       (println "✅ Game log written to hudfile.txt"))
      (println "No game log available"))))

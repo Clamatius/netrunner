@@ -47,9 +47,10 @@
         (println "   ./dev/send_command <side> list-lobbies")
         (println "   ./dev/send_command <side> join <game-id> <Side>"))
       ;; Check if we're in a lobby but game hasn't started yet
-      (if (and lobby (not (:started lobby)))
-      ;; Show lobby status
-      (let [players (:players lobby)
+      (cond
+        ;; Lobby exists but game not started - show lobby status
+        (and lobby (not (:started lobby)))
+        (let [players (:players lobby)
             player-count (count players)
             players-with-decks (count (filter :deck players))
             sides (set (map :side players))
@@ -79,8 +80,17 @@
                  (< player-count 2) (format "⏳ Waiting for players (%d/2)" player-count)
                  (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
                  :else "⏳ Waiting...")))
-      ;; Show game status
-      (let [my-side (:side @state/client-state)
+
+        ;; Game started but no game state yet (post-join, pre-resync)
+        (nil? gs)
+        (do
+          (println "📊 GAME STATUS")
+          (println "\n⏳ Waiting for game state...")
+          (println "💡 Use 'resync <game-id>' to fetch game state"))
+
+        ;; Show game status
+        :else
+        (let [my-side (:side @state/client-state)
             game-id (:gameid @state/client-state)
             active-side (state/active-player)
             turn-num (state/turn-number)
@@ -463,10 +473,9 @@
             (println "     -" (:side player) ":" (get-in player [:user :username] "Waiting..."))))
         (when (:started game)
           (println "   ⚠️  Game already started")))
-      (println "\nTo join a game, use: (join-game! {:gameid \"...\" :side \"Corp\"})")
       (println))
     (do
-      (println "No games available. Request lobby list with: (request-lobby-list!)")
+      (println "No games available.")
       nil)))
 
 (defn show-log-compact
