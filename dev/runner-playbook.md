@@ -22,6 +22,18 @@
 
 **Sure Gamble as the unit of credit measure:** Every deck plays 3x Sure Gamble, because 5→9 on turn 1 is too good not to. Total exchange is burst 2:1 clicks:credits. Money cards are usually burst or drip (slow rewards). It is important to distinguish which is which.
 
+### Conditions Reward Sequencing
+
+**Many cards have "if/when/first time" triggers.** Before acting, ask: can I order my clicks to enable discounts, maximize triggers, or dodge thresholds?
+
+**Common patterns:**
+- **"If you made a successful run this turn..."** (Carmen) → Run a free server first, then install at discount
+- **"The first time each turn..."** (Docklands Pass) → Make that first breach count; don't waste it on low-value access
+- **"If the Runner has 6 credits or less..."** (Whitespace) → Enter with >9 credits to avoid the ETR
+- **"Whenever you make a successful run..."** (Pennyshaver) → Run before clicking to cash out, so you collect the bonus
+
+**The difference between "run then install" and "install then run" is often 2+ credits.** Read the trigger, then order your clicks.
+
 ### The Statistical Reality
 
 **You need ~mean 17 *random* accesses to win with 7 points (tutorial less)** (varies by agenda density and luck).
