@@ -972,9 +972,12 @@
               already-printed? (= @last-waiting-status status-key)]
           (when-not already-printed?
             (reset! last-waiting-status status-key)
-            (println (format "🛑 Fire decision: %s (%d unbroken sub%s)"
+            (println (format "🛑 Subs unbroken: %s (%d sub%s)"
                            ice-title sub-count (if (= sub-count 1) "" "s")))
-            (println "   → Use 'fire-subs <name>' to fire, or 'continue' to skip"))
+            (println "   ⚠️  Runner has NOT signaled 'let subs fire' yet")
+            (println "   → WAIT for Runner to break or signal (unless they obviously can't)")
+            (println "   → fire-subs <name>  - only after Runner confirms")
+            (println "   → continue          - pass without firing"))
           {:status :decision-required
            :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
            :ice ice-title
