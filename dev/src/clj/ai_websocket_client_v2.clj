@@ -265,7 +265,11 @@
                              :on-close (fn [& args]
                                          (println "❌ Disconnected:" (first args))
                                          (.stop ws-client)
-                                         (swap! state/client-state assoc :connected false))
+                                         ;; Clear game state to prevent stale reads, but keep gameid for rejoin
+                                         (swap! state/client-state assoc
+                                                :connected false
+                                                :game-state nil
+                                                :last-state nil))
                              :on-error (fn [& args]
                                          (println "❌ Error:" (first args)))
                              :client ws-client}
@@ -374,37 +378,10 @@
 ;; Connection Management
 ;; ============================================================================
 
-(defn ensure-connected!
-  "Check connection and reconnect if needed. Returns true if connected.
-   Also checks socket health - the :connected flag can be stale."
-  ([] (ensure-connected! "ws://localhost:1042/chsk"))
-  ([url]
-   (cond
-     ;; Socket exists but is broken - clear it and reconnect
-     (and (connected?) (not (socket-healthy?)))
-     (do
-       (println "⚠️  Socket broken, clearing and reconnecting...")
-       (swap! state/client-state assoc :socket nil :ws-client nil :connected false)
-       (Thread/sleep 200)
-       (connect! url)
-       (Thread/sleep 2000)
-       (connected?))
-
-     ;; Not connected at all
-     (not (connected?))
-     (do
-       (println "⚠️  Not connected, reconnecting...")
-       (connect! url)
-       (Thread/sleep 2000)
-       (connected?))
-
-     ;; Connected and healthy
-     :else true)))
-
 (defn rejoin-game!
-  "Rejoin a game after reconnection using gameid from game state"
+  "Rejoin a game after reconnection using gameid from client state root"
   []
-  (when-let [gameid (get-in @state/client-state [:game-state :gameid])]
+  (when-let [gameid (:gameid @state/client-state)]
     (let [side (or (:side @state/client-state) "Runner")]
       (println "♻️  Rejoining game:" gameid "as" side)
       (send-message! :lobby/join
@@ -412,6 +389,40 @@
                       :request-side (str/capitalize side)})
       (Thread/sleep 2000)
       true)))
+
+(defn ensure-connected!
+  "Check connection and reconnect if needed. Returns true if connected.
+   Also checks socket health - the :connected flag can be stale.
+   After reconnect, auto-rejoins game if we had one."
+  ([] (ensure-connected! "ws://localhost:1042/chsk"))
+  ([url]
+   (let [had-gameid (:gameid @state/client-state)
+         reconnected
+         (cond
+           ;; Socket exists but is broken - clear it and reconnect
+           (and (connected?) (not (socket-healthy?)))
+           (do
+             (println "⚠️  Socket broken, clearing and reconnecting...")
+             (swap! state/client-state assoc :socket nil :ws-client nil :connected false)
+             (Thread/sleep 200)
+             (connect! url)
+             (Thread/sleep 2000)
+             :reconnected)
+
+           ;; Not connected at all
+           (not (connected?))
+           (do
+             (println "⚠️  Not connected, reconnecting...")
+             (connect! url)
+             (Thread/sleep 2000)
+             :reconnected)
+
+           ;; Connected and healthy
+           :else :already-connected)]
+     ;; Auto-rejoin if we reconnected and had a game
+     (when (and (= reconnected :reconnected) had-gameid (connected?))
+       (rejoin-game!))
+     (connected?))))
 
 ;; ============================================================================
 ;; Action Helpers (Used by ai-prompts)

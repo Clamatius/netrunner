@@ -116,6 +116,14 @@
 
 (defn get-game-state [] (:game-state @client-state))
 
+(defn get-game-state!
+  "Get game state, throwing if disconnected (fail-fast on stale reads).
+   Use this in commands where stale data would be misleading."
+  []
+  (when-not (:connected @client-state)
+    (throw (ex-info "Cannot read game state: disconnected" {:stale true})))
+  (:game-state @client-state))
+
 (defn active-player [] (get-in @client-state [:game-state :active-player]))
 (defn my-turn? [] (= (:side @client-state) (active-player)))
 (defn turn-number [] (get-in @client-state [:game-state :turn]))
