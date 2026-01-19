@@ -89,6 +89,8 @@
 
    Supported flags:
    --full-break      : Runner auto-breaks all ICE
+   --tank <ice-name> : Runner pre-authorizes letting subs fire on specified ICE
+   --tank-all        : Runner pre-authorizes letting subs fire on ALL ICE (yolo)
    --no-rez          : Corp doesn't rez anything
    --rez <ice-name>  : Corp only rezzes specified ICE
    --fire-unbroken   : Corp auto-fires unbroken subs
@@ -117,6 +119,21 @@
           ;; Boolean flags
           (= arg "--full-break")
           (recur rest-args server (assoc flags :full-break true))
+
+          (= arg "--tank-all")
+          (recur rest-args server (assoc flags :tank-all true))
+
+          ;; --tank <ice-name> (takes argument, can be repeated)
+          (= arg "--tank")
+          (if (empty? rest-args)
+            (do
+              (println "⚠️  --tank requires ICE name argument")
+              (recur rest-args server flags))
+            (let [ice-name (first rest-args)
+                  current-tank-set (get flags :tank #{})]
+              (recur (rest rest-args)
+                     server
+                     (assoc flags :tank (conj current-tank-set ice-name)))))
 
           (= arg "--no-rez")
           (recur rest-args server (assoc flags :no-rez true))
@@ -532,12 +549,20 @@
      :args {:msg (str "indicates to fire all unbroken subroutines on " ice-title)}})
   (Thread/sleep core/polling-delay))
 
+(defn- filter-meaningful-log-entries
+  "Filter log entries to exclude 'no further action' spam.
+   This prevents spam from pushing meaningful entries out of our detection window."
+  [log-entries]
+  (remove #(clojure.string/includes? (str (:text %)) "has no further action") log-entries))
+
 (defn- runner-signaled-let-fire?
   "Check if Runner has signaled they're done breaking on current ICE.
-   Looks for the specific system message in recent game log."
+   Looks for the specific system message in recent game log.
+   Filters out 'no further action' spam to ensure signal isn't missed."
   [state ice-title]
   (let [log (get-in state [:game-state :log])
-        recent (take-last 10 log)]
+        meaningful (filter-meaningful-log-entries log)
+        recent (take-last 20 meaningful)]  ; Increased window for safety
     (some #(and (clojure.string/includes? (str (:text %)) "indicates to fire")
                 (clojure.string/includes? (str (:text %)) ice-title))
           recent)))
@@ -1388,10 +1413,18 @@
                   (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
               nil)))))))
 
+(defn- ice-authorized-for-fire?
+  "Check if Runner has pre-authorized letting subs fire on this ICE.
+   Authorization comes from --tank <ice-name> or --tank-all flags."
+  [strategy ice-title]
+  (or (:tank-all strategy)
+      (contains? (get strategy :tank #{}) ice-title)))
+
 (defn handle-runner-encounter-ice
   "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
    Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff.
-   NOTE: Skip signal when --full-break is active (we're trying to break, not let fire)."
+   SAFETY: Only signals if Runner explicitly authorized via --tank or --tank-all.
+   Without authorization, pauses and asks Runner to decide."
   [{:keys [side run-phase state gameid strategy]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
@@ -1416,25 +1449,41 @@
       (when (and current-ice (:rezzed current-ice) (seq unfired-subs) (not corp-passed?))
         (let [ice-title (:title current-ice "ICE")
               sub-count (count unfired-subs)
+              authorized? (ice-authorized-for-fire? strategy ice-title)
               status-key [:waiting-for-corp-fire position ice-title]
               already-printed? (= @last-waiting-status status-key)
-              ;; Check if we've already signaled at this position
               already-signaled? (= @signaled-fire-position position)]
-          ;; Send signal once per ICE encounter (for model-vs-model coordination)
-          (when-not already-signaled?
-            (reset! signaled-fire-position position)
-            (println (format "📡 Signaling Corp: done breaking on %s" ice-title))
-            (let-subs-fire-signal! gameid ice-title))
-          ;; Only print waiting message once
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
-                           ice-title sub-count (if (= sub-count 1) "" "s"))))
-          {:status :waiting-for-corp-fire
-           :message (format "Waiting for Corp to fire subs on %s or pass" ice-title)
-           :ice ice-title
-           :unbroken-count sub-count
-           :position position})))))
+          (if (not authorized?)
+            ;; NOT authorized - pause and ask Runner to decide
+            (do
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "⚠️  %s has %d unbroken sub%s - authorization required"
+                               ice-title sub-count (if (= sub-count 1) "" "s")))
+                (println "   Options:")
+                (println (format "   → tank \"%s\"         - let subs fire, continue run" ice-title))
+                (println "   → jack-out            - end the run")
+                (println (format "   → Or break subs with: break \"%s\" <breaker>" ice-title)))
+              {:status :fire-decision-required
+               :message (format "%s has %d unbroken sub(s) - use 'tank' to let fire or 'jack-out'" ice-title sub-count)
+               :ice ice-title
+               :unbroken-count sub-count
+               :position position})
+            ;; Authorized - send signal to Corp
+            (do
+              (when-not already-signaled?
+                (reset! signaled-fire-position position)
+                (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)" ice-title))
+                (let-subs-fire-signal! gameid ice-title))
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
+                               ice-title sub-count (if (= sub-count 1) "" "s"))))
+              {:status :waiting-for-corp-fire
+               :message (format "Waiting for Corp to fire subs on %s or pass" ice-title)
+               :ice ice-title
+               :unbroken-count sub-count
+               :position position})))))))
 
 (defn handle-runner-pass-broken-ice
   "Priority 2.6: Runner at encounter-ice when all subs are broken.
@@ -1478,8 +1527,11 @@
                         (nth ice-list ice-index nil))
           ice-title (:title current-ice "ICE")
           ;; Check if subs have fired (via log, since :fired doesn't sync)
+          ;; Filter out "no further action" spam to prevent it from pushing
+          ;; meaningful entries out of our detection window
           log (get-in state [:game-state :log])
-          recent-log (take 10 (reverse log))
+          meaningful-log (filter-meaningful-log-entries (reverse log))
+          recent-log (take 20 meaningful-log)  ; Increased window for safety
           subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
                                          (str (:text %)))
                                recent-log)]
@@ -1681,7 +1733,7 @@
 (defn- terminal-status?
   "Returns true if this status should stop the auto-continue loop"
   [status]
-  (contains? #{:decision-required :ice-rezzed :ability-used :subs-fired
+  (contains? #{:decision-required :fire-decision-required :ice-rezzed :ability-used :subs-fired
                :tag-or-damage :run-complete :no-run
                :tactic-paused :tactic-failed}  ; Tactics system pauses
              status))

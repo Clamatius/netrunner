@@ -313,13 +313,13 @@
 (defn parse-card-reference
   "Parse card name with optional [N] index suffix
    Examples:
-     \"Palisade\" -> {:title \"Palisade\" :index 0}
-     \"Palisade [1]\" -> {:title \"Palisade\" :index 1}
-   Returns map with :title and :index (0-based)"
+     \"Palisade\" -> {:title \"Palisade\" :index 0 :explicit-index? false}
+     \"Palisade [1]\" -> {:title \"Palisade\" :index 1 :explicit-index? true}
+   Returns map with :title, :index (0-based), and :explicit-index?"
   [card-name]
   (if-let [[_ title idx] (re-matches #"(.+?)\s*\[(\d+)\]" card-name)]
-    {:title title :index (Integer/parseInt idx)}
-    {:title card-name :index 0}))
+    {:title title :index (Integer/parseInt idx) :explicit-index? true}
+    {:title card-name :index 0 :explicit-index? false}))
 
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection
@@ -589,18 +589,47 @@
 (defn find-installed-card
   "Find an installed card by title in the rig
    Supports [N] suffix for duplicate cards: \"Corroder [1]\"
-   Searches programs, hardware, and resources"
+   Searches programs, hardware, and resources
+   Returns nil and prints disambiguation message if multiple copies and no index specified"
   [card-name]
   (let [rig (state/runner-rig)
         all-installed (concat (:program rig) (:hardware rig) (:resource rig))
-        {:keys [title index]} (parse-card-reference card-name)
-        matches (filter #(= title (:title %)) all-installed)]
-    (nth (vec matches) index nil)))
+        {:keys [title index explicit-index?]} (parse-card-reference card-name)
+        matches (filter #(= title (:title %)) all-installed)
+        match-count (count matches)]
+    (cond
+      (zero? match-count) nil
+      (= 1 match-count) (first matches)
+      explicit-index? (nth (vec matches) index nil)
+      :else
+      (do
+        (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
+        (println "   Specify which one:")
+        (doseq [[idx card] (map-indexed vector matches)]
+          (let [zone-name (name (last (:zone card)))]
+            (println (format "   → \"%s [%d]\" (%s)" title idx zone-name))))
+        nil))))
+
+(defn- card-server-location
+  "Get human-readable server location for a Corp card"
+  [card]
+  (let [zone (:zone card)]
+    (when (and zone (>= (count zone) 2))
+      (let [server-key (nth zone 1)]
+        (case server-key
+          :hq "HQ"
+          :rd "R&D"
+          :archives "Archives"
+          ;; Remote servers
+          (if (and (keyword? server-key) (clojure.string/starts-with? (name server-key) "remote"))
+            (str "Server " (subs (name server-key) 6))
+            (name server-key)))))))
 
 (defn find-installed-corp-card
   "Find an installed Corp card by title
    Supports [N] suffix for duplicate cards: \"Palisade [1]\"
-   Searches all servers for ICE, assets, and upgrades"
+   Searches all servers for ICE, assets, and upgrades
+   Returns nil and prints disambiguation message if multiple copies and no index specified"
   [card-name]
   (let [servers (state/corp-servers)
         ;; Get all ICE from all servers
@@ -608,9 +637,23 @@
         ;; Get all content (assets/upgrades) from all servers
         all-content (mapcat :content (vals servers))
         all-installed (concat all-ice all-content)
-        {:keys [title index]} (parse-card-reference card-name)
-        matches (filter #(= title (:title %)) all-installed)]
-    (nth (vec matches) index nil)))
+        {:keys [title index explicit-index?]} (parse-card-reference card-name)
+        matches (filter #(= title (:title %)) all-installed)
+        match-count (count matches)]
+    (cond
+      (zero? match-count) nil
+      (= 1 match-count) (first matches)
+      explicit-index? (nth (vec matches) index nil)
+      :else
+      (do
+        (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
+        (println "   Specify which one:")
+        (doseq [[idx card] (map-indexed vector matches)]
+          (let [location (card-server-location card)
+                rezzed? (:rezzed card)
+                status (if rezzed? "rezzed" "unrezzed")]
+            (println (format "   → \"%s [%d]\" (%s, %s)" title idx location status))))
+        nil))))
 
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.

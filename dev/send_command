@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -209,6 +209,8 @@ ${GREEN}Prompts:${NC}
                      --single  Single-step mode (one action, then return)
                      --raw     Raw WebSocket pass (debugging only)
   jack-out        - Jack out of current run (end run unsuccessfully)
+  tank <ice-name> - Authorize letting subs fire on ICE, then continue run
+                     Use when paused at "authorization required" for unbroken subs
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
                      Wakes on: runs starting/ending, prompts, your turn to act
@@ -871,6 +873,25 @@ case "$COMMAND" in
                         (Thread/sleep 500)
                         (println "🚪 Jacked out of run"))
                       (println "❌ Not in a run"))))'
+        ;;
+
+    tank)
+        # Authorize letting subs fire on specified ICE, then continue run
+        ensure_connection
+        ICE_NAME="${1:-}"
+        if [[ -z "$ICE_NAME" ]]; then
+            error "tank requires ICE name. Usage: tank \"Ice Wall\""
+        fi
+        # Escape quotes in ICE name for Clojure string
+        ICE_NAME_ESCAPED="${ICE_NAME//\"/\\\"}"
+        execute "(do
+                  (require (quote [ai-runs :as runs]))
+                  (let [ice-name \"$ICE_NAME_ESCAPED\"
+                        current-tank (get (runs/get-strategy) :tank #{})]
+                    (runs/set-strategy! {:tank (conj current-tank ice-name)})
+                    (println (format \"✅ Authorized tank on: %s\" ice-name))
+                    (runs/continue-run!)))"
+        show_last_log_if_enabled
         ;;
 
     concede)
