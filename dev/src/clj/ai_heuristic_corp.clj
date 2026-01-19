@@ -43,9 +43,11 @@
 ;; ============================================================================
 
 (def config
-  {:min-credits 8          ; Below this, prioritize economy (high enough to afford Hedge Fund)
+  {:min-credits 8          ; Below this, prioritize economy
    :min-hand-size 3        ; Below this, consider drawing
-   :central-ice-target 1   ; Desired ICE per central
+   :ice-hq-target 1        ; Just one ICE on HQ (single-remote strategy)
+   :ice-rd-target 2        ; Layer R&D
+   :win-points 7           ; Points needed to win (6 for tutorial, 7 for full)
    :log-decisions true})   ; Print decision reasoning
 
 (defn log-message [& args]
@@ -86,6 +88,33 @@
 
 (defn assets-in-hand []
   (cards-of-type (my-hand) "Asset"))
+
+(defn upgrades-in-hand []
+  (cards-of-type (my-hand) "Upgrade"))
+
+(defn traps-in-hand
+  "Find assets that are traps (Urtica Cipher, etc.) - advanceable bluffs"
+  []
+  (filter (fn [card]
+            (or (str/includes? (str (:title card)) "Urtica")
+                (str/includes? (str (:title card)) "Cerebral")
+                (str/includes? (str (:title card)) "Snare")
+                (str/includes? (str (:title card)) "NGO Front")
+                ;; Ambush subtype
+                (str/includes? (str (:subtype card)) "Ambush")))
+          (assets-in-hand)))
+
+(defn economy-assets-in-hand
+  "Find assets that generate money (Regolith, PAD, Nico, etc.)"
+  []
+  (filter (fn [card]
+            (or (str/includes? (str (:title card)) "Regolith")
+                (str/includes? (str (:title card)) "PAD Campaign")
+                (str/includes? (str (:title card)) "Nico Campaign")
+                (str/includes? (str (:title card)) "Marilyn")
+                (str/includes? (str (:title card)) "Rashida")))
+          (assets-in-hand)))
+
 
 (defn economy-operations
   "Find playable economy operations (gain credits)"
@@ -159,15 +188,129 @@
           :when (and has-agenda (not has-ice))]
       server-key)))
 
-(defn protected-or-empty-remotes
-  "Find remotes that either have ICE or are empty (good for installing agendas)"
+(defn protected-empty-remote
+  "Find a remote that has ICE and no content. Returns server-key or nil.
+   For single-remote strategy, we only use one remote."
   []
   (let [remotes (get-remote-servers)]
-    (for [[server-key _] remotes
-          :let [content (server-content server-key)
-                has-ice (server-has-ice? server-key)]
-          :when (and has-ice (empty? content))]
-      server-key)))
+    (first
+      (for [[server-key _] remotes
+            :let [content (server-content server-key)
+                  has-ice (server-has-ice? server-key)]
+            :when (and has-ice (empty? content))]
+        server-key))))
+
+(defn protected-remote-for-agenda
+  "Find a remote that has ICE and can accept an agenda.
+   Agenda can share remote with upgrades, but not with other agendas/assets.
+   Returns server-key or nil."
+  []
+  (let [remotes (get-remote-servers)]
+    (first
+      (for [[server-key _] remotes
+            :let [content (server-content server-key)
+                  has-ice (server-has-ice? server-key)
+                  has-agenda-or-asset (some #(#{"Agenda" "Asset"} (:type %)) content)]
+            :when (and has-ice (not has-agenda-or-asset))]
+        server-key))))
+
+(defn protected-remote-with-asset
+  "Find a remote that has ICE and contains an asset (not an agenda).
+   Used to find remotes where we could overwrite the asset with an agenda.
+   Returns server-key or nil."
+  []
+  (let [remotes (get-remote-servers)]
+    (first
+      (for [[server-key _] remotes
+            :let [content (server-content server-key)
+                  has-ice (server-has-ice? server-key)
+                  has-asset (some #(= "Asset" (:type %)) content)
+                  has-agenda (some #(= "Agenda" (:type %)) content)]
+            :when (and has-ice has-asset (not has-agenda))]
+        server-key))))
+
+(defn the-remote
+  "Get THE remote server (single-remote strategy).
+   Returns the first remote if it exists, or nil."
+  []
+  (first (keys (get-remote-servers))))
+
+(defn remote-server-name
+  "Convert server-key like :remote1 to 'Server 1'"
+  [server-key]
+  (when server-key
+    (let [num (Integer/parseInt (str/replace (name server-key) "remote" ""))]
+      (str "Server " num))))
+
+;; ============================================================================
+;; Scoring Economics - Can we afford to install and score?
+;; ============================================================================
+
+(defn my-agenda-points
+  "Get Corp's current agenda points"
+  []
+  (or (get-in @state/client-state [:game-state :corp :agenda-point]) 0))
+
+(defn server-rez-cost
+  "Calculate total rez cost of unrezzed ICE on a server"
+  [server-key]
+  (let [ice-list (state/server-ice server-key)]
+    (->> ice-list
+         (filter #(not (:rezzed %)))
+         (map #(or (:cost %) 0))
+         (reduce + 0))))
+
+(defn agenda-advancement-cost
+  "Get the advancement cost of an agenda"
+  [agenda]
+  (or (:advancementcost agenda) 0))
+
+(defn can-afford-agenda-install?
+  "Check if we can afford to install agenda in remote and score it.
+   Needs: credits > rez cost of unrezzed ICE + advancement cost
+   This ensures we can rez ICE and advance to score."
+  [agenda server-key]
+  (let [rez-cost (server-rez-cost server-key)
+        adv-cost (agenda-advancement-cost agenda)
+        total-needed (+ rez-cost adv-cost)
+        credits (my-credits)]
+    (> credits total-needed)))
+
+(defn can-win-with-agenda?
+  "Check if scoring an agenda would win the game"
+  [agenda]
+  (let [current-points (my-agenda-points)
+        agenda-points (or (:agendapoints agenda) 0)
+        win-points (:win-points config)]
+    (>= (+ current-points agenda-points) win-points)))
+
+(defn winning-agenda-for-remote
+  "Find an agenda in hand that would win the game if installed in the remote.
+   Returns the agenda if we can afford to install and score it, nil otherwise."
+  []
+  (when-let [remote (the-remote)]
+    (first (filter #(and (can-win-with-agenda? %)
+                         (can-afford-agenda-install? % remote))
+                   (agendas-in-hand)))))
+
+(defn affordable-agenda-for-remote
+  "Find an agenda in hand that we can afford to install and score.
+   Only returns an agenda if there's a protected remote that can accept it
+   (has ICE, no existing agenda/asset - upgrades are fine).
+   Returns the agenda, or nil if none affordable or no suitable remote."
+  []
+  (when-let [remote (protected-remote-for-agenda)]
+    (first (filter #(can-afford-agenda-install? % remote)
+                   (agendas-in-hand)))))
+
+(defn affordable-agenda-to-overwrite-asset
+  "Find an agenda we can afford to install by overwriting an asset.
+   Used when the remote is blocked by an economy asset.
+   Returns the agenda, or nil if none affordable or no asset to overwrite."
+  []
+  (when-let [remote (protected-remote-with-asset)]
+    (first (filter #(can-afford-agenda-install? % remote)
+                   (agendas-in-hand)))))
 
 (defn central-ice-counts
   "Return map of central server -> ICE count"
@@ -176,14 +319,37 @@
    :rd (count (state/server-ice :rd))
    :archives (count (state/server-ice :archives))})
 
-(defn weakest-central
-  "Find the central with least ICE (nil if all meet target)"
+(defn remote-ice-count
+  "Count ICE on THE remote (or 0 if no remote)"
   []
-  (let [counts (central-ice-counts)
-        target (:central-ice-target config)
-        under-target (filter (fn [[_ cnt]] (< cnt target)) counts)]
-    (when (seq under-target)
-      (key (apply min-key val under-target)))))
+  (if-let [remote (the-remote)]
+    (count (state/server-ice remote))
+    0))
+
+(defn next-ice-target
+  "Determine where to install next ICE. Single-remote strategy:
+   1. R&D needs at least 1 ICE first (most important)
+   2. HQ needs exactly 1 ICE
+   3. Then layer on remote
+   4. Then keep layering R&D
+   Returns server name string or nil if nowhere needs ICE."
+  []
+  (let [{:keys [hq rd]} (central-ice-counts)
+        remote-ice (remote-ice-count)
+        remote (the-remote)]
+    (cond
+      ;; R&D needs first ICE (critical)
+      (zero? rd) "R&D"
+      ;; HQ needs its one ICE
+      (zero? hq) "HQ"
+      ;; Remote needs ICE (if remote exists)
+      (and remote (< remote-ice 2)) (remote-server-name remote)
+      ;; Layer more on R&D
+      (< rd (:ice-rd-target config)) "R&D"
+      ;; Keep layering remote
+      (and remote (< remote-ice 3)) (remote-server-name remote)
+      ;; All good
+      :else nil)))
 
 ;; ============================================================================
 ;; Asset Helpers
@@ -255,10 +421,10 @@
 (defn empty-remote-for-asset
   "Find an empty remote (with ICE) for installing an asset, or nil"
   []
-  (first (protected-or-empty-remotes)))
+  (protected-empty-remote))
 
 ;; ============================================================================
-;; Advance Logic Helpers
+;; Advance Logic Helper
 ;; ============================================================================
 
 (defn should-advance?
@@ -302,138 +468,413 @@
             :else nil))))))
 
 ;; ============================================================================
+;; Rule Registry
+;; ============================================================================
+;;
+;; Each rule is a map with:
+;;   :id          - Keyword identifier
+;;   :label       - Short display label (for dashboard)
+;;   :description - What this rule does
+;;   :condition-fn - (fn [ctx] bool) - Returns true if rule applies
+;;   :action-fn    - (fn [ctx] action-map) - Returns {:action :args}
+;;   :reason-fn    - (fn [ctx] string) - Explains why condition failed/passed
+
+(defn make-ctx
+  "Build context map for rule evaluation. Caches expensive lookups."
+  []
+  {:clicks (my-clicks)
+   :credits (my-credits)
+   :hand (my-hand)
+   :hand-size (count (my-hand))
+   :scorables (scorable-agendas)
+   :advanceables (advanceable-agendas)
+   :unprotected-agenda-servers (unprotected-remotes-with-agendas)
+   :ice-in-hand (ice-in-hand)
+   :agendas-in-hand (agendas-in-hand)
+   :economy-ops (economy-operations)
+   :economy-assets (economy-assets-in-hand)
+   :traps-in-hand (traps-in-hand)
+   :upgrades-in-hand (upgrades-in-hand)
+   :remotes (get-remote-servers)
+   :the-remote (the-remote)
+   :protected-empty (protected-empty-remote)
+   :protected-for-agenda (protected-remote-for-agenda)
+   :protected-with-asset (protected-remote-with-asset)
+   :click-assets (rezzed-assets-with-click-abilities)
+   :click-econ-unrezzed (click-economy-assets)
+   :ice-target (next-ice-target)
+   :my-points (my-agenda-points)
+   :min-credits (:min-credits config)
+   :min-hand-size (:min-hand-size config)})
+
+(def rules
+  "Ordered list of Corp decision rules. First matching rule wins."
+  [{:id :score
+    :label "SCORE"
+    :description "Score agenda that's ready"
+    :condition-fn (fn [ctx] (seq (:scorables ctx)))
+    :action-fn (fn [ctx]
+                 (let [agenda (first (:scorables ctx))]
+                   {:action :score :args {:card-name (:title agenda)}}))
+    :reason-fn (fn [ctx]
+                 (if (seq (:scorables ctx))
+                   (str (:title (first (:scorables ctx))) " is scorable")
+                   "no scorable agendas"))}
+
+   {:id :protect-naked-agenda
+    :label "PROTECT"
+    :description "ICE unprotected agenda in remote"
+    :condition-fn (fn [ctx]
+                    (and (seq (:unprotected-agenda-servers ctx))
+                         (seq (:ice-in-hand ctx))))
+    :action-fn (fn [ctx]
+                 (let [server-key (first (:unprotected-agenda-servers ctx))
+                       ice (first (:ice-in-hand ctx))]
+                   {:action :install-ice
+                    :args {:card-name (:title ice)
+                           :server (remote-server-name server-key)}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (empty? (:unprotected-agenda-servers ctx)) "no unprotected agendas"
+                   (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                   :else (str "protect " (name (first (:unprotected-agenda-servers ctx))))))}
+
+   {:id :install-for-win
+    :label "INSTALL FOR WIN"
+    :description "Install agenda that wins the game"
+    :condition-fn (fn [_] (winning-agenda-for-remote))
+    :action-fn (fn [_]
+                 (let [agenda (winning-agenda-for-remote)
+                       server (remote-server-name (the-remote))]
+                   {:action :install :args {:card-name (:title agenda) :server server}}))
+    :reason-fn (fn [ctx]
+                 (let [agenda (winning-agenda-for-remote)]
+                   (if agenda
+                     (str (:title agenda) " wins at " (+ (:my-points ctx) (or (:agendapoints agenda) 0)) " pts")
+                     (str (:my-points ctx) " pts + hand agendas < " (:win-points config)))))}
+
+   {:id :create-remote
+    :label "CREATE REMOTE"
+    :description "Create remote if none exists"
+    :condition-fn (fn [ctx]
+                    (and (empty? (:remotes ctx))
+                         (seq (:ice-in-hand ctx))))
+    :action-fn (fn [ctx]
+                 (let [ice (first (:ice-in-hand ctx))]
+                   {:action :install-ice
+                    :args {:card-name (:title ice) :server "New remote"}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (seq (:remotes ctx)) "remote already exists"
+                   (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                   :else "creating new remote"))}
+
+   {:id :install-agenda
+    :label "INSTALL AGENDA"
+    :description "Install agenda to protected remote"
+    :condition-fn (fn [_] (affordable-agenda-for-remote))
+    :action-fn (fn [_]
+                 (let [agenda (affordable-agenda-for-remote)
+                       remote (protected-remote-for-agenda)
+                       server (remote-server-name remote)]
+                   {:action :install :args {:card-name (:title agenda) :server server}}))
+    :reason-fn (fn [ctx]
+                 (let [agenda (affordable-agenda-for-remote)
+                       remote (protected-remote-for-agenda)]
+                   (cond
+                     (nil? remote) "no protected empty remote"
+                     (empty? (:agendas-in-hand ctx)) "no agendas in hand"
+                     (nil? agenda) "can't afford to score"
+                     :else (str (:title agenda) " to " (remote-server-name remote)))))}
+
+   {:id :overwrite-asset
+    :label "OVERWRITE ASSET"
+    :description "Replace econ asset with agenda"
+    :condition-fn (fn [_] (affordable-agenda-to-overwrite-asset))
+    :action-fn (fn [_]
+                 (let [agenda (affordable-agenda-to-overwrite-asset)
+                       remote (protected-remote-with-asset)
+                       server (remote-server-name remote)]
+                   {:action :install :args {:card-name (:title agenda) :server server}}))
+    :reason-fn (fn [ctx]
+                 (let [agenda (affordable-agenda-to-overwrite-asset)
+                       remote (protected-remote-with-asset)]
+                   (cond
+                     (nil? remote) "no remote with asset"
+                     (empty? (:agendas-in-hand ctx)) "no agendas in hand"
+                     (nil? agenda) "can't afford to score"
+                     :else (str (:title agenda) " overwrites in " (remote-server-name remote)))))}
+
+   {:id :install-trap
+    :label "INSTALL TRAP"
+    :description "Install trap as bluff"
+    :condition-fn (fn [ctx]
+                    (and (:protected-empty ctx)
+                         (>= (:credits ctx) 5)
+                         (seq (:traps-in-hand ctx))))
+    :action-fn (fn [ctx]
+                 (let [trap (first (:traps-in-hand ctx))
+                       server (remote-server-name (:protected-empty ctx))]
+                   {:action :install :args {:card-name (:title trap) :server server}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (nil? (:protected-empty ctx)) "no protected empty remote"
+                   (< (:credits ctx) 5) "need 5+ credits for bluff"
+                   (empty? (:traps-in-hand ctx)) "no traps in hand"
+                   :else (str (:title (first (:traps-in-hand ctx))) " as bluff")))}
+
+   {:id :install-econ-asset
+    :label "INSTALL ECON"
+    :description "Install economy asset to remote"
+    :condition-fn (fn [ctx]
+                    (and (:protected-empty ctx)
+                         (seq (:economy-assets ctx))))
+    :action-fn (fn [ctx]
+                 (let [asset (first (:economy-assets ctx))
+                       server (remote-server-name (:protected-empty ctx))]
+                   {:action :install :args {:card-name (:title asset) :server server}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (nil? (:protected-empty ctx)) "no protected empty remote"
+                   (empty? (:economy-assets ctx)) "no econ assets in hand"
+                   :else (str (:title (first (:economy-assets ctx))) " to remote")))}
+
+   {:id :install-upgrade
+    :label "INSTALL UPGRADE"
+    :description "Install upgrade to remote"
+    :condition-fn (fn [ctx]
+                    (and (:protected-empty ctx)
+                         (seq (:upgrades-in-hand ctx))))
+    :action-fn (fn [ctx]
+                 (let [upgrade (first (:upgrades-in-hand ctx))
+                       server (remote-server-name (:protected-empty ctx))]
+                   {:action :install :args {:card-name (:title upgrade) :server server}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (nil? (:protected-empty ctx)) "no protected empty remote"
+                   (empty? (:upgrades-in-hand ctx)) "no upgrades in hand"
+                   :else (str (:title (first (:upgrades-in-hand ctx))) " to remote")))}
+
+   {:id :advance
+    :label "ADVANCE"
+    :description "Advance installed agenda"
+    :condition-fn (fn [ctx] (should-advance? (:clicks ctx) (:credits ctx)))
+    :action-fn (fn [ctx]
+                 (let [agenda (should-advance? (:clicks ctx) (:credits ctx))]
+                   {:action :advance :args {:card-name (:title agenda)}}))
+    :reason-fn (fn [ctx]
+                 (let [agenda (should-advance? (:clicks ctx) (:credits ctx))]
+                   (if agenda
+                     (str (:title agenda) " "
+                          (or (:advance-counter agenda) 0) "/" (:advancementcost agenda))
+                     (cond
+                       (empty? (:advanceables ctx)) "no advanceable agendas"
+                       (< (:credits ctx) 1) "need 1+ credit"
+                       :else "would strand at scorable"))))}
+
+   {:id :use-asset-low
+    :label "USE ASSET"
+    :description "Use click asset when poor"
+    :condition-fn (fn [ctx]
+                    (and (< (:credits ctx) (:min-credits ctx))
+                         (seq (:click-assets ctx))))
+    :action-fn (fn [ctx]
+                 (let [asset (first (:click-assets ctx))
+                       ability-idx (:ability-idx asset)]
+                   {:action :use-ability
+                    :args {:card-name (:title asset) :ability-idx ability-idx}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (>= (:credits ctx) (:min-credits ctx)) (str "have " (:credits ctx) " >= " (:min-credits ctx))
+                   (empty? (:click-assets ctx)) "no usable click assets"
+                   :else (str "use " (:title (first (:click-assets ctx))))))}
+
+   {:id :econ-op-low
+    :label "ECON OP"
+    :description "Play economy operation when poor"
+    :condition-fn (fn [ctx]
+                    (and (< (:credits ctx) (:min-credits ctx))
+                         (seq (:economy-ops ctx))))
+    :action-fn (fn [ctx]
+                 (let [op (first (:economy-ops ctx))]
+                   {:action :play :args {:card-name (:title op)}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (>= (:credits ctx) (:min-credits ctx)) (str "have " (:credits ctx) " >= " (:min-credits ctx))
+                   (empty? (:economy-ops ctx)) "no econ operations"
+                   :else (str "play " (:title (first (:economy-ops ctx))))))}
+
+   {:id :click-credit-low
+    :label "CLICK CREDIT"
+    :description "Take credit when poor"
+    :condition-fn (fn [ctx] (< (:credits ctx) (:min-credits ctx)))
+    :action-fn (fn [_] {:action :credit :args {}})
+    :reason-fn (fn [ctx]
+                 (if (< (:credits ctx) (:min-credits ctx))
+                   (str (:credits ctx) " < " (:min-credits ctx))
+                   (str "have " (:credits ctx) " >= " (:min-credits ctx))))}
+
+   {:id :use-asset
+    :label "USE ASSET"
+    :description "Drain click assets even when not poor"
+    :condition-fn (fn [ctx] (seq (:click-assets ctx)))
+    :action-fn (fn [ctx]
+                 (let [asset (first (:click-assets ctx))
+                       ability-idx (:ability-idx asset)]
+                   {:action :use-ability
+                    :args {:card-name (:title asset) :ability-idx ability-idx}}))
+    :reason-fn (fn [ctx]
+                 (if (seq (:click-assets ctx))
+                   (str "drain " (:title (first (:click-assets ctx))))
+                   "no usable click assets"))}
+
+   {:id :rez-click-asset
+    :label "REZ ASSET"
+    :description "Rez click economy asset"
+    :condition-fn (fn [ctx]
+                    (and (seq (:click-econ-unrezzed ctx))
+                         (can-rez-asset? (first (:click-econ-unrezzed ctx)) (:credits ctx))))
+    :action-fn (fn [ctx]
+                 (let [asset (first (:click-econ-unrezzed ctx))]
+                   {:action :rez :args {:card-name (:title asset)}}))
+    :reason-fn (fn [ctx]
+                 (let [asset (first (:click-econ-unrezzed ctx))]
+                   (cond
+                     (empty? (:click-econ-unrezzed ctx)) "no unrezzed click assets"
+                     (not (can-rez-asset? asset (:credits ctx))) "can't afford rez"
+                     :else (str "rez " (:title asset)))))}
+
+   {:id :install-ice
+    :label "ICE"
+    :description "Install ICE on next priority target"
+    :condition-fn (fn [ctx]
+                    (and (seq (:ice-in-hand ctx))
+                         (:ice-target ctx)))
+    :action-fn (fn [ctx]
+                 (let [ice (first (:ice-in-hand ctx))
+                       server (:ice-target ctx)]
+                   {:action :install-ice
+                    :args {:card-name (:title ice) :server server}}))
+    :reason-fn (fn [ctx]
+                 (cond
+                   (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                   (nil? (:ice-target ctx)) "all servers covered"
+                   :else (str (:title (first (:ice-in-hand ctx))) " on " (:ice-target ctx))))}
+
+   {:id :econ-op
+    :label "ECON OP"
+    :description "Play economy operation"
+    :condition-fn (fn [ctx] (seq (:economy-ops ctx)))
+    :action-fn (fn [ctx]
+                 (let [op (first (:economy-ops ctx))]
+                   {:action :play :args {:card-name (:title op)}}))
+    :reason-fn (fn [ctx]
+                 (if (seq (:economy-ops ctx))
+                   (str "play " (:title (first (:economy-ops ctx))))
+                   "no econ operations"))}
+
+   {:id :draw
+    :label "DRAW"
+    :description "Draw if hand is small"
+    :condition-fn (fn [ctx] (< (:hand-size ctx) (:min-hand-size ctx)))
+    :action-fn (fn [_] {:action :draw :args {}})
+    :reason-fn (fn [ctx]
+                 (if (< (:hand-size ctx) (:min-hand-size ctx))
+                   (str (:hand-size ctx) " cards < " (:min-hand-size ctx))
+                   (str "have " (:hand-size ctx) " >= " (:min-hand-size ctx))))}
+
+   {:id :default-credit
+    :label "DEFAULT"
+    :description "Take credit as fallback"
+    :condition-fn (fn [_] true)
+    :action-fn (fn [_] {:action :credit :args {}})
+    :reason-fn (fn [_] "fallback action")}])
+
+(defn evaluate-all-rules
+  "Evaluate all rules against current context.
+   Returns list of {:rule :met? :reason :action :priority}"
+  ([] (evaluate-all-rules (make-ctx)))
+  ([ctx]
+   (map-indexed
+     (fn [idx rule]
+       (let [met? (try
+                    (boolean ((:condition-fn rule) ctx))
+                    (catch Exception e
+                      (println "⚠️ Error evaluating rule" (:id rule) ":" (.getMessage e))
+                      false))
+             reason (try
+                      ((:reason-fn rule) ctx)
+                      (catch Exception _ "error"))]
+         {:rule rule
+          :priority (inc idx)
+          :met? met?
+          :reason reason
+          :action (when met?
+                    (try
+                      ((:action-fn rule) ctx)
+                      (catch Exception _ nil)))}))
+     rules)))
+
+(defn dashboard
+  "Return formatted string showing all ranked options.
+   Shows available actions with ✓ and blocked ones with ✗."
+  ([] (dashboard (make-ctx)))
+  ([ctx]
+   (let [evaluated (evaluate-all-rules ctx)
+         lines (for [{:keys [rule priority met? reason]} evaluated]
+                 (let [icon (if met? "✓" "✗")
+                       label (format "%-18s" (:label rule))
+                       rule-id (str "[" (name (:id rule)) "]")]
+                   (str (format "%2d. " priority) icon " " label " " (format "%-24s" rule-id) " " reason)))]
+     (str "\n"
+          "BASELINE RANKING (tutorial-level heuristic)\n"
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+          "Credits: " (:credits ctx) " | Clicks: " (:clicks ctx) " | Hand: " (:hand-size ctx) "\n"
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+          (str/join "\n" lines)
+          "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))))
+
+(defn dashboard-compact
+  "Return compact dashboard showing top N available actions."
+  ([n] (dashboard-compact n (make-ctx)))
+  ([n ctx]
+   (let [evaluated (evaluate-all-rules ctx)
+         available (->> evaluated
+                        (filter :met?)
+                        (take n))]
+     (str "\n"
+          "AVAILABLE OPTIONS (top " n ")\n"
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+          (str/join "\n"
+                    (for [{:keys [rule priority reason]} available]
+                      (str (format "%2d. " priority) (:label rule) " - " reason)))
+          "\n"))))
+
+(defn first-matching-rule
+  "Find first rule whose condition is met. Returns evaluated rule map or nil."
+  ([] (first-matching-rule (make-ctx)))
+  ([ctx]
+   (first (filter :met? (evaluate-all-rules ctx)))))
+
+;; ============================================================================
 ;; Decision Logic
 ;; ============================================================================
 
 (defn decide-action
   "Analyze game state and decide what action to take.
+   Uses the rule registry - first matching rule wins.
+
    Returns a map with :action and :args keys, or nil if nothing to do."
   []
-  (let [clicks (my-clicks)
-        credits (my-credits)
-        hand (my-hand)
-        hand-size (count hand)]
-
+  (let [clicks (my-clicks)]
     ;; No clicks = can't do anything
     (when (and clicks (pos? clicks))
-      (cond
-        ;; 1. Score scorable agenda (top priority!)
-        (seq (scorable-agendas))
-        (let [agenda (first (scorable-agendas))]
-          (log-decision "SCORE:" (:title agenda) "is scorable!")
-          {:action :score :args {:card-name (:title agenda)}})
-
-        ;; 2. Protect unprotected agenda with ICE
-        (and (seq (unprotected-remotes-with-agendas))
-             (seq (ice-in-hand)))
-        (let [server-key (first (unprotected-remotes-with-agendas))
-              ice (first (ice-in-hand))
-              server-num (Integer/parseInt (str/replace (name server-key) "remote" ""))
-              server-name (str "Server " server-num)]
-          (log-decision "PROTECT: Installing" (:title ice) "on" server-name)
-          {:action :install-ice :args {:card-name (:title ice) :server server-name}})
-
-        ;; 3. Install agenda to protected or empty remote
-        (and (seq (agendas-in-hand))
-             (or (seq (protected-or-empty-remotes))
-                 ;; Or create new remote if no remotes exist
-                 (empty? (get-remote-servers))))
-        (let [agenda (first (agendas-in-hand))
-              ;; Prefer protected remote, else new remote
-              server (if-let [protected (first (protected-or-empty-remotes))]
-                       (let [num (Integer/parseInt (str/replace (name protected) "remote" ""))]
-                         (str "Server " num))
-                       "New remote")]
-          (log-decision "INSTALL AGENDA:" (:title agenda) "to" server)
-          {:action :install :args {:card-name (:title agenda) :server server}})
-
-        ;; 4. Play economy if low on credits (before advancing)
-        ;; This prevents stranding ourselves broke while advancing
-        (and (< credits (:min-credits config))
-             (seq (economy-operations)))
-        (let [op (first (economy-operations))]
-          (log-decision "ECON FIRST: Playing" (:title op) "(credits low:" credits ")")
-          {:action :play :args {:card-name (:title op)}})
-
-        ;; 4.5. Use rezzed click assets when low on credits (Regolith gives 3¢)
-        ;; This is better than taking 1¢ or advancing (costs 1¢)
-        (and (< credits (:min-credits config))
-             (seq (rezzed-assets-with-click-abilities)))
-        (let [asset (first (rezzed-assets-with-click-abilities))
-              ability-idx (:ability-idx asset)]
-          (log-decision "USE ASSET (low credits):" (:title asset) "ability" ability-idx)
-          {:action :use-ability :args {:card-name (:title asset) :ability-idx ability-idx}})
-
-        ;; 5. Advance installed agenda (with smart click management)
-        (should-advance? clicks credits)
-        (let [agenda (should-advance? clicks credits)]
-          (log-decision "ADVANCE:" (:title agenda)
-                       (str "(" (or (:advance-counter agenda) 0)
-                            "/" (:advancementcost agenda) ")"))
-          {:action :advance :args {:card-name (:title agenda)}})
-
-        ;; 6. Use rezzed asset abilities (like Regolith click ability)
-        ;; Even when not low on credits - draining Regolith is still good
-        (seq (rezzed-assets-with-click-abilities))
-        (let [asset (first (rezzed-assets-with-click-abilities))
-              ability-idx (:ability-idx asset)]
-          (log-decision "USE ASSET:" (:title asset) "ability" ability-idx)
-          {:action :use-ability :args {:card-name (:title asset) :ability-idx ability-idx}})
-
-        ;; 7. Rez CLICK economy assets (Regolith, etc.) - rez before using
-        ;; Don't rez drip assets during our turn - wait for opponent EOT
-        (and (seq (click-economy-assets))
-             (can-rez-asset? (first (click-economy-assets)) credits))
-        (let [asset (first (click-economy-assets))]
-          (log-decision "REZ CLICK ASSET:" (:title asset) "(will use next)")
-          {:action :rez :args {:card-name (:title asset)}})
-
-        ;; 8. Install economy assets to remotes
-        (and (seq (assets-in-hand))
-             (or (empty-remote-for-asset)
-                 ;; Create new remote if we have ICE and no remotes
-                 (and (seq (ice-in-hand)) (empty? (get-remote-servers)))))
-        (let [asset (first (assets-in-hand))
-              server (if-let [remote (empty-remote-for-asset)]
-                       (let [num (Integer/parseInt (str/replace (name remote) "remote" ""))]
-                         (str "Server " num))
-                       "New remote")]
-          (log-decision "INSTALL ASSET:" (:title asset) "to" server)
-          {:action :install :args {:card-name (:title asset) :server server}})
-
-        ;; 9. Install ICE on weak centrals
-        (and (seq (ice-in-hand))
-             (weakest-central)
-             (>= credits (:cost (first (ice-in-hand)) 0)))
-        (let [ice (first (ice-in-hand))
-              central (weakest-central)
-              server-name (str/upper-case (name central))]
-          (log-decision "FORTIFY:" server-name "with" (:title ice))
-          {:action :install-ice :args {:card-name (:title ice) :server server-name}})
-
-        ;; 10. Play economy operations (fallback if not already played)
-        (seq (economy-operations))
-        (let [op (first (economy-operations))]
-          (log-decision "ECONOMY: Playing" (:title op))
-          {:action :play :args {:card-name (:title op)}})
-
-        ;; 11. Take credits if low
-        (< credits (:min-credits config))
-        (do
-          (log-decision "LOW CREDITS: Taking credit (" credits "credits)")
-          {:action :credit :args {}})
-
-        ;; 12. Draw if hand is small
-        (< hand-size (:min-hand-size config))
-        (do
-          (log-decision "LOW CARDS: Drawing (" hand-size "cards)")
-          {:action :draw :args {}})
-
-        ;; 13. Default: take credit
-        :else
-        (do
-          (log-decision "DEFAULT: Taking credit")
-          {:action :credit :args {}})))))
+      (let [ctx (make-ctx)
+            match (first-matching-rule ctx)]
+        (when match
+          (let [{:keys [rule reason action]} match]
+            (log-decision (:label rule) ":" reason)
+            action))))))
 
 ;; ============================================================================
 ;; Action Execution
@@ -614,7 +1055,7 @@
   (println "Usable assets:" (map :title (rezzed-assets-with-click-abilities)))
   (println "Unprotected agendas in:" (map name (unprotected-remotes-with-agendas)))
   (println "Central ICE:" (central-ice-counts))
-  (println "\nDecision:" (decide-action)))
+  (println (dashboard-compact 5)))
 
 ;; ============================================================================
 ;; Run Response (During Runner's Turn)

@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -240,6 +240,8 @@ ${GREEN}Connection:${NC}
   connect         - Manually reconnect WebSocket to server
 
 ${GREEN}AI Bot:${NC}
+  dashboard       - Corp: Show ranked heuristic options (all rules)
+  dashboard-compact [N] - Corp: Show top N available options (default: 5)
   bot             - Corp: Make one heuristic decision and execute
   bot-turn        - Corp: Play full turn with heuristic AI
   bot-status      - Corp: Show decision-relevant state and next action
@@ -1136,6 +1138,22 @@ case "$COMMAND" in
         ;;
 
     # AI Bot commands
+    dashboard)
+        ensure_connection
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (println (bot/dashboard)))'
+        ;;
+
+    dashboard-compact)
+        ensure_connection
+        N="${1:-5}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=5
+        execute "(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (println (bot/dashboard-compact $N)))"
+        ;;
+
     bot)
         ensure_connection
         info "Heuristic Corp: Making one decision..."
