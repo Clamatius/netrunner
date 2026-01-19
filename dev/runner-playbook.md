@@ -22,15 +22,22 @@
 
 **Sure Gamble as the unit of credit measure:** Every deck plays 3x Sure Gamble, because 5→9 on turn 1 is too good not to. Total exchange is burst 2:1 clicks:credits. Money cards are usually burst or drip (slow rewards). It is important to distinguish which is which.
 
-### Conditions Reward Sequencing
+### Cost vs Effect
+
+**A card's cost must be paid to play it
+**Effect does not have this restriction - effects do as much as they can but no more
+**Example: "Event. Cost $1. Effect: draw 4, lose a click. Taking advantage: play last click so you don't actually lose it
+**Card templates use a colon to indicate costs, e.g. <click>: Take $3 credits from this resource"
+
+### Conditionals
 
 **Many cards have "if/when/first time" triggers.** Before acting, ask: can I order my clicks to enable discounts, maximize triggers, or dodge thresholds?
 
 **Common patterns:**
-- **"If you made a successful run this turn..."** (Carmen) → Run a free server first, then install at discount
-- **"The first time each turn..."** (Docklands Pass) → Make that first breach count; don't waste it on low-value access
-- **"If the Runner has 6 credits or less..."** (Whitespace) → Enter with >9 credits to avoid the ETR
-- **"Whenever you make a successful run..."** (Pennyshaver) → Run before clicking to cash out, so you collect the bonus
+- **"If you made a successful run this turn..."** Run servers you'd run anyway first, or weak servers like Archives if effect is strong
+- **"Once per turn / The first time per turn..."** → Max EV typically from using every turn if possible
+- **"Lose a click"** → Play last click
+- **ICE subroutines** often have conditions that allow you to bypass them → exploit the condition to save $
 
 **The difference between "run then install" and "install then run" is often 2+ credits.** Read the trigger, then order your clicks.
 
@@ -50,32 +57,32 @@ This means:
 
 ## Rig Building Priority
 
-**Essential components (install in this order):**
-
-1. **Economy** (Turn 1-2)
+1. **Economy events and rig** (Turn 1-2)
    - Drip pays off over time - the earlier the better
    - You take a tempo hit to install, so front-load it
+   - Dipping too low on credits gives the Corp a scoring window
+   - Rarely a good idea to go under $5 since then you can't Sure Gamble
 
-2. **First breaker** (Turn 2-3)
-   - Tempo hit to install so ideally only install the revealed type needed
-   - Lets you start running protected servers
-   - Don't wait for "perfect" rig
+2. **Breakers when locked out**
+   - Big tempo hit to install so ideally only install the revealed type needed
+   - Lets you start running servers protected by the type of ice broken
    - Killer typically protects you from damage, Fracter and Decoder from End The Run
+   - Don't wait for "perfect" rig - facechecking ICE risks subroutines but a lot of ICE just end the run
+   - Every ICE the corp rezzes means they had to invest there and may not be able to afford rezzes elsewhere
 
-**Sandbagging breakers:** Consider keeping breakers in hand instead of installing immediately.
-- Corp sees empty rig → thinks remote is safe → installs agenda → you surprise-install and steal
-- Mayfly + Overclock from hand = 6¢ to crack almost any single-ICE remote
-- AI breakers (Mayfly) are brutal surprise plays: raw credits → stolen agenda
-- Tradeoff: risk losing sandbagged breakers to net damage (Diviner, traps)
-- Best against glacier Corps building "safe" remotes; worse against damage-heavy Corps
+   **Sandbagging breakers:** Consider keeping breakers in hand instead of installing immediately.
+   - Corp sees empty rig → thinks remote is safe → installs agenda → you surprise-install and steal
+   - Mayfly + Overclock from hand = 6¢ to crack almost any single-ICE remote
+   - AI breakers (Mayfly) are brutal surprise plays: raw credits → stolen agenda
+   - Tradeoff: risk losing sandbagged breakers to net damage (sentries, traps) - run multiple breaker copies in deck
+   - Best against glacier Corps building "safe" remotes; worse against damage-heavy Corps
 
 3. **Complete breaker suite** (Turn 3-5)
-   - Must have all 3 types covered (one breaker per ICE type) to ensure access given enough $
+   - Must have all 3 types covered (one breaker per ICE type) or an AI breaker that breaks all types to ensure access given enough $
 
-4. **Multi-access tools** (Turn 6+)
-   - Typically expensive (3+ credits) so a tempo hit to install
-   - Only install after complete rig + stable economy
-   - Requirement: 10+ credits, all breakers installed
+4. **Multi-access permanent installs** (Turn 6+)
+   - Typically expensive (3+) so a tempo hit to install
+   - Only install after complete rig + stable economy   
 
 ---
 
@@ -84,8 +91,8 @@ This means:
 **Early game (Turns 1-5): Draw for rig pieces**
 
 ```
-Missing breakers? → Draw until you find them
-Missing economy? → Draw until you find Sure Gamble
+Missing required breakers for an important server (scoring remote, R&D)? → Draw until you find them
+Missing economy? → Draw until you find $ cards
 Have rig + economy? → Stop drawing, start running
 ```
 
@@ -127,21 +134,18 @@ Waiting for "perfect" hand size is pure downside. You delayed a strong card for 
 
 **The heuristic:** Cards you were never going to draw don't exist. Overdraw filtering is free. A turn of draw-draw-draw-draw, discard 4 is completely legitimate if those were the right draws.
 
-**Application to multi-access:** You're not "wasting" accesses on non-agendas. You're gaining previously hidden info. Each non-agenda access from R&D increases agenda density in what's left and means when they drew it, you know they didn't draw an agenda. Each card accessed from R&D or HQ has to go _somewhere_.
-
 **Survival draws (against damage decks):**
 
 Always draw before running if facing damage:
 ```
-Damage per run: 2 (from ICE/traps)
-Runs planned: 2
+If expected damage per run: ~2 (from ICE/traps)
 Current hand: 3
 Minimum safe: 2 + 2 = 4
 
 Draws needed: 4 - 3 = 1 draw before running
 ```
 
-**Rule:** Hand size must be > expected damage + 2 buffer.
+**Heuristic:** Hand size must be > expected damage + 2 buffer. Sometimes damage is better than spending credits - e.g. you're losing low-value cards like duplicate breakers
 
 ---
 
@@ -156,6 +160,7 @@ Draws needed: 4 - 3 = 1 draw before running
    - Code Gate? Need Unity
    - Barrier? Need Cleaver
    - Sentry? Need Carmen
+   - Stopgap? AI breakers can break multiple types with a downside
    - Missing type? Don't run OR accept letting subs fire
 
 2. **Can I afford break costs + trash costs?**
@@ -166,9 +171,10 @@ Draws needed: 4 - 3 = 1 draw before running
 
 3. **What's the expected value?**
    - R&D: Always valuable (random agenda access)
-   - HQ: Valuable if Corp drew many cards (see Drawn estimate)
-   - Remote with 3+ counters: Must contest (scoreable agenda)
+   - HQ: Valuable if Corp drew many cards without scoring much (see Drawn estimate)
+   - Remote with counters: High priority to contest (scoreable agenda or advanced trap)
    - Remote with 0 counters: Unknown (could be anything)
+   - Remote with multiple cards: At least one is an upgrade, usually boosting server defence - budget extra run cost to fight and trash it
 
 ### ICE Breaking
 
@@ -202,19 +208,23 @@ Almost always bypass: Clicks are cheaper than 8 credits unless you are [effectiv
 ### Server Priority
 
 **Early game (Turns 1-5):**
-1. HQ runs (force ICE rezzes, check for agendas in hand)
-2. Facecheck remotes (deny economy assets)
-3. R&D if desperate (Corp hasn't drawn much yet)
+1. Facecheck servers generally to get accesses (deny economy assets). Strike a balance between developing position and getting cheap accesses.
+2. Facechecking for rezzes reveals hidden info and helps keep Corp credits low
+3. If you actually want access to server A and it has unrezzed ICE, with the corp on a tight budget, perhaps run unrezzed server B first in case they can't defend both
+4. Runner typically has advantage because Corp cannot afford all defenses
 
 **Mid game (Turns 6-10):**
-1. R&D multi-access (primary win condition)
-2. Remote when obvious (Corp advancing = must contest)
-3. HQ pressure (keep them honest)
+1. Corp typically has advantage because Runner has not built full rig and repeat ICE traversal favours Corp
+2. R&D multi-access (primary win condition)
+3. Remote when obvious (Corp advancing = must contest)
+4. HQ pressure when agendas not being scored/stolen (keep them honest)
+5. Drop sandbagged breakers and deliver surprise server breaches
 
 **Late game (Turns 10+):**
-1. R&D relentlessly (statistical inevitability)
-2. Ignore heavily-defended remote unless affordable
-3. HQ only if R&D is impossible
+1. Runner typically favoured because of gaining efficient R&D / remote access
+2. Full breaker suite usually necessary
+3. Denying Corp agenda draws from R&D is plan A. Denying Corp agenda installs in remote so HQ becomes attractive is plan B.
+4. Watch for total server break costs - running through heavy ICE can cost $10+ per run
 
 ### HQ Dynamics
 
@@ -271,16 +281,16 @@ Where are those 3 points?
 - In Archives facedown
 ```
 
-**Remote Interpretation:**
+**Standard Agenda Types**
 ```
-Remotes: 0/0  → No remote pressure, focus R&D/HQ
-Remotes: 3/0  → 3 never-advance cards (agenda/asset/trap unknown)
-Remotes: 2/1  → 1 card has counters (likely agenda or trap)
-Remotes: 1/3  → 1 card with 3+ counters (URGENT: scoreable or lethal)
+Varies per meta, but default:
+* 3/1. Only 1 point for install + 3 advancements. Low priority for both sides. Credit opportunity cost: $8
+* 4/2. Invariably requires 2 turns to score. Often has a strong effect. 
+* 5/3. 
 ```
 
 **Advancement counter signals:**
-- **0 counters (never-advance):** Could be agenda (Seamless Launch threat), asset, or trap
+- **0 counters (never-advance):** Could be agenda (Seamless Launch threat), asset, trap or upgrade
   - Corp can score without advancing using fast-advance tools
   - Check if suspicious (multiple turns idle, Corp at scoring range)
   - They have to have the fast-advance and use it now if it's an agenda
@@ -294,21 +304,13 @@ Remotes: 1/3  → 1 card with 3+ counters (URGENT: scoreable or lethal)
   - Overadvanced traps: Urtica Cipher at 5 counters = 7 net damage (2 base + 5)
   - Check hand size vs expected damage before running
 
-**Pressure Target Selection:**
-```
-if Remotes: X/3+:
-    contest_remote_immediately  # Scoreable agenda or lethal trap
-elif Drawn > (Scored + Stolen + 4):
-    pressure_HQ  # Agendas stuck in hand
-elif R&D > 20 AND Missing > 10:
-    multiaccess_RD  # High agenda density
-else:
-    default_RD_pressure  # Standard strategy
-```
-
 ---
 
-## R&D Physicality
+## Card Physicality
+
+**Runner cards are akin to health.** Damage causes discards
+
+**HQ access is accessing the Corp's hand.** Reveals info about their current options
 
 **R&D is an ordered deck.** Cards don't shuffle between accesses. Understanding this prevents wasted runs.
 
@@ -318,6 +320,8 @@ else:
 - Click-to-draw is optional (costs 1 click)
 - Trashing a card in R&D sends it to Archives face-up
 - Trash costs in R&D are even more expensive than usual because the Corp didn't even have to draw the card - but if R&D access is cheap potentially allows you another access
+- Running empty remotes is usually pointless since you access 0 cards (although the run is still considered successful)
+- Running Archives flips all cards face-up and accesses _all_ of them. Corp discards are face-down and _can_ be agendas (risky for Corp)
 
 **Practical implications:**
 
@@ -337,6 +341,7 @@ Access shows card at depth:
 - Depth 2+: Accessible via multi-access, but not drawn soon
 
 Exception: Corp click-to-draw, stealing, trashing accelerates this
+When accessing R&D, vital to track whether top card has already been seen
 ```
 
 **Information flow:**
@@ -345,8 +350,8 @@ R&D (ordered) → HQ (drawn) → Installed/Scored/Archives
 
 When you see a card in R&D:
 - If junk: Stop running R&D until Corp draws
-- If agenda: Run again! Corp might draw it and score from hand
-- If trap: Note position, avoid multi-access that hits it, consider trashing if rich
+- If agenda: Stealing agenda as top card means next card is now fresh
+- If advanceable trap: Consider trashing if rich OR hitting the trap in the remote would be disastrous
 ```
 
 **Efficient R&D pressure:**
@@ -405,32 +410,6 @@ Action: Draw 1 card first, THEN run twice
 - Already behind on tempo (can't afford rebuild time)
 - Brain damage (permanent penalty)
 
-## Common Patterns
-
-**Facecheck:** Run into unrezzed ICE without appropriate breaker.
-
-**When to facecheck (Turns 1-4):**
-```
-if Corp_credits < (likely_ICE_rez_cost + 5):
-    facecheck  # They probably can't afford rez
-elif rezzed Corp_installed_economy_asset and can_afford_trash_cost:
-    facecheck  # Deny snowball or Corp gets rich
-elif turn_number <= 3:
-    facecheck  # Deny early economy setup
-```
-
-**Facecheck benefits:**
-- Force rezzes (Corp poverty - they cannot afford good defenses everywhere)
-- Deny economy assets
-- Information gathering, e.g. know what breaker to install
-
-**Facecheck costs:**
-- Damage (need to rebuild hand)
-- ETR subroutines (wasted click, no access)
-- Tags (Corp can trash your resources)
-
-**Rule of thumb:** Facecheck when Corp credits < (likely rez cost + 5).
-
 ### Remote Pressure Timing
 
 **When Corp installs in remote:**
@@ -478,46 +457,11 @@ Reality: Scored in one turn, no response window
 
 **Defense:**
 - Always check remotes, even 0-counter cards
-- Especially when Corp has credits for Seamless Launch
 - Especially when Corp needs 1-2 points to win
 - Accept you can't check everything (choose highest priority)
 
 ---
 
-## Turn Patterns
-
-### Basic Runner Turn
-
-```
-Turn start: Gain 4 clicks
-
-Option A (Building): Draw → Install → Install → Credit
-Option B (Running): Draw → Run R&D → Run HQ → Credit
-Option C (Pressure): Run R&D → Run R&D → Run remote → Credit
-
-Turn end: Discard to hand size if needed
-```
-
-**Early game focus:**
-```
-Turns 1-2: Economy + first breaker
-Turn 3-4: Complete breaker suite
-Turn 5+: Begin running pressure
-```
-
-**Mid game focus:**
-```
-Install multi-access (R&D Interface)
-Run R&D every turn (2 accesses per run)
-Contest obvious remote scoring attempts
-```
-
-**Late game focus:**
-```
-Run R&D multiple times per turn
-Ignore remotes unless critical
-Maintain hand size > 3 (flatline prevention)
-```
 
 ## Economic Warfare
 
@@ -528,11 +472,11 @@ Maintain hand size > 3 (flatline prevention)
 - Automatically offered in payment prompts during runs
 - Game uses temporary credits first, then normal pool
 - Check card text for phrases like "gain X credits to spend during this run"
+- Be sure to choose the temporary $ when spending $ NOT usual pool
 
 **Hosted credits (on installed cards):**
 - Credits stored on the card itself (shown as counters on the card)
-- Must manually use card ability to transfer to your credit pool
-- NOT automatically offered in payment prompts
+- Typically must manually use card ability to transfer to your credit pool so NOT automatically offered in payment prompts
 - Check card text for the transfer ability (usually requires a click)
 - **Use ability BEFORE running** if you need those credits for break/trash costs
 
@@ -550,10 +494,10 @@ Target: Remote with 2 ICE (Palisade + Brân 1.0)
 
 Break costs:
   Palisade (Barrier): 3 credits (Cleaver)
-  Brân 1.0 (Bioroid): 0 credits (bypass with 3 clicks)
+  Brân 1.0 (Bioroid): 0 credits (bypass with 3 clicks) or $8 (Cleaver, hugely expensive)
 
 Trash cost:
-  Unknown asset: Assume 0-4 credits depending on meta. Invariably 0 for advanced cards.
+  Unknown asset: Assume 0-4 credits depending on meta. Invariably 0 for advanced cards and additional 0-4 for upgrades.
 
 Total needed: $3 + 3 click + $4 = $7 + 3 clicks minimum to assure success - but be ~broke afterwards
 ```
@@ -569,33 +513,37 @@ Total needed: $3 + 3 click + $4 = $7 + 3 clicks minimum to assure success - but 
 4. Remember being rich threatens remote access
 
 **Trashing can be expensive but necessary:**
-- But never trash things you do not have to, e.g. a trap you can safely leave in a remote now you know where it is or something ineffectual
+- Highest priority: strong defensive upgrades
+- Then econ assets worth a lot of $ to Corp
+- Then unplayed traps that are actually dangerous if played
+- But never trash things you do not have to, e.g. a trap you can safely leave in a remote now you know where it is or something ineffectual like a drip econ asset that would only hog the scoring server
+- Trashing top card from R&D may give you another access this turn since top card is now fresh BUT you spent $ on something Corp didn't even have to draw
 
 ---
 
 ## Win Conditions
 
-**Primary:** Steal 7 agenda points through volume of accesses.
+**Primary:** Steal 7 agenda points through volume of accesses, 6 in tutorial.
 
 **The math:**
-- mean random ~17 accesses needed
+- Mean random ~17 accesses needed in full game
 - R&D multi-access = 2 accesses per run
 - 9 runs with multi-access = 18 accesses = likely win, but that is a lot of accesses on one server
 
 **Secondary scenarios:**
 - HQ flood steal (Corp drew many agendas, stuck in hand)
 - Remote snipes (stealing before Corp can score)
-- Corp deck-out (Corp draws from empty R&D = loss)
+- Each non-random steal from a remote drops the expected # random accesses for win dramatically
 
 **You lose if:**
-- Corp scores 7 agenda points first (6 in tutorial game)
-- Flatlined (damage > hand size)
+- Corp scores winning agenda points first
+- You _must_ discard to damage but can't (you do NOT lose on empty hand): flatlined
 
-**Endgame (Missing < 5 points):**
-- Every agenda is critical
-- Contest remotes when possible (can't let Corp score)
-- Maximum R&D pressure (find agendas before Corp draws them)
-- Keep safe hand size (don't die to damage)
+**Corp loses if:**
+- They _must_ draw but R&D is empty (they do NOT lose on R&D empty, ONLY if they must draw)
+
+**Endgame (win within 3 so either side could win):**
+- Every advanced agenda is critical to steal since it could immediately win for Corp
 
 ---
 
