@@ -3,6 +3,7 @@
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
             [ai-core :as core]
+            [ai-debug :as debug]
             [ai-prompts :as prompts]
             [ai-basic-actions :as basic]
             [ai-card-actions :as actions]))
@@ -562,7 +563,7 @@
   [state ice-title]
   (let [log (get-in state [:game-state :log])
         meaningful (filter-meaningful-log-entries log)
-        recent (take-last 20 meaningful)]  ; Increased window for safety
+        recent (take-last 20 meaningful)]
     (some #(and (clojure.string/includes? (str (:text %)) "indicates to fire")
                 (clojure.string/includes? (str (:text %)) ice-title))
           recent)))
@@ -993,16 +994,24 @@
       (when (and current-ice (seq unbroken-subs))
         (let [ice-title (:title current-ice "ICE")
               sub-count (count unbroken-subs)
-              status-key [:corp-fire-decision position ice-title]
+              ;; Actually check if Runner has signaled!
+              runner-signaled? (runner-signaled-let-fire? state ice-title)
+              status-key [:corp-fire-decision position ice-title runner-signaled?]
               already-printed? (= @last-waiting-status status-key)]
           (when-not already-printed?
             (reset! last-waiting-status status-key)
             (println (format "🛑 Subs unbroken: %s (%d sub%s)"
                            ice-title sub-count (if (= sub-count 1) "" "s")))
-            (println "   ⚠️  Runner has NOT signaled 'let subs fire' yet")
-            (println "   → WAIT for Runner to break or signal (unless they obviously can't)")
-            (println "   → fire-subs <name>  - only after Runner confirms")
-            (println "   → continue          - pass without firing"))
+            (if runner-signaled?
+              (do
+                (println "   ✅ Runner has signaled 'let subs fire'")
+                (println "   → fire-subs <name>  - fire the unbroken subs")
+                (println "   → continue          - pass without firing"))
+              (do
+                (println "   ⚠️  Runner has NOT signaled 'let subs fire' yet")
+                (println "   → WAIT for Runner to break or signal (unless they obviously can't)")
+                (println "   → fire-subs <name>  - only after Runner confirms")
+                (println "   → continue          - pass without firing"))))
           {:status :decision-required
            :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
            :ice ice-title

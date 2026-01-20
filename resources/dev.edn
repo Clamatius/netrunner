@@ -16,7 +16,7 @@
                      :max-age 5184000}}
  :web/lobby {:interval 1000
              :mongo #ig/ref :mongodb/connection
-             :time-inactive 600}
+             :time-inactive 172800}  ; 2 days (was 600s/10min)
  :web/chat {:max-length 144
             ;; sliding window size in seconds
             :rate-window 60

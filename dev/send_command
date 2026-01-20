@@ -1068,11 +1068,19 @@ case "$COMMAND" in
         ;;
 
     resync)
-        ensure_connection
+        # For resync, only ensure WebSocket is connected - don't run ensure-synced!
+        # (ensure-synced! would interfere with our explicit resync)
+        check_client
+        if [[ -n "$CLIENT_NAME" ]]; then
+            TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+              (require (quote [ai-websocket-client-v2 :as ws]))
+              (ws/ensure-connected!))' > /dev/null 2>&1 || true
+        fi
         GAME_ID="${1:-}"
         [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
         info "Resyncing game $GAME_ID..."
-        execute "(ai-actions/resync-game! \"$GAME_ID\")"
+        # Use reconnect-game! which waits for game-state to arrive
+        execute "(ai-connection/reconnect-game! \"$GAME_ID\")"
         ;;
 
     chat)

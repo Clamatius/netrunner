@@ -30,8 +30,10 @@
   [index]
   (let [client-state @state/client-state
         side (:side client-state)
+        ;; Normalize side to lowercase to match game state keys (:runner, :corp)
+        side-kw (when side (keyword (clojure.string/lower-case side)))
         gameid (:gameid client-state)
-        prompt (get-in client-state [:game-state (keyword side) :prompt-state])
+        prompt (get-in client-state [:game-state side-kw :prompt-state])
         choice (nth (:choices prompt) index nil)
         choice-uuid (:uuid choice)]
     (if choice-uuid
@@ -85,7 +87,8 @@
           (choose-card! 2)  ; Select third selectable card"
   [index]
   (let [client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         prompt (get-in client-state [:game-state side :prompt-state])
         selectable (:selectable prompt)
         eid (:eid prompt)]
@@ -152,7 +155,8 @@
    The prompt auto-resolves when enough cards are selected."
   [& card-refs]
   (let [client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         prompt (get-in client-state [:game-state side :prompt-state])
         selectable (:selectable prompt)
         eid (:eid prompt)]
@@ -235,7 +239,9 @@
   (let [prompt (state/get-prompt)
         prompt-type (:prompt-type prompt)
         client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        ;; Normalize side to lowercase to match game state keys (:runner, :corp)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         hand (get-in client-state [:game-state side :hand])
         hand-size (count hand)]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
@@ -262,7 +268,9 @@
   (let [prompt (state/get-prompt)
         prompt-type (:prompt-type prompt)
         client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        ;; Normalize side to lowercase to match game state keys (:runner, :corp)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         hand-size (count (get-in client-state [:game-state side :hand]))]
     (if (and prompt (or (= "mulligan" prompt-type) (= :mulligan prompt-type)))
       ;; Mulligan prompts are just normal choice prompts
@@ -306,7 +314,8 @@
    Auto-detects side and discards until at or below max hand size"
   []
   (let [client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         discarded (ws/handle-discard-prompt! side)]
     (when (= discarded 0)
       (println "No cards to discard"))))
@@ -317,7 +326,8 @@
    Usage: (discard-specific-cards! [0 2 4])  ; Discard cards at indices 0, 2, 4"
   [indices]
   (let [client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         gs (state/get-game-state)
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])]
@@ -342,7 +352,8 @@
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
         client-state @state/client-state
-        side (keyword (:side client-state))
+        side-str (:side client-state)
+        side (when side-str (keyword (clojure.string/lower-case side-str)))
         gs (state/get-game-state)
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])]

@@ -100,7 +100,9 @@
         existing-side (:side @client-state)
         ;; Only detect side if not already set, otherwise preserve it
         ;; This prevents re-detection on resync when server strips opponent user info
-        side (or existing-side (detect-side state our-uid))]
+        detected-side (or existing-side (detect-side state our-uid))
+        ;; Normalize to lowercase to match game state keys (:runner, :corp)
+        side (some-> detected-side clojure.string/lower-case)]
     (swap! client-state assoc
            :game-state state
            :last-state state
@@ -128,6 +130,13 @@
 (defn my-turn? [] (= (:side @client-state) (active-player)))
 (defn turn-number [] (get-in @client-state [:game-state :turn]))
 
+(defn my-side-kw
+  "Get current side as keyword, normalized to lowercase (:runner or :corp).
+   Game state keys are always lowercase, so this ensures proper access."
+  []
+  (when-let [side (:side @client-state)]
+    (keyword (clojure.string/lower-case side))))
+
 (defn runner-state [] (get-in @client-state [:game-state :runner]))
 (defn corp-state [] (get-in @client-state [:game-state :corp]))
 
@@ -138,20 +147,19 @@
 
 ;; Context-aware helpers (based on current client's side)
 (defn my-credits []
-  (credits-for-side (keyword (:side @client-state))))
+  (credits-for-side (my-side-kw)))
 
 (defn my-clicks []
-  (clicks-for-side (keyword (:side @client-state))))
+  (clicks-for-side (my-side-kw)))
 
 (defn my-hand []
-  (let [side (keyword (:side @client-state))]
-    (get-in @client-state [:game-state side :hand])))
+  (get-in @client-state [:game-state (my-side-kw) :hand]))
 
 (defn my-hand-count []
-  (hand-count-for-side (keyword (:side @client-state))))
+  (hand-count-for-side (my-side-kw)))
 
 (defn my-installed []
-  (let [side (keyword (:side @client-state))]
+  (let [side (my-side-kw)]
     (if (= side :runner)
       (get-in @client-state [:game-state :runner :rig])
       ;; Corp doesn't have a "rig", return servers
@@ -169,8 +177,10 @@
 (defn get-prompt
   "Get current prompt for our side, if any"
   []
-  (let [side (:side @client-state)]
-    (get-in @client-state [:game-state (keyword side) :prompt-state])))
+  (let [side (:side @client-state)
+        ;; Normalize to lowercase to match game state keys (:runner, :corp)
+        side-kw (when side (keyword (clojure.string/lower-case side)))]
+    (get-in @client-state [:game-state side-kw :prompt-state])))
 
 (defn get-turn-status
   "Get structured turn status information

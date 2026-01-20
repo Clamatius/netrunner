@@ -136,20 +136,38 @@
     (when (and my-username players)
       (some #(= my-username (get-in % [:user :username])) players))))
 
+(defn- lobby-state-has-gameid?
+  "Check if we have a lobby-state with matching gameid (for started games)"
+  []
+  (let [lobby-state (:lobby-state @state/client-state)
+        expected-gameid (:gameid @state/client-state)
+        lobby-gameid (:gameid lobby-state)]
+    (and expected-gameid lobby-gameid
+         (= (str expected-gameid) (str lobby-gameid)))))
+
 (defn- wait-for-in-lobby
-  "Wait until we appear in the lobby's players list (event-driven, not time-based).
+  "Wait until we're confirmed in the lobby (players list or gameid match).
+   For pre-start games, checks players list. For started games, checks gameid match.
    Returns true if we're in the lobby, false on timeout."
   [timeout-ms]
-  (wait-for-condition in-lobby-players? timeout-ms "lobby confirmation"))
+  (wait-for-condition
+    #(or (in-lobby-players?) (lobby-state-has-gameid?))
+    timeout-ms
+    "lobby confirmation"))
 
 ;; ============================================================================
 ;; Game Connection (Higher-Level)
 ;; ============================================================================
 
 (defn in-game?
-  "Check if currently in a game"
+  "Check if currently in a game (has gameid)"
   []
   (some? (:gameid @state/client-state)))
+
+(defn has-game-state?
+  "Check if we have game state data (not just gameid)"
+  []
+  (some? (state/get-game-state)))
 
 (defn connect-game!
   "Join a game by ID (with wait and status display)
@@ -164,14 +182,41 @@
      (display/show-status)
      (println "❌ Failed to join game"))))
 
+(defn- detect-side-from-username
+  "Detect side from username pattern.
+   ai-runner -> Runner, ai-corp -> Corp
+   Returns capitalized for server communication (server case-matches on these)."
+  []
+  (let [username (:username @state/client-state)]
+    (cond
+      (and username (clojure.string/includes? username "runner")) "Runner"
+      (and username (clojure.string/includes? username "corp")) "Corp"
+      :else nil)))
+
 (defn reconnect-game!
   "Rejoin an already-started game by requesting full state resync (with wait)
    Usage: (reconnect-game! \"game-uuid\")"
   [gameid]
-  (resync-game! gameid)
-  (if (wait-for-condition in-game? 5000 "state resync")
-     (display/show-status)
-     (println "❌ Failed to resync game state")))
+  (let [uuid-gameid (state/normalize-gameid gameid)
+        ;; Try to determine side from: 1) existing state, 2) username, 3) default to Any
+        my-side (or (:side @state/client-state)
+                    (detect-side-from-username)
+                    "Any Side")]
+    (println "🔄 Reconnecting as" my-side)
+    ;; Set gameid first so server knows which game we're asking about
+    (swap! state/client-state assoc :gameid uuid-gameid :side my-side)
+    ;; Try to join the game (this registers us as a player again)
+    (join-game! {:gameid uuid-gameid :side my-side})
+    ;; Give server time to process join
+    (Thread/sleep 1000)
+    ;; Request full state resync
+    (resync-game! gameid)
+    ;; Wait for game-state to arrive (longer timeout for network latency)
+    (if (wait-for-condition has-game-state? 8000 "state resync")
+      (display/show-status)
+      (do
+        (println "❌ Failed to resync game state")
+        (println "💡 Try: ./dev/send_command <side> status")))))
 
 (defn lobby-ready-to-start?
   "Check if the current lobby is ready to start a game.
