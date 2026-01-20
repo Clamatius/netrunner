@@ -674,7 +674,7 @@
     ;; Display header with card metadata
     (if card-data
       (let [card-type (or (:type card-data) "unknown")
-            trash-cost (:cost card-data)
+            trash-cost (:trash card-data)
             points (:agendapoints card-data)
             metadata (cond
                        points (str "[" card-type ", points=" points "]")
@@ -932,6 +932,8 @@
           (println "Cost:" cost))
         (when-let [strength (:strength card)]
           (println "Strength:" strength))
+        (when-let [trash (:trash card)]
+          (println "Trash Cost:" trash))
         (when-let [mu (:memoryunits card)]
           (println "Memory:" mu))
         (when-let [agenda-points (:agendapoints card)]
@@ -979,6 +981,7 @@
                        (when (:subtype card) (str "- " (:subtype card))))
                (when-let [cost (:cost card)] (println "Cost:" cost))
                (when-let [strength (:strength card)] (println "Strength:" strength))
+               (when-let [trash (:trash card)] (println "Trash Cost:" trash))
                (when (not-empty clean-text)
                  (println "Text:" clean-text)))
 
