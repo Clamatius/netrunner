@@ -1718,6 +1718,7 @@
                   handle-events
                   handle-access-display      ; Display accessed cards (returns nil to continue)
                   handle-auto-choice
+                  handle-recently-passed-in-log  ; Backup: check log when :no-action hasn't synced
                   handle-auto-continue
                   handle-run-complete
                   handle-no-run]]
