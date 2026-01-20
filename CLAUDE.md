@@ -121,6 +121,16 @@ Fresh context wakes up, reads the handover, continues without 150k tokens of pre
 
 **Why:** Claude has no introspective access to context fullness. This is human-in-the-loop fatigue sensing.
 
+## Git Workflow
+
+**Main dev branch:** `feat/ai_player_experiment`
+
+**Before starting work:** Always `git pull` to avoid merge conflicts with Michael's changes.
+
+**Committing:** Can commit directly to feature branches (this project, Server Defender, other Michael projects). This avoids stepping on each other's toes when working asynchronously.
+
+**For complex features:** Create a feature branch, implement against RFC specs, then PR for review.
+
 ## References
 
 - `make` or `Makefile` - All build/test commands (source of truth)
