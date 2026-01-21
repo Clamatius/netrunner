@@ -82,7 +82,97 @@ This means:
 
 4. **Multi-access permanent installs** (Turn 6+)
    - Typically expensive (3+) so a tempo hit to install
-   - Only install after complete rig + stable economy   
+   - Only install after complete rig + stable economy
+
+---
+
+## The Tempo War
+
+**Netrunner is fundamentally an economic race.**
+
+**Michael's formulation:** "The trick to win more than luck dictates is to maximize cost for access to servers with agendas (Corp) or minimize (Runner)."
+
+### Install As Needed, Not As Drawn
+
+**The trap:** "I drew Carmen (Killer), I should install it."
+
+**The reality:** Installing breakers you don't need is pure tempo loss.
+
+**Cost analysis (Shaper tutorial deck):**
+| Breaker | Install Cost | Effect if Unused |
+|---------|--------------|------------------|
+| Carmen (Killer) | 5¢ | Zero. Sentries didn't fire. |
+| Cleaver (Fracter) | 3¢ | Zero. No Barriers rezzed. |
+| Unity (Decoder) | 1¢ | Zero. No Code Gates. |
+
+**Total cost of installing all 3:** 9¢ (11¢ without Carmen discount)
+
+**Total cost of installing only what you need:** 1-5¢ typically
+
+**The discipline:**
+```
+Drew breaker? → Ask: "Is there ICE of this type I need to break?"
+  YES → Install (but still consider sandbagging)
+  NO → Keep in hand until needed
+```
+
+**Example (Game 5):**
+```
+Turn 4: Drew Carmen, installed for 5¢
+Turns 4-15: Karuna (only Sentry on board) never rezzed
+Result: 5¢ + 1 click wasted, enabled scoring window
+```
+
+The Carmen sat idle while Corp built a 5-ICE remote. Those 5¢ could have:
+- Contested Remote 1 early (before it grew to 5 ICE)
+- Trashed Nico Campaign (denied Corp 9¢)
+- Funded 5 R&D runs through Whitespace (Unity: 1¢/break)
+- Pro: can drop breaker after ICE paid for to invalidate its ETR and gain surprise access.
+- Con: can lose card to damage 
+- Damage is hypothetical install costs are known and immediate
+
+### Cheap Pressure > Expensive Access
+
+**When you have a 1¢ break:** Exploit it ruthlessly.
+
+**Example: Unity + Whitespace**
+```
+Whitespace: Code Gate, 1 sub
+Unity break cost: 1¢
+
+R&D protected only by Whitespace?
+→ Run R&D EVERY turn for 1¢ + 1 click
+→ Either Corp adds ICE (tempo cost to them) or you see top card every turn
+→ Mean ~17 accesses to win - at 1¢ each that's 17¢ total!
+```
+
+**Contrast: Unity + Palisade + Brân**
+```
+Break cost: 1¢ + 3¢ + 8¢ = 12¢ per run
+12¢ × 17 accesses = 204¢ (impossible)
+```
+
+**Strategic implication:** Identify which servers are cheap and attack them relentlessly. Force Corp to invest in defense or lose.
+
+### Forcing Rezzes as Value
+
+**Every ICE rez costs Corp credits.** Even getting ETR'd has value.
+
+**The play:**
+```
+Run → Hit unrezzed ICE → Corp rezzes (3-6¢) → ETR
+
+Result:
+- You: Lost 1 click (cost: ~1¢ equivalent)
+- Corp: Lost 3-6¢ in rez cost, cannot spend elsewhere
+- Info: Now know ICE type, can install correct breaker
+- Net: Corp paid 2-5¢ more than you for this exchange
+```
+
+**Don't fear ETR. Fear spending 5¢ when 0¢ would do.**
+
+**Locking down the remote makes HQ juicier. Locking down R&D denies agendas altogether.
+**Sometimes you can feint to attack the server you actually care about
 
 ---
 
@@ -225,6 +315,7 @@ Almost always bypass: Clicks are cheaper than 8 credits unless you are [effectiv
 2. Full breaker suite usually necessary
 3. Denying Corp agenda draws from R&D is plan A. Denying Corp agenda installs in remote so HQ becomes attractive is plan B.
 4. Watch for total server break costs - running through heavy ICE can cost $10+ per run
+5. If Runner has Corp in remote lockdown in endgame and HQ is not protected well, they may discard agendas to Archives
 
 ### HQ Dynamics
 
@@ -249,6 +340,48 @@ Almost always bypass: Clicks are cheaper than 8 credits unless you are [effectiv
 **Key insight:** HQ pressure is a *consequence* of remote threat, not a substitute for it. Make the remote scary first, then cash in on the flooded HQ.
 
 **After early remote steals:** R&D is usually richer than HQ. Corp draws agendas to install them, not hold them. If you just stole from a remote, Corp's hand is likely ICE/econ, not more agendas. Diversify to R&D or set up instead of hammering empty HQ.
+
+### R&D Lock Strategy
+
+**When R&D is cheap to access, run it EVERY turn.**
+
+**The R&D Lock:**
+```
+Setup: R&D protected by single Whitespace (Code Gate)
+Break cost: Unity = 1¢
+
+Turn 5: Run R&D (1¢) - see Hedge Fund
+Turn 5: Second run same turn - same card (wasted)
+Turn 6: Corp draws, run R&D (1¢) - fresh card
+Turn 7: Run R&D (1¢) - fresh card
+...
+
+Result: 1 access per turn costs 1¢. Corp MUST ice R&D or lose.
+```
+
+**Why this works:**
+- You're spending 1¢ to force Corp to either:
+  - Add ICE (costs them 3-6¢ rez + opportunity cost)
+  - Let you access every card before they draw it
+- Every agenda you steal from R&D is one they can't score
+- Corp's mandatory draw feeds you cards, not them
+
+**When to R&D Lock:**
+- Single weak ICE (1-2¢ break cost)
+- No multi-access installed (one card at a time)
+- Early-mid game (Corp hasn't iced heavily)
+
+**When to break the lock:**
+- Corp installs in remote with advancement counters (must contest)
+- Break cost rises above 3¢ (diminishing returns)
+- Same card twice = Corp hasn't drawn yet, switch servers
+
+**Common mistake:** Not running cheap R&D because "I only see one card."
+One card per turn for 1¢ = 10+ accesses by Turn 10 for 10¢.
+That's often enough to steal 4-6 agenda points.
+
+**R&D trash costs are effectively more expensive than usual for you:**
+- Not only did the corp not have to pay to rez it, they didn't even have to draw or install it!
 
 ---
 
@@ -440,6 +573,30 @@ Turn N install + multiple advances same turn → FAST ADVANCE
   If no or too expensive: Pressure R&D instead
 ```
 
+**Contest remotes early (prevent glacier buildup):**
+```
+Turn 3: Corp installs ICE #2 on Remote 1
+Turn 4: Corp installs ICE #3 on Remote 1
+Turn 5: Corp installs ICE #4 on Remote 1
+...
+Turn 10: Remote 1 has 5 ICE. Cost to run: 15¢+
+
+Mistake: "I'll contest when I have full rig"
+Reality: By then, full rig isn't enough
+
+Better:
+Turn 3: Run Remote 1 (force 2 rezzes, 6-10¢ Corp cost)
+Turn 5: Run again (force rez of new ICE)
+Result: Corp can't afford to keep icing AND scoring
+```
+
+**The glacier trap:** Every ICE you let them install for free makes the server harder. Contest early to:
+- Force rezzes (costs Corp credits)
+- Reveal ICE types (helps rig building)
+- Slow down glacier (Corp spends clicks on ICE, not agendas)
+
+**When to accept glacier:** If R&D or HQ are cheap, hammer those instead. Let Corp build a fortress they can never use.
+
 ### The Never-Advance Bluff
 
 Corp can score agendas without advancing them:
@@ -512,12 +669,52 @@ Total needed: $3 + 3 click + $4 = $7 + 3 clicks minimum to assure success - but 
 3. Don't run expensive servers until rebuilt
 4. Remember being rich threatens remote access
 
-**Trashing can be expensive but necessary:**
-- Highest priority: strong defensive upgrades
-- Then econ assets worth a lot of $ to Corp
-- Then unplayed traps that are actually dangerous if played
-- But never trash things you do not have to, e.g. a trap you can safely leave in a remote now you know where it is or something ineffectual like a drip econ asset that would only hog the scoring server
-- Trashing top card from R&D may give you another access this turn since top card is now fresh BUT you spent $ on something Corp didn't even have to draw
+**Trashing drip economy - The Math:**
+
+Drip economy assets pay out over multiple turns. Trashing them early denies the most value.
+
+**Example: Nico Campaign**
+```
+Nico Campaign: Trash cost 5¢, gives Corp 9¢ over 3 turns
+Turn 1: Nico installed
+Turn 2: You access Nico but don't trash (save 5¢)
+Turn 3-5: Corp takes 3¢/turn = 9¢ total
+
+Net result: Corp gained 9¢, you "saved" 5¢
+True cost: 9¢ - 5¢ = 4¢ advantage to Corp
+```
+
+**When to trash drip economy:**
+```
+Asset value to Corp > Trash cost to you?
+  YES → Trash it
+  NO → Leave it
+
+Nico Campaign: 9¢ value > 5¢ trash = TRASH
+```
+
+**When NOT to trash:**
+- Late game when asset has already paid out most value
+- When trashing leaves you unable to contest next play
+- When the asset is hogging the scoring remote (trap it with your threat) - if HQ unknown, run HQ when the asset is about to expire
+
+**Trashing priority (high to low):**
+1. **Strong defensive upgrades** - remove before they tax you repeatedly
+2. **Drip economy (Nico, PAD Campaign)** - highest value denial when fresh
+3. **Burst economy (Rashida, Clearinghouse)** - if unused, leave it
+4. **Traps you can't safely leave** - often better to leave known traps as info
+
+**The tempo calculation:**
+```
+You spend: Trash cost (5¢) + run cost (1-3¢)
+Corp loses: Full asset value (9¢) + install click
+
+If your cost < Corp's loss: TRASH
+Example: 5¢ + 2¢ = 7¢ < 9¢ + 1 click = favorable trade
+```
+
+**Common mistake:** "I can't afford to trash."
+Reality: You can't afford NOT to trash economy that outvalues trash cost.
 
 ---
 
@@ -562,9 +759,9 @@ Drawn: 10, Scored: 2   → 8 points unaccounted = HQ or remotes
 Start of turn:
 ── Plan turn. Make 2 plans for the turn if position is complex and pick the best. If you need to draw, draw now to get more options, may change plan
 ├─ Missing needed breakers? → Draw/install rig, don't be afraid to overdraw if necessary and in a hurry OR simply attack elsewhere if vulnerable
-├─ The run action is your most powerful - most subroutines are not that bad and invariably cost the Corp $ right now. End The Run costs you one click and tells you what breaker you need. Force the Corp to play your game
+├─ The run action is your most powerful - for unrezzed ICE, most subroutines are not that bad and cost the Corp to rez. End The Run costs you one click and tells you what breaker you need. Force the Corp to play your game
 ├─ They usually cannot afford to rez everything - attack their weak points and trash their fresh money assets when you can afford to
-├─ Advanced remotes → Contest remote immediately if possible, consider trap possibility
+├─ Advanced remotes → Contest remote immediately if possible, consider trap possibility. More advancements ~= more deadly
 ├─ Poor (< 6 credits)? → Build economy; $ threatens remotes via run into ETR, install breaker, run and steal
 ├─ Complete rig? → Run R&D to deny the Corp seeing agendas before you steal them.
 └─ Default → Run R&D, contest remotes as needed

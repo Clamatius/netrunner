@@ -8,7 +8,7 @@
             [clojure.string :as str]))
 
 (defn play-turn
-  "Play a simple turn: Start, Take Credits/Draw, End."
+  "Play a simple turn: Start, Take Credits x3, End."
   []
   (println "🐟 GOLDFISH - Playing turn...")
   
