@@ -219,10 +219,18 @@
                      :else "unknown")
 
         ;; Determine status
+        ;; Check if I'm the next player (for both-zero-clicks case)
+        i-am-next (and both-zero-clicks
+                       my-side
+                       (= (clojure.string/lower-case my-side) next-player))
+
         [emoji text can-act]
         (cond
+          ;; Both at 0 clicks - it's the next player's turn to start
           both-zero-clicks
-          ["🟢" (str "Waiting to start " next-player " turn") false]
+          (if i-am-next
+            ["🟢" "Ready to start your turn" true]
+            ["⏳" (str "Waiting for " next-player " to start") false])
 
           (not my-turn)
           ["⏳" (str "Waiting for " active-side) false]
