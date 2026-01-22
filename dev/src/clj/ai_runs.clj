@@ -7,7 +7,8 @@
             [ai-prompts :as prompts]
             [ai-basic-actions :as basic]
             [ai-card-actions :as actions]
-            [ai-run-tactics :as tactics]))
+            [ai-run-tactics :as tactics]
+            [ai-run-corp-handlers :as corp-handlers]))
 
 ;; ============================================================================
 ;; Run Strategy State
@@ -69,7 +70,8 @@
   []
   (reset! run-strategy {})
   (reset! last-waiting-status nil)
-  (reset! signaled-fire-position nil))
+  (reset! signaled-fire-position nil)
+  (corp-handlers/reset-waiting-status!))
 
 (defn set-strategy!
   "Merge new strategy flags into current strategy"
@@ -557,18 +559,6 @@
   [log-entries]
   (remove #(clojure.string/includes? (str (:text %)) "has no further action") log-entries))
 
-(defn- runner-signaled-let-fire?
-  "Check if Runner has signaled they're done breaking on current ICE.
-   Looks for the specific system message in recent game log.
-   Filters out 'no further action' spam to ensure signal isn't missed."
-  [state ice-title]
-  (let [log (get-in state [:game-state :log])
-        meaningful (filter-meaningful-log-entries log)
-        recent (take-last 20 meaningful)]
-    (some #(and (clojure.string/includes? (str (:text %)) "indicates to fire")
-                (clojure.string/includes? (str (:text %)) ice-title))
-          recent)))
-
 ;; ============================================================================
 ;; Handler Functions for continue-run! Strategy Pattern
 ;; ============================================================================
@@ -809,316 +799,6 @@
           (debug-chat! (format "WAIT: %s" reason)))
         {:status :waiting-for-opponent
          :message reason}))))
-
-(defn handle-corp-rez-strategy
-  "Priority 1.5: Corp rez strategy - auto-handle rez decisions"
-  [{:keys [side run-phase my-prompt strategy state gameid]}]
-  (when (and (= side "corp")
-             (= run-phase "approach-ice")
-             my-prompt
-             (or (:no-rez strategy) (:rez strategy)))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")
-          ice-rezzed? (:rezzed current-ice)
-          should-rez? (and (not (:no-rez strategy))
-                          (:rez strategy)
-                          (contains? (:rez strategy) ice-title)
-                          (not ice-rezzed?))]
-      (cond
-        ;; --no-rez: always decline
-        (:no-rez strategy)
-        (let [status-key [:corp-no-rez position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "🤖 Strategy: declining rez on %s" ice-title)))
-          (merge (send-continue! gameid)
-                 {:action :auto-declined-rez
-                  :ice ice-title}))
-
-        ;; --rez <ice-name>: rez if in set, decline otherwise
-        should-rez?
-        (do
-          (println (format "🤖 Strategy: --rez, rezzing %s" ice-title))
-          (if current-ice
-            (let [card-ref (core/create-card-ref current-ice)]
-              (ws/send-message! :game/action
-                               {:gameid gameid
-                                :command "rez"
-                                :args {:card card-ref}})
-              {:status :action-taken
-               :action :auto-rezzed
-               :ice ice-title})
-            (do
-              (println (format "⚠️  Could not find ICE to rez: %s" ice-title))
-              {:status :decision-required
-               :prompt my-prompt})))
-
-        ;; --rez set exists but this ICE is already rezzed: just continue
-        (and (:rez strategy) ice-rezzed?)
-        (do
-          (println (format "   → ICE %s already rezzed, continuing" ice-title))
-          (send-continue! gameid))
-
-        ;; --rez set exists but this ICE not in it: decline
-        :else
-        (do
-          (println (format "🤖 Strategy: --rez (not %s), declining" ice-title))
-          (merge (send-continue! gameid)
-                 {:action :auto-declined-rez
-                  :ice ice-title}))))))
-
-(defn handle-corp-rez-decision
-  "Priority 1.7: Corp at approach-ice WITHOUT strategy - pause for human decision"
-  [{:keys [side run-phase my-prompt strategy state]}]
-  (when (and (= side "corp")
-             (= run-phase "approach-ice")
-             my-prompt
-             ;; Only trigger if NO rez strategy is set (otherwise handle-corp-rez-strategy handles it)
-             (not (:no-rez strategy))
-             (not (:rez strategy)))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))]
-      (when (and current-ice (not (:rezzed current-ice)))
-        (let [ice-title (:title current-ice "ICE")
-              status-key [:corp-rez-decision position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "🛑 Rez decision: %s (cost %d¢)" ice-title (get current-ice :cost 0)))
-            (println "   → Use continue with '--rez <name>' to rez, or '--no-rez' to decline"))
-          {:status :decision-required
-           :message (format "Corp must decide: rez %s or continue" ice-title)
-           :ice ice-title
-           :position position})))))
-
-(defn handle-corp-fire-unbroken
-  "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs.
-
-   Bug fix: Removed my-prompt requirement. During encounter-ice phase,
-   Corp often has no prompt-state - just a paid ability window where
-   firing subs is available as an action, not a prompt choice.
-
-   Bug fix #2: Track fired position to prevent infinite loop.
-   The server doesn't sync :fired flag on subroutines, so we track
-   whether we've already fired at this position in this encounter.
-
-   Bug fix #3: Wait for Runner's signal before firing (model-vs-model coordination).
-   In simultaneous play, Corp must wait for Runner to signal they're done breaking."
-  [{:keys [side run-phase strategy state gameid]}]
-  (when (and (= side "corp")
-             (= run-phase "encounter-ice")
-             (:fire-unbroken strategy))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ;; Check if we already fired at this position (prevent infinite loop)
-          already-fired-here? (= (:fired-at-position strategy) position)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")
-          subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)
-          ;; Check if Runner has signaled they're done breaking
-          runner-signaled? (runner-signaled-let-fire? state ice-title)]
-      (cond
-        ;; Already fired at this position - don't fire again
-        already-fired-here?
-        nil  ; Let other handlers try (auto-continue will pass priority)
-
-        ;; No ICE found at position
-        (nil? current-ice)
-        (do
-          (println "⚠️  --fire-unbroken: no ICE at current position")
-          nil)  ; Let other handlers try
-
-        ;; No unbroken subs to fire
-        (empty? unbroken-subs)
-        nil  ; Let other handlers continue (auto-continue will pass)
-
-        ;; Runner hasn't signaled yet - wait for them
-        (not runner-signaled?)
-        nil  ; Let other handlers try (will poll again)
-
-        ;; Runner signaled, fire the unbroken subs!
-        :else
-        (do
-          (println (format "🤖 Strategy: --fire-unbroken, firing %d sub(s) on %s (Runner signaled)"
-                          (count unbroken-subs) ice-title))
-          ;; Mark that we've fired at this position
-          (set-strategy! {:fired-at-position position})
-          (let [card-ref (core/create-card-ref current-ice)]
-            (ws/send-message! :game/action
-                             {:gameid gameid
-                              :command "unbroken-subroutines"
-                              :args {:card card-ref}})
-            {:status :action-taken
-             :action :auto-fired-subs
-             :ice ice-title
-             :sub-count (count unbroken-subs)}))))))
-
-(defn handle-corp-fire-decision
-  "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision"
-  [{:keys [side run-phase my-prompt strategy state]}]
-  (when (and (= side "corp")
-             (= run-phase "encounter-ice")
-             my-prompt
-             (not (:fire-unbroken strategy)))
-    ;; Check if there are unfired unbroken subs to fire
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Must check both :broken AND :fired - subs can fire at most once per encounter
-          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
-      (when (and current-ice (seq unbroken-subs))
-        (let [ice-title (:title current-ice "ICE")
-              sub-count (count unbroken-subs)
-              ;; Actually check if Runner has signaled!
-              runner-signaled? (runner-signaled-let-fire? state ice-title)
-              status-key [:corp-fire-decision position ice-title runner-signaled?]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "🛑 Subs unbroken: %s (%d sub%s)"
-                           ice-title sub-count (if (= sub-count 1) "" "s")))
-            (if runner-signaled?
-              (do
-                (println "   ✅ Runner has signaled 'let subs fire'")
-                (println "   → fire-subs <name>  - fire the unbroken subs")
-                (println "   → continue          - pass without firing"))
-              (do
-                (println "   ⚠️  Runner has NOT signaled 'let subs fire' yet")
-                (println "   → WAIT for Runner to break or signal (unless they obviously can't)")
-                (println "   → fire-subs <name>  - only after Runner confirms")
-                (println "   → continue          - pass without firing"))))
-          {:status :decision-required
-           :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
-           :ice ice-title
-           :unbroken-count sub-count
-           :position position})))))
-
-(defn handle-corp-all-subs-resolved
-  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired).
-   If no actionable subs remain, just pass through to advance the phase."
-  [{:keys [side run-phase state gameid]}]
-  (when (and (= side "corp")
-             (= run-phase "encounter-ice"))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Subs that can still fire (not broken, not already fired)
-          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
-      ;; If ICE is rezzed but no actionable subs remain, just continue
-      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
-        (let [ice-title (:title current-ice "ICE")
-              all-broken? (every? :broken subroutines)]
-          (println (format "   → All subs %s on %s, Corp continuing"
-                          (if all-broken? "broken" "resolved") ice-title))
-          (send-continue! gameid))))))
-
-(defn handle-corp-waiting-after-subs-fired
-  "Priority 1.75: Corp at encounter-ice after subs have fired.
-   If Runner hasn't passed yet, wait. If Runner already passed, continue to advance phase."
-  [{:keys [side run-phase state gameid]}]
-  (when (and (= side "corp")
-             (= run-phase "encounter-ice"))
-    ;; Check if all subs have either been broken or fired
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Subs that can still fire (not broken, not already fired)
-          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          ;; Check if subs have fired (via log, since :fired doesn't sync from server)
-          log (get-in state [:game-state :log])
-          recent-log (take 10 (reverse log))
-          ice-title (:title current-ice "ICE")
-          subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
-                                         (str (:text %)))
-                               recent-log)]
-      ;; If subs have been resolved (via log check)
-      (when (and current-ice subs-resolved?)
-        (let [;; Check if Runner already passed (via log, since :no-action is unreliable)
-              recent-entries (take 5 (reverse log))
-              runner-passed? (some #(re-find #"(?i)ai-runner has no further action" (str (:text %))) recent-entries)]
-          (if runner-passed?
-            ;; Runner already passed - Corp should continue to advance the phase
-            (do
-              (println (format "   → Runner passed, Corp continuing past %s" ice-title))
-              (send-continue! gameid))
-            ;; Runner hasn't passed yet - wait
-            (let [status-key [:corp-waiting-after-fire position ice-title]
-                  already-printed? (= @last-waiting-status status-key)]
-              (when-not already-printed?
-                (reset! last-waiting-status status-key)
-                (println (format "⏸️  Waiting for Runner to continue past %s (subs resolved)" ice-title)))
-              {:status :waiting-for-opponent
-               :message (format "Waiting for Runner to continue past %s" ice-title)
-               :phase run-phase})))))))
-
-(defn handle-paid-ability-window
-  "Priority 1.8: General handler for paid ability windows in ALL phases.
-   Detects when we've passed priority but opponent hasn't yet.
-   This enables AI-to-AI coordination without LLM turns.
-
-   Uses :no-action state as source of truth."
-  [{:keys [side run-phase state]}]
-  (let [run (get-in state [:game-state :run])
-        no-action (:no-action run)
-        no-action-str (normalize-side no-action)
-        my-side side
-        opp-side (if (= side "runner") "corp" "runner")
-        ;; Check if we've passed - via state only
-        we-passed? (= no-action-str my-side)
-        ;; Check if opponent passed - via state only
-        opp-passed? (= no-action-str opp-side)]
-    ;; Only pause if WE have passed but opponent hasn't yet
-    ;; This creates the "baton pass" for AI-to-AI coordination
-    (when (and we-passed? (not opp-passed?))
-      (let [status-key [:waiting-for-opponent-paid-ability run-phase my-side]
-            already-printed? (= @last-waiting-status status-key)]
-        (when-not already-printed?
-          (reset! last-waiting-status status-key)
-          (println (format "⏸️  Waiting for %s paid abilities (%s phase)"
-                          (clojure.string/capitalize opp-side) run-phase))
-          (debug-chat! (format "WAIT: %s paid abilities @ %s" opp-side run-phase)))
-        {:status :waiting-for-opponent-paid-abilities
-         :message (format "Waiting for %s to pass or use paid abilities" opp-side)
-         :phase run-phase
-         :we-passed true}))))
 
 (defn handle-runner-approach-ice
   "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE"
@@ -1531,25 +1211,29 @@
         ;; Handler chain in priority order
         handlers [handle-force-mode
                   handle-opponent-wait
-                  handle-corp-rez-strategy
-                  handle-corp-rez-decision   ; Corp rez decision without strategy
-                  handle-corp-fire-unbroken
-                  handle-corp-fire-decision  ; Corp fire decision without strategy
-                  handle-corp-all-subs-resolved        ; Corp at encounter-ice, all subs broken/fired
-                  handle-corp-waiting-after-subs-fired ; Corp waits for Runner after subs resolve
-                  handle-paid-ability-window ; Wait after passing in any phase
+                  corp-handlers/handle-corp-rez-strategy
+                  corp-handlers/handle-corp-rez-decision
+                  (fn [ctx]  ; Wrapper to update strategy after firing
+                    (when-let [result (corp-handlers/handle-corp-fire-unbroken ctx)]
+                      (when-let [pos (:fired-at-position result)]
+                        (set-strategy! {:fired-at-position pos}))
+                      result))
+                  corp-handlers/handle-corp-fire-decision
+                  corp-handlers/handle-corp-all-subs-resolved
+                  corp-handlers/handle-corp-waiting-after-subs-fired
+                  corp-handlers/handle-paid-ability-window
                   handle-runner-approach-ice
-                  tactics/handle-runner-tactics      ; Runner tactics (before full-break)
-                  handle-runner-full-break   ; Runner auto-break with --full-break (fallback)
-                  handle-runner-encounter-ice ; Runner waits for Corp fire at encounter-ice
-                  handle-runner-pass-broken-ice ; Runner passes ICE after all subs broken
-                  handle-runner-pass-fired-ice  ; Runner passes ICE after subs fired
+                  tactics/handle-runner-tactics
+                  handle-runner-full-break
+                  handle-runner-encounter-ice
+                  handle-runner-pass-broken-ice
+                  handle-runner-pass-fired-ice
                   handle-waiting-for-opponent
                   handle-real-decision
                   handle-events
-                  handle-access-display      ; Display accessed cards (returns nil to continue)
+                  handle-access-display
                   handle-auto-choice
-                  handle-recently-passed-in-log  ; Backup: check log when :no-action hasn't synced
+                  handle-recently-passed-in-log
                   handle-auto-continue
                   handle-run-complete
                   handle-no-run]]
