@@ -1,11 +1,12 @@
 (ns ai-pure-functions-test
-  "Characterization tests for pure functions in ai_runs.clj
+  "Characterization tests for pure functions in ai_runs.clj and ai_run_tactics.clj
 
    These tests lock down behavior before refactoring. They test functions
    that have no side effects and are easy to verify in isolation."
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-runs :as runs]
+            [ai-run-tactics :as tactics]
             [ai-core :as core]))
 
 ;; ============================================================================
@@ -207,90 +208,90 @@
       (is (runs/can-auto-continue? prompt "approach-ice" "corp" state)))))
 
 ;; ============================================================================
-;; ice-primary-type tests (private fn, access via #')
+;; ice-primary-type tests (now in ai-run-tactics)
 ;; ============================================================================
 
 (deftest test-ice-primary-type-barrier
   (testing "Barrier ICE returns Barrier"
     (let [ice {:subtypes ["Barrier"]}]
-      (is (= "Barrier" (#'runs/ice-primary-type ice))))))
+      (is (= "Barrier" (tactics/ice-primary-type ice))))))
 
 (deftest test-ice-primary-type-code-gate
   (testing "Code Gate ICE returns Code Gate"
     (let [ice {:subtypes ["Code Gate"]}]
-      (is (= "Code Gate" (#'runs/ice-primary-type ice))))))
+      (is (= "Code Gate" (tactics/ice-primary-type ice))))))
 
 (deftest test-ice-primary-type-sentry
   (testing "Sentry ICE returns Sentry"
     (let [ice {:subtypes ["Sentry"]}]
-      (is (= "Sentry" (#'runs/ice-primary-type ice))))))
+      (is (= "Sentry" (tactics/ice-primary-type ice))))))
 
 (deftest test-ice-primary-type-multi-subtype
   (testing "Multi-subtype ICE returns first matching primary type"
     ;; Barrier checked first, then Code Gate, then Sentry
     (let [ice {:subtypes ["Sentry" "Barrier"]}]
-      (is (= "Barrier" (#'runs/ice-primary-type ice))))))
+      (is (= "Barrier" (tactics/ice-primary-type ice))))))
 
 (deftest test-ice-primary-type-no-primary
   (testing "ICE with no primary type returns nil"
     (let [ice {:subtypes ["Trap" "AP"]}]
-      (is (nil? (#'runs/ice-primary-type ice))))))
+      (is (nil? (tactics/ice-primary-type ice))))))
 
 (deftest test-ice-primary-type-empty
   (testing "ICE with no subtypes returns nil"
     (let [ice {:subtypes []}]
-      (is (nil? (#'runs/ice-primary-type ice))))))
+      (is (nil? (tactics/ice-primary-type ice))))))
 
 ;; ============================================================================
-;; breaker-ice-type tests (private fn)
+;; breaker-ice-type tests (now in ai-run-tactics)
 ;; ============================================================================
 
 (deftest test-breaker-ice-type-fracter
   (testing "Fracter breaks Barrier"
     (let [breaker {:subtypes ["Icebreaker" "Fracter"]}]
-      (is (= "Barrier" (#'runs/breaker-ice-type breaker))))))
+      (is (= "Barrier" (tactics/breaker-ice-type breaker))))))
 
 (deftest test-breaker-ice-type-decoder
   (testing "Decoder breaks Code Gate"
     (let [breaker {:subtypes ["Icebreaker" "Decoder"]}]
-      (is (= "Code Gate" (#'runs/breaker-ice-type breaker))))))
+      (is (= "Code Gate" (tactics/breaker-ice-type breaker))))))
 
 (deftest test-breaker-ice-type-killer
   (testing "Killer breaks Sentry"
     (let [breaker {:subtypes ["Icebreaker" "Killer"]}]
-      (is (= "Sentry" (#'runs/breaker-ice-type breaker))))))
+      (is (= "Sentry" (tactics/breaker-ice-type breaker))))))
 
 (deftest test-breaker-ice-type-ai
   (testing "AI breaker returns :ai (can break any type)"
     (let [breaker {:subtypes ["Icebreaker" "AI"]}]
-      (is (= :ai (#'runs/breaker-ice-type breaker))))))
+      (is (= :ai (tactics/breaker-ice-type breaker))))))
 
 (deftest test-breaker-ice-type-no-type
   (testing "Non-breaker program returns nil"
     (let [program {:subtypes ["Virus"]}]
-      (is (nil? (#'runs/breaker-ice-type program))))))
+      (is (nil? (tactics/breaker-ice-type program))))))
 
 ;; ============================================================================
-;; breaker-matches-ice? tests (private fn)
+;; breaker-matches-ice? tests (now in ai-run-tactics)
 ;; ============================================================================
 
 (deftest test-breaker-matches-ice-fracter-barrier
   (testing "Fracter matches Barrier"
     (let [breaker {:subtypes ["Fracter"]}
           ice {:subtypes ["Barrier"]}]
-      (is (#'runs/breaker-matches-ice? breaker ice)))))
+      (is (tactics/breaker-matches-ice? breaker ice)))))
 
 (deftest test-breaker-matches-ice-decoder-code-gate
   (testing "Decoder matches Code Gate"
     (let [breaker {:subtypes ["Decoder"]}
           ice {:subtypes ["Code Gate"]}]
-      (is (#'runs/breaker-matches-ice? breaker ice)))))
+      (is (tactics/breaker-matches-ice? breaker ice)))))
 
 (deftest test-breaker-matches-ice-killer-sentry
   (testing "Killer matches Sentry"
     (let [breaker {:subtypes ["Killer"]}
           ice {:subtypes ["Sentry"]}]
-      (is (#'runs/breaker-matches-ice? breaker ice)))))
+      (is (tactics/breaker-matches-ice? breaker ice)))))
 
 (deftest test-breaker-matches-ice-ai-any
   (testing "AI breaker matches any ICE type"
@@ -298,15 +299,15 @@
           barrier {:subtypes ["Barrier"]}
           code-gate {:subtypes ["Code Gate"]}
           sentry {:subtypes ["Sentry"]}]
-      (is (#'runs/breaker-matches-ice? ai-breaker barrier))
-      (is (#'runs/breaker-matches-ice? ai-breaker code-gate))
-      (is (#'runs/breaker-matches-ice? ai-breaker sentry)))))
+      (is (tactics/breaker-matches-ice? ai-breaker barrier))
+      (is (tactics/breaker-matches-ice? ai-breaker code-gate))
+      (is (tactics/breaker-matches-ice? ai-breaker sentry)))))
 
 (deftest test-breaker-matches-ice-mismatch
   (testing "Mismatched breaker/ICE returns false"
     (let [fracter {:subtypes ["Fracter"]}
           sentry {:subtypes ["Sentry"]}]
-      (is (not (#'runs/breaker-matches-ice? fracter sentry))))))
+      (is (not (tactics/breaker-matches-ice? fracter sentry))))))
 
 ;; ============================================================================
 ;; Test Suite Main
