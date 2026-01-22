@@ -8,7 +8,8 @@
             [ai-basic-actions :as basic]
             [ai-card-actions :as actions]
             [ai-run-tactics :as tactics]
-            [ai-run-corp-handlers :as corp-handlers]))
+            [ai-run-corp-handlers :as corp-handlers]
+            [ai-run-runner-handlers :as runner-handlers]))
 
 ;; ============================================================================
 ;; Run Strategy State
@@ -27,10 +28,6 @@
 
 ;; Track last waiting status to suppress repeated output
 (defonce last-waiting-status (atom nil))
-
-;; Track position where Runner has signaled "let subs fire"
-;; Reset when run ends or new ICE encountered
-(defonce signaled-fire-position (atom nil))
 
 ;; Debug chat mode - when enabled, announces waits/actions in game chat
 ;; Enable with: (reset! ai-runs/chat-debug-mode true)
@@ -70,8 +67,8 @@
   []
   (reset! run-strategy {})
   (reset! last-waiting-status nil)
-  (reset! signaled-fire-position nil)
-  (corp-handlers/reset-waiting-status!))
+  (corp-handlers/reset-waiting-status!)
+  (runner-handlers/reset-state!))
 
 (defn set-strategy!
   "Merge new strategy flags into current strategy"
@@ -537,29 +534,6 @@
                    (and current-ice (not (:rezzed current-ice))))))))
 
 ;; ============================================================================
-;; Subroutine Fire Coordination (Runner <-> Corp handoff)
-;; ============================================================================
-;;
-;; During ICE encounters, Runner must signal when done breaking so Corp can fire.
-;; This prevents race conditions in model-vs-model play where both clients poll.
-
-(defn- let-subs-fire-signal!
-  "Send system message signaling Runner is done breaking subs on this ICE.
-   Called once per ICE encounter (tracked by signaled-fire-position atom)."
-  [gameid ice-title]
-  (ws/send-message! :game/action
-    {:gameid gameid
-     :command "system-msg"
-     :args {:msg (str "indicates to fire all unbroken subroutines on " ice-title)}})
-  (Thread/sleep core/polling-delay))
-
-(defn- filter-meaningful-log-entries
-  "Filter log entries to exclude 'no further action' spam.
-   This prevents spam from pushing meaningful entries out of our detection window."
-  [log-entries]
-  (remove #(clojure.string/includes? (str (:text %)) "has no further action") log-entries))
-
-;; ============================================================================
 ;; Handler Functions for continue-run! Strategy Pattern
 ;; ============================================================================
 ;;
@@ -800,266 +774,6 @@
         {:status :waiting-for-opponent
          :message reason}))))
 
-(defn handle-runner-approach-ice
-  "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE"
-  [{:keys [side run-phase state]}]
-  (when (and (= side "runner")
-             (= run-phase "approach-ice")
-             (let [run (get-in state [:game-state :run])
-                   server (:server run)
-                   position (:position run)
-                   ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-                   ice-count (count ice-list)
-                   ice-index (- ice-count position)
-                   current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                                 (nth ice-list ice-index nil))
-                   no-action (:no-action run)
-                   no-action-str (normalize-side no-action)
-                   corp-already-declined? (= no-action-str "corp")]
-               (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")
-          status-key [:waiting-for-corp-rez position ice-title]
-          already-printed? (= @last-waiting-status status-key)]
-      ;; Only print verbose output first time we hit this state
-      (when-not already-printed?
-        (reset! last-waiting-status status-key)
-        (println "⏸️  Waiting for corp rez decision")
-        (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count))
-        (debug-chat! (format "WAIT: Corp rez decision on %s" ice-title)))
-      {:status :waiting-for-corp-rez
-       :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
-       :ice ice-title
-       :position position})))
-
-;; Track last --full-break warning to avoid repeating
-(defonce last-full-break-warning (atom nil))
-
-(defn handle-runner-full-break
-  "Priority 2.4: Auto-break with --full-break strategy.
-   During encounter-ice phase, if Runner has --full-break set, automatically
-   find and use 'Match strength and fully break' abilities on icebreakers.
-   Returns nil if no breaking possible (falls through to handle-runner-encounter-ice)."
-  [{:keys [side run-phase state strategy gameid]}]
-  (when (and (= side "runner")
-             (= run-phase "encounter-ice")
-             (:full-break strategy))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Subs that haven't been broken yet
-          unbroken-subs (filter #(not (:broken %)) subroutines)]
-      ;; Only try to break if ICE is rezzed and has unbroken subs
-      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs))
-        (let [ice-title (:title current-ice "ICE")
-              ;; Find icebreakers with playable abilities
-              runner-rig (get-in state [:game-state :runner :rig])
-              all-programs (get runner-rig :program [])
-
-              ;; DEBUG: Log what we see during encounter-ice
-              _ (println (format "🔍 DEBUG --full-break: phase=%s ice=%s (rezzed=%s, %d unbroken subs)"
-                                run-phase ice-title (:rezzed current-ice) (count unbroken-subs)))
-              _ (doseq [p all-programs]
-                  (println (format "🔍 DEBUG   %s abilities:" (:title p)))
-                  (doseq [[idx ab] (map-indexed vector (:abilities p))]
-                    (println (format "🔍 DEBUG     [%d] %s | playable=%s dynamic=%s"
-                                    idx (:label ab) (:playable ab) (:dynamic ab)))))
-
-              ;; Look for playable dynamic abilities (auto-pump-and-break)
-              breakable-abilities
-              (for [program all-programs
-                    [idx ability] (map-indexed vector (:abilities program))
-                    :when (and (:playable ability)
-                               (:dynamic ability)
-                               ;; dynamic type containing "break" is the full-break ability
-                               (when-let [dyn (:dynamic ability)]
-                                 (clojure.string/includes? (str dyn) "break")))]
-                {:card program
-                 :card-name (:title program)
-                 :ability-index idx
-                 :label (:label ability)
-                 :dynamic (:dynamic ability)})]
-          (if (seq breakable-abilities)
-            ;; Use the first available break ability
-            (let [{:keys [card-name ability-index label]} (first breakable-abilities)]
-              (reset! last-full-break-warning nil) ; Clear warning state on successful break
-              (println (format "🔨 Auto-breaking %s with %s" ice-title card-name))
-              (println (format "   Using: %s (ability %d)" label ability-index))
-              (let [result (actions/use-ability! card-name ability-index)]
-                (if (= :success (:status result))
-                  {:status :ability-used
-                   :message (format "Auto-broke %s with %s" ice-title card-name)
-                   :ice ice-title
-                   :breaker card-name}
-                  ;; If ability failed, let it fall through to normal handling
-                  nil)))
-            ;; No playable dynamic ability - try manual pump+break fallback
-            (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
-              fallback-result
-              ;; Fallback also failed - check if any breakers exist but can't afford
-              (let [warning-key [position ice-title]
-                    ;; Check for any dynamic break abilities (playable or not)
-                    all-break-abilities
-                    (for [program all-programs
-                          [idx ability] (map-indexed vector (:abilities program))
-                          :when (and (:dynamic ability)
-                                     (when-let [dyn (:dynamic ability)]
-                                       (clojure.string/includes? (str dyn) "break")))]
-                      {:card-name (:title program)
-                       :label (:label ability)
-                       :playable (:playable ability)
-                       :cost-label (:cost-label ability)})]
-                (when (not= @last-full-break-warning warning-key)
-                  (reset! last-full-break-warning warning-key)
-                  (if (seq all-break-abilities)
-                    ;; Breaker exists but ability not playable (likely insufficient credits)
-                    (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                      (println (format "⚠️  --full-break: Can't afford to break %s" ice-title))
-                      (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
-                    ;; No breaker can break this ICE type at all
-                    (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
-                nil))))))))
-
-(defn- ice-authorized-for-fire?
-  "Check if Runner has pre-authorized letting subs fire on this ICE.
-   Authorization comes from --tank <ice-name> or --tank-all flags."
-  [strategy ice-title]
-  (or (:tank-all strategy)
-      (contains? (get strategy :tank #{}) ice-title)))
-
-(defn handle-runner-encounter-ice
-  "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
-   Sends 'let subs fire' signal to Corp (once per ICE) to coordinate handoff.
-   SAFETY: Only signals if Runner explicitly authorized via --tank or --tank-all.
-   Without authorization, pauses and asks Runner to decide."
-  [{:keys [side run-phase state gameid strategy]}]
-  (when (and (= side "runner")
-             (= run-phase "encounter-ice")
-             ;; Don't signal fire when --full-break is active - we're trying to break!
-             (not (:full-break strategy)))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Subs that haven't been broken AND haven't fired yet
-          unfired-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          ;; Check if Corp has already declined to fire - via state only
-          no-action (:no-action run)
-          no-action-str (normalize-side no-action)
-          corp-passed? (= no-action-str "corp")]
-      ;; Only wait if ICE is rezzed, has unfired subs, and Corp hasn't passed yet
-      (when (and current-ice (:rezzed current-ice) (seq unfired-subs) (not corp-passed?))
-        (let [ice-title (:title current-ice "ICE")
-              sub-count (count unfired-subs)
-              authorized? (ice-authorized-for-fire? strategy ice-title)
-              status-key [:waiting-for-corp-fire position ice-title]
-              already-printed? (= @last-waiting-status status-key)
-              already-signaled? (= @signaled-fire-position position)]
-          (if (not authorized?)
-            ;; NOT authorized - pause and ask Runner to decide
-            (do
-              (when-not already-printed?
-                (reset! last-waiting-status status-key)
-                (println (format "⚠️  %s has %d unbroken sub%s - authorization required"
-                               ice-title sub-count (if (= sub-count 1) "" "s")))
-                (println "   Options:")
-                (println (format "   → tank \"%s\"         - let subs fire, continue run" ice-title))
-                (println "   → jack-out            - end the run")
-                (println (format "   → Or break subs with: break \"%s\" <breaker>" ice-title)))
-              {:status :fire-decision-required
-               :message (format "%s has %d unbroken sub(s) - use 'tank' to let fire or 'jack-out'" ice-title sub-count)
-               :ice ice-title
-               :unbroken-count sub-count
-               :position position})
-            ;; Authorized - send signal to Corp
-            (do
-              (when-not already-signaled?
-                (reset! signaled-fire-position position)
-                (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)" ice-title))
-                (let-subs-fire-signal! gameid ice-title))
-              (when-not already-printed?
-                (reset! last-waiting-status status-key)
-                (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
-                               ice-title sub-count (if (= sub-count 1) "" "s"))))
-              {:status :waiting-for-corp-fire
-               :message (format "Waiting for Corp to fire subs on %s or pass" ice-title)
-               :ice ice-title
-               :unbroken-count sub-count
-               :position position})))))))
-
-(defn handle-runner-pass-broken-ice
-  "Priority 2.6: Runner at encounter-ice when all subs are broken.
-   If no actionable subs remain, continue to pass the ICE.
-   This handles the case where Runner broke all subs with --full-break
-   and needs to advance past the ICE."
-  [{:keys [side run-phase state gameid]}]
-  (when (and (= side "runner")
-             (= run-phase "encounter-ice"))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          subroutines (:subroutines current-ice)
-          ;; Subs that can still fire (not broken, not already fired)
-          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
-      ;; If ICE is rezzed, has subs, but no actionable subs remain - pass it
-      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
-        (let [ice-title (:title current-ice "ICE")]
-          (println (format "   → All subs broken on %s, Runner passing ICE" ice-title))
-          (send-continue! gameid))))))
-
-(defn handle-runner-pass-fired-ice
-  "Priority 2.7: Runner at encounter-ice after subs have fired.
-   Check the log for 'resolves ... subroutines' to detect fired subs
-   (since :fired flag doesn't sync from server)."
-  [{:keys [side run-phase state gameid]}]
-  (when (and (= side "runner")
-             (= run-phase "encounter-ice"))
-    (let [run (get-in state [:game-state :run])
-          server (:server run)
-          position (:position run)
-          ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-          ice-count (count ice-list)
-          ice-index (- ice-count position)
-          current-ice (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-                        (nth ice-list ice-index nil))
-          ice-title (:title current-ice "ICE")
-          ;; Check if subs have fired (via log, since :fired doesn't sync)
-          ;; Filter out "no further action" spam to prevent it from pushing
-          ;; meaningful entries out of our detection window
-          log (get-in state [:game-state :log])
-          meaningful-log (filter-meaningful-log-entries (reverse log))
-          recent-log (take 20 meaningful-log)  ; Increased window for safety
-          subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
-                                         (str (:text %)))
-                               recent-log)]
-      ;; If subs have been resolved, Runner should pass the ICE
-      (when (and current-ice (:rezzed current-ice) subs-resolved?)
-        (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
-        (send-continue! gameid)))))
-
 (defn handle-events
   "Priority 4: Pause for important events (rez, abilities, subs, damage)"
   [{:keys [rez-event ability-event fired-event tag-damage-event]}]
@@ -1222,12 +936,12 @@
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
                   corp-handlers/handle-paid-ability-window
-                  handle-runner-approach-ice
+                  runner-handlers/handle-runner-approach-ice
                   tactics/handle-runner-tactics
-                  handle-runner-full-break
-                  handle-runner-encounter-ice
-                  handle-runner-pass-broken-ice
-                  handle-runner-pass-fired-ice
+                  runner-handlers/handle-runner-full-break
+                  runner-handlers/handle-runner-encounter-ice
+                  runner-handlers/handle-runner-pass-broken-ice
+                  runner-handlers/handle-runner-pass-fired-ice
                   handle-waiting-for-opponent
                   handle-real-decision
                   handle-events
