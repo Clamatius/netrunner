@@ -1,0 +1,128 @@
+#!/bin/bash
+# AI Client nREPL eval script
+# Sends commands to the AI Client REPL
+# Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
+# Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
+# Old usage still supported: ./ai-eval.sh <clojure-expression>
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/load-env.sh"
+
+TIMEOUT=${TIMEOUT:-10}
+
+# Parse arguments - support both old and new usage plus stdin mode
+# Stdin mode: ./ai-eval.sh --stdin client_name port < file_with_expression
+if [ "${1:-}" == "--stdin" ]; then
+    # Stdin mode: read expression from stdin to avoid shell escaping
+    CLIENT_NAME="${2:-fixed-id}"
+    REPL_PORT="${3:-7889}"
+    EXPRESSION=$(cat)
+elif [ $# -eq 1 ]; then
+    # Old usage: just expression
+    CLIENT_NAME="fixed-id"
+    REPL_PORT="${CLIENT_1_PORT:-7889}"
+    EXPRESSION="$1"
+elif [ $# -eq 3 ]; then
+    # New usage: client_name port expression
+    CLIENT_NAME="$1"
+    REPL_PORT="$2"
+    EXPRESSION="$3"
+else
+    echo "Usage: $0 [client_name] [port] <clojure-expression>"
+    echo "       $0 --stdin [client_name] [port] < file_with_expression"
+    echo "Examples:"
+    echo "  $0 '(ai-actions/status)'"
+    echo "  $0 runner $CLIENT_1_PORT '(ai-actions/status)'"
+    echo "  echo '(ai-actions/install-card! \"test\")' | $0 --stdin corp 7890"
+    exit 1
+fi
+
+# Check if AI client REPL is running
+if [ -f /tmp/ai-client-${CLIENT_NAME}.pid ]; then
+    PID=$(cat /tmp/ai-client-${CLIENT_NAME}.pid)
+    if ! ps -p $PID > /dev/null 2>&1; then
+        echo "❌ AI Client REPL '$CLIENT_NAME' not running (stale PID file)"
+        echo "   Start it with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
+        rm /tmp/ai-client-${CLIENT_NAME}.pid
+        exit 1
+    fi
+else
+    # Silently continue - PID file may not exist but client could still be running
+    : # no-op
+fi
+
+# Use Babashka if available (much faster), otherwise fall back to lein
+if command -v bb &> /dev/null; then
+    # Babashka nREPL client - fast and designed for scripting
+    # Use temp file to avoid shell escaping issues with ! and other special chars
+    EXPR_FILE=$(mktemp)
+    printf '%s' "$EXPRESSION" > "$EXPR_FILE"
+    trap "rm -f '$EXPR_FILE'" EXIT
+
+    bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+          (let [expr-file \"$EXPR_FILE\"
+                expr-code (slurp expr-file)]
+            (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
+              (let [in (java.io.PushbackInputStream. (io/input-stream sock))
+                    out (io/output-stream sock)
+                    bytes->str #(when % (String. (bytes %)))
+                    result-value (atom nil)]
+                (b/write-bencode out {\"op\" \"eval\" \"code\" expr-code})
+              (.flush out)
+              (loop []
+                (when-let [response (b/read-bencode in)]
+                  (when-let [val (get response \"value\")]
+                    (let [val-str (bytes->str val)]
+                      (print val-str)
+                      (flush)
+                      (reset! result-value val-str)))
+                  (when-let [out-msg (get response \"out\")]
+                    (print (bytes->str out-msg))
+                    (flush))
+                  (when-let [err (get response \"err\")]
+                    (binding [*out* *err*]
+                      (print (bytes->str err))
+                      (flush)))
+                  (when-let [ex (get response \"ex\")]
+                    (binding [*out* *err*]
+                      (println (str \"Exception: \" (bytes->str ex)))
+                      (flush))
+                    (reset! result-value :error))
+                  (when-let [root-ex (get response \"root-ex\")]
+                    (binding [*out* *err*]
+                      (println (str \"Root Exception: \" (bytes->str root-ex)))
+                      (flush))
+                    (reset! result-value :error))
+                  (when-not (get response \"status\")
+                    (recur))))
+                ;; Check if result indicates error and exit with code 1
+                (when (= @result-value :error)
+                  (System/exit 1))
+                (when @result-value
+                  (try
+                    (let [result (read-string @result-value)]
+                      (when (and (map? result) (= :error (:status result)))
+                        (System/exit 1)))
+                    (catch Exception _ nil))))))"
+else
+    # Fallback to lein repl :connect (slower, for compatibility)
+    timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
+        grep -v "^user=>" | \
+        grep -v "find-doc" | \
+        grep -v "^  #_=>" | \
+        grep -v "Welcome back!" | \
+        grep -v "Connecting to nREPL" | \
+        grep -v "REPL-y" | \
+        grep -v "Clojure" | \
+        grep -v "OpenJDK" | \
+        grep -v "Docs:" | \
+        grep -v "Source:" | \
+        grep -v "Javadoc:" | \
+        grep -v "Exit:" | \
+        grep -v "Results:" | \
+        grep -v "Bye for now" | \
+        sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | \
+        grep -v "^[[:space:]]*$"
+$EXPRESSION
+EOF
+fi

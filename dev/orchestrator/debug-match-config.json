@@ -1,0 +1,13 @@
+{
+  "match_id": "debug-game-b",
+  "description": "Debug Game B: Goldfish Corp vs Heuristic Runner",
+  "rounds": 1,
+  "decks": {
+    "corp": "system-gateway-beginner-corp",
+    "runner": "system-gateway-beginner-runner"
+  },
+  "agents": {
+    "agent_a": "goldfish",
+    "agent_b": "heuristic"
+  }
+}

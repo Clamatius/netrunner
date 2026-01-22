@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+#
+# fetch-cards - Fetch card texts from NetrunnerDB for problem files
+#
+# Usage:
+#   ./fetch-cards problems/midgame-001-runner-q.md  # Process single file
+#   ./fetch-cards --all                             # Process all -q.md files
+#   ./fetch-cards --check                           # List [[Card Name]] references
+#
+# Card markup: Use [[Card Name]] in problem files to mark cards for reference.
+# Script extracts these, fetches from NetrunnerDB, and generates Card Text section.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROBLEMS_DIR="$SCRIPT_DIR/problems"
+CACHE_FILE="$SCRIPT_DIR/.card-cache.json"
+CACHE_MAX_AGE=86400  # 24 hours
+
+# NetrunnerDB API
+NRDB_API="https://netrunnerdb.com/api/2.0/public/cards"
+
+# Ensure cache exists and is recent
+ensure_cache() {
+    local need_fetch=false
+
+    if [[ ! -f "$CACHE_FILE" ]]; then
+        need_fetch=true
+    elif [[ $(find "$CACHE_FILE" -mtime +1 2>/dev/null) ]]; then
+        need_fetch=true
+    fi
+
+    if $need_fetch; then
+        echo "Fetching card database from NetrunnerDB..." >&2
+        curl -s "$NRDB_API" > "$CACHE_FILE"
+        echo "Cached $(jq '.data | length' "$CACHE_FILE") cards" >&2
+    fi
+}
+
+# Get card JSON by title (case-insensitive) - returns first match only
+get_card() {
+    local name="$1"
+    jq -r --arg name "$name" '[.data[] | select(.title | ascii_downcase == ($name | ascii_downcase))] | first' "$CACHE_FILE"
+}
+
+# Format card text for problem file
+format_card() {
+    local card_json="$1"
+
+    local title=$(echo "$card_json" | jq -r '.title')
+    local type=$(echo "$card_json" | jq -r '.type_code')
+    local keywords=$(echo "$card_json" | jq -r '.keywords // ""')
+    local text=$(echo "$card_json" | jq -r '.text // ""')
+
+    # Build type line with subtypes
+    local type_line=""
+    case "$type" in
+        ice)
+            local subtypes=$(echo "$keywords" | tr ' ' ' ')
+            type_line="ICE: $subtypes"
+            ;;
+        program)
+            if [[ "$keywords" == *"Icebreaker"* ]]; then
+                type_line="Icebreaker: ${keywords/Icebreaker - /}"
+            else
+                type_line="Program: $keywords"
+            fi
+            ;;
+        resource)
+            type_line="Resource"
+            [[ -n "$keywords" ]] && type_line="Resource: $keywords"
+            ;;
+        event)
+            type_line="Event"
+            [[ -n "$keywords" ]] && type_line="Event: $keywords"
+            ;;
+        operation)
+            type_line="Operation"
+            [[ -n "$keywords" ]] && type_line="Operation: $keywords"
+            ;;
+        agenda)
+            type_line="Agenda"
+            [[ -n "$keywords" ]] && type_line="Agenda: $keywords"
+            ;;
+        asset)
+            type_line="Asset"
+            [[ -n "$keywords" ]] && type_line="Asset: $keywords"
+            ;;
+        upgrade)
+            type_line="Upgrade"
+            [[ -n "$keywords" ]] && type_line="Upgrade: $keywords"
+            ;;
+        hardware)
+            type_line="Hardware"
+            [[ -n "$keywords" ]] && type_line="Hardware: $keywords"
+            ;;
+        identity)
+            type_line="Identity"
+            ;;
+        *)
+            type_line="$type"
+            ;;
+    esac
+
+    # Build stats line based on card type
+    local stats=""
+    case "$type" in
+        ice)
+            local rez=$(echo "$card_json" | jq -r '.cost // "?"')
+            local str=$(echo "$card_json" | jq -r '.strength // "?"')
+            stats="Rez $rez, Strength $str"
+            ;;
+        program)
+            local cost=$(echo "$card_json" | jq -r '.cost // "?"')
+            local str=$(echo "$card_json" | jq -r '.strength // empty')
+            local mu=$(echo "$card_json" | jq -r '.memory_cost // "1"')
+            if [[ -n "$str" ]]; then
+                stats="Install $cost, Strength $str, $mu MU"
+            else
+                stats="Install $cost, $mu MU"
+            fi
+            ;;
+        resource|hardware)
+            local cost=$(echo "$card_json" | jq -r '.cost // "?"')
+            stats="Cost $cost"
+            ;;
+        event|operation)
+            local cost=$(echo "$card_json" | jq -r '.cost // "?"')
+            stats="Cost $cost"
+            ;;
+        agenda)
+            local adv=$(echo "$card_json" | jq -r '.advancement_cost // "?"')
+            local pts=$(echo "$card_json" | jq -r '.agenda_points // "?"')
+            stats="Adv $adv, Points $pts"
+            ;;
+        asset|upgrade)
+            local rez=$(echo "$card_json" | jq -r '.cost // "?"')
+            local trash=$(echo "$card_json" | jq -r '.trash_cost // "?"')
+            stats="Rez $rez, Trash $trash"
+            ;;
+    esac
+
+    # Format the card text - convert HTML-like markup
+    # [click] → [click], [credit] → [credit], <strong> → bold, etc.
+    local formatted_text=$(echo "$text" | \
+        sed 's/<strong>//g; s/<\/strong>//g' | \
+        sed 's/<em>//g; s/<\/em>//g' | \
+        sed 's/&ndash;/–/g' | \
+        sed 's/<trace>/Trace /g; s/<\/trace>//g' | \
+        sed 's/\[subroutine\]/↳/g')
+
+    # Build output
+    echo "**$title** - $type_line ($stats)"
+    echo "$formatted_text" | sed 's/^//'
+    echo ""
+}
+
+# Extract [[Card Name]] references from file
+extract_card_refs() {
+    local file="$1"
+    grep -oE '\[\[[^]]+\]\]' "$file" 2>/dev/null | \
+        sed 's/\[\[//g; s/\]\]//g' | \
+        sort -u
+}
+
+# Check mode - list all card references
+check_mode() {
+    echo "Card references in problem files:"
+    echo ""
+    for file in "$PROBLEMS_DIR"/*-q.md; do
+        [[ -f "$file" ]] || continue
+        local refs=$(extract_card_refs "$file")
+        if [[ -n "$refs" ]]; then
+            echo "$(basename "$file"):"
+            echo "$refs" | sed 's/^/  /'
+            echo ""
+        fi
+    done
+}
+
+# Process a single file - output card text section to stdout
+process_file() {
+    local file="$1"
+    local refs=$(extract_card_refs "$file")
+
+    if [[ -z "$refs" ]]; then
+        echo "No [[Card Name]] references found in $file" >&2
+        return 0
+    fi
+
+    echo "## Card Text (Auto-Generated)"
+    echo ""
+
+    while IFS= read -r card_name; do
+        [[ -z "$card_name" ]] && continue
+        local card_json=$(get_card "$card_name")
+
+        if [[ -z "$card_json" || "$card_json" == "null" ]]; then
+            echo "**$card_name** - NOT FOUND IN DATABASE" >&2
+            echo "**$card_name** - *Card not found*"
+            echo ""
+        else
+            format_card "$card_json"
+        fi
+    done <<< "$refs"
+    echo ""  # Ensure trailing blank line
+}
+
+# Update file in place - replace Card Text section
+update_file() {
+    local file="$1"
+    local card_section=$(process_file "$file" 2>/dev/null)
+
+    if [[ -z "$card_section" ]]; then
+        return 0
+    fi
+
+    # Check if file has existing Card Text section
+    if grep -q "^## Card Text" "$file"; then
+        # Replace existing section (everything from ## Card Text to next ## or end)
+        # This is tricky in bash, let's use a temp file approach
+        local temp_file=$(mktemp)
+        local in_card_section=false
+        local found_next_section=false
+
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^##\ Card\ Text ]]; then
+                in_card_section=true
+                continue
+            fi
+
+            if $in_card_section && [[ "$line" =~ ^## ]]; then
+                in_card_section=false
+                found_next_section=true
+            fi
+
+            if ! $in_card_section; then
+                echo "$line" >> "$temp_file"
+            fi
+        done < "$file"
+
+        # Insert new card section before ## Question or at end
+        local final_file=$(mktemp)
+        local inserted=false
+
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^##\ Question ]] && ! $inserted; then
+                printf '%s\n\n' "$card_section" >> "$final_file"
+                inserted=true
+            fi
+            echo "$line" >> "$final_file"
+        done < "$temp_file"
+
+        if ! $inserted; then
+            echo "$card_section" >> "$final_file"
+        fi
+
+        mv "$final_file" "$file"
+        rm -f "$temp_file"
+        echo "Updated: $file"
+    else
+        # No existing section - insert before ## Question
+        local temp_file=$(mktemp)
+        local inserted=false
+
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^##\ Question ]] && ! $inserted; then
+                printf '\n%s\n\n' "$card_section" >> "$temp_file"
+                inserted=true
+            fi
+            echo "$line" >> "$temp_file"
+        done < "$file"
+
+        if ! $inserted; then
+            echo "$card_section" >> "$temp_file"
+        fi
+
+        mv "$temp_file" "$file"
+        echo "Updated: $file"
+    fi
+}
+
+# Main
+case "${1:-}" in
+    --check|-c)
+        check_mode
+        ;;
+    --all|-a)
+        ensure_cache
+        for file in "$PROBLEMS_DIR"/*-q.md; do
+            [[ -f "$file" ]] || continue
+            update_file "$file"
+        done
+        ;;
+    --help|-h)
+        cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [FILE...]
+
+Fetch card texts from NetrunnerDB for problem files.
+
+Options:
+  --check, -c     List [[Card Name]] references in all problems
+  --all, -a       Process all problem files
+  --preview FILE  Show card text section without modifying file
+  --help, -h      Show this help
+
+Card markup: Use [[Card Name]] in problem files to mark cards for reference.
+
+Examples:
+  $(basename "$0") --check
+  $(basename "$0") problems/midgame-001-runner-q.md
+  $(basename "$0") --all
+EOF
+        ;;
+    --preview)
+        ensure_cache
+        process_file "$2"
+        ;;
+    "")
+        echo "Usage: $(basename "$0") [--check|--all|FILE...]" >&2
+        exit 1
+        ;;
+    *)
+        ensure_cache
+        for file in "$@"; do
+            if [[ -f "$file" ]]; then
+                update_file "$file"
+            else
+                echo "File not found: $file" >&2
+            fi
+        done
+        ;;
+esac

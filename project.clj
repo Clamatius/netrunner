@@ -16,7 +16,16 @@
 
   :repl-options {:timeout 180000
                  :init-ns web.dev
-                 :init (go)}
+                 :init (do
+                         (println "\n🚀 Starting web server...")
+                         (try
+                           (go)
+                           (println "✅ Web server started successfully on port 1042")
+                           (catch Exception e
+                             (println "⚠️  Auto-start failed:" (.getMessage e))
+                             (println "   Run (go) manually when ready")))
+                         (println "")
+                         nil)}
 
   :dependencies [[org.clojure/clojure "1.12.0"]
                  [org.clojure/clojurescript "1.11.132"
@@ -84,7 +93,7 @@
                    :eftest {:report eftest.report.pretty/report
                             :fail-fast? false}
                    :source-paths ["src/clj" "src/cljs" "src/cljc" "src/css"
-                                  "dev/src/clj" "dev/src/cljs"
+                                  "dev/src/clj" "dev/src/cljs" "dev/test"
                                   "test/clj" "test/cljc" "test/cljs"]
                    :resource-paths ["target"]
                    :clean-targets ^{:protect false} ["target"]
@@ -92,6 +101,14 @@
                               "-XX:+UnlockDiagnosticVMOptions"
                               "-XX:-OmitStackTraceInFastThrow"
                               "-XX:+DebugNonSafepoints"]}
+             :repl {:source-paths ["src/clj" "src/cljs" "src/cljc" "src/css"
+                                    "dev/src/clj" "dev/src/cljs" "dev/test"
+                                    "test/clj" "test/cljc" "test/cljs"]}
+             ;; Lightweight profile for AI client REPLs - no heavy dev deps
+             ;; Starts in ~8s vs ~35s with full dev profile
+             ;; user.clj gracefully handles missing deps (kaocha, web.dev)
+             :ai-client {:source-paths ["src/clj" "src/cljc" "dev/src/clj"]
+                         :plugins [[cider/cider-nrepl "0.47.1"]]}
              :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}}
 
   :aliases {"fetch" ^{:doc "Fetch card data and images from github"} ["run" "-m" "tasks.fetch/command"]

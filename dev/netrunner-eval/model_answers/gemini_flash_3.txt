@@ -1,0 +1,107 @@
+Problem 1: break-001-runner [Easy]
+Goal: Access the card in Server 1 this turn.
+
+Sequencing
+Click 1: Play Sure Gamble. ($7 - 5 + 9 = $11)
+Click 2: Install Unity. ($11 - 3 = $8)
+Click 3: Install Cleaver. ($8 - 3 = $5)
+Click 4: Run Server 1.
+Credit Math during Run
+Approach Whitespace (Code Gate, Str 0):
+Use Unity (Str 1) to break the second subroutine (ETR). Cost: $1. (Remaining: $4)
+Let the first subroutine fire (Lose $3). Cost: $3. (Remaining: $1)
+Note: Alternatively, break both subs for $2, leaving $3. Both result in enough for Palisade.
+Approach Palisade (Barrier, Str 4 in remote):
+Use Cleaver (Str 3). Pay for +1 Strength. Cost: $2. (Remaining: $2 or $1)
+Pay to break the subroutine (ETR). Cost: $1. (Remaining: $0)
+Access Successful.
+Problem 2: midgame-001-runner [Hard]
+Analysis: The unrezzed card with 2 advancements is most likely Send a Message (needs 3 more to score) or the second Urtica Cipher (trap).
+
+Calculation: To access this turn, you must bypass/break Brân 1.0 and Palisade.
+
+Brân 1.0: Costs 3 clicks (Bioroid) or ~$8 to break with Cleaver.
+Palisade: Costs $3 to break with Cleaver.
+Total Required: (3 Clicks + $3) or $11.
+Current Resources: You start with $3 ($2 + $1 from Smartware Distributor). You can gain a maximum of $5 more using clicks (Click 1: Telework Contract for $3, Click 2: Pennyshaver for $2). This leaves only 2 clicks and $8, which is insufficient to both bypass Brân and pay for Palisade.
+
+Recommended Action: Do not run the remote this turn. You cannot afford the access, and if it is an Urtica Cipher, you will be broke and vulnerable. Instead, build your board:
+
+Click 1: Take $3 from Telework Contract. ($6)
+Click 2: Install Verbal Plasticity. ($3)
+Click 3: Draw 2 cards (triggering Verbal Plasticity).
+Click 4: Draw 2 cards. This prepares you with a large hand to survive a potential trap and enough resources to contest the score next turn.
+Problem 3: mull-001-corp [Easy]
+Decision: KEEP. This is an excellent opening hand. You have:
+
+Economy: Hedge Fund to jump-start your credits.
+Defense: Ice Wall (Barrier) and Enigma (Code Gate) provide a solid gearcheck for both central servers.
+Bluff/Punish: Urtica Cipher can be used to bait the runner or protect a remote.
+Winning Path: Offworld Office is your first scoring target once the board is stable.
+Problem 4: mull-002-corp [Easy]
+Decision: MULLIGAN. This hand is dangerously slow and agenda-heavy.
+
+Agenda Flood: You have 6 points in hand. If the runner checks HQ early, you likely lose.
+Poor Economy: Your only economy is Government Subsidy, which costs $10 to play. You cannot afford this for several turns.
+Expensive ICE: Brân 1.0 costs $6 to rez. You cannot protect yourself on Turn 1.
+Problem 5: mull-003-runner [Easy]
+Decision: KEEP. A very balanced starting hand for a Runner.
+
+Economy: Sure Gamble and Smartware Distributor provide both burst and drip income.
+Breakers: You have two of the three main types (Cleaver and Carmen) immediately available.
+Pressure: Jailbreak allows for a high-value early run on R&D or HQ.
+Problem 6: mull-004-runner [Easy]
+Decision: MULLIGAN. While you have all three breaker types, you have zero economy.
+
+You will spend your first several turns clicking for credits just to install your programs.
+Overclock is great, but it doesn't help you build your permanent rig or pay for trash costs. You need a more stable economic start (like Sure Gamble).
+Problem 7: score-001-corp [Easy]
+Best Line: Win the game by scoring Superconducting Hub.
+
+Click 1: Install Superconducting Hub in Remote 1.
+Click 2: Advance Superconducting Hub.
+Click 3: Play Seamless Launch to place 2 counters on it.
+Action: Score Superconducting Hub (3 counters).
+Reasoning: You are at 5 points; this puts you at 6. More importantly, the Runner is at 1 card in hand and has no Killer. They cannot safely run Remote 1 because Karunā will deal 2 net damage, flatlining them before they can even reach the agenda. Scoring now draws you 2 cards to find your final agenda for the win.
+
+Problem 8: turn1-001-corp [Easy]
+Turn 1 Plan:
+
+Click 1: Play Hedge Fund. ($5 -> $9)
+Click 2: Install Whitespace on R&D.
+Click 3: Install Palisade on HQ.
+Reasoning: This is the "Standard Opening." It secures both centrals against early "siphons" or lucky agenda snipes and leaves you with enough credits ($9) to rez both pieces of ICE if the runner tests them.
+
+Problem 9: turn1-002-corp [Medium]
+Turn 1 Plan:
+
+Click 1: Install Diviner on R&D.
+Click 2: Install Karunā on HQ.
+Click 3: Take 1 credit from the bank ($5 -> $6).
+Reasoning: You lack Hedge Fund, but you have Government Subsidy. You need to reach $10 to play it. By installing two punishing pieces of ICE early, you discourage the runner from checking HQ/R&D while you spend next turn clicking for the remaining credits needed to launch your economy.
+
+Problem 10: turn1-003-runner [Medium]
+Turn 1 Plan:
+
+Click 1: Play Sure Gamble. ($5 -> $9)
+Click 2: Install Smartware Distributor. ($9)
+Click 3: Play Jailbreak on R&D. (Draw 1, Access 2).
+Click 4: Draw 1 card.
+Reasoning: You want to set up your economy (Smartware) while immediately applying pressure. Jailbreak on turn 1 is low risk and high reward, forcing the Corp to either spend their credits rezzing ICE early or concede two accesses.
+
+Problem 11: turn1-004-runner [Medium]
+Turn 1 Plan:
+
+Click 1: Play Sure Gamble. ($5 -> $9)
+Click 2: Run Server 1. Trash the card (likely Nico Campaign or Regolith). ($9 - 3 = $6)
+Click 3: Install Smartware Distributor. ($6)
+Click 4: Run HQ.
+Reasoning: The Corp's "Naked Install" in a remote is a clear economic play. Trashing it early is vital to prevent them from snowballing. Playing Sure Gamble first ensures you have the credits to pay the trash cost. Ending with an HQ run keeps the pressure on their hand before they can protect it.
+
+Summary of Task Completion
+I have completed the strategic analysis and provided solutions for all 11 Netrunner reasoning problems.
+
+Solved 2 complex board state problems involving credit math and ICE interaction.
+Evaluated 4 mulligan decisions based on economic viability and risk.
+Planned 5 optimal opening and mid-game turns for both Corp and Runner.
+Addressed all questions regarding sequencing, credit math, and hidden information interpretation.

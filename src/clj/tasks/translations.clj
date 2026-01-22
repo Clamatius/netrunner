@@ -73,7 +73,9 @@
                  (map (fn [^java.io.File f]
                         (let [n (str/replace (.getName f) ".ftl" "")
                               content (slurp f)]
-                          [n content]))))]
+                          [n content])))
+                 ;; Skip empty translation files (FTLParser throws on empty input)
+                 (filter (fn [[_ content]] (not (str/blank? content)))))]
   (reset! fluent-dictionary {})
   (doseq [[lang content] langs]
     (swap! fluent-dictionary assoc lang (build lang content)))

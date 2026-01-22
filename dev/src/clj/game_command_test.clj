@@ -1,0 +1,1865 @@
+;; Game command test: Direct game engine testing with fixed decks
+;; This bypasses WebSocket layer and tests game actions directly
+;; Allows deterministic games with known card positions for AI testing
+
+(ns game-command-test
+  (:require
+   [game.core :as core]
+   [game.core.card :refer [get-card get-counters]]
+   [game.test-framework :refer :all]
+   [jinteki.cards :refer [all-cards]]))
+
+;; ============================================================================
+;; System Gateway Beginner Decks (fixed order for reproducible tests)
+;; ============================================================================
+
+(def gateway-beginner-corp-deck
+  "System Gateway beginner Corp deck - exact order for testing"
+  ["Offworld Office" "Offworld Office" "Offworld Office"
+   "Send a Message" "Send a Message"
+   "Superconducting Hub" "Superconducting Hub"
+   "Nico Campaign" "Nico Campaign"
+   "Regolith Mining License" "Regolith Mining License"
+   "Urtica Cipher" "Urtica Cipher"
+   "Government Subsidy" "Government Subsidy"
+   "Hedge Fund" "Hedge Fund" "Hedge Fund"
+   "Seamless Launch" "Seamless Launch"
+   "Manegarm Skunkworks"
+   "Brân 1.0" "Brân 1.0"
+   "Palisade" "Palisade" "Palisade"
+   "Diviner" "Diviner"
+   "Whitespace" "Whitespace"
+   "Karunā" "Karunā"
+   "Tithe" "Tithe"])
+
+(def gateway-beginner-runner-deck
+  "System Gateway beginner Runner deck - exact order for testing"
+  ["Creative Commission" "Creative Commission"
+   "Jailbreak" "Jailbreak" "Jailbreak"
+   "Overclock" "Overclock"
+   "Sure Gamble" "Sure Gamble" "Sure Gamble"
+   "Tread Lightly" "Tread Lightly"
+   "VRcation" "VRcation"
+   "Docklands Pass"
+   "Pennyshaver"
+   "Red Team"
+   "Smartware Distributor" "Smartware Distributor"
+   "Telework Contract" "Telework Contract"
+   "Verbal Plasticity"
+   "Carmen" "Carmen"
+   "Cleaver" "Cleaver"
+   "Mayfly" "Mayfly"
+   "Unity" "Unity"])
+
+;; ============================================================================
+;; Card Lookup Helpers
+;; ============================================================================
+
+(defn card-info
+  "Quick lookup of card properties from the card database.
+  Returns a map with useful info for testing."
+  [card-name]
+  (when-let [card (get @all-cards card-name)]
+    {:title (:title card)
+     :type (:type card)
+     :cost (:cost card)
+     :faction (:faction card)
+     :side (:side card)
+     :strength (:strength card)
+     :agenda-points (:agendapoints card)
+     :advancement-cost (:advancementcost card)
+     :memory (:memoryunits card)
+     :influence (:influence card)}))
+
+(defn print-card-info
+  "Print card information in readable format"
+  [card-name]
+  (if-let [info (card-info card-name)]
+    (do
+      (println "\n=== Card Info:" card-name "===")
+      (doseq [[k v] info]
+        (when v
+          (println (str "  " (name k) ":") v))))
+    (println "Card not found:" card-name)))
+
+;; ============================================================================
+;; Test Setup Helpers
+;; ============================================================================
+
+(defn open-hand-game
+  "Create a game with both players' hands visible for testing.
+  Uses System Gateway beginner decks in fixed order.
+  Starting hand is first 5 cards from deck.
+
+  NOTE: Returns game state atom. Don't print at REPL or it will spam!"
+  []
+  (do-game
+    (new-game {:corp {:deck gateway-beginner-corp-deck
+                      :hand (take 5 gateway-beginner-corp-deck)}
+               :runner {:deck gateway-beginner-runner-deck
+                        :hand (take 5 gateway-beginner-runner-deck)}})
+    state))
+
+(defn custom-open-hand-game
+  "Create a game with custom hands for both sides.
+  Remaining deck cards are in specified order (no shuffling in tests).
+
+  NOTE: Returns game state atom. Don't print at REPL or it will spam!"
+  [corp-hand corp-deck runner-hand runner-deck]
+  (do-game
+    (new-game {:corp {:deck corp-deck
+                      :hand corp-hand}
+               :runner {:deck runner-deck
+                        :hand runner-hand}})
+    state))
+
+;; ============================================================================
+;; Game State Inspection
+;; ============================================================================
+
+(defn print-game-state
+  "Print current game state for both sides"
+  [state]
+  (let [corp (:corp @state)
+        runner (:runner @state)]
+    (println "\n=== GAME STATE ===")
+    (println "Corp:")
+    (println "  Credits:" (:credit corp))
+    (println "  Clicks:" (:click corp))
+    (println "  Hand:" (mapv :title (:hand corp)))
+    (println "  Deck size:" (count (:deck corp)))
+
+    (println "\nRunner:")
+    (println "  Credits:" (:credit runner))
+    (println "  Clicks:" (:click runner))
+    (println "  Hand:" (mapv :title (:hand runner)))
+    (println "  Deck size:" (count (:deck runner)))))
+
+(defn check-prompts
+  "Check for open prompts and print them for debugging.
+  Returns true if there are prompts open (indicating potential issues)."
+  [state]
+  (let [corp-prompt (get-prompt state :corp)
+        runner-prompt (get-prompt state :runner)
+        has-corp-prompt (and corp-prompt (not= :run (:prompt-type corp-prompt)))
+        has-runner-prompt (and runner-prompt (not= :run (:prompt-type runner-prompt)))]
+    (when (or has-corp-prompt has-runner-prompt)
+      (println "\n⚠️  OPEN PROMPTS DETECTED:")
+      (when has-corp-prompt
+        (println "  Corp prompt:" (:msg corp-prompt))
+        (println "    Type:" (:prompt-type corp-prompt))
+        (when (:choices corp-prompt)
+          (println "    Choices:" (:choices corp-prompt))))
+      (when has-runner-prompt
+        (println "  Runner prompt:" (:msg runner-prompt))
+        (println "    Type:" (:prompt-type runner-prompt))
+        (when (:choices runner-prompt)
+          (println "    Choices:" (:choices runner-prompt)))))
+    (or has-corp-prompt has-runner-prompt)))
+
+(defn assert-no-prompts
+  "Assert that neither side has open prompts. Useful for AI player to verify clean state."
+  [state context]
+  (when (check-prompts state)
+    (println "\n❌ ERROR: Unexpected prompts at:" context)
+    (println "   This usually means:")
+    (println "   - We tried to play a card that doesn't exist")
+    (println "   - An action requires a choice (server, target, etc.)")
+    (println "   - We need to handle a trigger or ability")))
+
+(defn has-prompts?
+  "Simple boolean check: does either side have open prompts?
+  Useful for AI player decision-making."
+  [state]
+  (check-prompts state))
+
+(defn print-board-state
+  "Print installed cards on both sides"
+  [state]
+  (println "\n=== BOARD STATE ===")
+  (println "Corp:")
+  (println "  HQ:" (mapv :title (get-in @state [:corp :servers :hq :content])))
+  (println "  R&D:" (mapv :title (get-in @state [:corp :servers :rd :content])))
+  (println "  Archives:" (mapv :title (get-in @state [:corp :servers :archives :content])))
+  (doseq [i (range 1 10)]
+    (let [remote (keyword (str "remote" i))
+          content (get-in @state [:corp :servers remote :content])
+          ice (get-in @state [:corp :servers remote :ices])]
+      (when (or (seq content) (seq ice))
+        (println (str "  Remote " i ":"))
+        (when (seq ice)
+          (println "    ICE:" (mapv :title ice)))
+        (when (seq content)
+          (println "    Content:" (mapv :title content))))))
+
+  (println "\nRunner:")
+  (println "  Programs:" (mapv :title (get-in @state [:runner :rig :program])))
+  (println "  Hardware:" (mapv :title (get-in @state [:runner :rig :hardware])))
+  (println "  Resources:" (mapv :title (get-in @state [:runner :rig :resource]))))
+
+;; ============================================================================
+;; Example Test: Basic Turn Flow
+;; ============================================================================
+
+(defn test-basic-turn-flow
+  "Test basic turn actions: credit, draw, end turn"
+  []
+  (println "\n========================================")
+  (println "TEST: Basic Turn Flow")
+  (println "========================================")
+
+  (let [state (open-hand-game)]
+    (println "\n--- Initial State ---")
+    (print-game-state state)
+
+    ;; Corp turn 1
+    (println "\n--- Corp Turn 1 ---")
+    (start-turn state :corp)
+    (take-credits state :corp)
+    (print-game-state state)
+
+    ;; Runner turn 1
+    (println "\n--- Runner Turn 1 ---")
+    (start-turn state :runner)
+    (core/process-action "credit" state :runner nil)
+    (println "Runner clicked for credit")
+    (print-game-state state)
+
+    (core/process-action "draw" state :runner nil)
+    (println "Runner drew a card")
+    (print-game-state state)
+
+    (take-credits state :runner)
+    (println "Runner ended turn")
+    (print-game-state state)
+
+    ;; Corp turn 2
+    (println "\n--- Corp Turn 2 ---")
+    (start-turn state :corp)
+    (print-game-state state)
+
+    (println "\n✅ Test complete!")
+    nil))  ; Don't return state - it's huge and will spam console
+
+;; ============================================================================
+;; Example Test: Playing Cards
+;; ============================================================================
+
+(defn test-playing-cards
+  "Test playing operations and installing cards"
+  []
+  (println "\n========================================")
+  (println "TEST: Playing Cards")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Hedge Fund in hand
+                ["Hedge Fund" "Palisade" "Nico Campaign"]
+                ;; Rest of corp deck
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner starts with Sure Gamble
+                ["Sure Gamble" "Docklands Pass" "Carmen"]
+                ;; Rest of runner deck
+                (drop 3 gateway-beginner-runner-deck))]
+
+    (println "\n--- Initial State ---")
+    (print-game-state state)
+
+    ;; Corp plays Hedge Fund
+    (println "\n--- Corp plays Hedge Fund ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Hedge Fund")
+    (print-game-state state)
+
+    ;; Corp installs Palisade on HQ
+    (println "\n--- Corp installs Palisade on HQ ---")
+    (play-from-hand state :corp "Palisade" "HQ")
+    (print-board-state state)
+    (print-game-state state)
+
+    ;; Corp installs Nico Campaign
+    (println "\n--- Corp installs Nico Campaign in new remote ---")
+    (play-from-hand state :corp "Nico Campaign" "New remote")
+    (print-board-state state)
+    (print-game-state state)
+
+    (take-credits state :corp)
+
+    ;; Runner plays Sure Gamble
+    (println "\n--- Runner plays Sure Gamble ---")
+    (start-turn state :runner)
+    (play-from-hand state :runner "Sure Gamble")
+    (print-game-state state)
+
+    ;; Runner installs Docklands Pass
+    (println "\n--- Runner installs Docklands Pass ---")
+    (play-from-hand state :runner "Docklands Pass")
+    (print-board-state state)
+    (print-game-state state)
+
+    (println "\n✅ Test complete!")
+    nil))  ; Don't return state - it's huge and will spam console
+
+;; ============================================================================
+;; Phase 2.1: Asset Installation & Rezzing
+;; ============================================================================
+
+(defn test-asset-management
+  "Test installing assets, rezzing them, and using their abilities.
+  Demonstrates:
+  - Installing assets to remote servers
+  - Rezzing assets (paying rez cost)
+  - Using card abilities (ability index 0)
+  - Verifying credit changes from abilities"
+  []
+  (println "\n========================================")
+  (println "TEST: Asset Management")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Nico Campaign and Regolith Mining License
+                ["Nico Campaign" "Regolith Mining License" "Hedge Fund"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Install Nico Campaign to new remote
+    (println "\n--- Corp installs Nico Campaign in new remote ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Nico Campaign" "New remote")
+    (print-board-state state)
+    (print-game-state state)
+
+    ;; Get reference to the installed (but unrezzed) Nico Campaign
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- Installed card: " (:title nico))
+      (println "    Rezzed?:" (:rezzed nico))
+      (println "    Rez cost:" (:cost nico)))
+
+    ;; Rez Nico Campaign (costs 1 credit)
+    (println "\n--- Corp rezzes Nico Campaign (costs 1 credit) ---")
+    (let [nico (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))]
+      (println "Credits before rez:" credits-before)
+      (rez state :corp nico)
+      (println "Credits after rez:" (:credit (:corp @state)))
+      (println "Credit change:" (- (:credit (:corp @state)) credits-before)))
+
+    ;; Check that it's now rezzed
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- After rezzing ---")
+      (println "    Rezzed?:" (:rezzed nico)))
+
+    ;; Check Nico's counters (it starts with 9)
+    (let [nico (get-content state :remote1 0)]
+      (println "\n--- Nico Campaign counters ---")
+      (println "Credits on Nico:" (get-counters nico :credit))
+      (println "Nico automatically gives 3 credits at start of turn (passive ability)"))
+
+    ;; End Corp turn and start new one to trigger Nico's automatic ability
+    (println "\n--- Corp ends turn ---")
+    (let [credits-after-corp-turn (:credit (:corp @state))]
+      (println "Corp credits after ending turn:" credits-after-corp-turn))
+    (take-credits state :corp)
+
+    (println "\n--- Runner turn ---")
+    (start-turn state :runner)
+    (let [credits-before-runner-ends (:credit (:corp @state))]
+      (println "Corp credits before runner ends turn:" credits-before-runner-ends))
+    (take-credits state :runner)
+
+    ;; At start of Corp turn, Nico should automatically trigger
+    (println "\n--- Corp turn begins (Nico auto-triggers) ---")
+    (start-turn state :corp)
+    (let [nico (get-content state :remote1 0)]
+      (println "Corp credits after turn starts:" (:credit (:corp @state)))
+      (println "Nico counters after trigger:" (get-counters nico :credit))
+      (println "Nico gave 3 credits automatically (9 - 6 = 3 counters used)"))
+
+    ;; Now test Regolith Mining License
+    (println "\n--- Corp installs Regolith Mining License in new remote ---")
+    (play-from-hand state :corp "Regolith Mining License" "New remote")
+    (print-board-state state)
+
+    ;; Rez Regolith (costs 1 credit)
+    (println "\n--- Corp rezzes Regolith Mining License ---")
+    (let [regolith (get-content state :remote2 0)
+          credits-before (:credit (:corp @state))]
+      (println "Credits before rez:" credits-before)
+      (rez state :corp regolith)
+      (println "Credits after rez:" (:credit (:corp @state))))
+
+    ;; Use Regolith's ability (costs 1 click, take 3 credits from card)
+    (println "\n--- Corp uses Regolith ability (1 click: take 3 credits) ---")
+    (let [regolith (get-content state :remote2 0)
+          credits-before (:credit (:corp @state))
+          counters-before (get-counters regolith :credit)]
+      (println "Corp credits before:" credits-before)
+      (println "Regolith counters before:" counters-before " (starts with 15)")
+      (card-ability state :corp regolith 0)
+      ;; Get updated card reference to see changes
+      (let [regolith-updated (get-content state :remote2 0)]
+        (println "Corp credits after:" (:credit (:corp @state)))
+        (println "Regolith counters after:" (get-counters regolith-updated :credit))
+        (println "Credits gained:" (- (:credit (:corp @state)) credits-before))))
+
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 2.2: Agenda Management
+;; ============================================================================
+
+(defn test-agenda-scoring
+  "Test advancing agendas and scoring them.
+  Demonstrates:
+  - Installing agendas in remote servers
+  - Advancing agendas (spending click + credit)
+  - Checking advancement counters
+  - Scoring agendas when requirement met
+  - Verifying agenda points awarded"
+  []
+  (println "\n========================================")
+  (println "TEST: Agenda Scoring")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Offworld Office
+                ["Offworld Office" "Hedge Fund" "Hedge Fund"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Install Offworld Office in new remote
+    (println "\n--- Corp installs Offworld Office in remote ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Offworld Office" "New remote")
+    (print-board-state state)
+
+    ;; Get reference to installed agenda
+    (let [agenda (get-content state :remote1 0)]
+      (println "\n--- Installed agenda ---")
+      (println "Title:" (:title agenda))
+      (println "Advancement requirement:" (:advancementcost agenda))
+      (println "Agenda points:" (:agendapoints agenda))
+      (println "Current advancement counters:" (get-counters agenda :advancement)))
+
+    ;; End turn to get fresh clicks for advancing
+    (println "\n--- Corp ends turn to get fresh clicks ---")
+    (println "Clicks remaining:" (:click (:corp @state)))
+    (take-credits state :corp)
+    (start-turn state :runner)
+    (take-credits state :runner)
+    (start-turn state :corp)
+    (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
+
+    ;; Advance agenda 4 times (Offworld Office needs 4 to score)
+    (println "\n--- Advancing agenda (1st advance) ---")
+    (let [agenda (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))
+          clicks-before (:click (:corp @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (advance state agenda)
+      (let [agenda-updated (get-content state :remote1 0)]
+        (println "Clicks after:" (:click (:corp @state)) "Credits after:" (:credit (:corp @state)))
+        (println "Advancement counters:" (get-counters agenda-updated :advancement))))
+
+    (println "\n--- Advancing agenda (2nd advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+
+    (println "\n--- Advancing agenda (3rd advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Need another turn for 4th advance (Corp only has 3 clicks/turn)
+    (println "\n--- Corp ends turn, needs more clicks ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (println "Corp turn 3 - Clicks available:" (:click (:corp @state)))
+
+    (println "\n--- Advancing agenda (4th advance) ---")
+    (advance state (get-content state :remote1 0))
+    (println "Advancement counters:" (get-counters (get-content state :remote1 0) :advancement))
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Now score the agenda (using core action, not test helper)
+    (println "\n--- Scoring agenda ---")
+    (let [agenda (get-content state :remote1 0)
+          scored-before (count (:scored (:corp @state)))
+          points-before (:agenda-point (:corp @state))]
+      (println "Scored agendas before:" scored-before)
+      (println "Agenda points before:" points-before)
+      ;; Use core/process-action to score (not score-agenda helper which also advances)
+      (core/process-action "score" state :corp {:card agenda})
+      (println "Scored agendas after:" (count (:scored (:corp @state))))
+      (println "Agenda points after:" (:agenda-point (:corp @state)))
+      (println "Points gained:" (- (:agenda-point (:corp @state)) points-before)))
+
+    ;; Verify agenda is no longer in remote
+    (println "\n--- After scoring ---")
+    (print-board-state state)
+    (println "Scored agendas:" (mapv :title (:scored (:corp @state))))
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 2.3: ICE Management
+;; ============================================================================
+
+(defn test-ice-installation
+  "Test installing ICE on servers and understanding ICE positions.
+  Demonstrates:
+  - Installing ICE on central servers (HQ, R&D)
+  - Installing multiple ICE on same server
+  - ICE position ordering (outermost to innermost)
+  - Verifying ICE placement with get-ice"
+  []
+  (println "\n========================================")
+  (println "TEST: ICE Installation")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with various ICE
+                ["Palisade" "Brân 1.0" "Tithe" "Whitespace" "Hedge Fund"]
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Install ICE on HQ
+    (println "\n--- Corp installs Palisade on HQ ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Palisade" "HQ")
+    (print-board-state state)
+    (println "Clicks remaining:" (:click (:corp @state)))
+
+    ;; Check ICE on HQ
+    (let [hq-ice (get-ice state :hq)]
+      (println "\nICE on HQ (count):" (count hq-ice))
+      (println "ICE on HQ (titles):" (mapv :title hq-ice)))
+
+    ;; Install ICE on R&D
+    (println "\n--- Corp installs Brân 1.0 on R&D ---")
+    (play-from-hand state :corp "Brân 1.0" "R&D")
+    (print-board-state state)
+
+    ;; Install first ICE on a remote
+    (println "\n--- Corp installs Tithe on new remote ---")
+    (play-from-hand state :corp "Tithe" "New remote")
+    (print-board-state state)
+
+    ;; Get fresh clicks for more ICE
+    (println "\n--- Corp ends turn to get more clicks ---")
+    (take-credits state :corp)
+    (start-turn state :runner)
+    (take-credits state :runner)
+    (start-turn state :corp)
+    (println "Corp turn 2 - Clicks available:" (:click (:corp @state)))
+
+    ;; Install second ICE on same remote (will be outermost)
+    ;; NOTE: Installing multiple ICE on same server has a tax!
+    ;; First ICE: +0 credits, Second ICE: +1 credit, Third: +2, etc.
+    (println "\n--- Corp installs Whitespace on Remote 1 (becomes outermost) ---")
+    (let [credits-before (:credit (:corp @state))]
+      (println "Credits before install:" credits-before)
+      (println "Installing 2nd ICE on Remote 1 - will cost +1 credit tax")
+      (play-from-hand state :corp "Whitespace" "Server 1")
+      (println "Credits after install:" (:credit (:corp @state)))
+      (println "Cost paid:" (- credits-before (:credit (:corp @state))) "(base 1 click, +1 credit for 2nd ICE)"))
+    (print-board-state state)
+
+    ;; Check ICE ordering on remote 1
+    (let [remote1-ice (get-ice state :remote1)]
+      (println "\n--- ICE positioning on Remote 1 ---")
+      (println "Total ICE count:" (count remote1-ice))
+      (println "ICE positions (outermost to innermost):" (mapv :title remote1-ice))
+      (println "Position 0 (outermost):" (:title (nth remote1-ice 0)))
+      (println "Position 1 (innermost):" (:title (nth remote1-ice 1))))
+
+    ;; Final board state
+    (println "\n--- Final Board State ---")
+    (print-board-state state)
+    (print-game-state state)
+
+    (println "\n--- Summary ---")
+    (println "HQ protected by:" (mapv :title (get-ice state :hq)))
+    (println "R&D protected by:" (mapv :title (get-ice state :rd)))
+    (println "Remote 1 protected by:" (mapv :title (get-ice state :remote1)))
+    (println "(ICE ordered from outermost to innermost)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 2.4: End-of-Turn Rez Timing
+;; ============================================================================
+
+(defn test-end-of-turn-rez
+  "Test rezzing assets at end of Runner's turn for optimal timing.
+  Demonstrates:
+  - Waiting to rez until end of Runner's turn
+  - Minimizing exposure (Runner can't trash before it pays out)
+  - Asset triggers at start of next Corp turn
+  - Using continue to pass through timing windows"
+  []
+  (println "\n========================================")
+  (println "TEST: End-of-Turn Rez Timing")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with Nico Campaign
+                ["Nico Campaign" "Hedge Fund" "Ice Wall"]
+                (drop 3 gateway-beginner-corp-deck)
+                ;; Runner gets standard starting hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Corp installs Nico but doesn't rez
+    (println "\n--- Corp installs Nico Campaign in remote (unrezzed) ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Nico Campaign" "New remote")
+    (print-board-state state)
+    (let [nico (get-content state :remote1 0)]
+      (println "Nico rezzed?:" (:rezzed nico)))
+
+    ;; Corp ends turn without rezzing
+    (println "\n--- Corp ends turn (Nico still unrezzed) ---")
+    (println "Corp clicks remaining:" (:click (:corp @state)))
+    (println "Corp credits:" (:credit (:corp @state)))
+    (take-credits state :corp)
+
+    ;; Runner takes their turn
+    (println "\n--- Runner turn ---")
+    (start-turn state :runner)
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner could run and trash Nico, but doesn't")
+
+    ;; Runner clicks for credits to pass time
+    (core/process-action "credit" state :runner nil)
+    (core/process-action "credit" state :runner nil)
+    (println "Runner spent 2 clicks on credits")
+
+    ;; NOW: End of Runner turn - Corp gets rez window!
+    (println "\n--- End of Runner turn - Corp rez window ---")
+    (println "Runner about to end turn...")
+    (let [nico (get-content state :remote1 0)
+          credits-before (:credit (:corp @state))]
+      (println "Corp credits before rez:" credits-before)
+      (println "Nico starts with 9 counters, gives 3 credits at start of turn")
+
+      ;; Rez during Runner's end-of-turn window
+      (println "\n--- Corp rezzes Nico during Runner's end-of-turn ---")
+      (rez state :corp nico)
+      (let [nico-rezzed (get-content state :remote1 0)]
+        (println "Nico now rezzed?:" (:rezzed nico-rezzed))
+        (println "Corp credits after rez:" (:credit (:corp @state)))
+        (println "Rez cost paid:" (- credits-before (:credit (:corp @state))))))
+
+    ;; Complete Runner's turn
+    (take-credits state :runner)
+
+    ;; Corp turn starts - Nico triggers automatically!
+    (println "\n--- Corp turn starts - Nico triggers immediately ---")
+    (start-turn state :corp)
+    (let [nico (get-content state :remote1 0)
+          credits-now (:credit (:corp @state))]
+      (println "Corp credits at turn start:" credits-now)
+      (println "Nico counters:" (get-counters nico :credit))
+      (println "Nico paid out 3 credits on first Corp turn after rez!"))
+
+    (println "\n--- Why this matters ---")
+    (println "1. Rezzed at END of Runner turn (Runner can't trash it)")
+    (println "2. Paid out IMMEDIATELY at start of Corp turn")
+    (println "3. Minimized exposure window")
+    (println "4. Got value before Runner could interact")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 3.1: Program Installation
+;; ============================================================================
+
+(defn test-program-installation
+  "Test installing programs (icebreakers) to Runner rig.
+  Demonstrates:
+  - Playing economy cards (Sure Gamble) for credits
+  - Installing programs costs clicks + credits
+  - Programs go into Runner's rig
+  - Different programs have different install costs
+  - Building a breaker suite for running"
+  []
+  (println "\n========================================")
+  (println "TEST: Program Installation")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with breakers, hardware, and economy
+                ["Carmen" "Cleaver" "Docklands Pass" "Sure Gamble" "Creative Commission"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Skip to Runner turn
+    (start-turn state :corp)
+    (take-credits state :corp)
+    (start-turn state :runner)
+
+    ;; Play economy card to get credits for installing
+    (println "\n--- Runner plays Sure Gamble for credits ---")
+    (println "Credits before:" (:credit (:runner @state)))
+    (play-from-hand state :runner "Sure Gamble")
+    (println "Credits after Sure Gamble:" (:credit (:runner @state)))
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Install first breaker
+    (println "\n--- Runner installs Carmen (Fracter breaker) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Carmen")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 5 credits"))
+    (print-board-state state)
+
+    ;; Install second breaker (still have clicks!)
+    (println "\n--- Runner installs Cleaver (Fracter breaker) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Cleaver")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 3 credits"))
+    (print-board-state state)
+
+    ;; Attempt to install hardware - but not enough credits!
+    (println "\n--- Runner attempts to install Docklands Pass (Hardware) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))
+          docklands (find-card "Docklands Pass" (:hand (:runner @state)))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (println "Docklands Pass install cost:" (:cost docklands))
+      (println "Can afford Docklands Pass?" (>= credits-before (:cost docklands)))
+      (play-from-hand state :runner "Docklands Pass")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (if (find-card "Docklands Pass" (:hand (:runner @state)))
+        (println "INSTALL FAILED - Not enough credits! Still in hand.")
+        (println "Installed successfully")))
+    (print-board-state state)
+
+    ;; Final state
+    (println "\n--- Final Rig ---")
+    (print-board-state state)
+    (println "\n--- Summary ---")
+    (println "Programs installed: 2 (Carmen, Cleaver)")
+    (println "- Carmen: Fracter (breaks Barrier ICE) - Cost: 5 credits")
+    (println "- Cleaver: Fracter (breaks Barrier ICE) - Cost: 3 credits")
+    (println "\nDocklands Pass FAILED to install:")
+    (println "- Costs 2 credits, but only 1 credit remaining")
+    (println "- This demonstrates resource management!")
+    (println "- Must budget credits carefully when building rig")
+    (println "\nTotal clicks used: 4 (Sure Gamble + 2 program installs + 1 failed install)")
+    (println "Total credits spent: 8 (5 for Carmen + 3 for Cleaver)")
+    (println "\nKey lesson: Check affordability before attempting installs!")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 3.2: Resource Management
+;; ============================================================================
+
+(defn test-resource-management
+  "Test installing resources and using their abilities.
+  Demonstrates:
+  - Installing resources to Runner rig
+  - Using click abilities on resources (placing/taking credits)
+  - Automatic start-of-turn abilities
+  - Resource economy management
+  - Multiple resource types working together"
+  []
+  (println "\n========================================")
+  (println "TEST: Resource Management")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with resources and economy
+                ["Smartware Distributor" "Telework Contract" "Sure Gamble" "Creative Commission" "Overclock"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Skip to Runner turn
+    (start-turn state :corp)
+    (play-from-hand state :corp "Offworld Office" "New remote") ;; so we don't have to discard
+    (take-credits state :corp)
+
+    (start-turn state :runner)
+
+    ;; Install Telework Contract (costs 1 credit, 1 click)
+    (println "\n--- Runner installs Telework Contract ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Telework Contract")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 1 credit"))
+    (print-board-state state)
+
+    ;; Check Telework's initial state
+    (let [telework (first (get-resource state))]
+      (println "\n--- Telework Contract initial state ---")
+      (println "Title:" (:title telework))
+      (println "Credits on card:" (get-counters telework :credit) "(starts with 9)"))
+
+    ;; Use Telework's ability (1 click: take 3 credits)
+    (println "\n--- Runner uses Telework ability (1 click: take 3 credits) ---")
+    (let [telework (first (get-resource state))
+          clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))
+          counters-before (get-counters telework :credit)]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (println "Telework counters before:" counters-before)
+      (card-ability state :runner telework 0)
+      (let [telework-updated (first (get-resource state))]
+        (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+        (println "Telework counters after:" (get-counters telework-updated :credit))
+        (println "Credits gained:" (- (:credit (:runner @state)) credits-before))))
+
+    ;; Install Smartware Distributor (costs 0!)
+    (println "\n--- Runner installs Smartware Distributor (FREE!) ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks before:" clicks-before "Credits before:" credits-before)
+      (play-from-hand state :runner "Smartware Distributor")
+      (println "Clicks after:" (:click (:runner @state)) "Credits after:" (:credit (:runner @state)))
+      (println "Cost: 1 click + 0 credits (free install!)"))
+    (print-board-state state)
+
+    ;; Check Smartware's initial state
+    (let [smartware (second (get-resource state))]
+      (println "\n--- Smartware Distributor initial state ---")
+      (println "Title:" (:title smartware))
+      (println "Credits on card:" (get-counters smartware :credit) "(starts with 0)"))
+
+    ;; Use Smartware's click ability to place credits
+    (println "\n--- Runner uses Smartware ability (1 click: place 3 credits on card) ---")
+    (let [smartware (second (get-resource state))
+          clicks-before (:click (:runner @state))
+          counters-before (get-counters smartware :credit)]
+      (println "Clicks before:" clicks-before)
+      (println "Smartware counters before:" counters-before)
+      (card-ability state :runner smartware 0)
+      (let [smartware-updated (second (get-resource state))]
+        (println "Clicks after:" (:click (:runner @state)))
+        (println "Smartware counters after:" (get-counters smartware-updated :credit))
+        (println "Counters added: 3")))
+
+    ;; End turn and start new turn to trigger Smartware's automatic ability
+    (println "\n--- Runner ends turn ---")
+    (println "Clicks remaining:" (:click (:runner @state)))
+    (end-turn state :runner)
+
+    (println "\n--- Corp turn (passing) ---")
+    (start-turn state :corp)
+    (play-from-hand state :corp "Offworld Office" "New remote") ;; so we don't have to discard
+    (take-credits state :corp)
+    
+    ;; At start of Runner turn, Smartware should automatically trigger
+    (println "\n--- Runner turn begins (Smartware auto-triggers) ---")
+    (start-turn state :runner)
+    (let [smartware (second (get-resource state))
+          credits-now (:credit (:runner @state))]
+      (println "Runner credits at turn start:" credits-now)
+      (println "Smartware counters:" (get-counters smartware :credit))
+      (println "Smartware gave 1 credit automatically (3 → 2 counters)"))
+
+    ;; Use Telework again on turn 2 (once-per-turn resets!)
+    (println "\n--- Runner uses Telework again (turn 2 - restriction reset!) ---")
+    (let [telework (first (get-resource state))
+          credits-before (:credit (:runner @state))
+          counters-before (get-counters telework :credit)]
+      (println "Credits before:" credits-before)
+      (println "Telework counters before:" counters-before)
+      (println "Telework ability: Once per turn → [click]: Take 3[credit]")
+      (card-ability state :runner telework 0)
+      (let [telework-updated (first (get-resource state))]
+        (println "Credits after:" (:credit (:runner @state)))
+        (println "Telework counters after:" (get-counters telework-updated :credit))
+        (println "✓ Gained" (- (:credit (:runner @state)) credits-before) "credits - once-per-turn reset works!")))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Show resource states
+    (println "\n--- Resource Status ---")
+    (let [telework (first (get-resource state))
+          smartware (second (get-resource state))]
+      (println "Telework Contract:" (get-counters telework :credit) "credits remaining (started with 9, took 3+3)")
+      (println "Smartware Distributor:" (get-counters smartware :credit) "credits remaining (placed 3, gave 1)"))
+
+    (println "\n--- Summary ---")
+    (println "Resource abilities demonstrated:")
+    (println "1. Telework Contract - Click ability to take credits")
+    (println "   - Install cost: 1 credit")
+    (println "   - Starts with 9[credit] loaded on install")
+    (println "   - Once per turn → [click]: Take 3[credit] from this resource")
+    (println "   - When empty, trash it")
+    (println "   - ✓ Successfully used TWICE (turn 1 and turn 2)")
+    (println "   - ✓ Once-per-turn restriction resets each turn!")
+    (println "2. Smartware Distributor - Click ability + automatic trigger")
+    (println "   - FREE to install (0 cost)")
+    (println "   - Click ability: Place 3 credits on card")
+    (println "   - Automatic: At start of turn, gain 1 credit from card")
+    (println "   - Demonstrates 'bank' economy pattern")
+    (println "\nKey mechanics:")
+    (println "- Resources install to rig like programs")
+    (println "- Click abilities use card-ability with ability index")
+    (println "- Automatic abilities trigger at start of turn")
+    (println "- Once-per-turn abilities have usage restrictions")
+    (println "- Some resources auto-trash when depleted (Telework)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Phase 3.3: Event Economy
+;; ============================================================================
+
+(defn test-runner-events
+  "Test playing Runner economy events.
+  Demonstrates:
+  - Playing events for immediate credit gains
+  - Events that cost clicks (Creative Commission)
+  - Net credit calculations (cost vs gain)
+  - Events going to discard pile after playing
+  - Different event types and their effects"
+  []
+  (println "\n========================================")
+  (println "TEST: Runner Event Economy")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp gets standard hand
+                (take 5 gateway-beginner-corp-deck)
+                (drop 5 gateway-beginner-corp-deck)
+                ;; Runner starts with economy events
+                ["Sure Gamble" "Sure Gamble" "Creative Commission" "Overclock" "Docklands Pass"]
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+
+    ;; Skip to Runner turn
+    (start-turn state :corp)
+    (take-credits state :corp)
+    (start-turn state :runner)
+
+    ;; Play Sure Gamble
+    (println "\n--- Runner plays Sure Gamble ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))
+          hand-size-before (count (:hand (:runner @state)))
+          discard-before (count (:discard (:runner @state)))]
+      (println "Before:")
+      (println "  Clicks:" clicks-before)
+      (println "  Credits:" credits-before)
+      (println "  Hand size:" hand-size-before)
+      (println "  Discard size:" discard-before)
+      (println "\nSure Gamble: Cost 5, gain 9 (net +4)")
+      (play-from-hand state :runner "Sure Gamble")
+      (println "\nAfter:")
+      (println "  Clicks:" (:click (:runner @state)) "(used 1 click to play)")
+      (println "  Credits:" (:credit (:runner @state)))
+      (println "  Net credit change:" (- (:credit (:runner @state)) credits-before) "(paid 5, gained 9)")
+      (println "  Hand size:" (count (:hand (:runner @state))))
+      (println "  Discard size:" (count (:discard (:runner @state))) "(event went to discard)")
+      (println "  Discard contents:" (mapv :title (:discard (:runner @state)))))
+
+    ;; Play Creative Commission
+    (println "\n--- Runner plays Creative Commission ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Before:")
+      (println "  Clicks:" clicks-before)
+      (println "  Credits:" credits-before)
+      (println "\nCreative Commission: Cost 1, gain 5 and lose [Click]")
+      (play-from-hand state :runner "Creative Commission")
+      (println "\nAfter:")
+      (println "  Clicks:" (:click (:runner @state)))
+      (println "  Click change:" (- (:click (:runner @state)) clicks-before) "(-1 to play, -1 from card effect)")
+      (println "  Credits:" (:credit (:runner @state)))
+      (println "  Net credit change:" (- (:credit (:runner @state)) credits-before) "(paid 1, gained 5)")
+      (println "  Discard size:" (count (:discard (:runner @state))))
+      (println "  Discard contents:" (mapv :title (:discard (:runner @state)))))
+
+    ;; Show remaining clicks for other actions
+    (println "\n--- Runner uses remaining clicks ---")
+    (println "Clicks remaining:" (:click (:runner @state)))
+    (println "Runner can still install or do other actions")
+
+    ;; Install something with remaining click
+    (println "\n--- Runner installs Docklands Pass with remaining click ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (play-from-hand state :runner "Docklands Pass")
+      (println "Clicks after install:" (:click (:runner @state)))
+      (println "Credits after install:" (:credit (:runner @state)))
+      (println "Still have" (:click (:runner @state)) "click(s) left!"))
+
+    ;; Try to play second Sure Gamble (but no clicks!)
+    (println "\n--- Runner attempts second Sure Gamble ---")
+    (let [clicks-before (:click (:runner @state))
+          credits-before (:credit (:runner @state))]
+      (println "Clicks available:" clicks-before)
+      (println "Credits before:" credits-before)
+      (if (pos? clicks-before)
+        (do
+          (play-from-hand state :runner "Sure Gamble")
+          (println "Credits after:" (:credit (:runner @state)))
+          (println "Net gain:" (- (:credit (:runner @state)) credits-before)))
+        (println "✗ Cannot play - no clicks remaining!")))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Show all discarded events
+    (println "\n--- Runner Discard Pile ---")
+    (println "Events played this turn:" (mapv :title (:discard (:runner @state))))
+    (println "Total events in discard:" (count (:discard (:runner @state))))
+
+    (println "\n--- Summary ---")
+    (println "Event economy demonstrated:")
+    (println "1. Sure Gamble")
+    (println "   - Cost: 5 credits, 1 click")
+    (println "   - Gain: 9 credits")
+    (println "   - Net: +4 credits per play")
+    (println "   - Played once successfully")
+    (println "   - Second attempt failed: no clicks remaining!")
+    (println "2. Creative Commission")
+    (println "   - Cost: 1 credit, 2 clicks (1 to play + 1 from card)")
+    (println "   - Gain: 5 credits")
+    (println "   - Net: +4 credits, -2 clicks")
+    (println "   - Trade-off: Same credit gain as Sure Gamble, costs extra click")
+    (println "\nKey mechanics:")
+    (println "- Events are one-time effects played from hand")
+    (println "- Events go to discard pile after playing")
+    (println "- Some events have additional costs (Creative Commission loses click)")
+    (println "- Events can be chained with other actions in same turn")
+    (println "- Net economy calculation: (gain - cost) per event")
+    (println "- IMPORTANT: Must have clicks available to play events!")
+    (println "\nClick efficiency comparison:")
+    (println "- Sure Gamble: +4 credits / 1 click = 4 credits per click")
+    (println "- Creative Commission: +4 credits / 2 clicks = 2 credits per click")
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-unopposed-runs
+  "Test basic unopposed runs on all three central servers.
+  Demonstrates:
+  - Running on HQ, R&D, and Archives
+  - Using run-empty-server helper for unopposed runs
+  - Accessing cards during successful runs
+  - Handling access prompts (No action, Steal)
+  - Understanding run phases and success
+  - Verifying run completion and no stale prompts"
+  []
+  (println "\n========================================")
+  (println "TEST: Unopposed Runs on Central Servers")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with agenda and operations in hand
+                ["Hostile Takeover" "Hedge Fund" "IPO" "Beanstalk Royalties" "Green Level Clearance"]
+                ;; Corp deck has more cards for R&D access
+                ["Offworld Office" "Offworld Office" "Offworld Office"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    ;; Corp setup: Trash Hostile Takeover to Archives
+    (start-turn state :corp)
+    (println "\n--- Corp trashes Hostile Takeover to Archives ---")
+    (trash-from-hand state :corp "Hostile Takeover")
+    (println "Corp Archives:" (mapv :title (:discard (:corp @state))))
+    (take-credits state :corp)
+
+    ;; Runner turn begins
+    (start-turn state :runner)
+    (println "\n--- Runner Turn Begins ---")
+    (println "Clicks available:" (:click (:runner @state)))
+    (println "Credits available:" (:credit (:runner @state)))
+
+    ;; Test 1: Run on Archives (contains agenda)
+    (println "\n--- Test 1: Run on Archives ---")
+    (println "Archives contains:" (mapv :title (:discard (:corp @state))))
+    (println "Runner initiating run on Archives...")
+    (run-empty-server state :archives)
+    (println "✓ Run successful! Accessing Archives...")
+
+    ;; Check what we're accessing
+    (let [archives-cards (:discard (:corp @state))
+          agenda (first (filter #(= "Hostile Takeover" (:title %)) archives-cards))]
+      (when agenda
+        (println "Found agenda:" (:title agenda) "(worth" (:agendapoints agenda) "points)")
+        (println "Runner chooses to steal...")
+        (click-prompt state :runner "Steal")
+        (println "✓ Agenda stolen!")
+        (println "Runner agenda points:" (:agenda-point (:runner @state)))))
+
+    (assert-no-prompts state "after Archives run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Test 2: Run on HQ (contains cards in hand)
+    (println "\n--- Test 2: Run on HQ ---")
+    (println "Corp hand size:" (count (:hand (:corp @state))))
+    (println "Corp hand:" (mapv :title (:hand (:corp @state))))
+    (println "Runner initiating run on HQ...")
+    (run-empty-server state :hq)
+    (println "✓ Run successful! Accessing card from HQ...")
+
+    ;; Runner accesses a random card from HQ
+    (let [prompt (get-prompt state :runner)]
+      (println "Access prompt:" (:msg prompt))
+      (println "Choices available:" (:choices prompt))
+      (println "Runner chooses: No action")
+      (click-prompt state :runner "No action")
+      (println "✓ Access complete, card not stolen"))
+
+    (assert-no-prompts state "after HQ run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Test 3: Run on R&D (accesses top card of deck)
+    (println "\n--- Test 3: Run on R&D ---")
+    (println "Corp deck size:" (count (:deck (:corp @state))))
+    (let [top-card (first (:deck (:corp @state)))]
+      (println "Top card of R&D:" (:title top-card) "(" (:type top-card) ")"))
+    (println "Runner initiating run on R&D...")
+    (run-empty-server state :rd)
+    (println "✓ Run successful! Accessing top card of R&D...")
+
+    ;; Runner accesses top card of R&D
+    ;; Note: Top card is Offworld Office (agenda), so we MUST steal it
+    (let [prompt (get-prompt state :runner)
+          top-card (first (:deck (:corp @state)))]
+      (println "Access prompt:" (:msg prompt))
+      (println "Choices available:" (:choices prompt))
+      (if (= "Agenda" (:type top-card))
+        (do
+          (println "Top card is an agenda - must steal!")
+          (click-prompt state :runner "Steal")
+          (println "✓ Agenda stolen! Runner now has" (:agenda-point (:runner @state)) "points"))
+        (do
+          (println "Runner chooses: No action")
+          (click-prompt state :runner "No action")
+          (println "✓ Access complete, card not stolen"))))
+
+    (assert-no-prompts state "after R&D run")
+    (println "Clicks remaining:" (:click (:runner @state)))
+
+    ;; Final state
+    (println "\n--- Final State ---")
+    (print-game-state state)
+    (print-board-state state)
+
+    (println "\n--- Summary ---")
+    (println "Unopposed runs demonstrated:")
+    (println "1. Archives Run")
+    (println "   - Accessed all cards in Archives")
+    (println "   - Stole Hostile Takeover agenda (1 point)")
+    (println "   - No ICE to encounter")
+    (println "2. HQ Run")
+    (println "   - Accessed random card from Corp's hand")
+    (println "   - Was Hedge Fund (operation)")
+    (println "   - Chose not to trash (no agenda)")
+    (println "   - Standard central server access")
+    (println "3. R&D Run")
+    (println "   - Accessed top card of Corp's deck")
+    (println "   - Was Offworld Office (agenda)")
+    (println "   - MUST steal agendas when accessed!")
+    (println "   - Stole agenda (2 points)")
+    (println "   - Runner now has" (:agenda-point (:runner @state)) "total agenda points")
+    (println "\nKey mechanics:")
+    (println "- run-empty-server: Helper for unopposed runs")
+    (println "- Run phases: initiation → movement → success → access")
+    (println "- Access prompts: Runner MUST steal agendas (no choice)")
+    (println "- Access prompts: Runner can choose 'No action' for non-agendas")
+    (println "- Central servers: HQ (hand), R&D (deck), Archives (discard)")
+    (println "- Each run costs 1 click")
+    (println "- Successful runs allow accessing cards")
+    (println "- Agendas MUST be stolen when accessed (automatic)")
+    (println "- IMPORTANT: Always check for prompts after runs!")
+    (println "\nClick usage:")
+    (println "- Started with 4 clicks")
+    (println "- Archives run: -1 click")
+    (println "- HQ run: -1 click")
+    (println "- R&D run: -1 click")
+    (println "- Final clicks remaining:" (:click (:runner @state)))
+
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-remote-access
+  "Test running on remote servers and accessing installed cards.
+  Demonstrates:
+  - Installing cards in remote servers (unrezzed)
+  - Running on remote servers (:remote1, :remote2, etc.)
+  - Accessing unrezzed cards in remotes
+  - Stealing agendas from remotes
+  - Multiple remotes in play
+  - Verifying agenda points awarded"
+  []
+  (println "\n========================================")
+  (println "TEST: Unopposed Remote Server Runs")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with agendas and other cards
+                ["Hostile Takeover" "Offworld Office" "PAD Campaign" "Ice Wall"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund" "Hedge Fund"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (core/gain-clicks state :corp 3) ; Extra clicks for multiple installs
+
+    (println "Corp hand:" (mapv :title (:hand (:corp @state))))
+    (println "Corp credits:" (:credit (:corp @state)))
+    (println "Corp clicks:" (:click (:corp @state)))
+
+    ;; Corp installs multiple cards in different remotes
+    (println "\n--- Corp installs cards in remotes ---")
+
+    ;; Install Hostile Takeover in Remote 1 (unrezzed agenda)
+    (println "Installing Hostile Takeover in Remote 1...")
+    (play-from-hand state :corp "Hostile Takeover" "New remote")
+    (assert-no-prompts state "after installing Hostile Takeover")
+    (println "✓ Installed agenda in Remote 1")
+
+    ;; Install PAD Campaign in Remote 2 (unrezzed asset)
+    (println "Installing PAD Campaign in Remote 2...")
+    (play-from-hand state :corp "PAD Campaign" "New remote")
+    (assert-no-prompts state "after installing PAD Campaign")
+    (println "✓ Installed asset in Remote 2")
+
+    ;; Install Offworld Office in Remote 3 (unrezzed agenda)
+    (println "Installing Offworld Office in Remote 3...")
+    (play-from-hand state :corp "Offworld Office" "New remote")
+    (assert-no-prompts state "after installing Offworld Office")
+    (println "✓ Installed agenda in Remote 3")
+
+    (println "\nCorp now has 3 remote servers with unrezzed cards")
+    (println "Remote 1: Hostile Takeover (agenda)")
+    (println "Remote 2: PAD Campaign (asset)")
+    (println "Remote 3: Offworld Office (agenda)")
+
+    ;; End Corp turn, start Runner turn
+    (take-credits state :corp)
+    (println "\n--- Runner turn starts ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner agenda points:" (:agenda-point (:runner @state)))
+
+    ;; Test 1: Run on Remote 1 (Hostile Takeover)
+    (println "\n--- Test 1: Run on Remote 1 (Hostile Takeover) ---")
+    (println "Running Remote 1...")
+    (run-empty-server state :remote1)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote1])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    (click-prompt state :runner "Steal")
+    (assert-no-prompts state "after Remote 1 run")
+    (println "✓ Stole Hostile Takeover!")
+    (println "   Runner agenda points:" (:agenda-point (:runner @state)))
+
+    ;; Test 2: Run on Remote 2 (PAD Campaign - asset, not agenda)
+    (println "\n--- Test 2: Run on Remote 2 (PAD Campaign) ---")
+    (println "Running Remote 2...")
+    (run-empty-server state :remote2)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote2])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    ;; PAD Campaign is an asset, so we can trash it or take no action
+    ;; For this test, we'll choose "No action" (could also pay to trash)
+    (click-prompt state :runner "No action")
+    (assert-no-prompts state "after Remote 2 run")
+    (println "✓ Chose 'No action' on asset")
+    (println "   (Could have paid credits to trash it)")
+
+    ;; Test 3: Run on Remote 3 (Offworld Office)
+    (println "\n--- Test 3: Run on Remote 3 (Offworld Office) ---")
+    (println "Running Remote 3...")
+    (run-empty-server state :remote3)
+
+    (let [prompt (get-prompt state :runner)
+          accessed-card (first (:content (get-in @state [:corp :servers :remote3])))]
+      (println "Access successful!")
+      (println "Access prompt:" (:msg prompt))
+      (println "Accessed card:" (:title accessed-card) "(" (:type accessed-card) ")")
+      (println "Choices:" (:choices prompt)))
+
+    (click-prompt state :runner "Steal")
+    ;; Note: Offworld Office's ability only triggers when SCORED by Corp, not when stolen
+    (assert-no-prompts state "after Remote 3 run")
+    (println "✓ Stole Offworld Office!")
+    (println "   Runner agenda points:" (:agenda-point (:runner @state)))
+    (println "   Note: Offworld Office ability only fires when Corp scores it, not when stolen")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Remote Server Runs")
+    (println "========================================")
+    (println "Runner final agenda points:" (:agenda-point (:runner @state)))
+    (println "   - Hostile Takeover: 1 point")
+    (println "   - Offworld Office: 2 points")
+    (println "   - Total: 3 points")
+    (println "\nRunner final clicks:" (:click (:runner @state)))
+    (println "   - Started with 4 clicks")
+    (println "   - Remote 1 run: -1 click")
+    (println "   - Remote 2 run: -1 click")
+    (println "   - Remote 3 run: -1 click")
+    (println "   - Remaining: 1 click")
+
+    (println "\nKey mechanics:")
+    (println "- Remote servers: :remote1, :remote2, :remote3, etc.")
+    (println "- Cards installed in remotes are unrezzed by default")
+    (println "- Runner can access unrezzed cards in remotes")
+    (println "- Agendas MUST be stolen when accessed (even if unrezzed)")
+    (println "- Assets/Upgrades offer 'No action' or 'Pay X to trash' choices")
+    (println "- Each remote is a separate server")
+    (println "- IMPORTANT: Stolen agendas don't trigger their abilities")
+    (println "  (Abilities only fire when Corp scores them, not when Runner steals)")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-unrezzed-ice-passing
+  "Test running through unrezzed ICE when Corp declines to rez.
+  Demonstrates:
+  - Installing ICE on a server (unrezzed by default)
+  - Run phases: approach-ice, movement, success
+  - Corp rez window during approach-ice phase
+  - Corp declining to rez (passing priority)
+  - Runner continuing past unrezzed ICE
+  - Successfully accessing server after passing unrezzed ICE
+  - Multiple ICE on same server (some rezzed, some unrezzed)"
+  []
+  (println "\n========================================")
+  (println "TEST: Running Through Unrezzed ICE")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE and agendas
+                ["Ice Wall" "Vanilla" "Hostile Takeover" "Hedge Fund"]
+                ;; Corp deck
+                ["Offworld Office" "Offworld Office"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs ICE on HQ (unrezzed) ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+
+    ;; Corp installs Ice Wall on HQ (unrezzed)
+    (println "Corp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed on HQ")
+      (println "  Rezzed?" (:rezzed ice))
+      (println "  Should be nil/false (unrezzed)"))
+
+    ;; End Corp turn
+    (take-credits state :corp)
+
+    ;; Test 1: Run through single unrezzed ICE
+    (println "\n--- Test 1: Runner runs HQ (1 unrezzed ICE) ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Initiating run on HQ...")
+    (run-on state :hq)
+
+    (println "\n✓ Run initiated!")
+    (println "Current run phase:" (:phase (:run @state)))
+    (println "Should be :approach-ice")
+
+    ;; Approaching ICE
+    (let [current-ice (core/get-current-ice state)]
+      (println "\nApproaching ICE:" (:title current-ice))
+      (println "Rezzed?" (:rezzed current-ice)))
+
+    (println "\nRunner continues (no paid abilities)...")
+    (core/continue state :runner nil)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Waiting on Corp to decide: rez or pass?")
+
+    (println "\nCorp DECLINES to rez (passes priority)...")
+    (core/continue state :corp nil)
+    (println "✓ Corp passed without rezzing")
+    (println "Run phase:" (:phase (:run @state)))
+
+    ;; Now use run-continue to handle the rest
+    (println "\nUsing run-continue to finish the run...")
+    (run-continue state)
+
+    (println "Run phase after run-continue:" (:phase (:run @state)))
+
+    ;; Access HQ
+    (println "\n✓ Accessing HQ...")
+    (let [prompt (get-prompt state :runner)]
+      (when prompt
+        (println "Access prompt:" (:msg prompt))
+        (when-let [choices (seq (:choices prompt))]
+          (let [choice-vals (mapv :value choices)]
+            (println "Choices:" choice-vals)
+            (if (some #(= % "Steal") choice-vals)
+              (do
+                (println "Found agenda - stealing it")
+                (click-prompt state :runner "Steal"))
+              (do
+                (println "Not an agenda - choosing No action")
+                (click-prompt state :runner "No action")))
+            (println "✓ Access complete")))))
+
+    (println "Run ended:" (nil? (:run @state)))
+
+    (assert-no-prompts state "after HQ run through unrezzed ICE")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Unrezzed ICE Passing")
+    (println "========================================")
+    (println "Runner successfully ran HQ through 1 unrezzed ICE")
+    (println "Corp declined to rez the ICE")
+    (println "Runner accessed HQ and stole Offworld Office")
+    (println "Runner agenda points:" (:agenda-point (:runner @state)))
+
+    (println "\nRun phases encountered:")
+    (println "1. :approach-ice (Ice Wall - unrezzed)")
+    (println "2. Runner continues (no paid abilities)")
+    (println "3. Corp continues (declines to rez)")
+    (println "4. :movement (passed the ICE)")
+    (println "5. run-continue handles remaining phases")
+    (println "6. :success (access HQ)")
+
+    (println "\nKey mechanics:")
+    (println "- ICE installed unrezzed by default with play-from-hand")
+    (println "- During :approach-ice, Corp has rez window")
+    (println "- Both Runner and Corp must (core/continue state :side nil) to proceed")
+    (println "- Corp declining to rez = calling continue without calling (rez state :corp ice)")
+    (println "- Runner passes unrezzed ICE when both sides continue")
+    (println "- After passing ICE, enter :movement phase")
+    (println "- run-continue handles Corp/Runner continues through remaining phases")
+    (println "- :success phase = access cards")
+    (println "- run-empty-server is shortcut that skips all manual phase progression")
+
+    (println "\nDifference from run-empty-server:")
+    (println "- run-empty-server: Automatic, assumes no ICE or ICE doesn't matter")
+    (println "- Manual progression: Explicit control of each phase")
+    (println "- Manual: Required when Corp needs to make rez decisions")
+    (println "- Manual: Shows all the phases that run-empty-server hides")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-ice-encounter-basic
+  "Test basic ICE encounter with rezzing and subroutine firing.
+  Demonstrates:
+  - Corp rezzing ICE during approach-ice phase
+  - Transition to encounter-ice phase
+  - Runner NOT breaking subroutines
+  - Subroutines firing automatically (End the run)
+  - Run ending unsuccessfully (no access)
+  - Difference between unsuccessful run vs successful run"
+  []
+  (println "\n========================================")
+  (println "TEST: Basic ICE Encounter - No Breaking")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE
+                ["Ice Wall" "Palisade" "Hostile Takeover"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund"]
+                ;; Runner with standard hand
+                (take 5 gateway-beginner-runner-deck)
+                (drop 5 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs and rezzes ICE ---")
+    (take-credits state :corp)
+    (take-credits state :runner)
+
+    ;; Corp installs Ice Wall on HQ
+    (println "Corp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed on HQ")
+      (println "  ICE strength:" (get-strength (get-card state ice)))
+      (println "  Rez cost:" (:cost ice)))
+
+    (take-credits state :corp)
+
+    ;; Test 1: Run HQ, Corp rezzes ICE, subroutines fire, run ends
+    (println "\n--- Test 1: Runner runs HQ, ICE fires, run ends ---")
+    (println "Runner clicks:" (:click (:runner @state)))
+    (println "Runner credits:" (:credit (:runner @state)))
+    (println "Corp credits:" (:credit (:corp @state)))
+
+    (println "\nInitiating run on HQ...")
+    (run-on state :hq)
+
+    (println "✓ Run initiated!")
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :approach-ice")
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\nApproaching Ice Wall")
+      (println "  Rezzed?" (:rezzed ice))
+      (println "  Corp has rez window now")
+
+      (println "\nCorp REZZES Ice Wall...")
+      (rez state :corp ice)
+      (let [rezzed-ice (get-card state ice)]
+        (println "✓ Ice Wall rezzed!")
+        (println "  Rezzed?" (:rezzed rezzed-ice))
+        (println "  Corp credits after rez:" (:credit (:corp @state)))
+        (println "  Rez cost was:" (:cost rezzed-ice))))
+
+    (println "\nUsing run-continue to move to encounter...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :encounter-ice")
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\n✓ Now encountering Ice Wall!")
+      (println "ICE title:" (:title ice))
+      (println "ICE strength:" (get-strength ice))
+      (println "Subroutines:" (count (:subroutines ice)))
+      (println "First subroutine:" (:label (first (:subroutines ice)))))
+
+    (println "\nRunner does NOT break subroutines...")
+    (println "Corp fires all unbroken subroutines...")
+
+    (let [ice (get-ice state :hq 0)]
+      (fire-subs state ice))
+
+    (println "\n✓ Subroutines fired!")
+    (println "'End the run' subroutine triggered")
+    (println "Run ended:" (nil? (:run @state)))
+    (println "Should be true (run is over)")
+
+    (println "\nNo access happened - run was unsuccessful")
+    (println "Runner did not get to access HQ")
+
+    ;; Verify run is completely over
+    (when (:run @state)
+      (println "ERROR: Run should be nil but it's still active!"))
+    (assert-no-prompts state "after run ends from ICE")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Basic ICE Encounter")
+    (println "========================================")
+    (println "Corp rezzed Ice Wall on HQ")
+    (println "Runner encountered ICE but did not break subroutines")
+    (println "'End the run' subroutine fired")
+    (println "Run ended unsuccessfully - no access to HQ")
+
+    (println "\nRun phases encountered:")
+    (println "1. :approach-ice - Corp rez window")
+    (println "2. Corp rezzes ICE: (rez state :corp ice)")
+    (println "3. run-continue → :encounter-ice")
+    (println "4. Runner does not break subs")
+    (println "5. fire-subs fires 'End the run'")
+    (println "6. Run ends (no :success, no access)")
+
+    (println "\nKey mechanics:")
+    (println "- Corp rezzes ICE during :approach-ice phase with (rez state :corp ice)")
+    (println "- Rezzing costs credits (Ice Wall costs " (:cost (get-ice state :hq 0)) ")")
+    (println "- run-continue transitions from :approach-ice to :encounter-ice")
+    (println "- In :encounter-ice, Runner can break subs OR Corp fires them")
+    (println "- fire-subs fires all unbroken subroutines")
+    (println "- 'End the run' subroutine terminates run immediately")
+    (println "- No access happens when run ends from ICE")
+    (println "- (:run @state) becomes nil when run ends")
+
+    (println "\nDifference from Phase 4.4:")
+    (println "- Phase 4.4: Corp declined to rez, Runner passed unrezzed ICE")
+    (println "- Phase 5.1: Corp REZZED ICE, subroutines FIRED, run ENDED")
+    (println "- This is the first time Runner has been STOPPED by ICE")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+(defn test-breaking-barrier
+  "Test breaking Barrier ICE with a Fracter icebreaker.
+  Demonstrates:
+  - Installing icebreaker program (Fracter type)
+  - Corp rezzing Barrier ICE
+  - Using breaker ability during encounter
+  - Breaking subroutines (choosing which ones)
+  - Successful run after breaking all subs
+  - Type matching: Fracter breaks Barrier
+  - Strength matching: Breaker strength >= ICE strength"
+  []
+  (println "\n========================================")
+  (println "TEST: Breaking Barrier ICE with Fracter")
+  (println "========================================")
+
+  (let [state (custom-open-hand-game
+                ;; Corp starts with ICE
+                ["Ice Wall" "Hostile Takeover" "Hedge Fund"]
+                ;; Corp deck
+                ["Hedge Fund" "Hedge Fund"]
+                ;; Runner needs a fracter - Corroder is the classic one
+                ["Corroder" "Sure Gamble" "Dirty Laundry" "Easy Mark"]
+                (drop 4 gateway-beginner-runner-deck))]
+
+    (println "\n--- Setup: Corp installs ICE, Runner installs breaker ---")
+
+    ;; Install Ice Wall on HQ BEFORE taking credits
+    (println "\nCorp installing Ice Wall on HQ...")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (let [ice (get-ice state :hq 0)]
+      (println "✓ Ice Wall installed")
+      (println "  Type:" (:subtype ice))
+      (println "  Strength:" (get-strength (get-card state ice)))
+      (println "  Rez cost:" (:cost ice)))
+
+    (take-credits state :corp)
+
+    ;; Runner installs Corroder (Fracter)
+    (println "\nRunner installing Corroder (Fracter)...")
+    (play-from-hand state :runner "Corroder")
+    (let [breaker (get-program state 0)]
+      (println "✓ Corroder installed")
+      (println "  Type:" (:subtype breaker))
+      (println "  Strength:" (get-strength (get-card state breaker)))
+      (println "  Install cost:" (:cost breaker))
+      (println "  Memory:" (:memoryunits breaker) "MU"))
+
+    (println "\nRunner credits:" (:credit (:runner @state)))
+    (println "Runner clicks:" (:click (:runner @state)))
+
+    ;; Test: Run HQ with breaker, break the ICE, access successfully
+    (println "\n--- Test: Runner runs HQ and breaks Ice Wall ---")
+    (println "Initiating run on HQ...")
+    (run-on state :hq)
+
+    (println "\n✓ Run initiated!")
+    (println "Run phase:" (:phase (:run @state)))
+
+    (let [ice (get-ice state :hq 0)]
+      (println "\nApproaching Ice Wall...")
+      (println "Corp REZZES Ice Wall...")
+      (rez state :corp ice)
+      (println "✓ Ice Wall rezzed!")
+      (println "  Corp credits after rez:" (:credit (:corp @state))))
+
+    (println "\nTransitioning to encounter...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :encounter-ice")
+
+    (let [ice (get-ice state :hq 0)
+          breaker (get-program state 0)]
+      (println "\n✓ Encountering Ice Wall!")
+      (println "  ICE strength:" (get-strength ice))
+      (println "  Breaker strength:" (get-strength (get-card state breaker)))
+      (println "  ICE subroutines:" (count (:subroutines ice)))
+      (println "  First subroutine:" (:label (first (:subroutines ice))))
+
+      (println "\nRunner uses Corroder to break subroutines...")
+      (println "  Breaker abilities:" (count (:abilities (get-card state breaker))))
+
+      ;; Use the breaker's break ability
+      (card-ability state :runner breaker 0)
+
+      (println "\n✓ Used breaker ability!")
+      (let [prompt (get-prompt state :runner)]
+        (when prompt
+          (println "Runner has prompt to choose which subroutine to break:")
+          (println "  Prompt:" (:msg prompt))
+          (println "  Choices:" (mapv :value (:choices prompt)))
+          (click-prompt state :runner "End the run")
+          (println "✓ Broke 'End the run' subroutine!"))))
+
+    (println "\nAll subroutines broken, continuing past ICE...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :movement (past the ICE)")
+
+    (println "\nContinuing to server access...")
+    (run-continue state)
+    (println "Run phase:" (:phase (:run @state)))
+    (println "Should be :success")
+
+    ;; Access HQ
+    (println "\n✓ Run successful! Accessing HQ...")
+    (let [prompt (get-prompt state :runner)]
+      (when prompt
+        (println "Access prompt:" (:msg prompt))
+        (let [choices (mapv :value (:choices prompt))]
+          (println "Choices:" choices)
+          (if (some #(= % "Steal") choices)
+            (do
+              (println "Found agenda - stealing it")
+              (click-prompt state :runner "Steal"))
+            (do
+              (println "Not an agenda - choosing No action")
+              (click-prompt state :runner "No action")))
+          (println "✓ Access complete"))))
+
+    (println "\nRun ended:" (nil? (:run @state)))
+    (println "Should be true")
+
+    (assert-no-prompts state "after successful run with breaking")
+
+    ;; Summary
+    (println "\n========================================")
+    (println "TEST SUMMARY: Breaking Barrier ICE")
+    (println "========================================")
+    (println "Runner installed Corroder (Fracter)")
+    (println "Corp rezzed Ice Wall (Barrier)")
+    (println "Runner broke 'End the run' subroutine")
+    (println "Run successful - accessed HQ!")
+
+    (println "\nRun phases with breaking:")
+    (println "1. :approach-ice - Corp rezzes ICE")
+    (println "2. run-continue → :encounter-ice")
+    (println "3. card-ability to use breaker")
+    (println "4. click-prompt to choose which subroutine to break")
+    (println "5. run-continue → :movement (past ICE)")
+    (println "6. run-continue → :success (access cards)")
+
+    (println "\nKey mechanics:")
+    (println "- Fracter icebreaker breaks Barrier ICE (type matching)")
+    (println "- Breaker strength must be >= ICE strength")
+    (println "  (Corroder strength 2 >= Ice Wall strength 1)")
+    (println "- card-ability activates the breaker's break ability")
+    (println "- Runner chooses which subroutines to break via prompt")
+    (println "- After breaking all subs, run continues past ICE")
+    (println "- Successful run = access cards!")
+
+    (println "\nBreaker types:")
+    (println "- Fracter breaks Barrier ICE")
+    (println "- Decoder breaks Code Gate ICE")
+    (println "- Killer breaks Sentry ICE")
+    (println "- AI breakers can break any type (usually less efficient)")
+
+    (println "\nDifference from Phase 5.1:")
+    (println "- Phase 5.1: Runner did NOT break, run ENDED")
+    (println "- Phase 5.2: Runner BROKE subroutines, run SUCCEEDED")
+    (println "- This is how Runner gets through ICE!")
+
+    (println "\n✅ Test complete!")
+    nil))
+
+;; ============================================================================
+;; Comment block for REPL usage
+;; ============================================================================
+
+(comment
+  ;; Card lookup helpers - quick info about any card
+  (print-card-info "Carmen")
+  (print-card-info "Docklands Pass")
+  (print-card-info "Hedge Fund")
+  (card-info "Nico Campaign")  ; Returns map instead of printing
+
+  ;; Run basic turn flow test (returns nil, won't spam)
+  (test-basic-turn-flow)
+
+  ;; Run playing cards test (returns nil, won't spam)
+  (test-playing-cards)
+
+  ;; Run asset management test (Phase 2.1) (returns nil, won't spam)
+  (test-asset-management)
+
+  ;; Run agenda scoring test (Phase 2.2) (returns nil, won't spam)
+  (test-agenda-scoring)
+
+  ;; Run ICE installation test (Phase 2.3) (returns nil, won't spam)
+  (test-ice-installation)
+
+  ;; Run end-of-turn rez timing test (Phase 2.4) (returns nil, won't spam)
+  (test-end-of-turn-rez)
+
+  ;; Run program installation test (Phase 3.1) (returns nil, won't spam)
+  (test-program-installation)
+
+  ;; Run resource management test (Phase 3.2) (returns nil, won't spam)
+  (test-resource-management)
+
+  ;; Run runner events test (Phase 3.3) (returns nil, won't spam)
+  (test-runner-events)
+
+  ;; Create custom game for experimentation
+  ;; IMPORTANT: Capture in a def, don't just call (open-hand-game) or it will print entire state!
+  (def my-state (open-hand-game))
+  (print-game-state my-state)
+
+  ;; Manual action examples
+  (core/process-action "credit" my-state :corp nil)
+  (core/process-action "draw" my-state :corp nil)
+  (play-from-hand my-state :corp "Hedge Fund")
+
+  ;; Check specific card in hand
+  (get-in @my-state [:corp :hand])
+
+  ;; Check prompt state
+  (get-in @my-state [:corp :prompt])
+
+  )

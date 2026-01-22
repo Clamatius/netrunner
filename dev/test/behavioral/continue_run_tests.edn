@@ -1,0 +1,53 @@
+{:scenarios
+ {:fresh-game
+  {:desc "Game start, both players kept hands"
+   :setup []}
+
+  :runner-turn-start
+  {:desc "Start of runner turn, corp passed"
+   :setup [{:corp "end-turn --force"}]}}
+
+ :tests
+ [{:name "basic-command-execution"
+   :desc "Validates that basic commands execute without error"
+   :scenario :fresh-game
+   :actions [{:corp "take-credit"}
+             {:corp "take-credit"}
+             {:corp "take-credit"}]
+   :expect-log-contains
+   ["gain 1"]
+   :timeout 10000}
+
+  ;; TODO: Additional behavioral tests
+  ;; These require working out game state complexity (prompts, hand size, etc)
+
+  ;; {:name "auto-end-turn-when-clicks-exhausted"
+  ;;  :desc "Auto-end doesn't trigger until prompts resolved (hand size, etc)"
+  ;;  ...}
+
+  ;; TODO: Complex tests requiring prompt handling and auto-continue validation
+  ;; These will be added once we work out game state complexity
+
+  ;; {:name "undefended-rnd-run-with-autocontinue"
+  ;;  :desc "Runner runs undefended R&D with --continue, validates full auto-continue flow"
+  ;;  :scenario :runner-turn-start
+  ;;  :actions [{:runner "run \"R&D\" --continue"}]
+  ;;  :expect-log-contains
+  ;;  ["accessed.*from R&D"
+  ;;   "breached R&D"]
+  ;;  :timeout 10000}
+
+  ;; {:name "multiple-undefended-runs-same-turn"
+  ;;  :desc "Runner makes multiple undefended runs in same turn with --continue"
+  ;;  :scenario :runner-turn-start
+  ;;  :actions [{:runner "run \"HQ\" --continue"}
+  ;;           {:runner "run \"R&D\" --continue"}
+  ;;           {:runner "run \"Archives\" --continue"}]
+  ;;  :expect-log-contains
+  ;;  ["accessed.*from HQ"
+  ;;   "accessed.*from R&D"
+  ;;   "accessed.*from Archives"]
+  ;;  :expect-log-count
+  ;;  {:pattern "breached" :count 3}
+  ;;  :timeout 15000}
+  ]}

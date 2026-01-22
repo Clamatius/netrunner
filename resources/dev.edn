@@ -5,7 +5,7 @@
                       ; Monger requires a db name in the URI string, be sure to specify
                       :connection-string #or [#env MONGO_CONNECTION_URI nil]}
  :web/app-state nil
- :web/server {:port 1042
+ :web/server {:port #long #or [#env WEB_SERVER_PORT 1042]
               :app #ig/ref :web/app}
  :web/auth {:expiration 60
             :secret "Dev salt"
@@ -16,7 +16,7 @@
                      :max-age 5184000}}
  :web/lobby {:interval 1000
              :mongo #ig/ref :mongodb/connection
-             :time-inactive 600}
+             :time-inactive 172800}  ; 2 days (was 600s/10min)
  :web/chat {:max-length 144
             ;; sliding window size in seconds
             :rate-window 60

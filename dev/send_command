@@ -1,0 +1,1231 @@
+#!/bin/bash
+# send_command - Simplified AI player control interface
+# Usage: ./send_command [client] <action> [args...]
+#   Single-client: ./send_command status
+#   Multi-client:  ./send_command runner status
+#                  ./send_command corp create-game "Test"
+
+set -euo pipefail
+set +H  # Disable history expansion to allow ! in function names
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
+TIMEOUT="${TIMEOUT:-20}"
+DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
+SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
+
+# Multi-client support: detect if first arg is a client name
+# Valid client names: runner, corp, or any custom name
+# Port mapping: runner=7889 (default), corp=7890
+CLIENT_NAME=""
+CLIENT_PORT="7889"
+
+# Check if first argument looks like a client name (not a command)
+FIRST_ARG="${1:-help}"
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+    CLIENT_NAME="$1"
+    shift
+
+    # Map client name to port
+    case "$CLIENT_NAME" in
+        runner)
+            CLIENT_PORT="7889"
+            ;;
+        corp)
+            CLIENT_PORT="7890"
+            ;;
+        *)
+            # Custom client, try to find its port by checking what's running
+            # Default to 7889 if not specified
+            CLIENT_PORT="7889"
+            ;;
+    esac
+fi
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+error() {
+    echo -e "${RED}❌ Error: $1${NC}" >&2
+    exit 1
+}
+
+success() {
+    [[ "$DEBUG" == "1" ]] && echo -e "${GREEN}✅ $1${NC}"
+    return 0
+}
+
+info() {
+    [[ "$DEBUG" == "1" ]] && echo -e "${BLUE}ℹ️  $1${NC}"
+    return 0
+}
+
+warn() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+# Check if AI client is running
+check_client() {
+    if ! lsof -i :$CLIENT_PORT > /dev/null 2>&1; then
+        if [[ -n "$CLIENT_NAME" ]]; then
+            error "AI Client REPL '$CLIENT_NAME' not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $CLIENT_PORT"
+        else
+            error "AI Client REPL not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh"
+        fi
+    fi
+}
+
+# Ensure WebSocket connection is active (auto-reconnect if needed)
+ensure_connection() {
+    # Use the improved ensure-connected! which checks socket health
+    # This detects broken sockets where connected? returns true but socket is dead
+    local connect_result
+    if [[ -n "$CLIENT_NAME" ]]; then
+        connect_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/ensure-connected!)
+          "ok")' 2>&1)
+    else
+        connect_result=$(TIMEOUT=10 "$AI_EVAL" '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/ensure-connected!)
+          "ok")' 2>&1)
+    fi
+
+    # Show connection messages if present (they go to stdout)
+    if [[ "$connect_result" == *"reconnecting"* ]] || [[ "$connect_result" == *"broken"* ]]; then
+        echo "$connect_result" | grep -v '^"ok"$' || true
+    fi
+
+    # Check for stale game state and auto-resync if needed
+    local sync_result
+    if [[ -n "$CLIENT_NAME" ]]; then
+        sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+          (require (quote [ai-connection :as conn]))
+          (conn/ensure-synced!)
+          "ok")' 2>&1)
+    else
+        sync_result=$(TIMEOUT=10 "$AI_EVAL" '(do
+          (require (quote [ai-connection :as conn]))
+          (conn/ensure-synced!)
+          "ok")' 2>&1)
+    fi
+
+    # Show sync messages if present (Stale, Kicked, or Resync)
+    if [[ "$sync_result" == *"Stale"* ]] || [[ "$sync_result" == *"Kicked"* ]] || [[ "$sync_result" == *"Resync"* ]]; then
+        echo "$sync_result" | grep -v '^"ok"$' || true
+    fi
+}
+
+# Show help
+show_help() {
+    cat << EOF
+${BLUE}AI Player Command Interface${NC}
+
+${YELLOW}Multi-Client Usage:${NC}
+  ./send_command runner <action> [args...]  - Send command to Runner client (port 7889)
+  ./send_command corp <action> [args...]    - Send command to Corp client (port 7890)
+  ./send_command <action> [args...]         - Send to default client (backward compatible)
+
+${YELLOW}Examples:${NC}
+  ./send_command runner status              - Check Runner's game status
+  ./send_command corp create-game "Test"    - Corp creates a game
+  ./send_command runner keep-hand           - Runner keeps mulligan
+  ./send_command corp start-game            - Corp starts the game
+
+${GREEN}Status Commands:${NC}
+  status          - Show game state (turn, credits, clicks, hand size)
+  board           - Show full game board (servers, ICE, rigs)
+  hand            - Show cards in hand
+  prompt          - Show current prompt (if any)
+  credits         - Show current credits
+  clicks          - Show remaining clicks
+  archives        - Show Corp's Archives (faceup/facedown cards)
+  log [N]         - Show last N game log entries (default: 20)
+  card-text <name>   - Look up card information (type, cost, text)
+  abilities <name>   - Show abilities for installed card
+  list-playables  - List all currently playable actions (cards, abilities)
+
+${GREEN}Basic Actions:${NC}
+  start-turn      - Start your turn (gain clicks, Corp draws card)
+  indicate-action - Signal you want to use paid ability (pauses game)
+  take-credit     - Spend 1 click to gain 1 credit
+  draw            - Spend 1 click to draw 1 card
+  end-turn [--force] - End your turn (requires --force if clicks remain - typically breaks the gamestate)
+  smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
+  fix-credits <N> - ⚠️  CHEATING: Manually set credits (ONLY for broken game states!)
+                     Use absolute value (10) or delta (+5, -3)
+
+${GREEN}Mulligan & Hand Management:${NC}
+  keep-hand       - Keep starting hand
+  mulligan        - Mulligan (redraw) starting hand
+  discard         - Auto-discard down to maximum hand size
+  discard <name>... - Discard specific cards by name (e.g., discard "Sure Gamble" "Diesel")
+  discard <N>...  - Discard specific cards by index (e.g., discard 0 2 4)
+
+${GREEN}Card Actions:${NC}
+  play <name>     - Play card by name (e.g., "Sure Gamble")
+  play-index <N>  - Play card by index (0-4)
+  use-ability <name> <N>  - Use installed card's ability N (e.g., "Smartware Distributor" 0)
+  use-runner-ability <name> <N> - Use runner ability on Corp card (e.g., "Brân 1.0" 0 for bioroid)
+  trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
+  rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
+  fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
+  auto-pass       - Toggle auto-pass priority during runs (Corp only)
+  advance <name> [--overadvance]  - Advance installed card (Corp only)
+                     Blocks advancing past requirement by default
+                     Use --overadvance to force advancing past requirement
+  score <name>    - Score agenda with sufficient advancement counters (Corp only)
+
+${GREEN}Runner Actions:${NC}
+  run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.)
+  let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
+
+${GREEN}Run Automation:${NC}
+  continue [flags]     - Auto-continue until decision required (see Prompts section)
+  continue-run [flags] - (alias for 'continue --single') Single-step mode
+  monitor-run [flags]  - (alias for 'continue') Loop mode
+
+  ${BLUE}Run Flags:${NC} (usable with run, continue)
+    --no-rez         Corp: don't rez any ICE (auto-decline all rez windows)
+    --rez <name>     Corp: only rez ICE matching <name>, decline others
+    --fire-unbroken  Corp: auto-fire unbroken subroutines
+    --full-break     Runner: auto-break all ICE with available breakers
+    --no-continue    Don't auto-continue after run start (single-step mode)
+    --force          ⚠️  TEST ONLY: Bypass ALL checks (breaks game state in HITL!)
+
+${GREEN}Prompts:${NC}
+  choose <N>      - Choose option N from current prompt (0, 1, 2...)
+  choose-value <text> - Choose option by matching text (e.g., "keep", "steal")
+  choose-card <N> - Choose card N from select prompt (for card-targeting effects)
+  multi-choose <cards...> - Select multiple cards for prompts like discard
+                     By name: multi-choose "Hedge Fund" "IPO" "Rashida"
+                     By index: multi-choose 0 1 2 3
+  continue [flags] - Auto-continue until decision required (default: loop mode)
+                     --single  Single-step mode (one action, then return)
+                     --raw     Raw WebSocket pass (debugging only)
+  jack-out        - Jack out of current run (end run unsuccessfully)
+  tank <ice-name> - Authorize letting subs fire on ICE, then continue run
+                     Use when paused at "authorization required" for unbroken subs
+  wait-for-diff [seconds] - Wait for game state change (shows recent log)
+  wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
+                     Wakes on: runs starting/ending, prompts, your turn to act
+                     Ignores: opponent credits, draws, minor actions
+                     --since N: Pass cursor from previous action; returns immediately
+                               if state already advanced (fixes race conditions)
+                     Works for: AI-vs-AI, HITL testing, script automation
+  wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
+  get-cursor          - Get current state cursor (for --since parameter)
+
+${GREEN}Lobby:${NC}
+  create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
+  start-game      - Start game (after creating and opponent joins)
+  auto-start      - Auto-start game if lobby is ready (validates 2 players with valid decks)
+  leave-game      - Leave current game lobby
+  list-lobbies    - List available games to join
+  join <game-id> <side>  - Join game as Runner or Corp
+  resync <game-id>       - Rejoin already-started game
+  chat <message>         - Send chat message to game
+
+${GREEN}Installation:${NC}
+  install <name> <server> [--overwrite]  - Install card to server
+                     Centrals: HQ, R&D, Archives (for ICE)
+                     Remotes: "new" creates new, "Server 1" etc. must exist
+                     Use --overwrite to replace existing asset/agenda
+  install-index <N> [server] - Install card by index (Corp needs server)
+
+${GREEN}Connection:${NC}
+  connect         - Manually reconnect WebSocket to server
+
+${GREEN}AI Bot:${NC}
+  dashboard       - Corp: Show ranked heuristic options (all rules)
+  dashboard-compact [N] - Corp: Show top N available options (default: 5)
+  bot             - Corp: Make one heuristic decision and execute
+  bot-turn        - Corp: Play full turn with heuristic AI
+  bot-status      - Corp: Show decision-relevant state and next action
+  bot-respond     - Corp: Respond to active run (rez/fire decisions)
+  bot-watch       - Corp: Continuously watch for and respond to runs
+
+${GREEN}Advanced:${NC}
+  eval <expr>     - Execute arbitrary Clojure expression
+  debug-chat [on|off] - Toggle debug chat mode (waits announced in game chat)
+                     Useful for HITL debugging - shows what AI is waiting for
+
+${YELLOW}Turn Timing Quick Reference:${NC}
+  ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+    • Discard happens before turn formally ends
+
+  ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
+    • No mandatory draw (unlike Corp)
+    • Use 'continue' to advance through paid ability windows
+    • Clicks must be spent before end-turn
+
+  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter ice → movement → access/jack out
+    • Runner: 'run <server>' auto-continues through unopposed runs
+    • Corp: 'monitor-run' to participate (auto-continues, pauses at rez decisions)
+    • Approach: Corp decides to rez ICE or decline (use 'rez <name>' or 'continue')
+    • Encounter: Break subs with icebreakers (or let fire with 'let-subs-fire')
+    • Access: 'choose-value steal/trash/"no action"' for each accessed card
+    • Runs auto-pause at: rez decisions (Corp), trashable access, sub fire decisions
+
+  ${BLUE}Common Stuck States:${NC}
+    • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn
+    • Run stopped → Check 'prompt' to see what decision is needed
+    • Turn won't end → Check 'prompt' for blocking discard/ability prompts
+
+${YELLOW}Examples:${NC}
+  ./send_command status
+  ./send_command list-lobbies
+  ./send_command take-credit
+  ./send_command play "Sure Gamble"
+  ./send_command install "Daily Casts"
+  ./send_command run "R&D"
+  ./send_command choose 0
+  ./send_command choose-value keep
+  ./send_command end-turn
+
+EOF
+}
+
+# Execute command via ai-eval.sh
+# Uses stdin mode to avoid shell escaping issues with ! in function names
+execute() {
+    local expr="$1"
+    local wrapped=false
+
+    # Wrap expression in with-out-str to capture stdout if it's a display command
+    # This is a heuristic: if it starts with (ai-actions/show- or (ai-actions/list-, wrap it
+    if [[ "$expr" == *"(ai-actions/show-"* ]] || [[ "$expr" == *"(ai-actions/list-"* ]] || [[ "$expr" == *"(ai-actions/hand"* ]] || [[ "$expr" == *"(ai-actions/status"* ]] || [[ "$expr" == *"(ai-actions/board"* ]]; then
+        # echo "DEBUG: Wrapping display command: $expr" >&2
+        expr="(with-out-str $expr)"
+        wrapped=true
+    fi
+
+    # Use temp file with stdin mode to avoid shell escaping issues with ! and other special chars
+    # Write expression to temp file to preserve ! without backslash escaping
+    local EXPR_FILE
+    EXPR_FILE=$(mktemp)
+    printf '%s' "$expr" > "$EXPR_FILE"
+    trap "rm -f '$EXPR_FILE'" RETURN
+
+    if [[ -n "$CLIENT_NAME" ]]; then
+        # Multi-client mode: pass client name and port via stdin
+        # Note: 2>&1 captures stderr too, so errors are visible
+        # The || true prevents set -e from exiting on non-zero return
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || true
+    else
+        # Single-client mode: use default (backward compatible)
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin < "$EXPR_FILE" 2>&1) || true
+    fi
+    # Note: $? here is from || true (always 0), but we parse errors from output
+    RET=$?
+
+    # If we wrapped it, the result is a string literal like "output\n". We need to unquote it.
+    # If it wasn't wrapped, just print the result as is.
+    if [[ "$wrapped" == "true" ]]; then
+        # Remove surrounding quotes and interpret escapes
+        # Check if result is at least 2 chars (quoted)
+        if [[ ${#RESULT} -ge 2 ]]; then
+            LEN=$((${#RESULT}-2))
+            echo -e "${RESULT:1:$LEN}"
+        else
+            echo "$RESULT"
+        fi
+    else
+        # Suppress all status map noise - we print human-readable messages instead
+        # Filter out any line starting with {:status (success, error, waiting, etc.)
+        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$' || true
+    fi
+
+    return $RET
+}
+
+# Show last log entry if SHOW_LAST_LOG is enabled
+show_last_log_if_enabled() {
+    local RET=$?
+    if [[ "$SHOW_LAST_LOG" == "1" ]]; then
+        echo ""
+        echo -e "${BLUE}--- Last Log Entry ---${NC}"
+        execute "(ai-actions/show-log 1)"
+    fi
+    return $RET
+}
+
+# Main command dispatcher
+COMMAND="${1:-help}"
+shift || true
+
+check_client
+
+case "$COMMAND" in
+    # Help
+    help|--help|-h)
+        show_help
+        ;;
+
+    # Connection
+    connect)
+        info "Reconnecting to game server..."
+        execute '(do
+          (require (quote [ai-websocket-client-v2 :as ws]))
+          (ws/connect! "ws://localhost:1042/chsk")
+          (Thread/sleep 2000)
+          (println "✅ Connected to ws://localhost:1042/chsk"))'
+        ;;
+
+    # Status commands (read-only)
+    status)
+        execute '(ai-actions/status)'
+        ;;
+
+    status-compact)
+        execute '(ai-actions/status-compact)'
+        ;;
+
+    board)
+        execute '(ai-actions/show-board)'
+        ;;
+
+    board-compact)
+        execute '(ai-actions/board-compact)'
+        ;;
+
+    hand)
+        execute '(ai-actions/show-hand)'
+        ;;
+
+    prompt)
+        execute '(ai-actions/show-prompt-detailed)'
+        ;;
+
+    credits)
+        execute '(ai-actions/show-credits)'
+        ;;
+
+    clicks)
+        execute '(ai-actions/show-clicks)'
+        ;;
+
+    archives)
+        execute '(ai-actions/show-archives)'
+        ;;
+
+    log)
+        N="${1:-20}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=20
+        execute "(ai-actions/show-log $N)"
+        ;;
+
+    log-compact)
+        N="${1:-5}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=5
+        execute "(ai-actions/show-log-compact $N)"
+        ;;
+
+    card-text)
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
+        execute "(ai-actions/show-card-text \"$CARD_NAME\")"
+        ;;
+
+    hand-text)
+        info "Looking up all cards in hand..."
+        execute "(ai-actions/show-hand-cards)"
+        ;;
+
+    abilities)
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"
+        execute "(ai-actions/show-card-abilities \"$CARD_NAME\")"
+        ;;
+
+    list-playables)
+        ensure_connection
+        info "Listing all playable actions..."
+        execute "(ai-actions/list-playables)"
+        ;;
+
+    # Basic actions
+    start-turn)
+        ensure_connection
+        info "Starting turn..."
+        execute '(ai-actions/start-turn!)'
+        show_last_log_if_enabled
+        ;;
+
+    wait-my-turn)
+        ensure_connection
+        info "Waiting for my turn..."
+        execute '(ai-actions/wait-for-my-turn)'
+        ;;
+
+    wait-run)
+        ensure_connection
+        info "Waiting for run (Corp only)..."
+        execute '(ai-actions/wait-for-run)'
+        ;;
+
+    indicate-action)
+        ensure_connection
+        info "Indicating paid ability..."
+        execute '(ai-actions/indicate-action!)'
+        ;;
+
+    take-credit)
+        ensure_connection
+        info "Taking credit..."
+        execute '(ai-actions/take-credit!)'
+        ;;
+
+    draw)
+        ensure_connection
+        info "Drawing card..."
+        execute '(ai-actions/draw-card!)'
+        ;;
+
+    end-turn)
+        ensure_connection
+        FORCE=false
+        # Check for --force flag
+        if [[ "${1:-}" == "--force" ]]; then
+            FORCE=true
+            info "Ending turn (FORCED - clicks will be wasted)..."
+        else
+            info "Ending turn..."
+        fi
+        if [[ "$FORCE" == "true" ]]; then
+            execute '(ai-actions/end-turn! :force true)'
+        else
+            execute '(ai-actions/end-turn!)'
+        fi
+        ;;
+
+    smart-end-turn)
+        ensure_connection
+        info "Smart end-turn (auto-detects if safe)..."
+        execute '(ai-actions/smart-end-turn!)'
+        ;;
+
+    fix-credits)
+        ensure_connection
+        AMOUNT="${1:-}"
+        [[ -z "$AMOUNT" ]] && error "Usage: send_command fix-credits <amount>\n  Example: fix-credits 10 (set to 10)\n  Example: fix-credits +5 (add 5)\n  Example: fix-credits -3 (subtract 3)"
+        warn "CHEATING: This is ONLY for fixing broken game states!"
+        execute "(ai-actions/fix-credits! $AMOUNT)"
+        ;;
+
+    # Dev/Testing commands
+    change)
+        ensure_connection
+        KEY="${1:-}"
+        DELTA="${2:-}"
+        [[ -z "$KEY" ]] && error "Usage: send_command change <key> <delta>"
+        [[ -z "$DELTA" ]] && error "Usage: send_command change <key> <delta>"
+        [[ ! "$DELTA" =~ ^-?[0-9]+$ ]] && error "Delta must be a number"
+        info "Changing $KEY by $DELTA (dev backdoor)..."
+        execute "(ai-actions/change! :$KEY $DELTA)"
+        ;;
+
+    # Mulligan
+    keep-hand)
+        ensure_connection
+        info "Keeping hand..."
+        execute '(ai-actions/keep-hand)'
+        ;;
+
+    mulligan)
+        ensure_connection
+        info "Taking mulligan..."
+        execute '(ai-actions/mulligan)'
+        ;;
+
+    discard)
+        ensure_connection
+        if [[ $# -eq 0 ]]; then
+            info "Auto-discarding to hand size..."
+            execute '(ai-actions/discard-to-hand-size!)'
+        else
+            # Check if all args are numeric (indices) or text (card names)
+            ALL_NUMERIC=true
+            for arg in "$@"; do
+                if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
+                    ALL_NUMERIC=false
+                    break
+                fi
+            done
+
+            if [[ "$ALL_NUMERIC" == "true" ]]; then
+                # Discard by index
+                INDICES=("$@")
+                info "Discarding cards at indices: ${INDICES[*]}"
+                INDICES_VEC="[${INDICES[*]}]"
+                execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
+            else
+                # Discard by card name
+                CARD_NAMES=("$@")
+                info "Discarding cards by name: ${CARD_NAMES[*]}"
+                # Build Clojure vector of card name strings
+                NAMES_VEC="["
+                for name in "${CARD_NAMES[@]}"; do
+                    NAMES_VEC+="\"$name\" "
+                done
+                NAMES_VEC+="]"
+                execute "(ai-actions/discard-by-names! $NAMES_VEC)"
+            fi
+        fi
+        ;;
+
+    # Card actions
+    play)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        SERVER="${2:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command play <card-name>"
+
+        # Auto-upgrade to install if server argument provided
+        if [[ -n "$SERVER" ]]; then
+            info "Auto-upgrading 'play' to 'install' (server argument provided: $SERVER)"
+            execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+        else
+            info "Playing card: $CARD_NAME"
+            execute "(ai-actions/play-card! \"$CARD_NAME\")"
+        fi
+        show_last_log_if_enabled
+        ;;
+
+    play-index)
+        ensure_connection
+        INDEX="${1:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command play-index <0-4>"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        info "Playing card at index $INDEX"
+        execute "(ai-actions/play-card! $INDEX)"
+        show_last_log_if_enabled
+        ;;
+
+    # Running
+    run)
+        ensure_connection
+        SERVER="${1:-}"
+        shift
+        [[ -z "$SERVER" ]] && error "Usage: send_command run <server> [--flags...]"
+
+        # Build flag arguments for varargs call
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+
+        info "Running on $SERVER..."
+        execute "(ai-actions/run! \"$SERVER\"$FLAGS_ARGS)"
+        show_last_log_if_enabled
+        ;;
+
+    # Card abilities
+    use-ability)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        ABILITY_INDEX="${2:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
+        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
+        [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
+        info "Using ability $ABILITY_INDEX on $CARD_NAME..."
+        execute "(ai-actions/use-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        ;;
+
+    use-runner-ability)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        ABILITY_INDEX="${2:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
+        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
+        [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
+        info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
+        execute "(ai-actions/use-runner-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        ;;
+
+    # Trash installed card
+    trash)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command trash <card-name>"
+        info "Trashing $CARD_NAME..."
+        execute "(ai-actions/trash-installed! \"$CARD_NAME\")"
+        ;;
+
+    # Rez Corp card
+    rez)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command rez <card-name>"
+        info "Rezzing $CARD_NAME..."
+        execute "(ai-actions/rez-card! \"$CARD_NAME\")"
+        ;;
+
+    # Fire ICE subroutines
+    fire-subs)
+        ensure_connection
+        ICE_NAME="${1:-}"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command fire-subs <ice-name>"
+        info "Firing unbroken subroutines on $ICE_NAME..."
+        execute "(ai-actions/fire-unbroken-subs! \"$ICE_NAME\")"
+        ;;
+
+    # Let ICE subroutines fire (Runner)
+    let-subs-fire)
+        ensure_connection
+        ICE_NAME="${1:-}"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command let-subs-fire <ice-name>"
+        info "Signaling intent to let subs fire on $ICE_NAME..."
+        execute "(ai-actions/let-subs-fire! \"$ICE_NAME\")"
+        ;;
+
+    # Toggle auto-pass priority (Corp)
+    auto-pass)
+        ensure_connection
+        info "Toggling auto-pass priority..."
+        execute "(ai-actions/toggle-auto-no-action!)"
+        ;;
+
+    # Advance card
+    advance)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        OVERADVANCE=false
+        shift 2>/dev/null || true
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --overadvance) OVERADVANCE=true ;;
+            esac
+            shift
+        done
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name> [--overadvance]"
+        info "Advancing $CARD_NAME..."
+        if [[ "$OVERADVANCE" == "true" ]]; then
+            execute "(ai-actions/advance-card! \"$CARD_NAME\" {:overadvance true})"
+        else
+            execute "(ai-actions/advance-card! \"$CARD_NAME\")"
+        fi
+        ;;
+
+    # Score agenda
+    score)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command score <card-name>"
+        info "Scoring $CARD_NAME..."
+        execute "(ai-actions/score-agenda! \"$CARD_NAME\")"
+        ;;
+
+    # Prompts
+    choose)
+        ensure_connection
+        CHOICE="${1:-}"
+        [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index>"
+        [[ ! "$CHOICE" =~ ^[0-9]+$ ]] && error "Choice must be a number"
+        info "Choosing option $CHOICE..."
+        execute "(ai-actions/choose-option! $CHOICE)"
+        ;;
+
+    choose-value)
+        ensure_connection
+        VALUE="${1:-}"
+        [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
+        info "Choosing option matching: $VALUE..."
+        execute "(ai-actions/choose-by-value! \"$VALUE\")"
+        ;;
+
+    choose-card)
+        ensure_connection
+        INDEX="${1:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index>"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        info "Choosing card at index $INDEX..."
+        execute "(ai-actions/choose-card! $INDEX)"
+        ;;
+
+    multi-choose)
+        ensure_connection
+        if [[ $# -eq 0 ]]; then
+            error "Usage: send_command multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."
+        fi
+
+        # Check if all args are numeric (indices) or text (card names)
+        ALL_NUMERIC=true
+        for arg in "$@"; do
+            if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
+                ALL_NUMERIC=false
+                break
+            fi
+        done
+
+        if [[ "$ALL_NUMERIC" == "true" ]]; then
+            # Select by index
+            INDICES=("$@")
+            info "Multi-selecting cards at indices: ${INDICES[*]}"
+            ARGS_STR=""
+            for idx in "${INDICES[@]}"; do
+                ARGS_STR="$ARGS_STR $idx"
+            done
+            execute "(ai-actions/multi-choose!$ARGS_STR)"
+        else
+            # Select by card name
+            CARD_NAMES=("$@")
+            info "Multi-selecting cards by name: ${CARD_NAMES[*]}"
+            ARGS_STR=""
+            for name in "${CARD_NAMES[@]}"; do
+                ARGS_STR="$ARGS_STR \"$name\""
+            done
+            execute "(ai-actions/multi-choose!$ARGS_STR)"
+        fi
+        ;;
+
+    continue)
+        ensure_connection
+        # Modes: --single (one step), --raw (dumb WebSocket), default is loop
+        if [[ "${1:-}" == "--single" ]]; then
+            shift
+            info "Single-step mode..."
+            FLAGS_ARGS=""
+            while [[ $# -gt 0 ]]; do
+                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                shift
+            done
+            execute "(ai-actions/continue-run!$FLAGS_ARGS)"
+        elif [[ "${1:-}" == "--raw" ]]; then
+            info "Raw mode - direct WebSocket continue..."
+            execute '(do
+                      (require (quote [ai-state :as state]))
+                      (require (quote [ai-websocket-client-v2 :as ws]))
+                      (let [s @state/client-state
+                            gameid (:gameid s)]
+                        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                     (java.util.UUID/fromString gameid)
+                                     gameid)
+                           :command "continue"
+                           :args nil})
+                        (Thread/sleep 1000)))'
+        else
+            # Default: loop mode (auto-continue until decision)
+            # Strip --loop if present (for backwards compat)
+            [[ "${1:-}" == "--loop" ]] && shift
+            FLAGS_ARGS=""
+            while [[ $# -gt 0 ]]; do
+                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                shift
+            done
+            info "Continuing until decision required..."
+            execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
+        fi
+        show_last_log_if_enabled
+        ;;
+
+    continue-run)
+        # Alias for 'continue --single' (single-step mode)
+        ensure_connection
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+        info "Single-step mode (continue-run is alias for 'continue --single')..."
+        execute "(ai-actions/continue-run!$FLAGS_ARGS)"
+        show_last_log_if_enabled
+        ;;
+
+    monitor-run)
+        # Alias for 'continue' (loop mode is now default)
+        ensure_connection
+        FLAGS_ARGS=""
+        while [[ $# -gt 0 ]]; do
+            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            shift
+        done
+        info "Loop mode (monitor-run is alias for 'continue')..."
+        execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
+        show_last_log_if_enabled
+        ;;
+
+    jack-out)
+        ensure_connection
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (require (quote [ai-websocket-client-v2 :as ws]))
+                  (let [s @state/client-state
+                        gameid (:gameid s)
+                        run-state (get-in s [:game-state :run])]
+                    (if run-state
+                      (do
+                        (ws/send-message! :game/action
+                          {:gameid (if (string? gameid)
+                                     (java.util.UUID/fromString gameid)
+                                     gameid)
+                           :command "jack-out"
+                           :args nil})
+                        (Thread/sleep 500)
+                        (println "🚪 Jacked out of run"))
+                      (println "❌ Not in a run"))))'
+        ;;
+
+    tank)
+        # Authorize letting subs fire on specified ICE, then continue run
+        ensure_connection
+        ICE_NAME="${1:-}"
+        if [[ -z "$ICE_NAME" ]]; then
+            error "tank requires ICE name. Usage: tank \"Ice Wall\""
+        fi
+        # Escape quotes in ICE name for Clojure string
+        ICE_NAME_ESCAPED="${ICE_NAME//\"/\\\"}"
+        execute "(do
+                  (require (quote [ai-runs :as runs]))
+                  (let [ice-name \"$ICE_NAME_ESCAPED\"
+                        current-tank (get (runs/get-strategy) :tank #{})]
+                    (runs/set-strategy! {:tank (conj current-tank ice-name)})
+                    (println (format \"✅ Authorized tank on: %s\" ice-name))
+                    (runs/continue-run!)))"
+        show_last_log_if_enabled
+        ;;
+
+    concede)
+        ensure_connection
+        info "Conceding game..."
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (require (quote [ai-websocket-client-v2 :as ws]))
+                  (let [s @state/client-state
+                        gameid (:gameid s)]
+                    (ws/send-message! :game/action
+                      {:gameid (if (string? gameid)
+                                 (java.util.UUID/fromString gameid)
+                                 gameid)
+                       :command "concede"
+                       :args nil})
+                    (println "🏳️ Conceded game")))'
+        ;;
+
+    wait-for-diff)
+        ensure_connection
+        TIMEOUT="${1:-60}"
+        info "Waiting for game state change (timeout: ${TIMEOUT}s)..."
+        execute "(ai-actions/wait-for-diff $TIMEOUT)"
+        ;;
+
+    wait-for-relevant-diff)
+        ensure_connection
+        TIMEOUT="300"
+        SINCE=""
+        # Parse args
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --since)
+                    SINCE="$2"
+                    shift 2
+                    ;;
+                *)
+                    # Assume it's timeout if numeric
+                    if [[ "$1" =~ ^[0-9]+$ ]]; then
+                        TIMEOUT="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+        if [[ -n "$SINCE" ]]; then
+            info "Waiting for relevant events (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
+            execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})"
+        else
+            info "Waiting for relevant events (timeout: ${TIMEOUT}s)..."
+            execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
+        fi
+        ;;
+
+    wait-for-log-past)
+        ensure_connection
+        if [ -z "$1" ]; then
+            error "Usage: wait-for-log-past <marker-text> [timeout]"
+            exit 1
+        fi
+        MARKER="$1"
+        TIMEOUT="${2:-60}"
+        info "Waiting for log entries past marker: \"${MARKER}\"..."
+        execute "(ai-actions/wait-for-log-past \"$MARKER\" $TIMEOUT)"
+        ;;
+
+    get-cursor)
+        ensure_connection
+        execute "(ai-actions/get-cursor)"
+        ;;
+
+    # Lobby
+    create-game)
+        ensure_connection
+        TITLE="${1:-AI Test Game}"
+        SIDE="${2:-Any Side}"
+        PRECON="${3:-worlds-2012-a}"
+        info "Creating game: $TITLE (Side: $SIDE)..."
+        execute "(do
+                   (require (quote [ai-connection :as conn]))
+                   (conn/create-lobby! {:title \"$TITLE\"
+                                        :side \"$SIDE\"
+                                        :format \"system-gateway\"
+                                        :gateway-type \"Beginner\"
+                                        :precon \"$PRECON\"
+                                        :room \"casual\"
+                                        :allow-spectator true
+                                        :spectatorhands false
+                                        :save-replay false
+                                        :api-access false
+                                        :password \"\"
+                                        :singleton false
+                                        :open-decklists false
+                                        :turmoil false
+                                        :timer nil})
+                   (Thread/sleep 2000)
+                   (println \"✅ Lobby creation request sent\"))"
+        ;;
+
+    start-game)
+        ensure_connection
+        info "Starting game..."
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (require (quote [ai-state :as state]))
+                   (let [s @state/client-state
+                         gameid (:gameid s)]
+                     (if gameid
+                       (do
+                         (ws/send-message! :game/start {:gameid gameid})
+                         (Thread/sleep 2000)
+                         (println "✅ Game start signal sent"))
+                       (println "❌ Not in a game lobby"))))'
+        ;;
+
+    auto-start)
+        ensure_connection
+        info "Checking if lobby is ready to auto-start..."
+        execute '(ai-actions/auto-start-if-ready!)'
+        ;;
+
+    leave-game)
+        ensure_connection
+        info "Leaving game lobby..."
+        execute '(do
+                   (require (quote [ai-websocket-client-v2 :as ws]))
+                   (require (quote [ai-state :as state]))
+                   (let [s @state/client-state
+                         gameid (:gameid s)]
+                     (if gameid
+                       (do
+                         (ws/send-message! :lobby/leave {:gameid gameid})
+                         (Thread/sleep 1000)
+                         ;; Clear client state after leaving
+                         (swap! state/client-state assoc :gameid nil :side nil)
+                         (println "✅ Left game lobby"))
+                       (println "⚠️  Not in a game lobby"))))'
+        ;;
+
+    list-lobbies)
+        ensure_connection
+        info "Fetching lobby list..."
+        execute '(do
+                   (require (quote [ai-connection :as conn]))
+                   (require (quote [ai-display :as display]))
+                   (println "Requesting lobby list...")
+                   (conn/request-lobby-list!)
+                   (Thread/sleep 1000)
+                   (display/show-games))'
+        ;;
+
+    list-game-ids)
+        ensure_connection
+        # Return just game IDs (one per line) for script parsing
+        execute '(do
+                   (require (quote [ai-connection :as conn]))
+                   (require (quote [ai-display :as display]))
+                   (conn/request-lobby-list!)
+                   (Thread/sleep 1000)
+                   (let [ids (display/list-active-game-ids)]
+                     (if (seq ids)
+                       (doseq [id ids] (println id))
+                       (println "NO_GAMES"))))'
+        ;;
+
+    join)
+        ensure_connection
+        GAME_ID="${1:-}"
+        SIDE="${2:-Runner}"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
+        info "Joining game $GAME_ID as $SIDE..."
+        execute "(ai-actions/connect-game! \"$GAME_ID\" \"$SIDE\")"
+        ;;
+
+    resync)
+        # For resync, only ensure WebSocket is connected - don't run ensure-synced!
+        # (ensure-synced! would interfere with our explicit resync)
+        check_client
+        if [[ -n "$CLIENT_NAME" ]]; then
+            TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+              (require (quote [ai-websocket-client-v2 :as ws]))
+              (ws/ensure-connected!))' > /dev/null 2>&1 || true
+        fi
+        GAME_ID="${1:-}"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
+        info "Resyncing game $GAME_ID..."
+        # Use reconnect-game! which waits for game-state to arrive
+        execute "(ai-connection/reconnect-game! \"$GAME_ID\")"
+        ;;
+
+    chat)
+        ensure_connection
+        MESSAGE="${1:-}"
+        [[ -z "$MESSAGE" ]] && error "Usage: send_command chat <message>"
+        info "Sending chat message..."
+        execute "(ai-actions/send-chat! \"$MESSAGE\")"
+        ;;
+
+    # Installation
+    install)
+        ensure_connection
+        # Parse args: install <card-name> [server] [--overwrite]
+        CARD_NAME=""
+        SERVER=""
+        OVERWRITE=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --overwrite) OVERWRITE=":overwrite true"; shift ;;
+                *)
+                    if [[ -z "$CARD_NAME" ]]; then
+                        CARD_NAME="$1"
+                    elif [[ -z "$SERVER" ]]; then
+                        SERVER="$1"
+                    fi
+                    shift ;;
+            esac
+        done
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name> [server] [--overwrite]"
+        if [[ -n "$SERVER" ]]; then
+            info "Installing card: $CARD_NAME on $SERVER"
+            if [[ -n "$OVERWRITE" ]]; then
+                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\" {$OVERWRITE})"
+            else
+                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+            fi
+        else
+            info "Installing card: $CARD_NAME"
+            execute "(ai-actions/install-card! \"$CARD_NAME\")"
+        fi
+        show_last_log_if_enabled
+        ;;
+
+    install-index)
+        ensure_connection
+        INDEX="${1:-}"
+        SERVER="${2:-}"
+        [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4> [server]"
+        [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        if [[ -n "$SERVER" ]]; then
+            info "Installing card at index $INDEX on $SERVER"
+            execute "(ai-actions/install-card! $INDEX \"$SERVER\")"
+        else
+            info "Installing card at index $INDEX"
+            execute "(ai-actions/install-card! $INDEX)"
+        fi
+        show_last_log_if_enabled
+        ;;
+
+    # Advanced
+    eval)
+        EXPR="${1:-}"
+        [[ -z "$EXPR" ]] && error "Usage: send_command eval '<clojure-expression>'"
+        execute "$EXPR"
+        ;;
+
+    debug-chat)
+        ensure_connection
+        MODE="${1:-status}"
+        case "$MODE" in
+            on|true|1)
+                info "Enabling debug chat mode..."
+                execute '(do (reset! ai-runs/chat-debug-mode true) (println "✅ Debug chat ENABLED - waits will be announced in game chat"))'
+                ;;
+            off|false|0)
+                info "Disabling debug chat mode..."
+                execute '(do (reset! ai-runs/chat-debug-mode false) (println "✅ Debug chat DISABLED"))'
+                ;;
+            *)
+                execute '(println (str "Debug chat mode: " (if @ai-runs/chat-debug-mode "ENABLED" "DISABLED")))'
+                ;;
+        esac
+        ;;
+
+    # AI Bot commands
+    dashboard)
+        ensure_connection
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (println (bot/dashboard)))'
+        ;;
+
+    dashboard-compact)
+        ensure_connection
+        N="${1:-5}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=5
+        execute "(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (println (bot/dashboard-compact $N)))"
+        ;;
+
+    bot)
+        ensure_connection
+        info "Heuristic Corp: Making one decision..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/play-turn))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-turn)
+        ensure_connection
+        info "Heuristic Corp: Playing full turn..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/play-full-turn))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-status)
+        ensure_connection
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/status))'
+        ;;
+
+    bot-respond)
+        ensure_connection
+        info "Heuristic Corp: Responding to active run..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/respond-to-run!))'
+        show_last_log_if_enabled
+        ;;
+
+    bot-watch)
+        ensure_connection
+        info "Heuristic Corp: Watching for runs (Ctrl+C to stop)..."
+        execute '(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (bot/watch-for-runs!))'
+        ;;
+
+    *)
+        error "Unknown command: $COMMAND"
+        ;;
+esac

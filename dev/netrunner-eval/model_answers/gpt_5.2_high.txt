@@ -1,0 +1,123 @@
+Solutions (1–11)
+1) break-001-runner — Access Server 1 this turn (with credit math)
+Goal: Get through rezzed Whitespace then rezzed Palisade and breach.
+
+Starting: Runner $7, grip contains Sure Gamble, Unity, Cleaver, etc. Rig empty.
+
+Line (4 clicks):
+
+Play Sure Gamble: pay 5, gain 9
+Credits: 7 -> 11
+Install Unity (cost 3)
+Credits: 11 -> 8
+Install Cleaver (cost 3)
+Credits: 8 -> 5
+Run Server 1 (start run with $5)
+Break math during the run:
+
+Whitespace (per problem text: 2 subs)
+Use Unity to break both subs: 2 credits total (1+1)
+Credits: 5 -> 3
+Palisade (remote-strength 4; 1 “end the run” sub)
+Pump Cleaver once to reach strength 4: 2 credits
+Break sub with Cleaver: 1 credit
+Credits: 3 -> 0
+Result: You pass both ICE and breach Server 1 this turn.
+
+2) midgame-001-runner — Remote w/ 2 advancements: what is it and what do you do?
+Key read:
+
+Last turn you saw HQ was: Urtica Cipher, Nico Campaign, Palisade, Whitespace (no agendas).
+A 2-advanced, double-rezzed remote is strongly signaling:
+An agenda they topdecked / installed after your HQ run (e.g. remaining Superconducting Hub / Offworld Office), or
+A Urtica Cipher they installed from HQ and started advancing (even though you saw it there last turn, they could have installed it after).
+Why you probably must check it now:
+
+With Seamless Launch in the Corp deck, 2 counters can become scoreable quickly (either via normal advancing or Seamless next turn), and you’re tied 3–3.
+Best practical line: contest immediately this turn
+This hinges on one important assumption:
+
+Assumption: At the start of your turn you effectively have access to $3 for the run (e.g. because the listed Smartware Distributor (1 hosted) represents a start-of-turn payout or equivalent).
+If you truly start the action phase at $2 with no automatic +1, you’re 1 credit short of cleanly breaking Palisade and you can’t afford to spend a click first (you need 3 clicks remaining to click-break all Brân 1.0 subs safely).
+Line (if you can start the run with $3):
+
+Click 1: Run Server 1 (the remote).
+On Brân 1.0: spend 3 clicks (bioroid ability) to break all 3 subs, especially the “install ICE inward” sub.
+This avoids the nightmare outcome where the Corp installs a surprise ICE between Brân and Palisade mid-run.
+On Palisade (remote strength 4): with Cleaver (strength 3)
+Pump once (2 credits), then break ETR (1 credit) = 3 credits
+1) break-001-runner (access Server 1 this turn)
+Start: $7, rig empty.
+
+Click 1: Play Sure Gamble (7 - 5 + 9 = $11)
+Click 2: Install Unity ($11 - 3 = $8)
+Click 3: Install Cleaver ($8 - 3 = $5)
+Click 4: Run Server 1
+On ICE:
+
+Whitespace (2 subs): Unity breaks 2 subs = 2c → $5 -> $3
+Palisade (strength 4 on remote, 1 ETR sub): Cleaver pump once (2c) + break (1c) = 3c → $3 -> $0
+Result: breach Server 1 this turn.
+
+2) midgame-001-runner (remote w/ 2 advancements: what is it, what do you do?)
+Most likely:
+
+Newly installed agenda (you previously saw no agendas in HQ), or
+Installed Urtica Cipher from last-turn HQ and advanced twice.
+Best play: contest now, because it’s already invested and could be scoreable soon.
+
+Line (uses the fact Smartware Distributor pays at turn start; otherwise you’re 1 credit short):
+
+Start of turn: take +1c from Smartware Distributor → effectively start at $3.
+Click 1: Run the remote
+On Brân 1.0: spend 3 clicks to break all 3 subs (prevents the “install ICE inward” blowout)
+On Palisade: spend 3 credits total with Cleaver (pump once + break) to pass
+Access the 2-advanced card (safe vs 2-advanced Urtica: 4 net damage vs your 5-card grip).
+3) mull-001-corp
+Keep. You have Hedge Fund + 2 early ICE (Ice Wall, Enigma) and a playable plan.
+
+4) mull-002-corp
+Mulligan. 3 agendas + Government Subsidy you can’t cast + only Brân for ICE = too clunky / agenda-flood risk.
+
+5) mull-003-runner
+Keep. Sure Gamble + Smartware Distributor + 2 breakers + Jailbreak = excellent opener.
+
+6) mull-004-runner
+Keep (slightly risky). You already have the full breaker suite + Overclock to fund an early run; missing long-term econ, but this is still strong.
+
+7) score-001-corp (start of your turn, best line)
+Runner has 1 card in grip and no Killer; your rezzed Karunā makes Server 1 effectively unrunnable.
+
+Best line: set up a near-certain score next turn while staying safe.
+
+Click 1: Install Superconducting Hub in Server 1
+Click 2: Advance it
+Click 3: Advance it (to 2 counters)
+Next turn you can finish scoring (advance once, or use Seamless Launch depending on your follow-up/draw).
+
+8) turn1-001-corp (T1 plan)
+Click 1: Hedge Fund
+Click 2: Install Whitespace on R&D
+Click 3: Install Palisade on HQ
+9) turn1-002-corp (T1 plan)
+Goal: create a scoring remote that sets up Seamless Launch next turn.
+
+Click 1: Install Diviner protecting a new remote
+Click 2: Install Send a Message in that remote
+Click 3: Advance it once
+10) turn1-003-runner (T1 plan vs 2 iced centrals, no remotes)
+Click 1: Install Smartware Distributor
+Click 2: Play Sure Gamble
+Click 3: Install Cleaver
+Click 4: Play VRcation (as last click to avoid the “lose 1 click” downside) to dig for the rest of your rig.
+11) turn1-004-runner (T1 plan vs naked remote)
+You should check the remote immediately (no ICE, and 0-advanced Urtica is survivable).
+
+Click 1: Run Server 1
+If it’s trashable economy (Nico/Regolith), trash it
+If it’s Urtica Cipher, take the damage, then trash if you choose
+Click 2: Play Sure Gamble
+Click 3: Install Carmen for 2 less (because you made a successful run)
+Click 4: Install Smartware Distributor
+Status
+All 11 problems have proposed best lines / decisions. If you want, tell me whether to treat Problem 2’s Smartware payout as already included in the $2 (it changes whether the remote run is immediately affordable).
