@@ -887,7 +887,7 @@
   (case action
     :score       (cards/score-agenda! (:card-name args))
     :advance     (cards/advance-card! (:card-name args))
-    :install     (cards/install-card! (:card-name args) (:server args))
+    :install     (cards/install-card! (:card-name args) (:server args) args)
     :install-ice (cards/install-card! (:card-name args) (:server args))
     :play        (cards/play-card! (:card-name args))
     :rez         (cards/rez-card! (:card-name args))
