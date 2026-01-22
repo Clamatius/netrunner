@@ -1206,6 +1206,136 @@
                       :dynamic (:dynamic ab)})
                    (:abilities prog))})))
 
+;; ============================================================================
+;; Manual Pump + Break Fallback (when dynamic abilities unavailable)
+;; ============================================================================
+
+(defn- ice-primary-type
+  "Get the primary ICE type (Barrier, Code Gate, Sentry) from ICE subtypes."
+  [ice]
+  (let [subtypes (set (:subtypes ice))]
+    (cond
+      (subtypes "Barrier") "Barrier"
+      (subtypes "Code Gate") "Code Gate"
+      (subtypes "Sentry") "Sentry"
+      :else nil)))
+
+(defn- breaker-ice-type
+  "Get the ICE type this breaker can break based on its subtypes."
+  [breaker]
+  (let [subtypes (set (:subtypes breaker))]
+    (cond
+      (subtypes "Fracter") "Barrier"
+      (subtypes "Decoder") "Code Gate"
+      (subtypes "Killer") "Sentry"
+      (subtypes "AI") :ai  ; AI breakers can break any type
+      :else nil)))
+
+(defn- breaker-matches-ice?
+  "Check if breaker can break the ICE type."
+  [breaker ice]
+  (let [ice-type (ice-primary-type ice)
+        breaker-type (breaker-ice-type breaker)]
+    (or (= breaker-type :ai)
+        (= breaker-type ice-type))))
+
+(defn- find-pump-ability
+  "Find a playable pump ability on the breaker. Returns {:index n :label s} or nil.
+   Pump abilities typically have labels like '+X strength' or 'X[c]: +Y strength'."
+  [breaker]
+  (first
+   (keep-indexed
+    (fn [idx ab]
+      (when (and (:playable ab)
+                 (not (:dynamic ab))  ; Skip dynamic abilities
+                 (let [label (str (:label ab))]
+                   (or (clojure.string/includes? label "+1 strength")
+                       (clojure.string/includes? label "+2 strength")
+                       (clojure.string/includes? label "+3 strength")
+                       (re-find #"\+\d+ strength" label))))
+        {:index idx :label (:label ab)}))
+    (:abilities breaker))))
+
+(defn- find-break-ability
+  "Find a playable break ability on the breaker. Returns {:index n :label s} or nil.
+   Break abilities typically have 'break' in the label."
+  [breaker ice-type]
+  (first
+   (keep-indexed
+    (fn [idx ab]
+      (when (and (:playable ab)
+                 (not (:dynamic ab))  ; Skip dynamic abilities
+                 (let [label (clojure.string/lower-case (str (:label ab)))]
+                   (and (clojure.string/includes? label "break")
+                        ;; Check type matches if not AI
+                        (or (= (breaker-ice-type breaker) :ai)
+                            (clojure.string/includes? label (clojure.string/lower-case ice-type))
+                            ;; Generic "break subroutine" labels
+                            (and (clojure.string/includes? label "subroutine")
+                                 (not (clojure.string/includes? label "barrier"))
+                                 (not (clojure.string/includes? label "code gate"))
+                                 (not (clojure.string/includes? label "sentry")))))))
+        {:index idx :label (:label ab)}))
+    (:abilities breaker))))
+
+(defn- try-manual-pump-and-break!
+  "Fallback: manually pump breaker to match ICE strength, then break.
+   Returns status map or nil if not possible."
+  [state ice all-programs]
+  (let [ice-title (:title ice "ICE")
+        ice-type (ice-primary-type ice)
+        ice-strength (or (:current-strength ice) (:strength ice) 0)
+        ;; Find a compatible breaker
+        compatible-breakers
+        (filter #(breaker-matches-ice? % ice) all-programs)]
+    (when (and ice-type (seq compatible-breakers))
+      (let [;; Find a breaker that can pump to strength or is already strong enough
+            usable-breaker
+            (first
+             (for [breaker compatible-breakers
+                   :let [breaker-strength (or (:current-strength breaker) (:strength breaker) 0)
+                         needs-pump? (< breaker-strength ice-strength)
+                         pump-ability (when needs-pump? (find-pump-ability breaker))
+                         break-ability (find-break-ability breaker ice-type)]
+                   ;; Must have break ability, and either strong enough or can pump
+                   :when (and break-ability
+                              (or (not needs-pump?) pump-ability))]
+               {:breaker breaker
+                :needs-pump? needs-pump?
+                :pump-ability pump-ability
+                :break-ability break-ability}))]
+        (when usable-breaker
+          (let [{:keys [breaker needs-pump? pump-ability break-ability]} usable-breaker
+                breaker-name (:title breaker)]
+            ;; Note: last-full-break-warning is reset by the caller on success
+            (if needs-pump?
+              ;; Need to pump first
+              (do
+                (println (format "🔧 Manual pump+break: %s needs pumping for %s" breaker-name ice-title))
+                (println (format "   Using pump: %s (ability %d)" (:label pump-ability) (:index pump-ability)))
+                (let [pump-result (actions/use-ability! breaker-name (:index pump-ability))]
+                  (if (= :success (:status pump-result))
+                    {:status :ability-used
+                     :message (format "Pumped %s (may need more pumps, then break)" breaker-name)
+                     :action :pump
+                     :ice ice-title
+                     :breaker breaker-name}
+                    ;; Pump failed
+                    nil)))
+              ;; Strong enough, break directly
+              (do
+                (println (format "🔨 Manual break: %s breaking %s" breaker-name ice-title))
+                (println (format "   Using: %s (ability %d)" (:label break-ability) (:index break-ability)))
+                (let [break-result (actions/use-ability! breaker-name (:index break-ability))]
+                  (if (= :success (:status break-result))
+                    {:status :ability-used
+                     :message (format "Broke subroutine on %s with %s" ice-title breaker-name)
+                     :action :break
+                     :ice ice-title
+                     :breaker breaker-name}
+                    ;; Break failed
+                    nil))))))))))
+
 (defn- pause-with-context
   "Return a pause status with rich context for manual intervention."
   [state ice-name reason]
@@ -1398,29 +1528,32 @@
                    :breaker card-name}
                   ;; If ability failed, let it fall through to normal handling
                   nil)))
-            ;; No playable break ability - check if any breakers exist but can't afford
-            (let [warning-key [position ice-title]
-                  ;; Check for any dynamic break abilities (playable or not)
-                  all-break-abilities
-                  (for [program all-programs
-                        [idx ability] (map-indexed vector (:abilities program))
-                        :when (and (:dynamic ability)
-                                   (when-let [dyn (:dynamic ability)]
-                                     (clojure.string/includes? (str dyn) "break")))]
-                    {:card-name (:title program)
-                     :label (:label ability)
-                     :playable (:playable ability)
-                     :cost-label (:cost-label ability)})]
-              (when (not= @last-full-break-warning warning-key)
-                (reset! last-full-break-warning warning-key)
-                (if (seq all-break-abilities)
-                  ;; Breaker exists but ability not playable (likely insufficient credits)
-                  (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                    (println (format "⚠️  --full-break: Can't afford to break %s" ice-title))
-                    (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
-                  ;; No breaker can break this ICE type at all
-                  (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
-              nil)))))))
+            ;; No playable dynamic ability - try manual pump+break fallback
+            (if-let [fallback-result (try-manual-pump-and-break! state current-ice all-programs)]
+              fallback-result
+              ;; Fallback also failed - check if any breakers exist but can't afford
+              (let [warning-key [position ice-title]
+                    ;; Check for any dynamic break abilities (playable or not)
+                    all-break-abilities
+                    (for [program all-programs
+                          [idx ability] (map-indexed vector (:abilities program))
+                          :when (and (:dynamic ability)
+                                     (when-let [dyn (:dynamic ability)]
+                                       (clojure.string/includes? (str dyn) "break")))]
+                      {:card-name (:title program)
+                       :label (:label ability)
+                       :playable (:playable ability)
+                       :cost-label (:cost-label ability)})]
+                (when (not= @last-full-break-warning warning-key)
+                  (reset! last-full-break-warning warning-key)
+                  (if (seq all-break-abilities)
+                    ;; Breaker exists but ability not playable (likely insufficient credits)
+                    (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
+                      (println (format "⚠️  --full-break: Can't afford to break %s" ice-title))
+                      (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
+                    ;; No breaker can break this ICE type at all
+                    (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
+                nil))))))))
 
 (defn- ice-authorized-for-fire?
   "Check if Runner has pre-authorized letting subs fire on this ICE.
