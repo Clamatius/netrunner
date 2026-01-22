@@ -52,46 +52,29 @@
         opp-clicks (get-in client-state [:game-state opp-side :click])
         turn-number (get-in client-state [:game-state :turn] 0)
         log (get-in client-state [:game-state :log])
-        recent-log (vec (take-last 100 log)) ; Increased to 100 for safety
+        recent-log (vec (take-last 100 log))
         my-username (get-my-username)
-        
-        ;; Analyze log for opponent status
-        opp-end-indices (keep-indexed (fn [idx entry]
-                                        (let [text (:text entry)]
-                                          (when (and text
-                                                     (str/includes? text "is ending")
-                                                     (or (nil? my-username)
-                                                         (not (str/includes? text my-username))))
-                                            idx)))
-                                      recent-log)
+
+        ;; Use extracted log analysis helpers
+        opp-end-indices (core/find-end-turn-indices recent-log my-username)
         last-opp-end-idx (last opp-end-indices)
-        
-        opp-start-indices (keep-indexed (fn [idx entry]
-                                          (let [text (:text entry)]
-                                            (when (and text
-                                                       (str/includes? text "started their turn")
-                                                       (or (nil? my-username)
-                                                           (not (str/includes? text my-username))))
-                                              idx)))
-                                        recent-log)
+
+        opp-start-indices (core/find-start-turn-indices recent-log :exclude-username my-username)
         last-opp-start-idx (last opp-start-indices)
-        
-        ;; Check if opponent started AGAIN after ending
-        ;; e.g. Runner ended Turn 14 (idx 10), Corp played, Corp ended, Runner started Turn 15 (idx 30)
-        ;; If we are Corp, last-opp-end-idx is 10. last-opp-start-idx is 30.
-        ;; 30 > 10 -> Runner is playing again. We should NOT start.
-        opp-restarted? (and last-opp-end-idx 
+
+        ;; Check if opponent started AGAIN after ending (they're playing again, we missed window)
+        opp-restarted? (and last-opp-end-idx
                             last-opp-start-idx
                             (> last-opp-start-idx last-opp-end-idx))
 
         is-first-turn? (and (= turn-number 0)
-                           (or (nil? my-clicks) (= my-clicks 0))
-                           (or (nil? opp-clicks) (= opp-clicks 0))
-                           (empty? opp-end-indices))
-        
+                            (or (nil? my-clicks) (= my-clicks 0))
+                            (or (nil? opp-clicks) (= opp-clicks 0))
+                            (empty? opp-end-indices))
+
         ;; Check if we effectively already played this turn
         already-played? (turn-started-since-last-opp-end?)]
-    
+
     (cond
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
@@ -100,14 +83,13 @@
       ;; Already played this turn (0 clicks but log shows we started)
       already-played?
       {:can-start false :reason :turn-already-played}
-      
+
       ;; Opponent started a new turn after ending the previous one
       opp-restarted?
       {:can-start false :reason :opponent-restarted}
 
       ;; First turn for Runner - can't start (Corp goes first)
-      (and is-first-turn?
-           (= my-side :runner))
+      (and is-first-turn? (= my-side :runner))
       {:can-start false :reason :not-first-player}
 
       ;; First turn for Corp - can start
@@ -198,32 +180,17 @@
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
-        
-        ;; Find LAST Opponent End
-        opp-end-indices (keep-indexed (fn [idx entry]
-                                        (let [text (:text entry)]
-                                          (when (and text
-                                                     (str/includes? text "is ending")
-                                                     (or (nil? my-username)
-                                                         (not (str/includes? text my-username))))
-                                            idx)))
-                                      recent-log)
-        last-opp-end-idx (last opp-end-indices)
-        last-opp-end-turn (when last-opp-end-idx 
-                            (extract-turn-from-log (:text (get recent-log last-opp-end-idx))))
 
-        ;; Find LAST My Start
-        my-start-indices (keep-indexed (fn [idx entry]
-                                         (let [text (:text entry)]
-                                           (when (and text
-                                                      (str/includes? text "started their turn")
-                                                      (or (nil? my-username)
-                                                          (str/includes? text my-username)))
-                                             idx)))
-                                       recent-log)
+        ;; Use extracted log analysis helpers
+        opp-end-indices (core/find-end-turn-indices recent-log my-username)
+        last-opp-end-idx (last opp-end-indices)
+        last-opp-end-turn (when last-opp-end-idx
+                            (core/extract-turn-number (:text (get recent-log last-opp-end-idx))))
+
+        my-start-indices (core/find-start-turn-indices recent-log :include-username my-username)
         last-my-start-idx (last my-start-indices)
         last-my-start-turn (when last-my-start-idx
-                             (extract-turn-from-log (:text (get recent-log last-my-start-idx))))]
+                             (core/extract-turn-number (:text (get recent-log last-my-start-idx))))]
 
     (cond
       ;; No opponent end found (e.g. Game Start, Corp Turn 1)
@@ -241,18 +208,18 @@
       ;; Async/Edge case: Start is before End (in logs)
       (< last-my-start-idx last-opp-end-idx)
       (if (nil? last-my-start-turn)
-        false 
+        false
         (cond
           ;; I started a later turn (Async race: Start T2 logged before Opp End T1)
           (> last-my-start-turn last-opp-end-turn)
           true
-          
+
           ;; Same turn numbers
           (= last-my-start-turn last-opp-end-turn)
           (if (= my-side :runner)
             true  ; Runner: Corp End T1 -> I Start T1. My Start T1 is "since" Corp End T1.
             false) ; Corp: I Start T1 -> Runner End T1. My Start T1 is NOT "since" Runner End T1.
-            
+
           :else
           false)))))
 

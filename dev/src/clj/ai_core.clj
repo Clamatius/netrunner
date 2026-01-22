@@ -83,6 +83,47 @@
 ;; composability and error handling.
 ;;
 ;; ============================================================================
+;; Result Builders
+;; ============================================================================
+;; Standardized constructors for status maps. Use these instead of hand-crafting
+;; maps to ensure consistency across the codebase.
+
+(defn success
+  "Build a success result map. Merges any additional data into the result.
+
+   Usage:
+     (success)                           ; => {:status :success}
+     (success :card \"Sure Gamble\")     ; => {:status :success :card \"Sure Gamble\"}
+     (success :action :installed :zone :rig)"
+  [& {:as data}]
+  (merge {:status :success} data))
+
+(defn error
+  "Build an error result map with a reason. Merges any additional data.
+
+   Usage:
+     (error :card-not-found)
+     (error :insufficient-credits :cost 5 :available 3)"
+  [reason & {:as data}]
+  (merge {:status :error :reason reason} data))
+
+(defn waiting-input
+  "Build a waiting-for-input result map. Indicates action created a prompt.
+
+   Usage:
+     (waiting-input my-prompt)"
+  [prompt]
+  {:status :waiting-input :prompt prompt})
+
+(defn waiting-opponent
+  "Build a waiting-for-opponent result map.
+
+   Usage:
+     (waiting-opponent \"Corp must rez or continue\")"
+  [message]
+  {:status :waiting-for-opponent :message message})
+
+;; ============================================================================
 ;; Side Comparison
 ;; ============================================================================
 
@@ -127,6 +168,28 @@
       (println "   Use 'prompt' to see details, or resolve it before retrying")
       (assoc result :active-prompt prompt-summary))
     result))
+
+(defn check-blocking-prompt
+  "Check if a blocking prompt exists that would prevent an action.
+
+   Returns an error map if a blocking prompt exists, nil if safe to proceed.
+   'Waiting' type prompts are not considered blocking.
+
+   Usage:
+     (if-let [err (check-blocking-prompt \"install card\")]
+       err  ; Return the error
+       ... proceed with action ...)"
+  [action-name]
+  (let [existing-prompt (state/get-prompt)]
+    (when (and existing-prompt
+               (not= :waiting (:prompt-type existing-prompt))
+               (not= "waiting" (:prompt-type existing-prompt)))
+      (println (str "❌ Cannot " action-name ": Active prompt must be answered first"))
+      (println (str "   Prompt: " (:msg existing-prompt)))
+      (flush)
+      {:status :error
+       :reason "Active prompt must be answered first"
+       :prompt existing-prompt})))
 
 ;; ============================================================================
 ;; Card Database Management
@@ -176,6 +239,61 @@
               (Thread/sleep polling-delay)
               (recur))
             false))))))
+
+;; ============================================================================
+;; Log Analysis Helpers (Pure Functions)
+;; ============================================================================
+;; These functions analyze game log entries to determine turn state.
+;; They are pure functions for testability - pass log and username explicitly.
+
+(defn find-end-turn-indices
+  "Find indices of 'is ending' log entries, optionally filtered by username.
+
+   Parameters:
+   - log: vector of log entries (each with :text key)
+   - exclude-username: if provided, exclude entries containing this username
+
+   Returns sequence of indices where end-turn entries appear."
+  [log exclude-username]
+  (keep-indexed
+   (fn [idx entry]
+     (let [text (:text entry)]
+       (when (and text
+                  (str/includes? text "is ending")
+                  (or (nil? exclude-username)
+                      (not (str/includes? text exclude-username))))
+         idx)))
+   log))
+
+(defn find-start-turn-indices
+  "Find indices of 'started their turn' log entries, filtered by username inclusion/exclusion.
+
+   Parameters:
+   - log: vector of log entries (each with :text key)
+   - include-username: if provided, only include entries containing this username
+   - exclude-username: if provided (and include-username nil), exclude entries with this username
+
+   Returns sequence of indices where start-turn entries appear."
+  [log & {:keys [include-username exclude-username]}]
+  (keep-indexed
+   (fn [idx entry]
+     (let [text (:text entry)]
+       (when (and text
+                  (str/includes? text "started their turn")
+                  (cond
+                    include-username (str/includes? text include-username)
+                    exclude-username (not (str/includes? text exclude-username))
+                    :else true))
+         idx)))
+   log))
+
+(defn extract-turn-number
+  "Extract turn number from log text like 'started their turn 5' or 'is ending their turn 14'.
+   Returns the integer turn number, or nil if not found."
+  [text]
+  (when text
+    (when-let [match (re-find #"turn (\d+)" text)]
+      (Integer/parseInt (second match)))))
 
 (defn verify-action-in-log
   "Check if a card action appears in recent game log entries
@@ -1111,6 +1229,31 @@
   "Return the opposite side"
   [side]
   (if (= side "runner") "corp" "runner"))
+
+(defn current-run-ice
+  "Get the ICE at the current run position from game state.
+
+   During a run, position counts from outermost ICE (highest number) to
+   innermost ICE (1). Position 0 means at the server (past all ICE).
+   ICE list is indexed from innermost (0) to outermost (count-1).
+
+   Parameters:
+   - state: Client state map containing [:game-state :run] and [:game-state :corp :servers]
+
+   Returns the ICE card map at current position, or nil if:
+   - No active run
+   - Position is 0 (at server)
+   - Position is out of bounds
+   - No ICE on the server"
+  [state]
+  (let [run (get-in state [:game-state :run])
+        server (:server run)
+        position (:position run)
+        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+        ice-count (count ice-list)
+        ice-index (- ice-count position)]
+    (when (and ice-list (> position 0) (<= position ice-count))
+      (nth ice-list ice-index nil))))
 
 ;; ============================================================================
 ;; First-Seen Card Display

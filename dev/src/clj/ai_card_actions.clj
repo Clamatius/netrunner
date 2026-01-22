@@ -100,6 +100,87 @@
           {:status :error
            :reason "Failed to start turn"}))))) ; close defn
 
+;; ============================================================================
+;; Install Card Helpers (extracted to reduce nesting)
+;; ============================================================================
+
+(defn- validate-install-server
+  "Validate server name for Corp installs. Returns error map or nil."
+  [server client-state]
+  (when (and server (core/side= "Corp" (:side client-state)))
+    (core/validate-server-name server)))
+
+(defn- validate-install-rules
+  "Validate Corp install rules (baby-proofing). Returns error map or nil."
+  [card normalized-server overwrite? client-state]
+  (when (and (core/side= "Corp" (:side client-state))
+             (not overwrite?))
+    (core/validate-corp-install card normalized-server)))
+
+(defn- handle-install-success!
+  "Handle successful install: print feedback, auto-resolve prompts, check auto-end."
+  [card-title card-type normalized-server before-clicks side overwrite?]
+  (let [after-state @state/client-state
+        after-clicks (get-in after-state [:game-state side :click])]
+    (if normalized-server
+      (println (str "📥 Installed: " card-title " on " normalized-server))
+      (println (str "📥 Installed: " card-title " (" card-type ")")))
+    (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+    ;; Auto-resolve any OK-only prompts (e.g., trash confirmation from overwrite)
+    (when overwrite?
+      (prompts/auto-resolve-ok-prompt!))
+    (core/show-turn-indicator)
+    (flush)
+    ;; Auto-end turn if no clicks remaining
+    (basic/check-auto-end-turn!)
+    {:status :success
+     :data {:card-title card-title :server normalized-server}}))
+
+(defn- handle-install-waiting!
+  "Handle install waiting for input (e.g., server selection prompt)."
+  [card-title prompt]
+  (println (str "⏸️  Installed: " card-title " - waiting for server selection"))
+  (println (str "   Prompt: " (:msg prompt)))
+  (core/show-turn-indicator)
+  (flush)
+  {:status :waiting-input
+   :card-title card-title
+   :prompt prompt})
+
+(defn- handle-install-error!
+  "Handle failed install."
+  [card-title result]
+  (println (str "❌ Failed to install: " card-title))
+  (println (str "   Reason: " (:reason result)))
+  (core/show-turn-indicator)
+  (flush)
+  result)
+
+(defn- execute-install!
+  "Execute the install action and handle the result."
+  [card normalized-server overwrite?]
+  (let [client-state @state/client-state
+        side (keyword (:side client-state))
+        card-title (:title card)
+        card-type (:type card)
+        before-clicks (get-in client-state [:game-state side :click])
+        gameid (:gameid client-state)
+        card-ref (core/create-card-ref card)
+        card-zone (:zone card)
+        args (if normalized-server
+               {:card card-ref :server normalized-server}
+               {:card card-ref})]
+    (ws/send-message! :game/action
+                      {:gameid gameid
+                       :command "play"
+                       :args args})
+    ;; Wait and verify action
+    (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
+      (case (:status result)
+        :success      (handle-install-success! card-title card-type normalized-server before-clicks side overwrite?)
+        :waiting-input (handle-install-waiting! card-title (:prompt result))
+        :error        (handle-install-error! card-title result)))))
+
 (defn install-card!
   "Install a card from hand by name or index.
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
@@ -124,119 +205,53 @@
   ([name-or-index server]
    (install-card! name-or-index server {}))
   ([name-or-index server opts]
-   (let [opts (if (keyword? opts) {opts true} opts)  ; Support (install-card! "x" "y" :overwrite true)
+   (let [opts (if (keyword? opts) {opts true} opts)
          overwrite? (:overwrite opts)]
-   ;; Check for pre-existing blocking prompt before attempting action
-   (let [existing-prompt (state/get-prompt)]
-     (if (and existing-prompt
-              (not= :waiting (:prompt-type existing-prompt)))
-       (do
-         (println (str "❌ Cannot install card: Active prompt must be answered first"))
-         (println (str "   Prompt: " (:msg existing-prompt)))
-         (flush)
-         {:status :error
-          :reason "Active prompt must be answered first"
-          :prompt existing-prompt})
-       (if (basic/ensure-turn-started!)
-         (let [card (core/find-card-in-hand name-or-index)]
-           (if card
-             (let [client-state @state/client-state
-                   side (keyword (:side client-state))
-                   card-title (:title card)
-                   card-type (:type card)
-                   ;; Normalize server name (remote2 → Server 2, hq → HQ, etc.)
-                   normalized-server (when server
-                                      (:normalized (core/normalize-server-name server)))
-                   ;; Validate server name exists (Corp only - prevents "R" and invalid servers)
-                   server-validation-error (when (and server (core/side= "Corp" (:side client-state)))
-                                             (core/validate-server-name server))
-                   ;; Validate Corp installs (baby-proofing) unless overwrite is requested
-                   validation-error (when (and (core/side= "Corp" (:side client-state))
-                                               (not overwrite?)
-                                               (not server-validation-error))
-                                     (core/validate-corp-install card normalized-server))]
-               ;; Check server name validation first
-               (if server-validation-error
-                 (do
-                   (println (str "❌ Invalid server: " (:reason server-validation-error)))
-                   (when-let [hint (:hint server-validation-error)]
-                     (println (str "   💡 " hint)))
-                   (flush)
-                   {:status :error
-                    :reason (:reason server-validation-error)
-                    :existing (:existing server-validation-error)})
-                 ;; Check install validation
-                 (if validation-error
-                   (do
-                     (println (str "⚠️  Blocked install: " (:reason validation-error)))
-                     (when-let [hint (:hint validation-error)]
-                       (println (str "   💡 " hint)))
-                     (println "   Use --overwrite flag to proceed anyway")
-                     (flush)
-                     {:status :blocked
-                      :reason (:reason validation-error)
-                      :hint "Use --overwrite to install anyway (will trash existing card)"})
-                 ;; Valid install - proceed
-                 (let [before-state (core/capture-state-snapshot)
-                       before-clicks (get-in client-state [:game-state side :click])
-                       gameid (:gameid client-state)
-                       card-ref (core/create-card-ref card)
-                       card-zone (:zone card)
-                       ;; Both Corp and Runner use "play" command
-                       ;; Corp requires :server, Runner installs without :server arg
-                       args (if normalized-server
-                             {:card card-ref :server normalized-server}
-                             {:card card-ref})]
-                   (ws/send-message! :game/action
-                                     {:gameid gameid
-                                      :command "play"
-                                      :args args})
-               ;; Wait and verify action - now returns status map
-               (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
-                 (case (:status result)
-                   :success
-                   (let [after-state @state/client-state
-                         after-clicks (get-in after-state [:game-state side :click])]
-                     (if normalized-server
-                       (println (str "📥 Installed: " card-title " on " normalized-server))
-                       (println (str "📥 Installed: " card-title " (" card-type ")")))
-                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-                     ;; Auto-resolve any OK-only prompts (e.g., trash confirmation from overwrite)
-                     (when overwrite?
-                       (prompts/auto-resolve-ok-prompt!))
-                     (core/show-turn-indicator)
-                     (flush)
-                     ;; Auto-end turn if no clicks remaining
-                     (basic/check-auto-end-turn!)
-                     {:status :success
-                      :data {:card-title card-title :server normalized-server}})
+     ;; Check for blocking prompt
+     (if-let [prompt-error (core/check-blocking-prompt "install card")]
+       prompt-error
+       ;; Ensure turn is started
+       (if-not (basic/ensure-turn-started!)
+         {:status :error :reason "Failed to start turn"}
+         ;; Find the card
+         (if-let [card (core/find-card-in-hand name-or-index)]
+           (let [client-state @state/client-state
+                 normalized-server (when server
+                                     (:normalized (core/normalize-server-name server)))
+                 server-error (validate-install-server server client-state)
+                 install-error (when-not server-error
+                                 (validate-install-rules card normalized-server overwrite? client-state))]
+             ;; Check validations
+             (cond
+               server-error
+               (do
+                 (println (str "❌ Invalid server: " (:reason server-error)))
+                 (when-let [hint (:hint server-error)]
+                   (println (str "   💡 " hint)))
+                 (flush)
+                 {:status :error
+                  :reason (:reason server-error)
+                  :existing (:existing server-error)})
 
-                   :waiting-input
-                   (let [prompt (:prompt result)]
-                     (println (str "⏸️  Installed: " card-title " - waiting for server selection"))
-                     (println (str "   Prompt: " (:msg prompt)))
-                     (core/show-turn-indicator)
-                     (flush)
-                     {:status :waiting-input
-                      :card-title card-title
-                      :prompt prompt})
+               install-error
+               (do
+                 (println (str "⚠️  Blocked install: " (:reason install-error)))
+                 (when-let [hint (:hint install-error)]
+                   (println (str "   💡 " hint)))
+                 (println "   Use --overwrite flag to proceed anyway")
+                 (flush)
+                 {:status :blocked
+                  :reason (:reason install-error)
+                  :hint "Use --overwrite to install anyway (will trash existing card)"})
 
-                   :error
-                   (do
-                     (println (str "❌ Failed to install: " card-title))
-                     (println (str "   Reason: " (:reason result)))
-                     (core/show-turn-indicator)
-                     (flush)
-                     result))))))) ; close case, let(result), let(before-state), if(validation), if(server-validation), let(client-state)
-             (do
-               (println (str "❌ Card not found in hand: " name-or-index))
-               (flush)
-               {:status :error
-                :reason (str "Card not found in hand: " name-or-index)})))
-         (do
-           (flush)
-           {:status :error
-            :reason "Failed to start turn"}))))))) ; close defn arities + outer let
+               :else
+               (execute-install! card normalized-server overwrite?)))
+           ;; Card not found
+           (do
+             (println (str "❌ Card not found in hand: " name-or-index))
+             (flush)
+             {:status :error
+              :reason (str "Card not found in hand: " name-or-index)})))))))
 
 ;; ============================================================================
 ;; Card Abilities

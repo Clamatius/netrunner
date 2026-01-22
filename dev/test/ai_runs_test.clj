@@ -314,6 +314,123 @@
     (is (nil? (:no-rez (runs/get-strategy))))))
 
 ;; ============================================================================
+;; handle-runner-approach-ice tests
+;; ============================================================================
+
+(deftest test-runner-approach-unrezzed-ice
+  (testing "Runner at approach-ice with unrezzed ICE waits for corp"
+    (with-mock-state
+      (mock-state-with-run
+       :side "runner"
+       :run-phase "approach-ice"
+       :position 1
+       :ice [{:title "Enigma" :rezzed false}]
+       :no-action nil)  ; Corp hasn't acted yet
+      (let [result (runs/continue-run!)]
+        (is (= :waiting-for-corp-rez (:status result)))
+        (is (= "Enigma" (:ice result)))))))
+
+(deftest test-runner-approach-rezzed-ice
+  (testing "Runner at approach-ice with rezzed ICE does not wait"
+    (with-mock-state
+      (mock-state-with-run
+       :side "runner"
+       :run-phase "approach-ice"
+       :position 1
+       :ice [{:title "Enigma" :rezzed true}])
+      (let [result (runs/continue-run!)]
+        ;; Should NOT return :waiting-for-corp-rez
+        (is (not= :waiting-for-corp-rez (:status result)))))))
+
+(deftest test-runner-approach-corp-already-declined
+  (testing "Runner proceeds when corp already declined rez (no-action = corp)"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "runner"
+         :run-phase "approach-ice"
+         :position 1
+         :ice [{:title "Enigma" :rezzed false}]
+         :no-action "corp")  ; Corp already declined
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (runs/continue-run!)]
+            ;; Should NOT be waiting - corp already passed
+            (is (not= :waiting-for-corp-rez (:status result)))))))))
+
+;; ============================================================================
+;; handle-runner-full-break tests (characterization)
+;; ============================================================================
+
+;; Note: Testing full-break requires complex state setup with programs,
+;; abilities, and ice. These are characterization tests to document behavior.
+
+(deftest test-full-break-strategy-required
+  (testing "full-break handler only activates with :full-break strategy"
+    (with-mock-state
+      (mock-state-with-run
+       :side "runner"
+       :run-phase "encounter-ice"
+       :position 1
+       :ice [{:title "Ice Wall" :rezzed true}])
+      ;; Without strategy, should not trigger full-break behavior
+      (runs/reset-strategy!)
+      (let [result (runs/continue-run!)]
+        ;; Not using full-break, so should be decision-required or waiting
+        (is (not= :ability-used (:status result)))))))
+
+(deftest test-full-break-with-no-ice
+  (testing "full-break does nothing when no ICE at position"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "runner"
+         :run-phase "encounter-ice"
+         :position 0  ; Position 0 = at server, no ICE
+         :ice [])
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:full-break true})
+          (let [result (runs/continue-run!)]
+            ;; full-break should fall through when no ICE
+            (is (not= :ability-used (:status result))))
+          (runs/reset-strategy!))))))
+
+;; ============================================================================
+;; Corp rez strategy edge cases
+;; ============================================================================
+
+(deftest test-corp-rez-already-rezzed-ice
+  (testing "Corp with --rez strategy continues past already-rezzed ICE"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "corp"
+         :run-phase "approach-ice"
+         :position 1
+         :ice [{:title "Ice Wall" :rezzed true}]  ; Already rezzed
+         :prompt (make-prompt :msg "Paid ability window"))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:rez #{"Ice Wall"}})
+          (let [result (runs/continue-run!)]
+            ;; Should continue, not try to rez again
+            (is (some? result)))
+          (runs/reset-strategy!))))))
+
+(deftest test-corp-no-strategy-pauses
+  (testing "Corp with no rez strategy pauses at unrezzed ICE for decision"
+    (with-mock-state
+      (mock-state-with-run
+       :side "corp"
+       :run-phase "approach-ice"
+       :position 1
+       :ice [{:title "Ice Wall" :rezzed false}]
+       :prompt (make-prompt :msg "Rez Ice Wall?"))
+      (runs/reset-strategy!)  ; No strategy
+      (let [result (runs/continue-run!)]
+        ;; Should pause for human decision
+        (is (= :decision-required (:status result)))
+        (is (= "Ice Wall" (:ice result)))))))
+
+;; ============================================================================
 ;; Test Suite Summary
 ;; ============================================================================
 
