@@ -18,23 +18,31 @@ class NANParser:
         return game_record
 
     def parse_line(self, line):
-        # Format: "Player T#: Action1; Action2; ..."
-        match = re.match(r"(Corp|Runner) T(\d+): (.+)", line)
+        # Format: "Player T# [CorpScore-RunnerScore]: Action1; Action2; ..."
+        # Score checkpoint is optional
+        match = re.match(r"(Corp|Runner) T(\d+)(?: \[(\d+)-(\d+)\])?: (.+)", line)
         if not match:
             print(f"Warning: Could not parse line: {line}")
             return None
-            
+
         player = match.group(1)
         turn_number = int(match.group(2))
-        actions_str = match.group(3)
-        
+        corp_score = int(match.group(3)) if match.group(3) else None
+        runner_score = int(match.group(4)) if match.group(4) else None
+        actions_str = match.group(5)
+
         actions = [self.parse_action(a.strip()) for a in actions_str.split(";")]
-        
-        return {
+
+        result = {
             "player": player,
             "turn": turn_number,
             "actions": actions
         }
+
+        if corp_score is not None:
+            result["score"] = {"corp": corp_score, "runner": runner_score}
+
+        return result
 
     def parse_action(self, action_str):
         # Simple verb-object parsing

@@ -180,19 +180,70 @@ def simplify_action(action_text):
         
     if "break all subroutines" in action_text:
         return "break-all"
-        
-    return None 
+
+    # Damage
+    match = re.search(r"suffers? (\d+) (net|meat|core) damage", action_text)
+    if match:
+        amount = match.group(1)
+        dmg_type = match.group(2)
+        return f"damage {amount} {dmg_type}"
+
+    # Flatline check
+    if "is flatlined" in action_text:
+        return "flatline"
+
+    # Discard from hand (end of turn)
+    match = re.search(r"discards (.+) from (HQ|the grip)", action_text)
+    if match:
+        card = match.group(1)
+        return f"discard {card}"
+
+    return None
+
+def detect_side_from_action(action_text):
+    """Detect if an action is from Corp or Runner based on content."""
+    if "Corp Basic Action Card" in action_text:
+        return "Corp"
+    if "Runner Basic Action Card" in action_text:
+        return "Runner"
+    if "makes his mandatory start of turn draw" in action_text:
+        return "Corp"  # Only Corp has mandatory draw
+    if "makes her mandatory start of turn draw" in action_text:
+        return "Corp"
+    if "makes their mandatory start of turn draw" in action_text:
+        return "Corp"
+    # Run-related actions are Runner
+    if " make a run on " in action_text or " makes a run on " in action_text:
+        return "Runner"
+    if " breaches " in action_text:
+        return "Runner"
+    if " encounters " in action_text:
+        return "Runner"
+    if " jacks out" in action_text:
+        return "Runner"
+    # Score is Corp, steal is Runner
+    if " scores " in action_text and " agenda point" in action_text:
+        return "Corp"
+    if " steals " in action_text:
+        return "Runner"
+    # Rez is typically Corp
+    if " rez " in action_text.lower() and "protecting" in action_text:
+        return "Corp"
+    return None
 
 def generate_dsl(events):
     dsl_lines = []
     current_turn = 0
     active_player = ""
     turn_actions = []
-    
+
     corp_score = 0
     runner_score = 0
     turn_start_score = (0, 0)
-    
+
+    # Track username -> side mapping as we discover it
+    username_to_side = {}
+
     def flush_turn():
         if turn_actions:
             # Join actions with semicolon
@@ -204,22 +255,46 @@ def generate_dsl(events):
     for event in events:
         if event['type'] == 'chat':
             continue
-            
+
         action = event['action']
+        actor = event.get('actor', '')
+
+        # Try to learn username -> side mapping from action content
+        detected_side = detect_side_from_action(action)
+        if detected_side and actor and actor not in username_to_side:
+            username_to_side[actor] = detected_side
+            # Also map the other player
+            other_side = "Runner" if detected_side == "Corp" else "Corp"
+            for other_actor in username_to_side:
+                if username_to_side[other_actor] != detected_side:
+                    break
+            # We'll fill in the other side when we see them
+
         simplified = simplify_action(action)
-        
+
         if not simplified:
             continue
-            
+
         if simplified.startswith("Turn"):
             flush_turn()
             parts = simplified.split(" ")
             current_turn = parts[1]
-            if event['actor'] == "Clamatius": 
-                active_player = "Corp"
+
+            # Determine active player from mapping or detection
+            if actor in username_to_side:
+                active_player = username_to_side[actor]
+            elif detected_side:
+                active_player = detected_side
+                username_to_side[actor] = detected_side
             else:
-                active_player = "Runner"
-            
+                # Fallback: Turn 1 first player is always Corp
+                if current_turn == "1" and not username_to_side:
+                    active_player = "Corp"
+                    username_to_side[actor] = "Corp"
+                else:
+                    # Alternate from last known
+                    active_player = "Runner" if active_player == "Corp" else "Corp"
+
             # Capture score at start of this turn
             turn_start_score = (corp_score, runner_score)
             continue

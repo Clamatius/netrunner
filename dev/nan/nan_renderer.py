@@ -107,13 +107,23 @@ class NANRenderer:
                 pass
                             
         # Score
+        # Note: actual points come from score checkpoint in turn headers
+        # This just tracks that a score happened (for removing from board)
         elif action.startswith("score "):
             name = action.split(" ", 1)[1]
-            self.corp_score += 1 # We don't know points, just count
-            # Remove from root if it was there?
-            # Finding which server is hard without tracking "advance S1".
-            pass
-            
+            # Remove scored agenda from root if we can find it
+            for server in list(self.roots.keys()):
+                self.roots[server] = [c for c in self.roots[server]
+                                      if c["name"] != name and c["name"] != "?"]
+
+        # Steal
+        elif action.startswith("steal "):
+            name = action.split(" ", 1)[1]
+            # Remove stolen agenda from root if visible
+            for server in list(self.roots.keys()):
+                self.roots[server] = [c for c in self.roots[server]
+                                      if c["name"] != name]
+
         # Advance
         elif action.startswith("advance "):
             server = action.split(" ")[1]
