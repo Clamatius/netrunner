@@ -250,6 +250,13 @@ ${GREEN}AI Bot:${NC}
   bot-respond     - Corp: Respond to active run (rez/fire decisions)
   bot-watch       - Corp: Continuously watch for and respond to runs
 
+${GREEN}Replay Recording:${NC}
+  replay-start    - Start recording game for replay
+  replay-stop     - Stop recording (keeps data)
+  replay-save [f] - Save replay to file (default: dev/replays/replay-<gameid>-<timestamp>.json)
+  replay-status   - Show recording status (enabled, diff count)
+  replay-clear    - Clear recorded data
+
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
   debug-chat [on|off] - Toggle debug chat mode (waits announced in game chat)
@@ -1146,6 +1153,58 @@ case "$COMMAND" in
         EXPR="${1:-}"
         [[ -z "$EXPR" ]] && error "Usage: send_command eval '<clojure-expression>'"
         execute "$EXPR"
+        ;;
+
+    # Replay Recording
+    replay-start)
+        info "Starting replay recording..."
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (state/start-replay-recording!)
+                  ;; Auto-capture current state if in a game
+                  (when (:game-state @state/client-state)
+                    (state/capture-current-state!)))'
+        ;;
+
+    replay-stop)
+        info "Stopping replay recording..."
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (state/stop-replay-recording!))'
+        ;;
+
+    replay-save)
+        FILENAME="${1:-}"
+        info "Saving replay..."
+        if [[ -n "$FILENAME" ]]; then
+            execute "(do
+                      (require (quote [ai-state :as state]))
+                      (state/save-replay! \"$FILENAME\"))"
+        else
+            execute '(do
+                      (require (quote [ai-state :as state]))
+                      (state/save-replay!))'
+        fi
+        ;;
+
+    replay-status)
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (let [{:keys [enabled history gameid start-time]} @state/replay-recording]
+                    (println (format "🎬 Replay Recording Status"))
+                    (println (format "   Enabled: %s" enabled))
+                    (println (format "   Game ID: %s" (or gameid "none")))
+                    (println (format "   Started: %s" (or start-time "never")))
+                    (println (format "   History entries: %d" (count history)))
+                    (when (seq history)
+                      (println (format "   (1 initial state + %d diffs)" (dec (count history)))))))'
+        ;;
+
+    replay-clear)
+        info "Clearing replay recording..."
+        execute '(do
+                  (require (quote [ai-state :as state]))
+                  (state/clear-replay!))'
         ;;
 
     debug-chat)

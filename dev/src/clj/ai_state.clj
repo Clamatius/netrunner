@@ -523,6 +523,109 @@
 
 (defonce state-cursor (atom 0))
 
+;; ============================================================================
+;; Replay Recording
+;; ============================================================================
+;; Accumulate game state for replay generation.
+;; Records initial state on :game/start, then all diffs.
+;; Format matches jinteki client expectations: {:history [init-state diff1 diff2 ...]}
+
+(defonce replay-recording
+  (atom {:enabled false
+         :history []
+         :gameid nil
+         :start-time nil}))
+
+(defn replay-enabled? []
+  (:enabled @replay-recording))
+
+(defn start-replay-recording!
+  "Begin recording game state for replay. Call before joining game."
+  []
+  (reset! replay-recording {:enabled true
+                            :history []
+                            :gameid nil
+                            :start-time (java.time.Instant/now)})
+  (println "🎬 Replay recording started"))
+
+(defn stop-replay-recording!
+  "Stop recording but keep accumulated data."
+  []
+  (swap! replay-recording assoc :enabled false)
+  (println "🎬 Replay recording stopped"))
+
+(defn record-initial-state!
+  "Record initial game state (called on :game/start).
+   State should be the full game state, not a diff."
+  [state gameid]
+  (when (:enabled @replay-recording)
+    (swap! replay-recording assoc
+           :history [state]
+           :gameid gameid)
+    (println "🎬 Initial state recorded for gameid:" gameid)))
+
+(defn capture-current-state!
+  "Capture current game state as initial state for replay.
+   Use when starting recording mid-game."
+  []
+  (when (:enabled @replay-recording)
+    (let [gs (:game-state @client-state)
+          gameid (:gameid @client-state)]
+      (if gs
+        (do
+          (swap! replay-recording assoc
+                 :history [gs]
+                 :gameid gameid)
+          (println "🎬 Captured current state as initial (gameid:" gameid ")"))
+        (println "❌ No game state to capture")))))
+
+(defn record-diff!
+  "Record a game diff (called on :game/diff).
+   Diffs are appended to history after initial state."
+  [diff]
+  (when (:enabled @replay-recording)
+    (swap! replay-recording update :history conj diff)
+    (debug/debug "🎬 Recorded diff #" (dec (count (:history @replay-recording))))))
+
+(defn get-replay-data
+  "Get current replay data as map. Returns nil if no recording."
+  []
+  (let [{:keys [history gameid start-time]} @replay-recording]
+    (when (seq history)
+      {:metadata {:gameid (str gameid)
+                  :recorded-at (str start-time)
+                  :saved-at (str (java.time.Instant/now))
+                  :diff-count (dec (count history))}
+       :history history})))
+
+(defn save-replay!
+  "Save current replay to file. Returns filename on success, nil on failure."
+  ([] (save-replay! nil))
+  ([filename]
+   (if-let [replay-data (get-replay-data)]
+     (let [gameid (:gameid @replay-recording)
+           default-name (str "replay-" (or gameid "unknown") "-"
+                            (.format (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd-HHmmss")
+                                     (java.time.LocalDateTime/now))
+                            ".json")
+           filepath (or filename (str "dev/replays/" default-name))]
+       ;; Ensure replays directory exists
+       (.mkdirs (java.io.File. "dev/replays"))
+       (require '[cheshire.core :as json])
+       (spit filepath ((resolve 'cheshire.core/generate-string) replay-data {:pretty true}))
+       (println "💾 Replay saved to" filepath)
+       (println "   Diffs recorded:" (dec (count (:history @replay-recording))))
+       filepath)
+     (do
+       (println "❌ No replay data to save")
+       nil))))
+
+(defn clear-replay!
+  "Clear replay recording state."
+  []
+  (reset! replay-recording {:enabled false :history [] :gameid nil :start-time nil})
+  (println "🎬 Replay recording cleared"))
+
 (defn get-cursor
   "Get current state cursor value. Opaque to callers."
   []

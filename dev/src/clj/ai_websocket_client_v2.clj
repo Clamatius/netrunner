@@ -105,6 +105,8 @@
                          (str "Game starting...\nGameID: " (:gameid state)))
       (state/set-full-state! state)
       (swap! state/client-state assoc :gameid (state/normalize-gameid (:gameid state)))
+      ;; Record initial state for replay if recording enabled
+      (state/record-initial-state! state (:gameid state))
       ;; Bump cursor for wait synchronization
       (state/bump-cursor!))
 
@@ -125,6 +127,8 @@
                                                 (take 5 diff)
                                                 diff)))
           (state/update-game-state! diff)
+          ;; Record diff for replay if recording enabled
+          (state/record-diff! diff)
           ;; Clear lobby-state once game has started (receiving diffs means game is active)
           (swap! state/client-state dissoc :lobby-state :diff-mismatch)
           ;; Track last successful diff time
