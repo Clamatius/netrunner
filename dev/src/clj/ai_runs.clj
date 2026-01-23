@@ -1165,15 +1165,18 @@
 ;; Tactics allow specifying per-ICE breaking strategies:
 ;;
 ;; {:tactics {"Tithe"      {:card "Unity" :action :break-dynamic}
-;;            "Whitespace" {:card "Carmen" :action :break-subs :subs [0 2]}
+;;            "Whitespace" {:card "Carmen" :action :break-subs :subs ["End the run"]}
 ;;            :default     :pause}}
 ;;
 ;; Supported actions (V1):
 ;; - :break-dynamic  - Use card's "Match strength and fully break" ability
 ;; - :use-ability    - Use specific ability by index {:ability-index N}
 ;;
-;; V2 stubs (recognized but no-op):
-;; - :break-subs     - Selective sub breaking (not yet implemented)
+;; Supported actions (V2):
+;; - :break-subs     - Selective sub breaking {:subs ["End the run" "Do net damage"]}
+;;                     Uses sub labels (not indices) for resilience
+;;
+;; V3 stubs (recognized but no-op):
 ;; - :prep           - Pre-encounter actions
 ;; - :script         - Multi-step sequences
 
@@ -1396,6 +1399,67 @@
                 {:status :tactic-failed
                  :reason (format "Ability failed: %s" (:reason result))}))))))))
 
+(defn- execute-break-subs!
+  "Execute a :break-subs tactic - use card's break ability and select specific subs.
+
+   Attempts to break subroutines specified by label (not index, since indices change).
+   Uses the first playable ability with 'break' in label or name.
+
+   For example: {:card \"Corroder\" :action :break-subs :subs [\"End the run\"]}
+
+   NOTE: This is a simplified V2 implementation. It:
+   - Uses the first break ability found
+   - Selects subs by label (substring match via choose-by-value!)
+   - May need multiple ability uses for multi-sub ICE"
+  [card-name sub-labels state]
+  (let [runner-rig (get-in state [:game-state :runner :rig])
+        programs (get runner-rig :program [])
+        target-prog (first (filter #(= (:title %) card-name) programs))]
+    (if-not target-prog
+      {:status :tactic-failed
+       :reason (format "Card not found in rig: %s" card-name)}
+      ;; Find a playable break ability (non-dynamic)
+      (let [abilities (:abilities target-prog)
+            break-ability (first
+                           (keep-indexed
+                            (fn [idx ab]
+                              (when (and (:playable ab)
+                                         (not (:dynamic ab))  ; Not the "auto-break all" ability
+                                         (or (clojure.string/includes?
+                                               (str (:label ab)) "break")
+                                             (clojure.string/includes?
+                                               (str (:label ab)) "Break")))
+                                {:index idx :label (:label ab)}))
+                            abilities))]
+        (if-not break-ability
+          {:status :tactic-failed
+           :reason (format "%s has no playable break ability" card-name)}
+          (do
+            (println (format "🎯 Tactic: %s breaking subs %s" card-name (vec sub-labels)))
+            ;; Use the break ability
+            (let [result (actions/use-ability! card-name (:index break-ability))]
+              (if (not= :success (:status result))
+                {:status :tactic-failed
+                 :reason (format "Break ability failed: %s" (:reason result))}
+                ;; Now select subs from the prompt
+                (do
+                  (Thread/sleep 100)  ; Wait for prompt
+                  (doseq [sub-label sub-labels]
+                    (println (format "   → Breaking: %s" sub-label))
+                    (prompts/choose-by-value! sub-label)
+                    (Thread/sleep 50))
+                  ;; Select "Done" if present (some breakers require explicit done)
+                  (let [prompt (state/get-prompt)]
+                    (when (and prompt
+                               (some #(clojure.string/includes?
+                                        (str (:value %)) "Done")
+                                     (:choices prompt)))
+                      (prompts/choose-by-value! "Done")))
+                  {:status :action-taken
+                   :action :break-subs
+                   :card card-name
+                   :subs sub-labels})))))))))
+
 (defn- execute-tactic!
   "Dispatch and execute a tactic based on its :action type."
   [tactic ice-name state]
@@ -1413,11 +1477,12 @@
             {:status :action-taken :action :tactic-executed :card card}
             {:status :tactic-failed :reason (:reason result)})))
 
-      ;; V2 Stubs - recognized but not implemented
+      ;; V2: Selective subroutine breaking
       :break-subs
-      (do
-        (println "⚠️  V2: :break-subs not yet implemented - pausing")
-        (pause-with-context state ice-name ":break-subs requires V2"))
+      (let [sub-indices (:subs tactic)]
+        (if (empty? sub-indices)
+          {:status :tactic-failed :reason ":break-subs requires :subs [indices...]"}
+          (execute-break-subs! card sub-indices state)))
 
       :prep
       (do
