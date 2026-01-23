@@ -105,7 +105,8 @@
                          (str "Game starting...\nGameID: " (:gameid state)))
       (state/set-full-state! state)
       (swap! state/client-state assoc :gameid (state/normalize-gameid (:gameid state)))
-      ;; Record initial state for replay if recording enabled
+      ;; Auto-start replay recording for every game
+      (state/start-replay-recording!)
       (state/record-initial-state! state (:gameid state))
       ;; Bump cursor for wait synchronization
       (state/bump-cursor!))
