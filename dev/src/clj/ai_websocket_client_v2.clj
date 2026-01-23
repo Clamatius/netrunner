@@ -18,6 +18,23 @@
 (declare ensure-connected!)
 
 ;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defn get-base-url
+  "Get the server base URL from AI_BASE_URL env var, default to localhost:1042"
+  []
+  (or (System/getenv "AI_BASE_URL") "http://localhost:1042"))
+
+(defn get-ws-url
+  "Get the WebSocket URL, derived from base URL"
+  []
+  (let [base (get-base-url)]
+    (-> base
+        (str/replace #"^https?://" "ws://")
+        (str "/chsk"))))
+
+;; ============================================================================
 ;; Message Handling
 ;; ============================================================================
 
@@ -187,7 +204,7 @@
   "Get CSRF token from the main page for WebSocket connection"
   []
   (try
-    (let [get-res (http/get "http://localhost:1042" {:as :text})]
+    (let [get-res (http/get (get-base-url) {:as :text})]
       (if (:error get-res)
         (do
           (println "❌ Failed to get CSRF token:" (:error get-res))
@@ -394,7 +411,7 @@
   "Check connection and reconnect if needed. Returns true if connected.
    Also checks socket health - the :connected flag can be stale.
    After reconnect, auto-rejoins game if we had one."
-  ([] (ensure-connected! "ws://localhost:1042/chsk"))
+  ([] (ensure-connected! (get-ws-url)))
   ([url]
    (let [had-gameid (:gameid @state/client-state)
          reconnected
