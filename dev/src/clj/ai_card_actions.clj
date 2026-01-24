@@ -299,9 +299,16 @@
         (let [result (core/verify-ability-in-log card-name core/action-timeout)]
           (case (:status result)
             :success
-            (if ability-label
-              (println (str "⚡ Used ability: " card-name " - " ability-label))
-              (println (str "⚡ Used ability #" ability-index " on " card-name)))
+            (do
+              (if ability-label
+                (println (str "⚡ Used ability: " card-name " - " ability-label))
+                (println (str "⚡ Used ability #" ability-index " on " card-name)))
+              ;; Auto-end turn if this was a click ability and no clicks remaining
+              ;; Skip during runs (breaker abilities) and for non-click abilities
+              (let [cost-label (str (:cost-label ability ""))]
+                (when (and (clojure.string/includes? cost-label "[Click]")
+                           (not (some? (get-in @state/client-state [:game-state :run]))))
+                  (basic/check-auto-end-turn!))))
 
             :waiting-input
             (println (str "⏳ Ability triggered prompt: " card-name " - "
