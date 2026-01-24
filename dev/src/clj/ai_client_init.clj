@@ -104,9 +104,10 @@
       (println "\n⚠️  No AI_USERNAME set - using client-id auth (fallback mode)")
       (println "   Set AI_USERNAME and AI_PASSWORD for proper auth")
 
-      ;; Set client-id from environment variable or use default
+      ;; Set client-id from AI_CLIENT_NAME env var (set by start-ai-client-repl.sh)
       ;; IMPORTANT: Must start with "ai-client-" to trigger fake user creation
-      (let [client-name (or (System/getenv "AI_CLIENT_NAME") "fixed-id")
+      ;; Using side name (runner/corp) ensures stable identity across REPL restarts
+      (let [client-name (or (System/getenv "AI_CLIENT_NAME") "runner")
             client-id (str "ai-client-" client-name)]
         (println (str "   Client name: " client-name))
         (swap! ai-state/client-state assoc :client-id client-id))

@@ -304,14 +304,16 @@
    Useful for auto-recovery when we've been marked as 'left' but can rejoin."
   []
   (let [lobby-list (:lobby-list @state/client-state)
-        ;; Get our expected username from current state
-        ;; The username format is 'ai-{side}' e.g., 'ai-runner', 'ai-corp' (all lowercase)
-        my-side (:side @state/client-state)
-        my-name (when my-side (str "ai-" (clojure.string/lower-case my-side)))]
+        ;; Get username from client-id (server transforms 'ai-client-xxx' to 'AI-xxx')
+        ;; or fall back to stored username if using session auth
+        client-id (:client-id @state/client-state)
+        my-name (or (:username @state/client-state)
+                    (when client-id
+                      (clojure.string/replace client-id "ai-client-" "AI-")))]
     (when (and lobby-list my-name)
       (->> lobby-list
            (filter (fn [game]
-                    ;; Player structure is {:user {:username "ai-corp" ...} :side "Corp" ...}
+                    ;; Player structure is {:user {:username "AI-xxx" ...} :side "Corp" ...}
                     (some #(= my-name (get-in % [:user :username]))
                           (:players game))))
            first
