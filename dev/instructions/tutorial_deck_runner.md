@@ -35,6 +35,8 @@ Corp cards of note:
 - 2 damage, then you can jack out if you want, then 2 more
 - Sometimes 4 damage is worth winning the game to access, but if the card is advanced you may flatline on Cipher
 
+ICE breaking budget: $2 light (e.g. Whitespace), $4 medium (e.g. Karuna), $8 for full-break of Bran (worst case)
+
 ## The Rig (Breaker Suite)
 
 **Mayfly (The Skeleton Key)**
