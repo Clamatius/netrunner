@@ -12,24 +12,10 @@
             [ai-core :as core]))
 
 ;; ============================================================================
-;; Shared Helpers (duplicated from ai-runs to avoid circular dependency)
+;; Shared Helpers
 ;; ============================================================================
 
-(defn get-current-ice
-  "Get the ICE being approached/encountered from game state.
-   Position counts from server outward (1 = outermost ICE).
-   ICE list is indexed from innermost (0) to outermost.
-   So ice-index = (count - position)."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)]
-    (when (and ice-list (pos? ice-count) (> position 0))
-      (let [ice-index (- ice-count position)]
-        (when (<= ice-index (dec ice-count))
-          (nth ice-list ice-index nil))))))
+;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn normalize-side
   "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
@@ -82,7 +68,7 @@
              (= run-phase "approach-ice")
              my-prompt
              (or (:no-rez strategy) (:rez strategy)))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           ice-rezzed? (:rezzed current-ice)
           should-rez? (and (not (:no-rez strategy))
@@ -142,7 +128,7 @@
              my-prompt
              (not (:no-rez strategy))
              (not (:rez strategy)))
-    (let [current-ice (get-current-ice state)]
+    (let [current-ice (core/current-run-ice state)]
       (when (and current-ice (not (:rezzed current-ice)))
         (let [ice-title (:title current-ice "ICE")
               position (get-in state [:game-state :run :position])
@@ -171,7 +157,7 @@
     (let [run (get-in state [:game-state :run])
           position (:position run)
           already-fired-here? (= (:fired-at-position strategy) position)
-          current-ice (get-current-ice state)
+          current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           subroutines (:subroutines current-ice)
           unbroken-subs (filter #(not (:broken %)) subroutines)
@@ -206,7 +192,7 @@
              (= run-phase "encounter-ice")
              my-prompt
              (not (:fire-unbroken strategy)))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
       (when (and current-ice (seq unbroken-subs))
@@ -241,7 +227,7 @@
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice"))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
       (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
@@ -257,7 +243,7 @@
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice"))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           log (get-in state [:game-state :log])
           recent-log (take 10 (reverse log))

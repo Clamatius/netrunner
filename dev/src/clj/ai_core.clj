@@ -1233,8 +1233,8 @@
 (defn current-run-ice
   "Get the ICE at the current run position from game state.
 
-   During a run, position counts from outermost ICE (highest number) to
-   innermost ICE (1). Position 0 means at the server (past all ICE).
+   During a run, position counts down as runner moves inward.
+   Position N means you're at ICE index (N-1). Position 0 = at server.
    ICE list is indexed from innermost (0) to outermost (count-1).
 
    Parameters:
@@ -1251,7 +1251,7 @@
         position (:position run)
         ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
         ice-count (count ice-list)
-        ice-index (- ice-count position)]
+        ice-index (dec position)]
     (when (and ice-list (> position 0) (<= position ice-count))
       (nth ice-list ice-index nil))))
 

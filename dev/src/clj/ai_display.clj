@@ -166,14 +166,8 @@
                 (println "  Position:" pos))
               ;; Show ICE info during encounter-ice
               (when (= "encounter-ice" (:phase run-state))
-                (let [server (:server run-state)
-                      position (:position run-state)
-                      ice-list (get-in gs [:corp :servers (keyword (last server)) :ices])
-                      ice-count (count ice-list)
-                      ice-index (when (and position (pos? position)) (- ice-count position))
-                      current-ice (when (and ice-index (>= ice-index 0) (< ice-index ice-count))
-                                    (nth ice-list ice-index nil))]
-                  (when (and current-ice (:rezzed current-ice))
+                (when-let [current-ice (core/current-run-ice @state/client-state)]
+                  (when (:rezzed current-ice)
                     (let [ice-title (:title current-ice)
                           ice-str (:strength current-ice)
                           ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
@@ -789,14 +783,8 @@
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
   [state run my-side]
-  (let [server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)
-        ice-index (when (and position (pos? position)) (- ice-count position))
-        current-ice (when (and ice-index (>= ice-index 0) (< ice-index ice-count))
-                      (nth ice-list ice-index nil))]
-    (when (and current-ice (:rezzed current-ice))
+  (when-let [current-ice (core/current-run-ice state)]
+    (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
             ice-str (:strength current-ice)
             ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))

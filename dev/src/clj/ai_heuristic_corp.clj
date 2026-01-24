@@ -1078,20 +1078,7 @@
   (when-let [server-key (get-run-server)]
     (state/server-ice server-key)))
 
-(defn get-current-run-ice
-  "Get the ICE currently being approached/encountered"
-  []
-  (let [run (get-in @state/client-state [:game-state :run])
-        server-key (get-run-server)]
-    (when (and run server-key)
-      (let [position (:position run)
-            ice-list (state/server-ice server-key)
-            ice-count (count ice-list)
-            ;; Position counts from server outward (1 = outermost)
-            ;; ice-list is indexed 0 = innermost
-            ice-index (- ice-count position)]
-        (when (and (pos? position) (<= position ice-count))
-          (nth ice-list ice-index nil))))))
+;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn server-has-agenda?
   "Check if a server has an agenda installed"

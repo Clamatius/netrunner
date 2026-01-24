@@ -334,20 +334,7 @@
 ;; Continue-Run Helper Functions (Bug #12 Fix)
 ;; ============================================================================
 
-(defn get-current-ice
-  "Get the ICE being approached/encountered from game state.
-   Position counts from server outward (1 = outermost ICE).
-   ICE list is indexed from innermost (0) to outermost.
-   So ice-index = (count - position)."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)
-        ice-index (- ice-count position)]  ; Convert position to array index
-    (when (and ice-list (> position 0) (<= position ice-count))
-      (nth ice-list ice-index))))
+;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn get-rez-event
   "Find first rez event in log entries, or nil if none"
@@ -428,7 +415,7 @@
   [state]
   (let [run-phase (get-in state [:game-state :run :phase])
         corp-prompt (get-in state [:game-state :corp :prompt-state])
-        current-ice (get-current-ice state)]
+        current-ice (core/current-run-ice state)]
 
     (or
       ;; Approaching unrezzed ICE - ALWAYS a rez opportunity
@@ -504,7 +491,7 @@
   "Returns human-readable reason for waiting"
   [state side]
   (let [run-phase (get-in state [:game-state :run :phase])
-        current-ice (get-current-ice state)]
+        current-ice (core/current-run-ice state)]
 
     (cond
       (and (= side "runner") (= run-phase "approach-ice") current-ice)
@@ -530,7 +517,7 @@
        ;; (rez decision is too important to auto-pass)
        (not (and (= side "corp")
                  (= run-phase "approach-ice")
-                 (let [current-ice (get-current-ice state)]
+                 (let [current-ice (core/current-run-ice state)]
                    (and current-ice (not (:rezzed current-ice))))))))
 
 ;; ============================================================================

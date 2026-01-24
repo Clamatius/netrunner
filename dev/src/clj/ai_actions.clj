@@ -147,7 +147,7 @@
 ;; ============================================================================
 
 (def run! runs/run!)
-(def get-current-ice runs/get-current-ice)
+(def get-current-ice core/current-run-ice)  ;; Moved to ai-core
 (def get-rez-event runs/get-rez-event)
 (def opponent-indicated-action? runs/opponent-indicated-action?)
 (def has-real-decision? runs/has-real-decision?)

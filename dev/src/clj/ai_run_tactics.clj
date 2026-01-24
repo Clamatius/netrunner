@@ -15,23 +15,14 @@
    - :break-subs     - Selective sub breaking (not yet implemented)
    - :prep           - Pre-encounter actions
    - :script         - Multi-step sequences"
-  (:require [ai-card-actions :as actions]))
+  (:require [ai-card-actions :as actions]
+            [ai-core :as core]))
 
 ;; ============================================================================
 ;; ICE & Breaker Inspection
 ;; ============================================================================
 
-(defn get-current-ice
-  "Get the ICE currently being encountered. Returns nil if not at valid ICE."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)
-        ice-index (- ice-count position)]
-    (when (and ice-list (pos? ice-count) (> position 0) (<= ice-index (dec ice-count)))
-      (nth ice-list ice-index nil))))
+;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn list-available-breakers
   "List all icebreakers in Runner rig with their break abilities."
@@ -195,7 +186,7 @@
 (defn- pause-with-context
   "Return a pause status with rich context for manual intervention."
   [state ice-name reason]
-  (let [ice (get-current-ice state)
+  (let [ice (core/current-run-ice state)
         subroutines (:subroutines ice)
         unbroken (filter #(not (:broken %)) subroutines)
         breakers (list-available-breakers state)
@@ -302,7 +293,7 @@
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
              (:tactics strategy))
-    (let [ice (get-current-ice state)
+    (let [ice (core/current-run-ice state)
           ice-name (:title ice)]
       (when (and ice (:rezzed ice))
         (let [tactics-map (:tactics strategy)

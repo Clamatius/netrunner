@@ -14,21 +14,10 @@
             [ai-run-tactics :as tactics]))
 
 ;; ============================================================================
-;; Shared Helpers (duplicated from ai-runs to avoid circular dependency)
+;; Shared Helpers
 ;; ============================================================================
 
-(defn- get-current-ice
-  "Get the ICE being approached/encountered from game state."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)]
-    (when (and ice-list (pos? ice-count) (> position 0))
-      (let [ice-index (- ice-count position)]
-        (when (<= ice-index (dec ice-count))
-          (nth ice-list ice-index nil))))))
+;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn- normalize-side
   "Normalize a side value to string."
@@ -96,7 +85,7 @@
              (= run-phase "approach-ice"))
     (let [run (get-in state [:game-state :run])
           position (:position run)
-          current-ice (get-current-ice state)
+          current-ice (core/current-run-ice state)
           no-action (:no-action run)
           no-action-str (normalize-side no-action)
           corp-already-declined? (= no-action-str "corp")]
@@ -128,7 +117,7 @@
              (:full-break strategy))
     (let [run (get-in state [:game-state :run])
           position (:position run)
-          current-ice (get-current-ice state)
+          current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           unbroken-subs (filter #(not (:broken %)) subroutines)]
       (when (and current-ice (:rezzed current-ice) (seq unbroken-subs))
@@ -214,7 +203,7 @@
              (not (:full-break strategy)))
     (let [run (get-in state [:game-state :run])
           position (:position run)
-          current-ice (get-current-ice state)
+          current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           unfired-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
           no-action (:no-action run)
@@ -268,7 +257,7 @@
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice"))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
       (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
@@ -281,7 +270,7 @@
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice"))
-    (let [current-ice (get-current-ice state)
+    (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           log (get-in state [:game-state :log])
           meaningful-log (filter-meaningful-log-entries (reverse log))
