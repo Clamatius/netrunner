@@ -1,6 +1,28 @@
 # Corp Play Structure
 
-**Purpose:** Turn-by-turn execution checklist. Not strategy—mechanics.
+**Purpose:** Turn-by-turn execution checklist & heuristics for the Agent Player.
+
+---
+
+## Operational Heuristics (Hard Constraints)
+
+### 1. The Credit Floor (4¢)
+*   **Rule**: Never end turn with < 4 credits voluntarily.
+*   **Reason**: Money is threat. Poor Corp = Porous Servers.
+*   **Exception**: Scoring the winning agenda point.
+
+### 2. Action Priority (The Decision Loop)
+1.  **SCORE**: If advanced agenda installed & scoreable -> Score.
+2.  **EMERGENCY ECON**: If Credits < 4 -> Play `Hedge Fund` / `Government Subsidy` or `take-credit`.
+3.  **DEFEND**: If Central Server (HQ/R&D) is naked -> Install ICE.
+4.  **DEVELOP**: If rich (>8¢) & scoring remote exists -> Install Agenda/Asset in remote.
+5.  **BUILD**: If rich (>8¢) & no remote -> Install ICE to create scoring remote.
+6.  **DRAW**: If hand empty or digging for specific tool.
+
+### 3. Installation Rules
+*   **ICE**: Only install if you can afford to rez it + 4¢.
+*   **Agendas**: NEVER install naked (without ICE).
+*   **Econ Assets**: Install `Drip Assets` behind light ICE, `Click Assets` in the scoring remote when poor or no agenda to score.
 
 ---
 

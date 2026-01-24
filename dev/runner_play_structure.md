@@ -1,6 +1,30 @@
 # Runner Play Structure
 
-**Purpose:** Turn-by-turn execution checklist. Not strategy—mechanics.
+**Purpose:** Turn-by-turn execution checklist & heuristics for the Agent Player.
+
+---
+
+## Operational Heuristics (Hard Constraints)
+
+### 1. The Credit Floor (3¢)
+*   **Rule**: Never run or install if it leaves you with < 3 credits.
+*   **Reason**: You need money to steal (trash upgrades, pay for ICE breaking, etc)
+*   **Priority**: If < 3 credits, your ONLY priority is **Economy** cards, `take-credit` worst case.
+
+### 2. Just-in-Time Rig
+*   **Rule**: Do not install a breaker until you see the ICE it breaks.
+*   **Exceptions**:
+    *   You are rich (> 10 credits).
+    *   You are about to run a dangerous face-down server and need safety.
+    *   You are preparing a specific "Go Turn" (e.g., Deep Dive/Docklands).
+*   **Waste**: Installing `Carmen` (Killer) when Corp has no Sentries is a waste of tempo.
+
+### 3. Action Priority (The Decision Loop)
+1.  **WIN**: If less than 3 points to win and remote/R&D is open -> RUN.
+2.  **ECONOMY**: If < 5 credits -> Play economy events / `take-credit`.
+3.  **PRESSURE**: If rich (> 6 credits) -> Run weak servers (R&D/HQ). Facecheck if necessary for info.
+4.  **BUILD**: If locked out -> Install **needed** breakers only.
+5.  **DRAW**: If hand empty or digging for breakers.
 
 ---
 
