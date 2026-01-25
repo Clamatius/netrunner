@@ -507,7 +507,7 @@ elif top_card_is_agenda:
 
 **Damage types (all work the same for Runner):**
 - Net damage: From traps, ICE, agendas - typically more damage per advancement on traps
-- Meat damage: From operations, tags (not in tutorial decks)
+- Meat damage: From tag-punishment operations (Orbital Superiority = 4 damage if tagged)
 - Brain damage: Random discard + permanent -1 max hand size (avoid at ALL costs)
 
 **Flatline condition:** Hand size < damage amount → instant loss
@@ -542,6 +542,81 @@ Action: Draw 1 card first, THEN run twice
 - Hand size ≤ expected damage (flatline risk)
 - Already behind on tempo (can't afford rebuild time)
 - Brain damage (permanent penalty)
+
+---
+
+## Tags
+
+**Tags are the Corp's handle on you.** While tagged, you're vulnerable to punishment.
+
+### How You Get Tagged
+
+- **ICE subroutines:** Funhouse gives 1 tag if you don't pay 4¢
+- **Operations:** Public Trail tags you if you have more credits than Corp
+- **Failed traces:** Some cards initiate traces; losing gives tags
+- **Agenda effects:** Some agendas tag on steal or access
+
+### Why Tags Are Dangerous
+
+**Meat damage operations:**
+```
+Public Trail (1¢) → Runner tagged
+Orbital Superiority → 4 meat damage if Runner tagged
+
+Hand size 4? You're dead.
+Hand size 5? You survive with 1 card.
+```
+
+**Resource trashing:**
+- Corp can spend click + 2¢ to trash ANY of your installed resources while tagged
+- Economy resources (Daily Casts, Liberated Account) = tempo destruction
+- Key program/hardware support resources = rig crippled
+
+**The kill combo (intermediate deck):**
+```
+Turn N: Runner runs into Funhouse, takes tag (couldn't afford 4¢)
+Turn N: Runner ends turn tagged with 4 cards in hand
+Turn N+1: Corp plays Orbital Superiority → 4 meat damage → FLATLINE
+```
+
+### Clearing Tags
+
+**Command:** `remove-tag` (costs 2¢ + 1 click per tag)
+
+**Clear tags when:**
+- You have < 5 cards in hand (meat damage kill range)
+- Corp is playing kill cards (Orbital Superiority, Punitive Counterstrike)
+- You have valuable resources installed
+- End of turn and Corp has clicks + credits for punishment
+
+**Float tags when:**
+- You have 5+ cards AND Corp can't kill you this turn
+- No resources to lose
+- Clearing would cost more than the punishment
+- You need those clicks/credits for a critical play
+
+### Survival Heuristics
+
+**The Funhouse rule:**
+```
+Before running through Funhouse:
+  Can I pay 4¢ to avoid the tag? → Pay it
+  Can't afford 4¢? → Do I have 5+ cards AND 3¢ to clear? → Run, clear after
+  Neither? → DON'T RUN (or accept death risk)
+```
+
+**End of turn check:**
+```
+Tagged + < 5 cards + Corp has kill card = CLEAR TAG NOW
+Tagged + 5+ cards + no resources = probably safe to float
+Tagged + valuable resources = clear or lose them
+```
+
+**Credit math:**
+- Funhouse: 4¢ to avoid OR 2¢ + click to clear after = 4¢ is often better
+- Multiple tags: Each costs 2¢ + click to clear = expensive, avoid accumulating
+
+**Key insight:** Tags are temporary if you clear them. The danger is ending your turn tagged when Corp can punish. If Corp spends their turn tagging you and you clear before their next turn, they wasted tempo.
 
 ### Remote Pressure Timing
 
@@ -771,6 +846,8 @@ Start of turn:
 ```
 Corp at game point → Contest ALL remotes, can't let them score
 Hand size < 3 → Draw immediately (flatline danger)
+Tagged + < 5 cards → Clear tag or draw to 5+ before ending turn
+Tagged + resources → Clear tag or lose them to Corp trash
 ```
 
 ---
