@@ -8,25 +8,50 @@
 ;; Prompts & Choices
 ;; ============================================================================
 
+(defn wait-for-prompt-change!
+  "Wait for prompt state to change after making a choice.
+   Returns true if prompt changed (different eid or disappeared), false on timeout.
+
+   This fixes the multi-step prompt sync issue (e.g., Mutual Favor):
+   Server processes choice → sends diff with new prompt → we wait for it."
+  [old-eid & {:keys [timeout-ms] :or {timeout-ms 3000}}]
+  (loop [waited 0]
+    (if (>= waited timeout-ms)
+      (do
+        (println "⚠️  Timeout waiting for prompt change")
+        false)
+      (let [current-prompt (state/get-prompt)
+            current-eid (:eid current-prompt)]
+        (if (or (nil? current-prompt)
+                (not= current-eid old-eid))
+          true  ; Prompt changed or disappeared
+          (do
+            (Thread/sleep 100)
+            (recur (+ waited 100))))))))
+
 (defn choose-by-index!
   "Make a choice from current prompt by index or UUID.
    Usage: (choose-by-index! 0)        ; choose first option
           (choose-by-index! \"uuid\")  ; choose by UUID
 
-   For choosing by value text (e.g. \"Keep\", \"Steal\"), use choose-by-value! instead."
+   For choosing by value text (e.g. \"Keep\", \"Steal\"), use choose-by-value! instead.
+   Waits for prompt state to change after sending choice."
   [choice]
-  (let [prompt (state/get-prompt)]
+  (let [prompt (state/get-prompt)
+        old-eid (:eid prompt)]
     (if prompt
       (do
         (ws/choose! choice)
-        (Thread/sleep core/quick-delay)
+        ;; Wait for prompt to change instead of fixed sleep
+        (wait-for-prompt-change! old-eid)
         (core/with-cursor {:status :success}))
       (do
         (println "⚠️  No active prompt")
         (core/with-cursor {:status :error :reason "No active prompt"})))))
 
 (defn choose-option!
-  "Choose from prompt by index (side-aware)"
+  "Choose from prompt by index (side-aware).
+   Waits for prompt state to change after sending choice."
   [index]
   (let [client-state @state/client-state
         side (:side client-state)
@@ -34,6 +59,7 @@
         side-kw (when side (keyword (clojure.string/lower-case side)))
         gameid (:gameid client-state)
         prompt (get-in client-state [:game-state side-kw :prompt-state])
+        old-eid (:eid prompt)
         choice (nth (:choices prompt) index nil)
         choice-uuid (:uuid choice)]
     (if choice-uuid
@@ -43,7 +69,8 @@
                           {:gameid gameid
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
-        (Thread/sleep core/standard-delay)
+        ;; Wait for prompt to change instead of fixed sleep
+        (wait-for-prompt-change! old-eid)
         (core/with-cursor {:status :success :choice choice}))
       (do
         (println (str "❌ Invalid choice index: " index))
@@ -121,7 +148,8 @@
           (do
             (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
             (ws/select-card! card eid)
-            (Thread/sleep core/short-delay)
+            ;; Wait for prompt to change instead of fixed sleep
+            (wait-for-prompt-change! eid)
             (core/with-cursor {:status :success :card card}))
           (do
             (println (format "❌ Could not resolve card at index %d" index))
@@ -226,6 +254,8 @@
               (println (format "   → %s" (:title card)))
               (ws/select-card! card eid)
               (Thread/sleep core/short-delay))
+            ;; Wait for prompt to change after all selections
+            (wait-for-prompt-change! eid)
             (println "✅ Selection complete")
             (core/with-cursor {:status :success :selected (count cards-to-select)})))))))
 
