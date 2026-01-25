@@ -102,6 +102,7 @@
   (filter :rezzed (state/server-ice server-key)))
 
 (defn server-ice-types [server-key]
+  "Returns known ICE types for rezzed ICE on a server."
   (let [ice (get-rezzed-ice server-key)]
     (map (fn [card]
            (let [subtypes (:subtypes card)]
@@ -113,9 +114,20 @@
          ice)))
 
 (defn can-break-server? [server-key]
-  (let [types (server-ice-types server-key)
+  "Check if runner can safely run this server.
+   For unrezzed ICE, assumes worst case (could be any type).
+   Returns true only if we have breakers for all rezzed types
+   AND full rig for any unrezzed ICE."
+  (let [all-ice (state/server-ice server-key)
+        rezzed-ice (filter :rezzed all-ice)
+        unrezzed-ice (filter #(not (:rezzed %)) all-ice)
+        rezzed-types (server-ice-types server-key)
         missing (missing-breakers)]
-    (every? (fn [t] (not (some #{t} missing))) types)))
+    (if (seq unrezzed-ice)
+      ;; Unrezzed ICE present - need full rig (no missing breakers)
+      (empty? missing)
+      ;; All rezzed - just check the known types
+      (every? (fn [t] (not (some #{t} missing))) rezzed-types))))
 
 (defn remote-advancements [server-key]
   (let [content (state/server-cards server-key)
