@@ -595,7 +595,7 @@
                  (let [agenda (affordable-agenda-to-overwrite-asset)
                        remote (protected-remote-with-asset)
                        server (remote-server-name remote)]
-                   {:action :install :args {:card-name (:title agenda) :server server}}))
+                   {:action :install :args {:card-name (:title agenda) :server server :overwrite true}}))
     :reason-fn (fn [ctx]
                  (let [agenda (affordable-agenda-to-overwrite-asset)
                        remote (protected-remote-with-asset)]
