@@ -1,0 +1,14 @@
+{
+  "match_id": "intermediate-stress-test",
+  "description": "Intermediate decks - stress test tags, viruses, resources",
+  "rounds": 2,
+  "decks": {
+    "corp": "system-gateway-intermediate-corp",
+    "runner": "system-gateway-intermediate-runner"
+  },
+  "gateway_type": "Intermediate",
+  "agents": {
+    "agent_a": "heuristic",
+    "agent_b": "heuristic"
+  }
+}

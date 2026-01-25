@@ -93,8 +93,13 @@ if [ -z "$AGENT_B" ]; then
     AGENT_B=$(echo "$AGENTS_BLOCK" | grep '"runner":' | cut -d '"' -f 4)
 fi
 
+# Extract gateway type (default: Beginner)
+GATEWAY_TYPE=$(grep '"gateway_type":' "$CONFIG_FILE" | cut -d '"' -f 4)
+GATEWAY_TYPE="${GATEWAY_TYPE:-Beginner}"
+
 echo "🆔 Match ID: $MATCH_ID"
 echo "🔄 Rounds: $ROUNDS"
+echo "🎮 Gateway: $GATEWAY_TYPE"
 echo "🤖 Agent A: $AGENT_A"
 echo "🤖 Agent B: $AGENT_B"
 
@@ -164,27 +169,27 @@ load_agent() {
     if [ "$side" == "corp" ]; then
         case "$agent_type" in
             "heuristic")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require (quote [ai-heuristic-corp])) (future ((resolve (quote ai-heuristic-corp/start-autonomous!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
                 ;;
             "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_corp.clj\") (require (quote [ai-goldfish-corp])) (future ((resolve (quote ai-goldfish-corp/start-autonomous!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_corp.clj\") (require '[ai-goldfish-corp]) (future (ai-goldfish-corp/start-autonomous!)))" > /dev/null
                 ;;
             *)
                 echo "      ⚠️  Unknown Corp agent '$agent_type', defaulting to heuristic"
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require (quote [ai-heuristic-corp])) (future ((resolve (quote ai-heuristic-corp/start-autonomous!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
                 ;;
         esac
     elif [ "$side" == "runner" ]; then
         case "$agent_type" in
             "heuristic")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_runner.clj\") (require (quote [ai-heuristic-runner])) (future ((resolve (quote ai-heuristic-runner/loop!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_runner.clj\") (require '[ai-heuristic-runner]) (future (ai-heuristic-runner/loop!)))" > /dev/null
                 ;;
             "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require (quote [ai-goldfish-runner])) (future ((resolve (quote ai-goldfish-runner/loop!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
                 ;;
             *)
                 echo "      ⚠️  Unknown Runner agent '$agent_type', defaulting to goldfish"
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require (quote [ai-goldfish-runner])) (future ((resolve (quote ai-goldfish-runner/loop!)))))" > /dev/null
+                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
                 ;;
         esac
     fi
@@ -204,8 +209,8 @@ run_game() {
     
     # Create Game
     LOBBY_TITLE="Match ${MATCH_ID} R${round}${game_suffix}"
-    echo "   Creating lobby: $LOBBY_TITLE..."
-    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" > /tmp/create-game.log 2>&1
+    echo "   Creating lobby: $LOBBY_TITLE ($GATEWAY_TYPE)..."
+    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" "$GATEWAY_TYPE" > /tmp/create-game.log 2>&1
     if [ $? -ne 0 ]; then
         echo "   ❌ Failed to create game. Output:"
         cat /tmp/create-game.log

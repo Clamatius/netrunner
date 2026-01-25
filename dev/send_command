@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -160,6 +160,11 @@ ${GREEN}Basic Actions:${NC}
   fix-credits <N> - ⚠️  CHEATING: Manually set credits (ONLY for broken game states!)
                      Use absolute value (10) or delta (+5, -3)
 
+${GREEN}Tag & Virus Actions:${NC}
+  remove-tag      - (Runner) Pay \$2 + click to remove a tag
+  purge           - (Corp) Spend 3 clicks to purge all virus counters
+  trash-resource  - (Corp) Pay \$2 + click to trash tagged runner's resource
+
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
   mulligan        - Mulligan (redraw) starting hand
@@ -239,7 +244,7 @@ ${GREEN}Prompts:${NC}
   get-cursor          - Get current state cursor (for --since parameter)
 
 ${GREEN}Lobby:${NC}
-  create-game <title> [side] [precon]  - Create new game (default: "Any Side", "worlds-2012-a")
+  create-game <title> [side] [precon] [gateway-type]  - Create new game (gateway-type: Beginner|Intermediate)
   start-game      - Start game (after creating and opponent joins)
   auto-start      - Auto-start game if lobby is ready (validates 2 players with valid decks)
   leave-game      - Leave current game lobby
@@ -534,6 +539,25 @@ case "$COMMAND" in
         ensure_connection
         info "Smart end-turn (auto-detects if safe)..."
         execute '(ai-actions/smart-end-turn!)'
+        ;;
+
+    # Tag and Virus actions
+    remove-tag)
+        ensure_connection
+        info "Removing tag (2 credits + click)..."
+        execute '(ai-actions/remove-tag!)'
+        ;;
+
+    purge)
+        ensure_connection
+        info "Purging viruses (3 clicks)..."
+        execute '(ai-actions/purge-viruses!)'
+        ;;
+
+    trash-resource)
+        ensure_connection
+        info "Trashing tagged runner's resource ($2 + click)..."
+        execute '(ai-actions/trash-resource!)'
         ;;
 
     fix-credits)
@@ -994,13 +1018,14 @@ case "$COMMAND" in
         TITLE="${1:-AI Test Game}"
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
-        info "Creating game: $TITLE (Side: $SIDE)..."
+        GATEWAY_TYPE="${4:-Beginner}"
+        info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
                    (conn/create-lobby! {:title \"$TITLE\"
                                         :side \"$SIDE\"
                                         :format \"system-gateway\"
-                                        :gateway-type \"Beginner\"
+                                        :gateway-type \"$GATEWAY_TYPE\"
                                         :precon \"$PRECON\"
                                         :room \"casual\"
                                         :allow-spectator true
