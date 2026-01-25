@@ -163,8 +163,9 @@
             ;; No playable dynamic ability - try manual pump+break fallback
             (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
               fallback-result
-              ;; Fallback also failed - check if any breakers exist but can't afford
+              ;; Fallback also failed - let subs fire instead of returning nil (which causes infinite loop)
               (let [warning-key [position ice-title]
+                    already-signaled? (= @signaled-fire-position position)
                     all-break-abilities
                     (for [program all-programs
                           [idx ability] (map-indexed vector (:abilities program))
@@ -179,10 +180,20 @@
                   (reset! last-full-break-warning warning-key)
                   (if (seq all-break-abilities)
                     (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                      (println (format "⚠️  --full-break: Can't afford to break %s" ice-title))
+                      (println (format "⚠️  --full-break: Can't afford to break %s, letting subs fire" ice-title))
                       (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
-                    (println (format "⚠️  --full-break: No icebreaker can break %s" ice-title))))
-                nil))))))))
+                    (println (format "⚠️  --full-break: No icebreaker can break %s, letting subs fire" ice-title))))
+                ;; Signal to Corp that we're done breaking (same as tank-authorized path)
+                (when-not already-signaled?
+                  (reset! signaled-fire-position position)
+                  (let-subs-fire-signal! gameid ice-title))
+                ;; Return waiting-for-corp-fire so loop pauses correctly
+                {:status :waiting-for-corp-fire
+                 :message (format "Can't break %s, waiting for Corp to fire subs" ice-title)
+                 :ice ice-title
+                 :unbroken-count (count unbroken-subs)
+                 :position position
+                 :reason (if (seq all-break-abilities) :cant-afford :no-breaker)}))))))))
 
 ;; ============================================================================
 ;; Runner Encounter Handlers
