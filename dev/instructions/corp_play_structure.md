@@ -36,8 +36,11 @@ Card effects and board state always beat every heuristic given here, given combi
 Write this out before taking actions:
 
 ```
-TURN [N] — [credits]¢, ||| clicks
+Before turn: do I need to rez anything?
+Then, MANDATORY DRAW.
+NOW: Build your plan for the turn. Write it down so you can check the clicks and credits.
 
+TURN [N] — [credits]¢, ||| clicks
 Plan:
   | [action 1]     [cost]¢  → [remaining]¢
   || [action 2]    [cost]¢  → [remaining]¢
@@ -94,6 +97,14 @@ Can rez Brân (6¢) next turn? YES ✓
 □ Asset? They may trash (check trash cost vs their credits).
 
 ---
+
+## Drawing as Corp
+□ As a general rule, drawing as Corp is risky as you can draw agendas faster than you can score them
+□ Every agenda in hand/play is a huge liability
+□ The two usual cases: 
+    □ Rich (have ICE rez costs + ~$8) and need agenda to score. Drawing last click is risky unless HQ is safer than the remote.
+    □ Desperate (need ICE for a server)
+□ Taking credits is a low-efficiency action but unlike the Runner, we can't simply draw for $ cards when poor
 
 ## Don't Forget
 
