@@ -82,3 +82,28 @@ ICE breaking budget: $2 light (e.g. Whitespace), $4 medium (e.g. Karuna), $8 for
 - **Cost**: 5¢.
 - **Effect**: Run any central server not already run this turn. If successful, **gain 3 credits**.
 - **Usage**: Huge tempo swing if centrals weak; late game r&d lock. Use on open/cheap servers including Archives to fuel up. Doesn't use up credits if you bounce off and now know the ICE.
+
+
+## BOOSTER cards if using
+
+2× Wildcat Strike $2: [+$6 / draw 4, _corp_ chooses which]
+2× Mutual Favor $0: fetch icebreaker from deck. installs if successful run, but still fetches without. Best saved till you know what you need or the last one
+2× DZMZ Optimizer $2: +1MU [discount on program installs side-benefit]
+2× Leech: $1: +virus for central run, -virus for -1 str on any ice. Helpful to pay for central pressure
+2× Conduit: $4: +virus for R&D run. click: run R&D for <virus> extra accesses. Very expensive but great late-game wincon
+
+Note the Corp now has the abilities:
+- click x3: purge all virus counters
+- $2, click: trash a resource of a _tagged_ runner
+
+The Runner now has the ability:
+- $2, click: remove 1 tag.
+
+Tag punishment possible other than resource trashing:
+- Orbital Superiority: 4/2 agenda. On score: tag (tagless) or 4 damage (tagged)
+- Retribution: $1 operation. Trash 1 program/hardware if Runner is tagged
+
+Important upgrade:
+-AMAZE Amusements: +2 tags if you stole an agenda from the server
+
+IMPORTANT: With the booster added, deck size is now 40 cards and games are played to 7 points.

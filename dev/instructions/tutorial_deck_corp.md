@@ -58,3 +58,21 @@ ICE Roles:
 - **Brân 1.0**: The Wall. Stops runs. Clickable, but costs 3 clicks. Place innermost. 2 in the same server is very expensive to run - at least one costs $.
 - **Palisade**: Barrier for remotes. 
 - **Diviner**: Small tax code gate. 
+
+** BOOSTER cards if using
+
+2× Orbital Superiority: agenda 4/2, 4 meat to tagged runners / tag to untagged. Generally better to score than try for a kill if you don't have the combo.
+2× Funhouse: ice $5: code gate 4str. tag on encounter, tag or $4. Expensive but will tag runners a lot.
+2× Public Trail: event $4 to tag runner UNLESS runner pays $8. The other half of the Orbital combo. Net: you also need the runner to be poor AND low cards AND running to kill.
+2× Predictive Planogram: event $0: gain $3 / draw $3, both if runner tagged. Nice cheap spike econ
+1× Retribution: $1 event: trash program or hardware of tagged runner. Great if they've already discarded a Decoder or Fracter - blow up the other one and they can't break the ETRs.
+1× AMAZE Amusements- $1 upgrade: give agenda-stealing runners from this run 2 tags. ideally play behind Bran so they can't clear tags.
+
+Note the Corp now has the abilities:
+- click x3: purge all virus counters
+- $2, click: trash a resource of a _tagged_ runner
+
+The Runner now has the ability:
+- $2, click: remove 1 tag.
+
+IMPORTANT: With the booster added, deck size is now 40 cards and games are played to 7 points.
