@@ -185,3 +185,9 @@ Both are required
 AI_DEBUG_LEVEL=true ./send_command runner status
 ```
 Shows internal WebSocket messages for debugging.
+
+### If confused on what to plan
+```bash
+./send_command dashboard-compact
+```
+Shows the default plan for the heuristic-based player.
