@@ -4,7 +4,10 @@
 
 ---
 
-## Operational Heuristics (Hard Constraints)
+## The Golden Rule
+The cards and board always beat every rule given here, given combinations of effects. 
+
+## Operational Heuristics (Hardest Constraints)
 
 ### 1. The Credit Floor (3¢)
 *   **Rule**: Never run or install if it leaves you with < 3 credits.
@@ -12,7 +15,7 @@
 *   **Priority**: If < 3 credits, your ONLY priority is **Economy** cards, `take-credit` worst case.
 
 ### 2. Just-in-Time Rig
-*   **Rule**: Do not install a breaker until you see the ICE it breaks.
+*   **Rule**: Do not install things unless you have a use for them
 *   **Exceptions**:
     *   You are rich (> 10 credits).
     *   You are about to run a dangerous face-down server and need safety.
@@ -28,15 +31,47 @@
 
 ---
 
+## Ballpark Credit Model
+
+Credit = $1 - basic unit
+$0 - so broke can't even play econ cards. Often difficult to dig out of here without clicking for credits
+$5 - enough to play Sure Gamble again for +$4 - but can't install breakers and credibly run without it
+$10 - threatening run on most servers - especially with run events, can crack big servers.
+NOTE: Losing the actual threat can lead to Corp scoring since you cannot run the remote.
+Due to this, being poor is usually awful unless you win on the spot.
+Comparable to Chess, your effective assessed position is:
+- $ (flexible)
+- Currently KNOWN useful cards with enough $ to install and/or use (sometimes required)
+- [discounted] threat to do things, e.g. cards in hand could be unknown breakers for corp
+
+Typical unrezzed budgets for breakables: $5 / unrezzed ICE, $4 / unrezzed asset / upgrade
+
 ## Turn Template
 
 **Before planning, ask:**
 □ Is there something URGENT I must do this turn? (Contest remote, survive threat)
 □ If not, and hand < 5 cards: **Draw click 1**, then re-plan with full options.
 □ Still not urgent after drawing? Consider drawing again.
+Exception: some cards lose you a click if you play them. They cost you positionally ~$1.5 unless you play last click.
 
 The cards in your hand are known. The cards in your deck might be better.
-Exception: VRcation wants you to dump hand first, then play it last click.
+You frequently don't need to install much if you _make_ Corp rez ICE and 
+tell you what you need / where is weak. Hidden info makes calculation difficult,
+so where possible reveal it for future planning and probe for weaknesses.
+Running unrezzed servers defending something unknown always tells you something, but not empty ones.
+
+Important plan inputs:
+□ If hand < 3 and damage ICE/traps possible: draw if possible
+□ Credit check: Do I have 5¢? (Sure Gamble threshold) If not in order consider:
+- use econ cards if helpful
+- draw for more econ
+- click for credit (generally worst action but sometimes unavoidable)
+□ Do I contest advanced remotes? (1+ counters = potential 2+ point score next turn)
+□ Do I run R&D if it's cheap? (Deny Corp draws)
+□ Do I need to use clicks on a known Bioroid ICE this turn?
+□ HQ is generally only worth running if:
+- Corp hasn't scored in 2+ turns, e.g. via threatened remote lockdown / previous score
+- Corp is agenda flooded at game start - e.g. plays little or no ICE
 
 **Then write out your plan:**
 
@@ -115,13 +150,12 @@ Enough? [YES/NO]
 □ The cards have to go somewhere so ICE you see in R&D or HQ will probably be installed soon etc.
 □ If the Corp is not scoring for a while (maybe because you can run the remote), there may be agendas in HQ that they are scared to install.
 
-### R&D Access Decisions
+### Trash decisions
 
 **Before trashing, ask:** "If they draw this, how bad?"
 
-- R&D trash = expensive (Corp hasn't paid to draw/install yet) + you miss the card below
-- Economy in scoring remote = setup time, not an agenda
-- Often better: let them draw, trash from remote later, access deeper now
+- Best: only trash if you can run again easily to get next cord: add mental $2 to R&D trash costs, $1 to R&D to represent draw & install
+- If you don't trash, corp is now guaranteed to draw non-agenda and now next card may be agenda again if you access
 
 ---
 
@@ -163,13 +197,68 @@ When you hit ICE, in order:
 
 ---
 
-## Before Ending Turn
+## Breaking ICE - Command Guide
 
-□ Hand size check: Do I have 3+ cards? (Damage buffer)
-□ If hand < 3 and damage ICE/traps possible: DRAW FIRST next turn
-□ Credit check: Do I have 5¢? (Sure Gamble threshold)
-□ Did I contest advanced remotes? (3+ counters = score next turn)
-□ Did I run R&D if it's cheap? (Deny Corp draws)
+### Breaker Types Must Match ICE Types
+
+| ICE Type   | Breaker Type | Example Breakers |
+|------------|--------------|------------------|
+| Barrier    | Fracter      | Cleaver, Paperclip |
+| Code Gate  | Decoder      | Unity, Gordian Blade |
+| Sentry     | Killer       | Carmen, Bukhgalter |
+
+**AI breakers** (like Mayfly) can break any ICE type, but usually have a drawback (trash after use).
+
+**Critical rule:** A Fracter cannot break Code Gates. A Killer cannot break Barriers. If you run with the wrong breaker, you cannot break the ICE.
+
+### Ability Indices During Encounters
+
+When you encounter ICE, use `abilities "<breaker>"` to see available actions:
+
+```bash
+./send_command abilities "Cleaver"
+```
+
+**Outside a run (or wrong ICE type):**
+```
+[0] Break up to 2 Barrier subroutines  (1¢)
+[1] Add 1 strength                      (2¢)
+```
+
+**During encounter with matching ICE type:**
+```
+[0] Break up to 2 Barrier subroutines  (1¢)
+[1] Add 1 strength                      (2¢)
+[2] Fully break Palisade               (1¢)   ← USE THIS
+```
+
+**Key insight:** If ability [2] doesn't appear, either:
+1. You're not in an encounter phase, OR
+2. Your breaker can't break this ICE type, OR
+3. You can't afford the full break cost
+
+### The Recommended Workflow
+
+**ALWAYS use the "Fully break" ability [2] when available** (unless you want some subs to fire).
+
+```bash
+./send_command run "R&D"
+./send_command continue                    # Approach ICE
+./send_command continue                    # Encounter ICE
+./send_command use-ability "Cleaver" 2     # Fully break
+./send_command continue                    # Done breaking, proceed
+```
+
+### Manual Breaking (Situational)
+
+When you only want to break some subroutines:
+
+```bash
+./send_command use-ability "Mayfly" 0      # "Break 1 subroutine"
+./send_command choose 0                     # Break first sub
+./send_command choose 1                     # Done (let remaining fire)
+./send_command continue                     # Pass priority
+```
 
 ---
 
@@ -264,6 +353,32 @@ Corp advances existing card:
 Corp has scored 4-5 points:
   └─ EVERY remote is potentially game-winning
   └─ Contest everything you can afford
+```
+
+---
+
+## Damage Mechanics
+
+Your hand size is your health. Damage causes random discards—if you must discard but can't, you flatline and lose.
+
+**Damage Types (all work the same for Runner):**
+- **Net Damage:** From traps (Urtica Cipher), ICE, certain agendas
+- **Meat Damage:** From tag-punishment operations (Orbital Superiority)
+- **Core Damage:** Random discard PLUS permanent -1 max hand size (avoid!)
+
+**Key Differences from End-of-Turn Discard:**
+- Damage = **random discard** (no player choice)
+- End-of-turn = **chosen discard** (player selects which cards)
+
+**Survival Rule:** Hand size must be > expected damage + 2 buffer
+
+**Example:**
+```
+Planning run on server with potential trap (Urtica Cipher at 2 adv = 4 damage)
+Current hand: 3 cards
+Safe hand size: 4 + 2 = 6 minimum
+
+Action: Draw 3 cards first, THEN run
 ```
 
 ---
