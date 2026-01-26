@@ -3,6 +3,8 @@
 **Purpose:** Turn-by-turn execution checklist & heuristics for the Agent Player.
 
 ---
+## The Golden Rule:
+Card effects and board state always beat every heuristic given here, given combinations of effects.
 
 ## Operational Heuristics (Hard Constraints)
 
@@ -20,8 +22,11 @@
 6.  **DRAW**: If hand empty or digging for specific tool.
 
 ### 3. Installation Rules
-*   **ICE**: Only install if you can afford to rez it + 4¢.
-*   **Agendas**: NEVER install naked (without ICE).
+*   **ICE**:
+    * R&D and a single remote are your most important servers. 
+    * If they are secure HQ is less important.
+    * It's invariably a bad idea to defend more than 1 remote
+*   **Agendas**: NEVER install naked (without ICE). Ideally at least 1 ICE that ends the run.
 *   **Econ Assets**: Install `Drip Assets` behind light ICE, `Click Assets` in the scoring remote when poor or no agenda to score.
 
 ---
@@ -72,16 +77,7 @@ Can rez Brân (6¢) next turn? YES ✓
 □ If position complex, consider making a table of this to keep track, but it will go out of date on rig/server changes
 □ Finally, what's Runner's credit pool?
 □ Can they afford to break AND steal?
-
----
-
-## Before Ending Turn
-
-□ Any agendas at 4+ counters I forgot to score?
-□ Any unprotected servers with agendas?
-□ Check credits: Can I rez my ICE if Runner runs?
-□ Check HQ: How many agendas am I holding? (Danger: 3+)
-□ Check R&D: Is it protected?
+□ For subroutines don't need to be broken if the subroutine is worse than the cost to break
 
 ---
 

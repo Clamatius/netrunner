@@ -11,8 +11,8 @@ The cards and board always beat every rule given here, given combinations of eff
 
 ### 1. The Credit Floor (3¢)
 *   **Rule**: Never run or install if it leaves you with < 3 credits.
-*   **Reason**: You need money to steal (trash upgrades, pay for ICE breaking, etc)
-*   **Priority**: If < 3 credits, your ONLY priority is **Economy** cards, `take-credit` worst case.
+*   **Reason**: You need money to steal (trash upgrades, pay for ICE breaking, etc).
+*   **Priority**: If < 3 credits, your ONLY priority is **Economy** cards, `take-credit` (your least efficient action).
 
 ### 2. Just-in-Time Rig
 *   **Rule**: Do not install things unless you have a use for them
@@ -51,14 +51,13 @@ Typical unrezzed budgets for breakables: $5 / unrezzed ICE, $4 / unrezzed asset 
 **Before planning, ask:**
 □ Is there something URGENT I must do this turn? (Contest remote, survive threat)
 □ If not, and hand < 5 cards: **Draw click 1**, then re-plan with full options.
-□ Still not urgent after drawing? Consider drawing again.
+□ Still not urgent after drawing? Strongly consider drawing again.
 Exception: some cards lose you a click if you play them. They cost you positionally ~$1.5 unless you play last click.
 
-The cards in your hand are known. The cards in your deck might be better.
-You frequently don't need to install much if you _make_ Corp rez ICE and 
-tell you what you need / where is weak. Hidden info makes calculation difficult,
-so where possible reveal it for future planning and probe for weaknesses.
-Running unrezzed servers defending something unknown always tells you something, but not empty ones.
+□ The cards in your hand are known. The cards in your deck might be better.
+□ You frequently don't need to install much if you _make_ Corp rez ICE and tell you what you need / where is weak.
+□ Hidden info makes calculation difficult, so where possible reveal it for future planning and probe for weaknesses.
+□ Running unrezzed servers defending something unknown always tells you something, but not running empty ones.
 
 Important plan inputs:
 □ If hand < 3 and damage ICE/traps possible: draw if possible
@@ -69,6 +68,7 @@ Important plan inputs:
 □ Do I contest advanced remotes? (1+ counters = potential 2+ point score next turn)
 □ Do I run R&D if it's cheap? (Deny Corp draws)
 □ Do I need to use clicks on a known Bioroid ICE this turn?
+□ Do I need to remove tags after a run?
 □ HQ is generally only worth running if:
 - Corp hasn't scored in 2+ turns, e.g. via threatened remote lockdown / previous score
 - Corp is agenda flooded at game start - e.g. plays little or no ICE
@@ -158,6 +158,13 @@ Enough? [YES/NO]
 - If you don't trash, corp is now guaranteed to draw non-agenda and now next card may be agenda again if you access
 
 ---
+
+## ICE Characteristics
+□ Sentries: break with Killer/AI. Usually doesn't ETR. May do damage.
+□ Code Gates: break with Decoder. Often ETRs.
+□ Barriers: break with Fracter. Invariably ETRs.
+
+Your breakers are expensive. Hypothetical subroutines lose to concrete install costs till you know.
 
 ## ICE Encounter Checklist
 
@@ -295,22 +302,35 @@ When you only want to break some subroutines:
 
 **⚠️ Same R&D card = Corp hasn't drawn. STOP.**
 - See same card twice? **Stop running R&D immediately.**
-- You're wasting clicks seeing the same card.
+- You're wasting clicks seeing the same card at the top of the deck.
 - Wait for Corp's mandatory draw next turn.
 - Switch to HQ or remote pressure.
 
+**HQ is the worst server in general to run.**
+- HQ Access is random, so you may not see agendas in hand even if there
+- Worth running at least once through ice to force a rez
+
+**HQ/R&D accesses.**
+- Remember what you see - has to go somewhere
+- What Corp does with the cards drawn reveals hints about their remaining cards
+
 **Unrezzed ICE might not get rezzed.**
-- Corp might be poor
+- Corp might be poor / the ice expensive / the ice terrible
 - Run forces them to pay or let you through
-- Info either way
+- Info either way as long as server not empty
 
 **Damage needs hand buffer.**
 - Net damage = random discard
 - Hand size 0 + damage = FLATLINE (you lose)
-- Keep hand ≥ expected damage + 2
+- Keep hand full or close
 
 **Traps scale with advancement.**
 - Check hand size vs worst case before accessing
+
+**If you run Archives to reveal face-down cards.**
+- Rarely worth it without a card that triggers on central access
+- Consider: if that is what Corp is discarding, what's likely in their hand?
+- The Corp can discard agendas to Archives but will only do it if flooded
 
 ---
 
