@@ -186,8 +186,11 @@
                   (println "💡 Use 'end-turn' to finish your turn"))
                 (println "Clicks:" clicks)))
             (let [hand-count (state/my-hand-count)
-                  max-hand-size (get-in gs [:runner :hand-size-modification] 5)]
+                  max-hand-size (get-in gs [:runner :hand-size-modification] 5)
+                  tags (get-in gs [:runner :tag :base] 0)]
               (println "Hand:" hand-count "cards")
+              (when (pos? tags)
+                (println (str "🏷️  Tags: " tags)))
               (when (and (= "runner" my-side) (> hand-count max-hand-size))
                 (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
             (let [agenda-points (get-in gs [:runner :agenda-point] 0)
@@ -241,8 +244,12 @@
               (println "Hand:" hand-count "cards")
               (when (and (= "corp" my-side) (> hand-count max-hand-size))
                 (println "⚠️  Over hand size! Discard to" max-hand-size "at end of turn")))
-            (let [agenda-points (get-in gs [:corp :agenda-point] 0)]
-              (println "Agenda Points:" agenda-points "/ 7"))
+            (let [agenda-points (get-in gs [:corp :agenda-point] 0)
+                  runner-tags (get-in gs [:runner :tag :base] 0)]
+              (println "Agenda Points:" agenda-points "/ 7")
+              (when (and (= "corp" my-side) (pos? runner-tags))
+                (println (str "🏷️  Runner tagged! (" runner-tags " tag" (when (> runner-tags 1) "s") ")"))
+                (println "   💡 trash-resource ($2 + click to trash a resource)")))
             (when (and prompt (not= :waiting prompt-type))
               (println "\n🔔 Active Prompt:" (:msg prompt)))
 

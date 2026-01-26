@@ -110,6 +110,11 @@
 (def end-turn basic/end-turn)
 (def fix-credits! basic/fix-credits!)
 
+;; Tag and virus actions
+(def remove-tag! basic/remove-tag!)
+(def purge-viruses! basic/purge-viruses!)
+(def trash-resource! basic/trash-resource!)
+
 ;; ============================================================================
 ;; Re-exported functions from ai-prompts
 ;; ============================================================================

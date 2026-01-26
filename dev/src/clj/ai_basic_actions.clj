@@ -665,6 +665,134 @@
   (end-turn!))
 
 ;; ============================================================================
+;; Tag and Virus Actions
+;; ============================================================================
+
+(defn remove-tag!
+  "Runner action: Pay $2 + click to remove a tag.
+   Returns {:status :success} or {:status :error :reason ...}"
+  []
+  (if (ensure-turn-started!)
+    (let [client-state @state/client-state
+          side (:side client-state)]
+      (if (not= (clojure.string/lower-case (or side "")) "runner")
+        (do
+          (println "❌ Only Runner can remove tags")
+          (core/with-cursor {:status :error :reason "Only Runner can remove tags"}))
+        (let [tags (get-in client-state [:game-state :runner :tag :base] 0)
+              credits (get-in client-state [:game-state :runner :credit] 0)
+              clicks (get-in client-state [:game-state :runner :click] 0)]
+          (cond
+            (< tags 1)
+            (do
+              (println "❌ No tags to remove")
+              (core/with-cursor {:status :error :reason "No tags to remove"}))
+
+            (< credits 2)
+            (do
+              (println "❌ Need $2 to remove tag (have $" credits ")")
+              (core/with-cursor {:status :error :reason "Need $2 to remove tag"}))
+
+            (< clicks 1)
+            (do
+              (println "❌ Need 1 click to remove tag (have " clicks ")")
+              (core/with-cursor {:status :error :reason "Need 1 click to remove tag"}))
+
+            :else
+            (let [gameid (:gameid client-state)]
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "remove-tag"
+                                 :args nil})
+              (Thread/sleep core/medium-delay)
+              (let [new-state @state/client-state
+                    new-tags (get-in new-state [:game-state :runner :tag :base] 0)
+                    new-credits (get-in new-state [:game-state :runner :credit] 0)]
+                (println (str "🏷️  Removed tag: " tags " → " new-tags " tags ($" credits " → $" new-credits ")"))
+                (check-auto-end-turn!)
+                (core/with-cursor {:status :success :tags-before tags :tags-after new-tags})))))))
+    (core/with-cursor {:status :error :reason "Failed to start turn"})))
+
+(defn purge-viruses!
+  "Corp action: Spend 3 clicks to purge all virus counters.
+   Returns {:status :success} or {:status :error :reason ...}"
+  []
+  (if (ensure-turn-started!)
+    (let [client-state @state/client-state
+          side (:side client-state)]
+      (if (not= (clojure.string/lower-case (or side "")) "corp")
+        (do
+          (println "❌ Only Corp can purge viruses")
+          (core/with-cursor {:status :error :reason "Only Corp can purge viruses"}))
+        (let [clicks (get-in client-state [:game-state :corp :click] 0)]
+          (if (< clicks 3)
+            (do
+              (println "❌ Need 3 clicks to purge (have " clicks ")")
+              (core/with-cursor {:status :error :reason "Need 3 clicks to purge"}))
+            (let [gameid (:gameid client-state)]
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "purge"
+                                 :args nil})
+              (Thread/sleep core/medium-delay)
+              (println "🧹 Purged all virus counters")
+              (check-auto-end-turn!)
+              (core/with-cursor {:status :success}))))))
+    (core/with-cursor {:status :error :reason "Failed to start turn"})))
+
+(defn trash-resource!
+  "Corp action: Pay $2 + click to trash a tagged runner's resource.
+   Requires runner to be tagged. Creates a prompt to select which resource.
+   Returns {:status :success} or {:status :error :reason ...} or {:status :waiting-input}"
+  []
+  (if (ensure-turn-started!)
+    (let [client-state @state/client-state
+          side (:side client-state)]
+      (if (not= (clojure.string/lower-case (or side "")) "corp")
+        (do
+          (println "❌ Only Corp can trash resources")
+          (core/with-cursor {:status :error :reason "Only Corp can trash resources"}))
+        (let [runner-tagged? (> (get-in client-state [:game-state :runner :tag :base] 0) 0)
+              credits (get-in client-state [:game-state :corp :credit] 0)
+              clicks (get-in client-state [:game-state :corp :click] 0)]
+          (cond
+            (not runner-tagged?)
+            (do
+              (println "❌ Runner must be tagged to trash resources")
+              (core/with-cursor {:status :error :reason "Runner not tagged"}))
+
+            (< credits 2)
+            (do
+              (println "❌ Need $2 to trash resource (have $" credits ")")
+              (core/with-cursor {:status :error :reason "Need $2 to trash resource"}))
+
+            (< clicks 1)
+            (do
+              (println "❌ Need 1 click to trash resource (have " clicks ")")
+              (core/with-cursor {:status :error :reason "Need 1 click to trash resource"}))
+
+            :else
+            (let [gameid (:gameid client-state)]
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "trash-resource"
+                                 :args nil})
+              (Thread/sleep core/medium-delay)
+              ;; This creates a prompt to select which resource to trash
+              (let [new-state @state/client-state
+                    prompt (first (get-in new-state [:game-state :corp :prompt]))]
+                (if prompt
+                  (do
+                    (println "🗑️  Select resource to trash:")
+                    (println (str "   " (:msg prompt)))
+                    (core/with-cursor {:status :waiting-input :prompt prompt}))
+                  (do
+                    (println "🗑️  Trashed resource")
+                    (check-auto-end-turn!)
+                    (core/with-cursor {:status :success})))))))))
+    (core/with-cursor {:status :error :reason "Failed to start turn"})))
+
+;; ============================================================================
 ;; Emergency Game State Fix (CHEATING - Use Only for Broken States!)
 ;; ============================================================================
 
