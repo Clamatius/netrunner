@@ -1053,6 +1053,12 @@
   []
   (state/get-cursor))
 
+(defn clear-game-state!
+  "Clear all cached game state. Delegates to ai-state.
+   Call before reconnect/resync to prevent stale data issues."
+  []
+  (state/clear-game-state!))
+
 ;; ============================================================================
 ;; Relevant Diff Waiting (for model-vs-model coordination)
 ;; ============================================================================

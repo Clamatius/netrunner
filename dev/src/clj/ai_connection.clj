@@ -91,10 +91,13 @@
              (if perspective (str "(" perspective " perspective)") "(neutral view)"))))
 
 (defn resync-game!
-  "Request full game state resync (for reconnecting to started games)
+  "Request full game state resync (for reconnecting to started games).
+   Clears cached state first to prevent stale data issues.
    Usage: (resync-game! gameid)"
   [gameid]
   (let [uuid-gameid (state/normalize-gameid gameid)]
+    ;; Clear stale state before resync to prevent diff application issues
+    (state/clear-game-state!)
     (swap! state/client-state assoc :gameid uuid-gameid)
     (ws/send-message! :game/resync {:gameid uuid-gameid})
     (println "🔄 Requesting game state resync for" uuid-gameid)))

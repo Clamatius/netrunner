@@ -641,3 +641,30 @@
   "Reset cursor to 0 (e.g., for new game session)."
   []
   (reset! state-cursor 0))
+
+;; ============================================================================
+;; State Clearing (for reconnect/resync)
+;; ============================================================================
+
+(defn clear-game-state!
+  "Clear all cached game state before reconnect/resync.
+   This prevents stale state from causing issues with diff application.
+   Preserves connection info (socket, uid, session-token, username) and side hint.
+
+   Call this BEFORE requesting a resync to ensure clean state."
+  []
+  (let [preserved-keys [:connected :socket :uid :session-token :username :csrf-token
+                        :client-id :side :gameid :spectator :spectator-perspective]]
+    ;; Clear game-specific state
+    (swap! client-state
+           (fn [s]
+             (-> (select-keys s preserved-keys)
+                 (assoc :game-state nil
+                        :last-state nil
+                        :lobby-state nil
+                        :lobby-list nil))))
+    ;; Reset auxiliary state atoms
+    (reset-cursor!)
+    (reset-seen-cards!)
+    (clear-stale-flag!)
+    (println "🧹 Cleared cached game state")))

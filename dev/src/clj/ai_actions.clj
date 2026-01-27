@@ -46,6 +46,7 @@
 (def other-side core/other-side)
 (def get-cursor core/get-cursor)
 (def with-cursor core/with-cursor)
+(def clear-game-state! core/clear-game-state!)
 
 ;; ============================================================================
 ;; Re-exported functions from ai-connection

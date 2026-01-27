@@ -282,6 +282,7 @@ ${GREEN}Replay Recording:${NC}
 
 ${GREEN}Advanced:${NC}
   eval <expr>     - Execute arbitrary Clojure expression
+  nuke-state      - Clear all cached game state (use before manual resync)
   debug-chat [on|off] - Toggle debug chat mode (waits announced in game chat)
                      Useful for HITL debugging - shows what AI is waiting for
 
@@ -1254,6 +1255,11 @@ case "$COMMAND" in
         execute '(do
                   (require (quote [ai-state :as state]))
                   (state/clear-replay!))'
+        ;;
+
+    nuke-state)
+        info "Clearing cached game state..."
+        execute "(ai-actions/clear-game-state!)"
         ;;
 
     debug-chat)
