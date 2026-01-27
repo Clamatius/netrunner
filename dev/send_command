@@ -235,8 +235,8 @@ ${GREEN}Prompts:${NC}
                      Use when paused at "authorization required" for unbroken subs
   wait-for-diff [seconds] - Wait for game state change (shows recent log)
   wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
-                     Wakes on: runs starting/ending, prompts, your turn to act
-                     Ignores: opponent credits, draws, minor actions
+                     Wakes on: runs starting/ending, prompts, your turn, 'ping' chat
+                     Ignores: opponent credits, draws, minor actions, chit-chat
                      --since N: Pass cursor from previous action; returns immediately
                                if state already advanced (fixes race conditions)
                      Works for: AI-vs-AI, HITL testing, script automation
@@ -252,6 +252,7 @@ ${GREEN}Lobby:${NC}
   join <game-id> <side>  - Join game as Runner or Corp
   resync <game-id>       - Rejoin already-started game
   chat <message>         - Send chat message to game
+  ping                   - Send 'ping' to wake opponent's wait-for-relevant-diff
 
 ${GREEN}Installation:${NC}
   install <name> <server> [--overwrite]  - Install card to server
@@ -1138,6 +1139,12 @@ case "$COMMAND" in
         [[ -z "$MESSAGE" ]] && error "Usage: send_command chat <message>"
         info "Sending chat message..."
         execute "(ai-actions/send-chat! \"$MESSAGE\")"
+        ;;
+
+    ping)
+        ensure_connection
+        info "Sending ping signal..."
+        execute "(ai-actions/send-ping!)"
         ;;
 
     # Installation

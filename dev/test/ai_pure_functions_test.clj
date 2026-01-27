@@ -310,6 +310,51 @@
       (is (not (tactics/breaker-matches-ice? fracter sentry))))))
 
 ;; ============================================================================
+;; ping-message? tests (ai-core)
+;; ============================================================================
+
+;; Access private function for testing
+(def ping-message? #'core/ping-message?)
+
+(deftest test-ping-message-exact-match
+  (testing "exact 'ping' message wakes the sleeper"
+    (is (ping-message? {:text "TestPlayer: ping"}))
+    (is (ping-message? {:text "AI_Corp: ping"}))))
+
+(deftest test-ping-message-case-insensitive
+  (testing "ping is case-insensitive"
+    (is (ping-message? {:text "Player: PING"}))
+    (is (ping-message? {:text "Player: Ping"}))
+    (is (ping-message? {:text "Player: pInG"}))))
+
+(deftest test-ping-message-with-whitespace
+  (testing "ping with surrounding whitespace still matches"
+    (is (ping-message? {:text "Player:  ping "}))
+    (is (ping-message? {:text "Player: ping  "}))))
+
+(deftest test-ping-message-not-chat
+  (testing "non-chat messages don't trigger ping (no colon format)"
+    (is (not (ping-message? {:text "ping"})))))
+
+(deftest test-ping-message-chit-chat
+  (testing "normal chat doesn't wake the sleeper"
+    (is (not (ping-message? {:text "Player: hello"})))
+    (is (not (ping-message? {:text "Player: I'm thinking about my move"})))
+    (is (not (ping-message? {:text "Player: nice play!"})))))
+
+(deftest test-ping-message-contains-ping
+  (testing "messages containing 'ping' but not exact match don't trigger"
+    (is (not (ping-message? {:text "Player: ping pong"})))
+    (is (not (ping-message? {:text "Player: I'll ping you later"})))
+    (is (not (ping-message? {:text "Player: pinging..."})))))
+
+(deftest test-ping-message-nil-entry
+  (testing "nil or missing text handled gracefully"
+    (is (not (ping-message? nil)))
+    (is (not (ping-message? {})))
+    (is (not (ping-message? {:text nil})))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

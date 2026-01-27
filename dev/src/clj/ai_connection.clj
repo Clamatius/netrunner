@@ -275,6 +275,13 @@
          :msg message})
       (println "❌ Not in a game"))))
 
+(defn send-ping!
+  "Send a 'ping' signal to wake up opponent's wait-for-relevant-diff.
+   Use this for AI coordination when no game state change occurs.
+   Usage: (send-ping!)"
+  []
+  (send-chat! "ping"))
+
 ;; ============================================================================
 ;; Dev/Testing Commands
 ;; ============================================================================

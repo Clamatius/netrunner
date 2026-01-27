@@ -58,6 +58,7 @@
 (def lobby-ready-to-start? connection/lobby-ready-to-start?)
 (def auto-start-if-ready! connection/auto-start-if-ready!)
 (def send-chat! connection/send-chat!)
+(def send-ping! connection/send-ping!)
 (def change! connection/change!)
 (def find-our-game connection/find-our-game)
 (def verify-in-game! connection/verify-in-game!)

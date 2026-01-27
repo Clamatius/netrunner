@@ -1090,6 +1090,17 @@
       ;; (Corp always goes first)
       (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))
 
+(defn- ping-message?
+  "Check if a log entry is a 'ping' wake signal.
+   Returns true for exact match 'ping' (case-insensitive, trimmed).
+   Used by AIs to wake each other without game state changes."
+  [entry]
+  (let [text (or (:text entry) "")]
+    ;; Match chat messages that are just "ping" (with optional username prefix)
+    ;; Chat format is "Username: message" for player messages
+    (when-let [msg-part (second (re-find #":\s*(.+)" text))]
+      (= "ping" (clojure.string/lower-case (clojure.string/trim msg-part))))))
+
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
    Returns keyword indicating wake reason."
@@ -1185,7 +1196,7 @@
                  reason (relevance-reason current-state side initial-run-active?)]
 
              (cond
-               ;; Found something relevant
+               ;; Found something relevant (game state)
                reason
                (do
                  (when (:verbose opts)
@@ -1197,6 +1208,17 @@
                   :reason reason
                   :cursor (state/get-cursor)
                   :new-log-entries new-entries
+                  :run-active? (run-active? current-state)
+                  :has-prompt? (has-prompt? current-state side)})
+
+               ;; Check for "ping" wake signal in chat
+               (some ping-message? new-entries-raw)
+               (do
+                 (when (:verbose opts)
+                   (println "🏓 Woke up: ping"))
+                 {:status :ping
+                  :reason :ping
+                  :cursor (state/get-cursor)
                   :run-active? (run-active? current-state)
                   :has-prompt? (has-prompt? current-state side)})
 
