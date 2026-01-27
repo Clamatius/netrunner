@@ -865,3 +865,81 @@
         :old-credits current-credits
         :new-credits new-credits
         :delta delta-amount}))))
+
+;; ============================================================================
+;; Debug Helpers for Testing Discard Pile Interactions
+;; ============================================================================
+
+(defn discard-card!
+  "DEBUG HELPER: Trash a card from hand to discard pile.
+   Useful for testing effects that interact with Archives/Heap.
+
+   Usage: (discard-card! \"Hedge Fund\")
+
+   Returns {:status :success :card-discarded <name>} or {:status :error ...}"
+  [card-name]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        side-kw (keyword side)
+        hand (get-in client-state [:game-state side-kw :hand])
+        card (first (filter #(= card-name (:title %)) hand))
+        gameid (:gameid client-state)]
+    (if card
+      (do
+        (ws/send-message! :game/action
+                          {:gameid gameid
+                           :command "trash"
+                           :args {:card card}})
+        (Thread/sleep core/medium-delay)
+        ;; Verify it moved
+        (let [new-state @state/client-state
+              in-discard? (some #(= card-name (:title %))
+                               (get-in new-state [:game-state side-kw :discard]))]
+          (if in-discard?
+            (do
+              (println (format "🗑️  Discarded: %s" card-name))
+              (core/with-cursor {:status :success :card-discarded card-name}))
+            (do
+              (println (format "⚠️  Trash command sent but card may not have moved: %s" card-name))
+              (core/with-cursor {:status :error :reason "Card did not move to discard"})))))
+      (do
+        (println (format "❌ Card not in hand: %s" card-name))
+        (core/with-cursor {:status :error :reason (str "Card not found: " card-name)})))))
+
+(defn draw-to-card!
+  "DEBUG HELPER: Draw cards until a specific card appears in hand.
+   Returns error if card not found after drawing entire deck.
+   Max 45 draws as safety limit.
+
+   Usage: (draw-to-card! \"Hedge Fund\")
+
+   Returns {:status :success :card <name> :draws N} or {:status :error ...}"
+  [card-name]
+  (let [max-draws 45]
+    (loop [draws 0]
+      (let [client-state @state/client-state
+            side (:side client-state)
+            side-kw (keyword side)
+            hand (get-in client-state [:game-state side-kw :hand])
+            found (first (filter #(= card-name (:title %)) hand))
+            deck-size (count (get-in client-state [:game-state side-kw :deck]))]
+        (cond
+          found
+          (do
+            (println (format "✅ Found %s after %d draws" card-name draws))
+            (core/with-cursor {:status :success :card card-name :draws draws}))
+
+          (>= draws max-draws)
+          (do
+            (println (format "❌ Max draws (%d) reached, %s not found" max-draws card-name))
+            (core/with-cursor {:status :error :reason "Max draws reached"}))
+
+          (= deck-size 0)
+          (do
+            (println (format "❌ Deck empty, %s not found" card-name))
+            (core/with-cursor {:status :error :reason "Deck empty"}))
+
+          :else
+          (do
+            (draw-card!)
+            (recur (inc draws))))))))

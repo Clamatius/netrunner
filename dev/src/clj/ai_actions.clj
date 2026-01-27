@@ -112,6 +112,10 @@
 (def end-turn basic/end-turn)
 (def fix-credits! basic/fix-credits!)
 
+;; Debug helpers for testing discard pile interactions
+(def discard-card! basic/discard-card!)
+(def draw-to-card! basic/draw-to-card!)
+
 ;; Tag and virus actions
 (def remove-tag! basic/remove-tag!)
 (def purge-viruses! basic/purge-viruses!)
