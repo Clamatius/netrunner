@@ -341,6 +341,58 @@ Almost always bypass: Clicks are cheaper than 8 credits unless you are [effectiv
 
 **After early remote steals:** R&D is usually richer than HQ. Corp draws agendas to install them, not hold them. If you just stole from a remote, Corp's hand is likely ICE/econ, not more agendas. Diversify to R&D or set up instead of hammering empty HQ.
 
+### Information from Rez Decisions
+
+**Corp rez decisions reveal information.** When Corp rezzes ICE, analyze why.
+
+**The rez decision matrix:**
+
+| Corp Action | What It Likely Means |
+|-------------|---------------------|
+| Rez ETR ICE on remote | Protecting something valuable (agenda, key asset) |
+| Rez damage ICE on remote | Protecting AND deterring (could be trap or agenda) |
+| Don't rez on remote | Can't afford OR trap that wants access |
+| Rez ETR ICE on central | Standard defense |
+
+**The critical tell:**
+
+```
+Situation: Server has advanced card + unrezzed ICE
+You run, Corp rezzes ETR ICE
+
+Why would Corp pay to keep you out?
+- If it's a trap, Corp WANTS you to access (why pay to prevent that?)
+- If it's agenda, Corp wants to protect it
+
+Conclusion: ETR rez on remote = protecting something valuable
+```
+
+**Bayesian update example:**
+
+```
+Prior: 50% trap, 50% agenda
+Observation: Corp rezzed 3¢ Palisade to ETR
+Likelihood if trap: ~0% (why pay to prevent trap damage?)
+Likelihood if agenda: ~100% (obvious protection)
+
+Posterior: Near certainty it's an agenda
+```
+
+**Application to tag punishment:**
+
+If Corp protects a slow-advanced card AND plays tag-punishment:
+- Likely Orbital Superiority (4/2 that deals 4 meat damage if you're tagged)
+- Keep 8¢+ to avoid Public Trail tags
+- Keep hand size 5+ as damage buffer
+- Don't end turn tagged if avoidable
+
+**The "Sword of Damocles" effect:**
+
+Even without seeing specific cards, knowing what's in the format shapes play:
+- Orbital Superiority in format → tag avoidance more valuable
+- Retribution in format → can't discard spare breakers carelessly
+- The possibility changes optimal play even before you see the card
+
 ### R&D Lock Strategy
 
 **When R&D is cheap to access, run it EVERY turn.**
