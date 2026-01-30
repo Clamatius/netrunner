@@ -1031,6 +1031,12 @@
                    :iterations (inc iteration)
                    :elapsed-ms (- (System/currentTimeMillis) start-time))
 
+            ;; Waiting for Runner signal - poll and retry (Corp auto-waiting)
+            (= status :waiting-for-runner-signal)
+            (do
+              (Thread/sleep wait-delay-ms)
+              (recur (inc iteration)))
+
             ;; Waiting for opponent - terminal status, stop loop
             ;; The other client needs to run their own loop (e.g., Corp runs monitor-run!)
             (or (= status :waiting-for-opponent)

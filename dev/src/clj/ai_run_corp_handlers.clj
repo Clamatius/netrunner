@@ -186,7 +186,8 @@
              :fired-at-position position}))))))
 
 (defn handle-corp-fire-decision
-  "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision."
+  "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision.
+   Returns :decision-required if Runner has signaled, :waiting-for-runner-signal otherwise."
   [{:keys [side run-phase my-prompt strategy state]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice")
@@ -202,25 +203,32 @@
               runner-signaled? (runner-signaled-let-fire? state ice-title)
               status-key [:corp-fire-decision position ice-title runner-signaled?]
               already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "Subs unbroken: %s (%d sub%s)"
-                           ice-title sub-count (if (= sub-count 1) "" "s")))
-            (if runner-signaled?
-              (do
+          (if runner-signaled?
+            ;; Runner signaled - Corp must decide NOW
+            (do
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "Subs unbroken: %s (%d sub%s)"
+                               ice-title sub-count (if (= sub-count 1) "" "s")))
                 (println "   Runner has signaled 'let subs fire'")
                 (println "   fire-subs <name>  - fire the unbroken subs")
                 (println "   continue          - pass without firing"))
-              (do
-                (println "   Runner has NOT signaled 'let subs fire' yet")
-                (println "   WAIT for Runner to break or signal")
-                (println "   fire-subs <name>  - only after Runner confirms")
-                (println "   continue          - pass without firing"))))
-          {:status :decision-required
-           :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
-           :ice ice-title
-           :unbroken-count sub-count
-           :position position})))))
+              {:status :decision-required
+               :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
+               :ice ice-title
+               :unbroken-count sub-count
+               :position position})
+            ;; Runner hasn't signaled - keep waiting (auto-continue loop will poll)
+            (do
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "⏳ Waiting for Runner to break or signal on %s (%d unbroken sub%s)..."
+                               ice-title sub-count (if (= sub-count 1) "" "s"))))
+              {:status :waiting-for-runner-signal
+               :message (format "Waiting for Runner to break or signal on %s" ice-title)
+               :ice ice-title
+               :unbroken-count sub-count
+               :position position})))))))
 
 (defn handle-corp-all-subs-resolved
   "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired)."
