@@ -370,7 +370,9 @@
             after-clicks (get-in client-state [:game-state (keyword side) :click])]
         (core/show-before-after "💰 Credits" before-credits after-credits)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-        (core/show-turn-indicator)
+        ;; Show turn indicator only if we won't auto-end (which shows its own)
+        (when (> after-clicks 0)
+          (core/show-turn-indicator))
         (check-auto-end-turn!)
         (core/with-cursor
           {:status :success

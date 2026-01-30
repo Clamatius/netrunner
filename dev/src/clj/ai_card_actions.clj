@@ -48,13 +48,15 @@
                       before-clicks (get-in client-state [:game-state side :click])
                       gameid (:gameid client-state)
                       card-ref (core/create-card-ref card)
-                      card-zone (:zone card)]
+                      card-zone (:zone card)
+                      ;; Capture log size BEFORE sending to avoid race conditions
+                      initial-log-size (core/get-log-size)]
                   (ws/send-message! :game/action
                                     {:gameid gameid
                                      :command "play"
                                      :args {:card card-ref}})
               ;; Wait and verify action - now returns status map
-              (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
+              (let [result (core/verify-action-in-log card-title card-zone core/action-timeout initial-log-size)]
                 (case (:status result)
                   :success
                   (let [after-state @state/client-state
@@ -66,9 +68,11 @@
                       (println (str "   💰 Credits: " before-credits " → " after-credits
                                    " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-                    (core/show-turn-indicator)
+                    ;; Show turn indicator only if we won't auto-end (which shows its own)
+                    (when (> after-clicks 0)
+                      (core/show-turn-indicator))
                     (flush)
-                    ;; Auto-end turn if no clicks remaining
+                    ;; Auto-end turn if no clicks remaining (will show its own indicator)
                     (basic/check-auto-end-turn!)
                     {:status :success
                      :data {:card-title card-title}})
@@ -119,19 +123,25 @@
 
 (defn- handle-install-success!
   "Handle successful install: print feedback, auto-resolve prompts, check auto-end."
-  [card-title card-type normalized-server before-clicks side overwrite?]
+  [card-title card-type normalized-server before-clicks before-credits card-cost side overwrite?]
   (let [after-state @state/client-state
-        after-clicks (get-in after-state [:game-state side :click])]
+        after-clicks (get-in after-state [:game-state side :click])
+        after-credits (get-in after-state [:game-state side :credit])]
     (if normalized-server
       (println (str "📥 Installed: " card-title " on " normalized-server))
       (println (str "📥 Installed: " card-title " (" card-type ")")))
+    ;; Show credits spent if any
+    (when (and card-cost (> card-cost 0))
+      (core/show-before-after "💰 Credits" before-credits after-credits))
     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
     ;; Auto-resolve any OK-only prompts (e.g., trash confirmation from overwrite)
     (when overwrite?
       (prompts/auto-resolve-ok-prompt!))
-    (core/show-turn-indicator)
+    ;; Show turn indicator only if we won't auto-end (which shows its own)
+    (when (> after-clicks 0)
+      (core/show-turn-indicator))
     (flush)
-    ;; Auto-end turn if no clicks remaining
+    ;; Auto-end turn if no clicks remaining (will show its own indicator)
     (basic/check-auto-end-turn!)
     {:status :success
      :data {:card-title card-title :server normalized-server}}))
@@ -163,21 +173,25 @@
         side (keyword (:side client-state))
         card-title (:title card)
         card-type (:type card)
+        card-cost (or (:cost card) 0)
         before-clicks (get-in client-state [:game-state side :click])
+        before-credits (get-in client-state [:game-state side :credit])
         gameid (:gameid client-state)
         card-ref (core/create-card-ref card)
         card-zone (:zone card)
         args (if normalized-server
                {:card card-ref :server normalized-server}
-               {:card card-ref})]
+               {:card card-ref})
+        ;; Capture log size BEFORE sending to avoid race conditions
+        initial-log-size (core/get-log-size)]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "play"
                        :args args})
     ;; Wait and verify action
-    (let [result (core/verify-action-in-log card-title card-zone core/action-timeout)]
+    (let [result (core/verify-action-in-log card-title card-zone core/action-timeout initial-log-size)]
       (case (:status result)
-        :success      (handle-install-success! card-title card-type normalized-server before-clicks side overwrite?)
+        :success      (handle-install-success! card-title card-type normalized-server before-clicks before-credits card-cost side overwrite?)
         :waiting-input (handle-install-waiting! card-title (:prompt result))
         :error        (handle-install-error! card-title result)))))
 
@@ -408,13 +422,14 @@
                 (println (format "❌ Cannot rez ICE during %s phase" (or run-phase "this")))
                 (println "   → ICE can only be rezzed during approach-ice phase")
                 nil)
-              (do
+              (let [;; Capture log size BEFORE sending to avoid race conditions
+                    initial-log-size (core/get-log-size)]
                 (ws/send-message! :game/action
                                   {:gameid gameid
                                    :command "rez"
                                    :args {:card card-ref}})
                 ;; Wait and verify action appeared in log
-                (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
+                (if (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
                   (let [after-state @state/client-state
                         after-credits (get-in after-state [:game-state :corp :credit])]
                     (println (str "🔴 Rezzed: " card-name))
@@ -533,14 +548,16 @@
                   card-ref {:cid (:cid card)
                            :zone (:zone card)
                            :side (:side card)
-                           :type (:type card)}]
+                           :type (:type card)}
+                  ;; Capture log size BEFORE sending to avoid race conditions
+                  initial-log-size (core/get-log-size)]
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "advance"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log
               ;; Note: Card doesn't change zones, so we pass its current zone
-              (let [result (core/verify-action-in-log card-name (:zone card) 3000)]
+              (let [result (core/verify-action-in-log card-name (:zone card) 3000 initial-log-size)]
                 (if (= :success (:status result))
                   (let [after-state @state/client-state
                         updated-card (core/find-installed-corp-card card-name)
@@ -586,13 +603,15 @@
           (if (= "Agenda" (:type card))
             (let [gameid (:gameid client-state)
                   card-ref (core/create-card-ref card)
-                  agenda-points (:agendapoints card)]
+                  agenda-points (:agendapoints card)
+                  ;; Capture log size BEFORE sending to avoid race conditions
+                  initial-log-size (core/get-log-size)]
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "score"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log (look for "score" or card name)
-              (if (core/verify-action-in-log card-name (:zone card) core/action-timeout)
+              (if (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
                 (let [after-state @state/client-state
                       after-score (get-in after-state [:game-state :corp :agenda-point])
                       runner-score (get-in after-state [:game-state :runner :agenda-point])]

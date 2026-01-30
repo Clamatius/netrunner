@@ -307,9 +307,14 @@
    - Action waiting for input: Only prompt created, card still in hand
    - Action failed: Nothing happened
 
-   Waits up to max-wait-ms for the log entry to appear"
-  [card-name card-initial-zone max-wait-ms]
-  (let [initial-size (get-log-size)
+   Waits up to max-wait-ms for the log entry to appear
+
+   IMPORTANT: Pass initial-log-size captured BEFORE sending the action message
+   to avoid race conditions with fast WebSocket responses."
+  ([card-name card-initial-zone max-wait-ms]
+   (verify-action-in-log card-name card-initial-zone max-wait-ms nil))
+  ([card-name card-initial-zone max-wait-ms initial-log-size]
+  (let [initial-size (or initial-log-size (get-log-size))
         initial-prompt (state/get-prompt)
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
@@ -363,7 +368,7 @@
             (recur))
           {:status :error
            :reason "Action not confirmed in game log (timeout)"
-           :card-name card-name})))))
+           :card-name card-name}))))))
 
 (defn verify-ability-in-log
   "Check if ability usage appears in game log.

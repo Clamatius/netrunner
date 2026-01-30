@@ -121,8 +121,67 @@ ensure_connection() {
     fi
 }
 
-# Show help
+# Show compact help (default) or full help (--full/--dev)
 show_help() {
+    local show_full="${1:-}"
+    if [[ "$show_full" == "--full" ]] || [[ "$show_full" == "--dev" ]]; then
+        show_help_full
+    else
+        show_help_compact
+    fi
+}
+
+show_help_compact() {
+    cat << EOF
+${BLUE}AI Player Command Interface${NC}
+
+${YELLOW}Usage:${NC}
+  ./send_command corp|runner <command> [args...]
+
+${GREEN}Essential Commands:${NC}
+  status           Show game state (turn, credits, clicks)
+  board            Show game board (servers, ICE, installed cards)
+  hand             Show cards in hand
+  prompt           Show current prompt (if any)
+
+${GREEN}Turn Actions:${NC}
+  start-turn       Start your turn
+  take-credit      Spend click for credit
+  draw             Spend click to draw
+  end-turn         End your turn
+
+${GREEN}Card Actions:${NC}
+  play <name>      Play operation/event
+  install <name> <server>  Install card (Corp needs server: new, HQ, etc.)
+  advance <name>   Advance installed card
+  score <name>     Score agenda
+  rez <name>       Rez ICE/asset/upgrade
+
+${GREEN}Running:${NC}
+  run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
+  continue         Continue run / pass priority
+
+${GREEN}Prompts:${NC}
+  choose <N>       Choose option N (0 = first)
+  choose-card <N>  Select card N from selectable cards
+
+${GREEN}Lobby:${NC}
+  create-game <title>   Create new game
+  keep-hand / mulligan  Mulligan decision
+  start-game            Start game after players join
+
+${YELLOW}Examples:${NC}
+  ./send_command corp status
+  ./send_command corp install "Hedge Fund" HQ
+  ./send_command runner run HQ
+  ./send_command runner choose 0
+
+${BLUE}For full help:${NC} ./send_command help --full
+
+EOF
+}
+
+show_help_full() {
     cat << EOF
 ${BLUE}AI Player Command Interface${NC}
 
@@ -155,14 +214,8 @@ ${GREEN}Basic Actions:${NC}
   indicate-action - Signal you want to use paid ability (pauses game)
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
-  end-turn [--force] - End your turn (requires --force if clicks remain - typically breaks the gamestate)
+  end-turn [--force] - End your turn (requires --force if clicks remain)
   smart-end-turn  - Auto-end turn if safe (checks prompts, clicks, EOT triggers)
-  fix-credits <N> - ⚠️  CHEATING: Manually set credits (ONLY for broken game states!)
-                     Use absolute value (10) or delta (+5, -3)
-
-${GREEN}Debug Helpers:${NC}
-  discard-card <name> - Move card from hand to discard pile (for testing Archives/Heap)
-  draw-to-card <name> - Draw cards until specified card appears in hand
 
 ${GREEN}Tag & Virus Actions:${NC}
   remove-tag      - (Runner) Pay \$2 + click to remove a tag
@@ -172,158 +225,95 @@ ${GREEN}Tag & Virus Actions:${NC}
 ${GREEN}Mulligan & Hand Management:${NC}
   keep-hand       - Keep starting hand
   mulligan        - Mulligan (redraw) starting hand
-
-  ${BLUE}End-of-Turn Discard:${NC} (when hand exceeds max size)
-  discard         - Auto-discard first N cards (not smart - prefer specifying cards)
-  discard <name>... - Discard specific cards by name
-                     Example: discard "Sure Gamble" "Diesel"
-                     Use quotes around each card name!
-  discard <N>...  - Discard by hand index (0 = first card)
-                     Example: discard 0 2 4
-
-  NOTE: 'discard' is ONLY for end-of-turn hand size prompts.
-        For mid-game card selection prompts, use 'choose-card' instead.
+  discard <name>... - Discard specific cards for end-of-turn hand size
 
 ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
   play-index <N>  - Play card by index (0-4)
-  use-ability <name> <N>  - Use installed card's ability N (e.g., "Smartware Distributor" 0)
-  use-runner-ability <name> <N> - Use runner ability on Corp card (e.g., "Brân 1.0" 0 for bioroid)
-  trash <name>    - Trash installed card by name (Corp: ICE/asset, Runner: rig)
+  use-ability <name> <N>  - Use installed card's ability N
+  use-runner-ability <name> <N> - Use runner ability on Corp card
+  trash <name>    - Trash installed card by name
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)
   auto-pass       - Toggle auto-pass priority during runs (Corp only)
   advance <name> [--overadvance]  - Advance installed card (Corp only)
-                     Blocks advancing past requirement by default
-                     Use --overadvance to force advancing past requirement
-  score <name>    - Score agenda with sufficient advancement counters (Corp only)
+  score <name>    - Score agenda with sufficient advancement counters
 
-${GREEN}Runner Actions:${NC}
+${GREEN}Running:${NC}
   run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.)
-  let-subs-fire <name> - Signal intent to let ICE subroutines fire (Runner only, during runs)
-
-${GREEN}Run Automation:${NC}
-  continue [flags]     - Auto-continue until decision required (see Prompts section)
-  continue-run [flags] - (alias for 'continue --single') Single-step mode
-  monitor-run [flags]  - (alias for 'continue') Loop mode
+  let-subs-fire <name> - Signal intent to let ICE subroutines fire
+  continue [flags]     - Auto-continue until decision required
+  jack-out             - Jack out of current run
+  tank <ice-name>      - Authorize letting subs fire on ICE
 
   ${BLUE}Run Flags:${NC} (usable with run, continue)
-    --no-rez         Corp: don't rez any ICE (auto-decline all rez windows)
-    --rez <name>     Corp: only rez ICE matching <name>, decline others
+    --no-rez         Corp: don't rez any ICE
+    --rez <name>     Corp: only rez ICE matching <name>
     --fire-unbroken  Corp: auto-fire unbroken subroutines
     --full-break     Runner: auto-break all ICE with available breakers
-    --no-continue    Don't auto-continue after run start (single-step mode)
-    --force          ⚠️  TEST ONLY: Bypass ALL checks (breaks game state in HITL!)
+    --no-continue    Don't auto-continue after run start
 
 ${GREEN}Prompts:${NC}
-  ${BLUE}Button/Choice Prompts:${NC} (prompt shows text options like "Yes"/"No", "Steal"/"Don't access")
   choose <N>      - Choose option N from prompt (0 = first option)
-  choose-value <text> - Choose by matching text (e.g., "Yes", "Steal", "Done")
+  choose-value <text> - Choose by matching text (e.g., "Yes", "Steal")
+  choose-card <N> - Select card N from selectable cards
+  multi-choose <cards...> - Select MULTIPLE cards
 
-  ${BLUE}Card Selection Prompts:${NC} (prompt asks you to select a card)
-  choose-card <N> - Select card N from the selectable cards (0 = first)
-                     Use 'prompt' command to see what cards are selectable
-  multi-choose <cards...> - Select MULTIPLE cards (for effects requiring several)
-                     By name: multi-choose "Hedge Fund" "IPO"
-                     By index: multi-choose 0 1 2
-
-  ${BLUE}How to tell which to use:${NC}
-  - Run 'prompt' to see the current prompt type and options
-  - "choice" prompts → use choose/choose-value
-  - "select" prompts → use choose-card (single) or multi-choose (multiple)
-  continue [flags] - Auto-continue until decision required (default: loop mode)
-                     --single  Single-step mode (one action, then return)
-                     --raw     Raw WebSocket pass (debugging only)
-  jack-out        - Jack out of current run (end run unsuccessfully)
-  tank <ice-name> - Authorize letting subs fire on ICE, then continue run
-                     Use when paused at "authorization required" for unbroken subs
-  wait-for-diff [seconds] - Wait for game state change (shows recent log)
+${GREEN}Waiting / Synchronization:${NC}
+  wait-for-diff [seconds] - Wait for game state change
   wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
-                     Wakes on: runs starting/ending, prompts, your turn, 'ping' chat
-                     Ignores: opponent credits, draws, minor actions, chit-chat
-                     --since N: Pass cursor from previous action; returns immediately
-                               if state already advanced (fixes race conditions)
-                     Works for: AI-vs-AI, HITL testing, script automation
-  wait-for-log-past <marker> [seconds] - Wait for log entries after marker text
-  get-cursor          - Get current state cursor (for --since parameter)
+  get-cursor              - Get current state cursor (for --since parameter)
 
 ${GREEN}Lobby:${NC}
-  create-game <title> [side] [precon] [gateway-type]  - Create new game (gateway-type: Beginner|Intermediate)
-  start-game      - Start game (after creating and opponent joins)
-  auto-start      - Auto-start game if lobby is ready (validates 2 players with valid decks)
+  create-game <title> [side] [precon] [gateway-type]  - Create new game
+  start-game      - Start game (after opponent joins)
+  auto-start      - Auto-start game if lobby is ready
   leave-game      - Leave current game lobby
   list-lobbies    - List available games to join
   join <game-id> <side>  - Join game as Runner or Corp
   resync <game-id>       - Rejoin already-started game
-  chat <message>         - Send chat message to game
-  ping                   - Send 'ping' to wake opponent's wait-for-relevant-diff
+  chat <message>         - Send chat message
+  ping                   - Wake opponent's wait-for-relevant-diff
 
 ${GREEN}Installation:${NC}
   install <name> <server> [--overwrite]  - Install card to server
                      Centrals: HQ, R&D, Archives (for ICE)
                      Remotes: "new" creates new, "Server 1" etc. must exist
-                     Use --overwrite to replace existing asset/agenda
-  install-index <N> [server] - Install card by index (Corp needs server)
+  install-index <N> [server] - Install card by index
 
-${GREEN}Connection:${NC}
-  connect         - Manually reconnect WebSocket to server
+${GREEN}AI Bot (Corp only):${NC}
+  dashboard       - Show ranked heuristic options (all rules)
+  dashboard-compact [N] - Show top N available options
+  bot             - Make one heuristic decision and execute
+  bot-turn        - Play full turn with heuristic AI
+  bot-respond     - Respond to active run (rez/fire decisions)
+  bot-watch       - Continuously watch for and respond to runs
 
-${GREEN}AI Bot:${NC}
-  dashboard       - Corp: Show ranked heuristic options (all rules)
-  dashboard-compact [N] - Corp: Show top N available options (default: 5)
-  bot             - Corp: Make one heuristic decision and execute
-  bot-turn        - Corp: Play full turn with heuristic AI
-  bot-status      - Corp: Show decision-relevant state and next action
-  bot-respond     - Corp: Respond to active run (rez/fire decisions)
-  bot-watch       - Corp: Continuously watch for and respond to runs
+${GREEN}Debug & Dev:${NC}
+  fix-credits <N>     - CHEATING: Manually set credits
+  discard-card <name> - Move card to discard (for testing)
+  draw-to-card <name> - Draw until card appears in hand
+  eval <expr>         - Execute arbitrary Clojure expression
+  nuke-state          - Clear all cached game state
+  debug-chat [on|off] - Toggle debug chat mode
+  connect             - Manually reconnect WebSocket
 
 ${GREEN}Replay Recording:${NC}
   replay-start    - Start recording game for replay
   replay-stop     - Stop recording (keeps data)
-  replay-save [f] - Save replay to file (default: dev/replays/replay-<gameid>-<timestamp>.json)
-  replay-status   - Show recording status (enabled, diff count)
+  replay-save [f] - Save replay to file
+  replay-status   - Show recording status
   replay-clear    - Clear recorded data
-
-${GREEN}Advanced:${NC}
-  eval <expr>     - Execute arbitrary Clojure expression
-  nuke-state      - Clear all cached game state (use before manual resync)
-  debug-chat [on|off] - Toggle debug chat mode (waits announced in game chat)
-                     Useful for HITL debugging - shows what AI is waiting for
 
 ${YELLOW}Turn Timing Quick Reference:${NC}
   ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
-    • Use 'continue' to advance through paid ability windows
-    • Clicks must be spent before end-turn
-    • Discard happens before turn formally ends
-
   ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
-    • No mandatory draw (unlike Corp)
-    • Use 'continue' to advance through paid ability windows
-    • Clicks must be spent before end-turn
-
-  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter ice → movement → access/jack out
-    • Runner: 'run <server>' auto-continues through unopposed runs
-    • Corp: 'monitor-run' to participate (auto-continues, pauses at rez decisions)
-    • Approach: Corp decides to rez ICE or decline (use 'rez <name>' or 'continue')
-    • Encounter: Break subs with icebreakers (or let fire with 'let-subs-fire')
-    • Access: 'choose-value steal/trash/"no action"' for each accessed card
-    • Runs auto-pause at: rez decisions (Corp), trashable access, sub fire decisions
+  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter → movement → access
 
   ${BLUE}Common Stuck States:${NC}
-    • Both at 0 clicks, no prompts → Use 'start-turn' to begin next turn
-    • Run stopped → Check 'prompt' to see what decision is needed
-    • Turn won't end → Check 'prompt' for blocking discard/ability prompts
-
-${YELLOW}Examples:${NC}
-  ./send_command status
-  ./send_command list-lobbies
-  ./send_command take-credit
-  ./send_command play "Sure Gamble"
-  ./send_command install "Daily Casts"
-  ./send_command run "R&D"
-  ./send_command choose 0
-  ./send_command choose-value keep
-  ./send_command end-turn
+    • Both at 0 clicks, no prompts → Use 'start-turn'
+    • Run stopped → Check 'prompt' for decision needed
+    • Turn won't end → Check 'prompt' for blocking prompts
 
 EOF
 }
@@ -401,7 +391,7 @@ check_client
 case "$COMMAND" in
     # Help
     help|--help|-h)
-        show_help
+        show_help "${1:-}"
         ;;
 
     # Connection

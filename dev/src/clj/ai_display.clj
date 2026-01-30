@@ -724,6 +724,50 @@
       (println (format "  %d. %s [%s]" idx (:title card) (:type card))))
     hand))
 
+(defn- format-card-for-hand
+  "Format a single card for hand display with type-specific info."
+  [card]
+  (let [card-type (:type card)
+        subtypes (when-let [st (:subtypes card)]
+                   (when (seq st)
+                     (str ": " (clojure.string/join ", " st))))
+        ;; Type-specific formatting
+        cost-info (case card-type
+                    ;; Agendas: show advancement requirement and points
+                    "Agenda" (let [adv (:advancementcost card)
+                                   pts (:agendapoints card)]
+                               (str " (" adv "⬆ → " pts "pts)"))
+                    ;; ICE: show rez cost (not play cost)
+                    "ICE" (str " (" (:cost card) "¢)")
+                    ;; Programs: show cost, MU, and strength if icebreaker
+                    "Program" (let [cost (:cost card)
+                                    mu (:memoryunits card 1)
+                                    strength (:strength card)]
+                                (str " (" cost "¢, " mu "MU"
+                                     (when strength (str ", str " strength))
+                                     ")"))
+                    ;; Hardware: show cost
+                    "Hardware" (str " (" (:cost card) "¢)")
+                    ;; Resources: show cost
+                    "Resource" (str " (" (:cost card) "¢)")
+                    ;; Assets: show cost and trash cost
+                    "Asset" (let [cost (:cost card)
+                                  trash (:trash card)]
+                              (str " (" cost "¢"
+                                   (when trash (str ", 🗑" trash))
+                                   ")"))
+                    ;; Upgrades: show cost and trash cost
+                    "Upgrade" (let [cost (:cost card)
+                                    trash (:trash card)]
+                                (str " (" cost "¢"
+                                     (when trash (str ", 🗑" trash))
+                                     ")"))
+                    ;; Operations/Events: show cost
+                    (if-let [c (:cost card)]
+                      (str " (" c "¢)")
+                      ""))]
+    (str "[" card-type subtypes "]" cost-info)))
+
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
   []
@@ -734,17 +778,11 @@
           nil)
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
-          (println (str "\n🃏 " (clojure.string/capitalize side) " Hand:"))
+          (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
           (doseq [[idx card] (map-indexed vector hand)]
             (let [card-name (core/format-card-name-with-index card hand)
-                  card-type (:type card)
-                  subtypes (when-let [st (:subtypes card)]
-                            (when (seq st)
-                              (str ": " (clojure.string/join ", " st))))
-                  cost (if-let [c (:cost card)]
-                        (str " (" c "¢)")
-                        "")]
-              (println (str "  " idx ". " card-name " [" card-type subtypes "]" cost))
+                  formatted (format-card-for-hand card)]
+              (println (str "  " idx ". " card-name " " formatted))
               ;; Show card text for first-seen cards
               (core/show-card-on-first-sight! (:title card)))))
         hand))))
