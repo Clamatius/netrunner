@@ -29,6 +29,11 @@ Card effects and board state always beat every heuristic given here, given combi
 *   **Agendas**: NEVER install naked (without ICE). Ideally at least 1 ICE that ends the run.
 *   **Econ Assets**: Install `Drip Assets` behind light ICE, `Click Assets` in the scoring remote when poor or no agenda to score.
 
+### 4. ICE Layering
+*   Mix ICE types on important servers. Palisade + Tithe beats Palisade alone.
+*   Each type forces a different breaker. Runner with only Cleaver walks through barriers but eats net damage from sentries.
+*   "Doesn't ETR" ≠ useless. Taxing ICE wins the economic war—every run through ICE costs them.
+
 ---
 
 ## Turn Template

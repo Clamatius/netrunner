@@ -55,7 +55,7 @@ ICE Roles and "favourite" server, typical cost to break:
 - **Tithe**: HQ, R&D. $2. Anti-facecheck. Always rez (1 cost). Small tax and they don't have to pay it. They usually pay.
 - **Karunā**: R&D, Remote: $4. "Fork" ICE. Runner must choose: End run OR take damage.
 - **Whitespace**: R&D, HQ: $2/$1. Early game gearcheck. Becomes porous if Runner is rich (>6¢).
-- **Brân 1.0**: R&D, Remote: $8/{2|3 clicks} The Wall. Stops runs. Clickable, but costs 3 clicks. Place innermost. 2 in the same server is very expensive to run - at least one costs $. The runner will almost always go elsewhere.
+- **Brân 1.0**: Remote, R&D (lategame): $8/{2|3 clicks} The Wall. Stops runs. Clickable, but costs 3 clicks. Place innermost. 2 in the same server is very expensive to run - at least one costs $. The runner will almost always go elsewhere.
 - **Palisade**: Remote: $3/$1 based on ability. Put on remotes if at all possible because it's a bad tax ice but good ETR.
 - **Diviner**: R&D, HQ: Small tax code gate. Runner can dodge the ability with smart play, otherwise costs ~$3.
 
