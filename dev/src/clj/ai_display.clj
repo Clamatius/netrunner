@@ -253,12 +253,13 @@
             (when (and prompt (not= :waiting prompt-type))
               (println "\n🔔 Active Prompt:" (:msg prompt)))
 
-            ;; Show recent log entries
+            ;; Show recent log entries (summarized)
             (when-let [log (get-in gs [:log])]
-              (let [recent-log (take-last 3 log)]
-                (when (seq recent-log)
+              (let [recent-log (take-last 4 log)
+                    summarized (core/summarize-log-entries recent-log)]
+                (when (seq summarized)
                   (println "\n--- RECENT LOG ---")
-                  (doseq [entry recent-log]
+                  (doseq [entry summarized]
                     (println " " (:text entry))))))
 
             nil)))))))

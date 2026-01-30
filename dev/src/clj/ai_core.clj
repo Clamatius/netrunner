@@ -1002,6 +1002,131 @@
            :else
            (recur (inc checks))))))))
 
+;; ============================================================================
+;; Log Summarization
+;; ============================================================================
+
+(defn- run-start-entry?
+  "Check if entry is a run start"
+  [text]
+  (or (re-find #"makes a run on" text)
+      (re-find #"to make a run on" text)))
+
+(defn- run-detail-entry?
+  "Check if entry is run detail (ICE encounter, breaking, etc.) that should be collapsed"
+  [text]
+  (or (re-find #"is encountered" text)
+      (re-find #"breaks? .* subroutine" text)
+      (re-find #"passes? " text)
+      (re-find #"approaches?" text)
+      (re-find #"fires? no unbroken" text)
+      (re-find #"Runner has no further action" text)
+      (re-find #"Corp has no further action" text)
+      (re-find #"continue|Continue" text)
+      (re-find #"jacks out" text)
+      (re-find #"Run ends" text)))
+
+(defn- run-end-entry?
+  "Check if entry marks run end (success or failure)"
+  [text]
+  (or (re-find #"Run on .* successful" text)
+      (re-find #"Run ends" text)
+      (re-find #"jacks out" text)))
+
+(defn- access-entry?
+  "Check if entry is an access"
+  [text]
+  (re-find #"accesses?" text))
+
+(defn- extract-run-server
+  "Extract server name from run start entry"
+  [text]
+  (when-let [match (or (re-find #"makes a run on ([^.]+)" text)
+                       (re-find #"to make a run on ([^.]+)" text))]
+    (second match)))
+
+(defn- simplify-basic-action
+  "Remove 'to use X Basic Action Card' ceremony from log text"
+  [text]
+  (-> text
+      (str/replace #" to use (Corp|Runner) Basic Action Card to" " to")
+      (str/replace #"\s+" " ")))
+
+(defn summarize-log-entries
+  "Summarize log entries, collapsing run details into single lines.
+   Returns a sequence of {:text ...} maps suitable for display."
+  [entries]
+  (loop [remaining entries
+         result []
+         in-run? false
+         run-server nil
+         accesses 0
+         ice-passed []]
+    (if (empty? remaining)
+      ;; End of entries - close any open run
+      (if in-run?
+        (let [summary (str "  [Run on " run-server
+                          (when (seq ice-passed) (str " - passed " (str/join ", " ice-passed)))
+                          (when (pos? accesses) (str " - accessed " accesses " card" (when (> accesses 1) "s")))
+                          "]")]
+          (conj result {:text summary}))
+        result)
+
+      (let [entry (first remaining)
+            text (or (:text entry) "")
+            simplified (simplify-basic-action text)]
+        (cond
+          ;; Run start - begin tracking
+          (run-start-entry? text)
+          (let [server (extract-run-server text)]
+            (recur (rest remaining)
+                   (if in-run?
+                     ;; Close previous run first
+                     (conj result {:text (str "  [Run on " run-server " completed]")})
+                     result)
+                   true
+                   server
+                   0
+                   []))
+
+          ;; In a run - track details
+          in-run?
+          (cond
+            ;; ICE encounter - track name
+            (re-find #"(\S+) is encountered" text)
+            (let [ice-name (second (re-find #"(\S+) is encountered" text))]
+              (recur (rest remaining) result true run-server accesses (conj ice-passed ice-name)))
+
+            ;; Access - count them
+            (access-entry? text)
+            (recur (rest remaining) result true run-server (inc accesses) ice-passed)
+
+            ;; Run end - emit summary
+            (run-end-entry? text)
+            (let [success? (re-find #"successful" text)
+                  summary (str (if success? "✓ " "✗ ") "Run on " run-server
+                              (when (seq ice-passed) (str " (passed " (str/join ", " ice-passed) ")"))
+                              (when (pos? accesses) (str " → accessed " accesses)))]
+              (recur (rest remaining)
+                     (conj result {:text summary})
+                     false nil 0 []))
+
+            ;; Other run detail - skip
+            (run-detail-entry? text)
+            (recur (rest remaining) result true run-server accesses ice-passed)
+
+            ;; Non-run entry during run (unusual) - emit it
+            :else
+            (recur (rest remaining)
+                   (conj result {:text simplified})
+                   true run-server accesses ice-passed))
+
+          ;; Not in run - emit simplified entry
+          :else
+          (recur (rest remaining)
+                 (conj result {:text simplified})
+                 false nil 0 []))))))
+
 (defn wait-for-log-past
   "Wait until log has entries AFTER the given text marker
    Useful for avoiding race conditions when opponent is mid-turn
@@ -1200,35 +1325,53 @@
                  current-log (get-in current-state [:game-state :log])
                  current-log-count (count current-log)
                  ;; Filter out AI debug chat messages (start with robot emoji)
+                 ;; Log is oldest-first, so take-last gets the newest entries
                  new-entries-raw (when (> current-log-count last-log-count)
-                                   (take (- current-log-count last-log-count) current-log))
+                                   (take-last (- current-log-count last-log-count) current-log))
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
                  reason (relevance-reason current-state side initial-run-active?)]
 
-             (cond
-               ;; Found something relevant (game state)
-               reason
-               (do
-                 (when (:verbose opts)
-                   (println (format "⚡ Woke up: %s" (name reason)))
-                   (when (seq new-entries)
-                     (doseq [entry (take 3 new-entries)]
-                       (println (format "  • %s" (:text entry))))))
-                 {:status :relevant-change
-                  :reason reason
-                  :cursor (state/get-cursor)
-                  :new-log-entries new-entries
-                  :run-active? (run-active? current-state)
-                  :has-prompt? (has-prompt? current-state side)})
+             ;; Calculate ALL entries since we started waiting (not just last poll)
+             ;; Log is oldest-first, so take-last gets newest entries
+             (let [entries-since-start-raw (when (> current-log-count initial-log-count)
+                                             (take-last (- current-log-count initial-log-count) current-log))
+                   entries-since-start (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") entries-since-start-raw)]
+
+               (cond
+                 ;; Found something relevant (game state)
+                 reason
+                 (do
+                   (when (:verbose opts)
+                     (println (format "⚡ Woke up: %s" (name reason)))
+                     (println "")
+                     (println "📜 Game log while you were waiting:")
+                     (if (seq entries-since-start)
+                       ;; Summarize run sequences, simplify basic action text
+                       (doseq [entry (summarize-log-entries entries-since-start)]
+                         (println (format "  • %s" (:text entry))))
+                       (println "  (no new entries)")))
+                   {:status :relevant-change
+                    :reason reason
+                    :cursor (state/get-cursor)
+                    :new-log-entries entries-since-start
+                    :run-active? (run-active? current-state)
+                    :has-prompt? (has-prompt? current-state side)})
 
                ;; Check for "ping" wake signal in chat
                (some ping-message? new-entries-raw)
                (do
                  (when (:verbose opts)
-                   (println "🏓 Woke up: ping"))
+                   (println "🏓 Woke up: ping")
+                   (println "")
+                   (println "📜 Game log while you were waiting:")
+                   (if (seq entries-since-start)
+                     (doseq [entry (summarize-log-entries entries-since-start)]
+                       (println (format "  • %s" (:text entry))))
+                     (println "  (no new entries)")))
                  {:status :ping
                   :reason :ping
                   :cursor (state/get-cursor)
+                  :new-log-entries entries-since-start
                   :run-active? (run-active? current-state)
                   :has-prompt? (has-prompt? current-state side)})
 
@@ -1236,22 +1379,24 @@
                (> (System/currentTimeMillis) deadline)
                (do
                  (when (:verbose opts)
-                   (println "⏱️  Timeout - no relevant events"))
+                   (println "⏱️  Timeout - no relevant events")
+                   (when (seq entries-since-start)
+                     (println "")
+                     (println "📜 Game log while you were waiting:")
+                     (doseq [entry (summarize-log-entries entries-since-start)]
+                       (println (format "  • %s" (:text entry))))))
                  {:status :timeout
-                  :cursor (state/get-cursor)})
+                  :cursor (state/get-cursor)
+                  :new-log-entries entries-since-start})
 
-               ;; State changed but not relevant - keep waiting
+               ;; State changed but not relevant - keep waiting silently
+               ;; (full log shown on wake, no need to spam ignored entries)
                (> current-log-count last-log-count)
-               (do
-                 (when (:verbose opts)
-                   (let [text (or (-> new-entries first :text) "")
-                         truncated (subs text 0 (min 60 (count text)))]
-                     (println (format "   💤 Ignoring: %s" truncated))))
-                 (recur current-log-count))
+               (recur current-log-count)
 
                ;; No change yet
                :else
-               (recur last-log-count)))))))))
+               (recur last-log-count))))))))))
 
 ;; ============================================================================
 ;; Run Helper Functions

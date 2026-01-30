@@ -18,6 +18,15 @@
 (declare ensure-connected!)
 
 ;; ============================================================================
+;; Action Synchronization
+;; ============================================================================
+;; Prevents race conditions when multiple commands are sent rapidly.
+;; Only one :game/action can be in flight at a time.
+;; The lock is held while waiting for state update confirmation (cursor advance).
+
+(def ^:private action-lock (Object.))
+
+;; ============================================================================
 ;; Configuration
 ;; ============================================================================
 
@@ -328,11 +337,9 @@
 ;; Sending Messages
 ;; ============================================================================
 
-(defn send-message!
-  "Send a message to server.
-   Auto-reconnects if disconnected or send fails."
+(defn- send-message-impl!
+  "Internal: actually send the message."
   [event-type data]
-  ;; Ensure connected before sending
   (when (ensure-connected!)
     (if-let [socket (:socket @state/client-state)]
       (try
@@ -358,6 +365,27 @@
       (do
         (println "❌ Not connected (after ensure-connected!)")
         false))))
+
+(defn send-message!
+  "Send a message to server.
+   Auto-reconnects if disconnected or send fails.
+   For :game/action messages, uses locking to prevent race conditions."
+  [event-type data]
+  (if (= event-type :game/action)
+    ;; Game actions need synchronization
+    (locking action-lock
+      (let [cursor-before (state/get-cursor)
+            result (send-message-impl! event-type data)]
+        (when result
+          ;; Wait briefly for cursor to advance (state update received)
+          ;; This prevents the next action from starting before we get confirmation
+          (let [deadline (+ (System/currentTimeMillis) 1500)]
+            (while (and (= (state/get-cursor) cursor-before)
+                        (< (System/currentTimeMillis) deadline))
+              (Thread/sleep 50))))
+        result))
+    ;; Non-action messages don't need synchronization
+    (send-message-impl! event-type data)))
 
 (defn send-action!
   "Send a game action"
