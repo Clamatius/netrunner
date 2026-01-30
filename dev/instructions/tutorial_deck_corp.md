@@ -51,13 +51,13 @@ Notable cards:
 - **Don't expect kills**: You're mostly hoping to bait a run through ice so they pay $ as well as damage to slow them down
 - **Usage**: Install, advance, advance. Mimics an agenda. If they run on low cards, flatline.
 
-ICE Roles:
-- **Tithe**: Anti-facecheck. Always rez (1 cost). Small tax. Good on HQ.
-- **Karunā**: "Fork" ICE. Runner must choose: End run OR take damage.
-- **Whitespace**: Early game gearcheck. Becomes porous if Runner is rich (>6¢).
-- **Brân 1.0**: The Wall. Stops runs. Clickable, but costs 3 clicks. Place innermost. 2 in the same server is very expensive to run - at least one costs $.
-- **Palisade**: Barrier for remotes. 
-- **Diviner**: Small tax code gate. 
+ICE Roles and "favourite" server, typical cost to break:
+- **Tithe**: HQ, R&D. $2. Anti-facecheck. Always rez (1 cost). Small tax and they don't have to pay it. They usually pay.
+- **Karunā**: R&D, Remote: $4. "Fork" ICE. Runner must choose: End run OR take damage.
+- **Whitespace**: R&D, HQ: $2/$1. Early game gearcheck. Becomes porous if Runner is rich (>6¢).
+- **Brân 1.0**: R&D, Remote: $8/{2|3 clicks} The Wall. Stops runs. Clickable, but costs 3 clicks. Place innermost. 2 in the same server is very expensive to run - at least one costs $. The runner will almost always go elsewhere.
+- **Palisade**: Remote: $3/$1 based on ability. Put on remotes if at all possible because it's a bad tax ice but good ETR.
+- **Diviner**: R&D, HQ: Small tax code gate. Runner can dodge the ability with smart play, otherwise costs ~$3.
 
 ** BOOSTER cards if using
 
