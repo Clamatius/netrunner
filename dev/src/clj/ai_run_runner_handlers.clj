@@ -236,7 +236,8 @@
                 (println "   Options:")
                 (println (format "   → tank \"%s\"         - let subs fire, continue run" ice-title))
                 (println "   → jack-out            - end the run")
-                (println (format "   → Or break subs with: break \"%s\" <breaker>" ice-title)))
+                (println "   → Or break: use-ability \"<breaker>\" <index>")
+                (println "              (run 'abilities \"<breaker>\"' to see options)"))
               {:status :fire-decision-required
                :message (format "%s has %d unbroken sub(s) - use 'tank' to let fire or 'jack-out'" ice-title sub-count)
                :ice ice-title
