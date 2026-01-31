@@ -1,0 +1,1228 @@
+Game LogSettingsRun TimingTurn Timing
+Clamatius
+[8:40:05]
+ has created the game.
+ai-runner
+[8:41:59]
+ joined the game.
+ai-runner
+[8:42:17]
+ joined the game.
+Clamatius
+[8:42:25]
+ keeps his hand.
+ai-runner
+[8:43:18]
+ keeps their hand.
+Clamatius
+[8:43:42]
+ started his turn 1 with 5  and 5 cards in HQ.
+Clamatius
+[8:43:42]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:44:09]
+ spends  and pays 5  to play Hedge Fund.
+Clamatius
+[8:44:09]
+ uses Hedge Fund to gain 9 .
+Clamatius
+[8:44:12]
+ spends  and pays 0  to install ice protecting HQ.
+Clamatius
+[8:44:18]
+ spends  and pays 0  to install ice protecting Server 1 (new remote).
+Clamatius
+[8:44:19]
+ is ending his turn 1 with 9  and 3 cards in HQ.
+ai-runner
+[8:44:48]
+ started their turn 1 with 5  and 5 cards in their Grip.
+ai-runner
+[8:44:54]
+ spends  and pays 0  to play Jailbreak.
+ai-runner
+[8:45:03]
+ uses Jailbreak to make a run on R&D.
+ai-runner
+[8:45:30]
+ approaches R&D.
+ai-runner
+[8:45:30]
+ uses Jailbreak to draw 1 card.
+ai-runner
+[8:45:30]
+ breaches R&D.
+ai-runner
+[8:45:30]
+ accesses an unseen card from R&D.
+ai-runner
+[8:45:31]
+ accesses an unseen card from R&D.
+ai-runner
+[8:45:55]
+ spends  and pays 5  to play Sure Gamble.
+ai-runner
+[8:45:55]
+ uses Sure Gamble to gain 9 .
+ai-runner
+[8:46:00]
+ spends  and pays 0  to install Smartware Distributor.
+ai-runner
+[8:46:05]
+ spends  to use Smartware Distributor to place 3 .
+Clamatius
+Clamatius
+[8:46:14]
+very solid turn
+ai-runner
+[8:46:19]
+ is ending their turn 1 with 9  and 3 cards in their Grip.
+Clamatius
+[8:46:22]
+ started his turn 2 with 9  and 3 cards in HQ.
+Clamatius
+[8:46:22]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:46:33]
+ spends  to install a card in the root of Server 1.
+Clamatius
+[8:46:34]
+ spends  to use Corp Basic Action Card to gain 1 .
+Clamatius
+[8:46:35]
+ spends  and pays 10  to play Government Subsidy.
+Clamatius
+[8:46:35]
+ uses Government Subsidy to gain 15 .
+Clamatius
+[8:46:37]
+ is ending his turn 2 with 15  and 2 cards in HQ.
+ai-runner
+[8:48:42]
+ started their turn 2 with 9  and 3 cards in their Grip.
+ai-runner
+[8:48:42]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[8:48:56]
+ spends  to make a run on R&D.
+ai-runner
+[8:48:57]
+ will continue the run.
+ai-runner
+[8:48:57]
+ approaches R&D.
+ai-runner
+[8:48:57]
+ breaches R&D.
+ai-runner
+[8:48:57]
+ accesses an unseen card from R&D.
+ai-runner
+[8:49:07]
+ spends  and pays 3  to install Carmen.
+ai-runner
+[8:49:27]
+ spends  and pays 5  to play Sure Gamble.
+ai-runner
+[8:49:27]
+ uses Sure Gamble to gain 9 .
+ai-runner
+[8:49:32]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[8:49:33]
+ is ending their turn 2 with 11  and 2 cards in their Grip.
+Clamatius
+[8:49:36]
+ started his turn 3 with 15  and 2 cards in HQ.
+Clamatius
+[8:49:36]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:49:46]
+ spends  to install a card in the root of Server 1.
+Clamatius
+[8:49:54]
+ spends  and pays 1  to install ice protecting Server 1.
+Clamatius
+[8:49:57]
+ spends  to use Corp Basic Action Card to gain 1 .
+Clamatius
+[8:49:58]
+ is ending his turn 3 with 15  and 1 card in HQ.
+ai-runner
+[8:52:05]
+ started their turn 3 with 11  and 2 cards in their Grip.
+ai-runner
+[8:52:05]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[8:52:11]
+ spends  and pays 0  to play Jailbreak.
+ai-runner
+[8:52:16]
+ uses Jailbreak to make a run on R&D.
+Clamatius
+[8:52:18]
+ has no further action.
+ai-runner
+[8:52:22]
+ will continue the run.
+ai-runner
+[8:52:26]
+ approaches R&D.
+ai-runner
+[8:52:26]
+ uses Jailbreak to draw 1 card.
+ai-runner
+[8:52:26]
+ breaches R&D.
+ai-runner
+[8:52:26]
+ accesses an unseen card from R&D.
+Clamatius
+Clamatius
+[8:52:31]
+surely you hit now
+ai-runner
+[8:53:02]
+ pays 2  to trash Urtica Cipher from R&D.
+ai-runner
+[8:53:02]
+ accesses an unseen card from R&D.
+ai-runner
+[8:53:25]
+ spends  to make a run on R&D.
+Clamatius
+Clamatius
+[8:53:49]
+we need the physicality section again for sure, that's what that tells us
+ai-runner
+[8:53:58]
+ approaches R&D.
+ai-runner
+[8:53:58]
+ breaches R&D.
+ai-runner
+[8:53:58]
+ accesses an unseen card from R&D.
+Clamatius
+Clamatius
+[8:54:11]
+r&d is the deck so accessing will be the same again since it's top card down
+ai-runner
+[8:54:17]
+ spends  to use Smartware Distributor to place 3 .
+ai-runner
+[8:54:23]
+ spends  and pays 1  to play VRcation.
+ai-runner
+[8:54:23]
+ uses VRcation to draw 4 cards.
+ai-runner
+[8:54:23]
+ is ending their turn 3 with 9  and 5 cards in their Grip.
+Clamatius
+[8:54:25]
+ started his turn 4 with 15  and 1 card in HQ.
+Clamatius
+[8:54:25]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:54:34]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[8:54:35]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[8:54:41]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[8:54:42]
+ scores Superconducting Hub and gains 1 agenda point.
+Clamatius
+[8:54:44]
+ uses Superconducting Hub to draw 2 cards.
+Clamatius
+[8:54:45]
+ is ending his turn 4 with 12  and 4 cards in HQ.
+ai-runner
+[8:56:22]
+ started their turn 4 with 9  and 5 cards in their Grip.
+ai-runner
+[8:56:22]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[8:56:29]
+ spends  to make a run on R&D.
+Clamatius
+Clamatius
+[8:56:39]
+mental note: ice r&d
+ai-runner
+[8:56:49]
+ approaches R&D.
+ai-runner
+[8:56:49]
+ breaches R&D.
+ai-runner
+[8:56:49]
+ accesses an unseen card from R&D.
+ai-runner
+[8:56:56]
+ spends  and pays 1  to install Telework Contract.
+Clamatius
+Clamatius
+[8:56:59]
+your access luck has not been optimal
+ai-runner
+[8:57:02]
+ spends  to use Telework Contract to gain 3 .
+Clamatius
+Clamatius
+[8:57:04]
+I think you used it all on gem
+ai-runner
+[8:57:07]
+ spends  and pays 1  to play VRcation.
+ai-runner
+[8:57:07]
+ uses VRcation to draw 4 cards.
+Clamatius
+Clamatius
+[8:57:31]
+you will have to discard to 5 cards
+ai-runner
+[8:57:32]
+ discards Tread Lightly and Verbal Plasticity from their Grip at end of turn.
+ai-runner
+[8:57:32]
+ is ending their turn 4 with 11  and 5 cards in their Grip.
+Clamatius
+[8:57:35]
+ started his turn 5 with 12  and 4 cards in HQ.
+Clamatius
+[8:57:35]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:57:41]
+ spends  and pays 0  to install ice protecting R&D.
+Clamatius
+[8:57:44]
+ spends  to install a card in the root of Server 1.
+Clamatius
+[8:57:47]
+ spends  and pays 5  to play Hedge Fund.
+Clamatius
+[8:57:47]
+ uses Hedge Fund to gain 9 .
+Clamatius
+[8:57:48]
+ is ending his turn 5 with 16  and 2 cards in HQ.
+ai-runner
+[8:58:22]
+ started their turn 5 with 11  and 5 cards in their Grip.
+ai-runner
+[8:58:22]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[8:58:28]
+ spends  and pays 3  to install Unity.
+ai-runner
+[8:58:33]
+ spends  and pays 3  to install Pennyshaver.
+ai-runner
+[8:58:38]
+ spends  to use Telework Contract to gain 3 .
+ai-runner
+[8:58:43]
+ spends  and pays 5  to play Sure Gamble.
+ai-runner
+[8:58:43]
+ uses Sure Gamble to gain 9 .
+ai-runner
+[8:58:43]
+ is ending their turn 5 with 13  and 2 cards in their Grip.
+Clamatius
+[8:58:46]
+ started his turn 6 with 16  and 2 cards in HQ.
+Clamatius
+[8:58:46]
+ makes his mandatory start of turn draw.
+Clamatius
+[8:58:51]
+ spends  and pays 1  to play Seamless Launch.
+Clamatius
+[8:58:52]
+ uses Seamless Launch to place 2 advancement tokens on a card in Server 1.
+Clamatius
+[8:58:54]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[8:58:55]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[8:58:55]
+ scores Offworld Office and gains 2 agenda points.
+Clamatius
+[8:58:55]
+ uses Offworld Office to gain 7 .
+Clamatius
+[8:58:57]
+ is ending his turn 6 with 20  and 2 cards in HQ.
+Clamatius
+Clamatius
+[9:00:22]
+I must remember to get the boys down in r&d a pizza party
+ai-runner
+[9:03:11]
+ started their turn 6 with 13  and 2 cards in their Grip.
+ai-runner
+[9:03:11]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[9:03:21]
+ spends  and pays 1  to play Overclock.
+ai-runner
+[9:03:31]
+ uses Overclock to make a run on Server 1.
+Clamatius
+[9:03:36]
+ has no further action.
+ai-runner
+[9:03:37]
+ approaches ice protecting Server 1 at position 1.
+Clamatius
+[9:03:39]
+ pays 3  to rez Palisade protecting Server 1 at position 1.
+Clamatius
+[9:03:41]
+ has no further action.
+Clamatius
+Clamatius
+[9:03:49]
+claude loses the 1/3 too
+ai-runner
+[9:04:00]
+ encounters Palisade protecting Server 1 at position 1.
+ai-runner
+[9:04:00]
+ has no further action.
+ai-runner
+[9:04:00]
+ has no further action.
+ai-runner
+[9:04:01]
+ has no further action.
+ai-runner
+[9:04:01]
+ has no further action.
+Clamatius
+[9:04:01]
+ uses Palisade to end the run.
+Clamatius
+[9:04:01]
+ resolves 1 unbroken subroutine on Palisade (" End the run").
+Clamatius
+Clamatius
+[9:04:15]
+no further action bug rears its ugly head again :/
+ai-runner
+[9:04:51]
+ spends  and pays 1  to install Mayfly.
+ai-runner
+[9:04:56]
+ spends  to use Telework Contract to gain 3 .
+ai-runner
+[9:04:56]
+ trashes Telework Contract.
+ai-runner
+[9:05:06]
+ spends  to make a run on Server 1.
+ai-runner
+[9:05:10]
+ approaches Palisade protecting Server 1 at position 1.
+Clamatius
+[9:05:12]
+ has no further action.
+ai-runner
+[9:05:22]
+ encounters Palisade protecting Server 1 at position 1.
+ai-runner
+[9:05:45]
+ uses Mayfly to will trash itself when this run ends.
+ai-runner
+[9:05:45]
+ pays 4  to increase the strength of Mayfly to 4 and break all subroutines on Palisade.
+ai-runner
+[9:05:45]
+ has no further action.
+ai-runner
+[9:05:49]
+ passes Palisade protecting Server 1 at position 1.
+ai-runner
+[9:05:51]
+ will continue the run.
+ai-runner
+[9:05:51]
+ approaches ice protecting Server 1 at position 0.
+Clamatius
+[9:05:52]
+ pays 3  to rez Palisade protecting Server 1 at position 0.
+ai-runner
+[9:05:54]
+ encounters Palisade protecting Server 1 at position 0.
+ai-runner
+[9:06:18]
+ uses Mayfly to will trash itself when this run ends.
+ai-runner
+[9:06:18]
+ pays 4  to increase the strength of Mayfly to 4 and break all subroutines on Palisade.
+ai-runner
+[9:06:18]
+ has no further action.
+ai-runner
+[9:06:20]
+ passes Palisade protecting Server 1 at position 0.
+ai-runner
+[9:06:23]
+ will continue the run.
+Clamatius
+[9:06:24]
+ pays 2  to rez Manegarm Skunkworks in Server 1.
+ai-runner
+[9:06:25]
+ approaches Server 1.
+Clamatius
+Clamatius
+[9:06:39]
+the secrets are out!
+Clamatius
+Clamatius
+[9:06:45]
+skunks everywhere
+ai-runner
+[9:06:50]
+ pays 5 .
+ai-runner
+[9:06:50]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:06:50]
+ breaches Server 1.
+ai-runner
+[9:06:50]
+ accesses Manegarm Skunkworks from Server 1.
+Clamatius
+Clamatius
+[9:07:04]
+so close. $1 out
+Clamatius
+Clamatius
+[9:07:10]
+good ol' skunkworks. so good
+ai-runner
+[9:07:27]
+ is ending their turn 6 with 2  and 0 cards in their Grip.
+Clamatius
+[9:07:30]
+ started his turn 7 with 12  and 2 cards in HQ.
+Clamatius
+[9:07:30]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:07:37]
+ spends  to use Corp Basic Action Card to draw 1 card.
+Clamatius
+[9:07:46]
+ spends  to install a card in the root of Server 2 (new remote).
+Clamatius
+[9:07:53]
+ spends  to install a card in the root of Server 1.
+Clamatius
+[9:07:54]
+ is ending his turn 7 with 12  and 2 cards in HQ.
+ai-runner
+[9:08:12]
+ started their turn 7 with 2  and 0 cards in their Grip.
+ai-runner
+[9:08:12]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[9:08:34]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[9:08:40]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[9:08:46]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[9:08:56]
+ spends  to make a run on Server 2.
+ai-runner
+[9:09:42]
+ approaches Server 2.
+ai-runner
+[9:09:42]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:09:42]
+ breaches Server 2.
+ai-runner
+[9:09:42]
+ accesses Nico Campaign from Server 2.
+ai-runner
+[9:09:49]
+ pays 2  to trash Nico Campaign from Server 2.
+ai-runner
+[9:10:02]
+ is ending their turn 7 with 1  and 3 cards in their Grip.
+Clamatius
+[9:10:03]
+ started his turn 8 with 12  and 2 cards in HQ.
+Clamatius
+[9:10:03]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:10:16]
+ spends  and pays 1  to install ice protecting R&D.
+Clamatius
+[9:10:20]
+ pays 2  to rez Regolith Mining License in Server 1.
+Clamatius
+[9:10:21]
+ spends  to use Regolith Mining License to gain 3 .
+Clamatius
+[9:10:21]
+ spends  to use Regolith Mining License to gain 3 .
+Clamatius
+[9:10:22]
+ is ending his turn 8 with 15  and 2 cards in HQ.
+ai-runner
+[9:12:55]
+ started their turn 8 with 1  and 3 cards in their Grip.
+ai-runner
+[9:13:11]
+ spends  to use Pennyshaver to gain 3 .
+ai-runner
+[9:13:23]
+ spends  and pays 3  to install Cleaver.
+ai-runner
+[9:13:31]
+ spends  and pays 0  to install Smartware Distributor.
+Clamatius
+Clamatius
+[9:13:33]
+the gang's all together
+ai-runner
+[9:13:43]
+ spends  to use Smartware Distributor to place 3 .
+ai-runner
+[9:13:56]
+ is ending their turn 8 with 1  and 1 card in their Grip.
+Clamatius
+[9:13:58]
+ started his turn 9 with 15  and 2 cards in HQ.
+Clamatius
+[9:13:58]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:14:17]
+ spends  to use Regolith Mining License to gain 3 .
+Clamatius
+[9:14:17]
+ spends  to use Regolith Mining License to gain 3 .
+Clamatius
+[9:14:18]
+ spends  to use Regolith Mining License to gain 3 .
+Clamatius
+[9:14:18]
+ trashes Regolith Mining License.
+Clamatius
+[9:14:19]
+ is ending his turn 9 with 24  and 3 cards in HQ.
+ai-runner
+[9:16:49]
+ started their turn 9 with 1  and 1 card in their Grip.
+ai-runner
+[9:16:49]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[9:16:55]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[9:17:07]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:17:14]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:17:20]
+ spends  and pays 1  to play Creative Commission.
+ai-runner
+[9:17:20]
+ uses Creative Commission to gain 5 .
+ai-runner
+[9:17:20]
+ is ending their turn 9 with 8  and 1 card in their Grip.
+Clamatius
+[9:17:24]
+ started his turn 10 with 24  and 3 cards in HQ.
+Clamatius
+[9:17:24]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:17:31]
+ spends  and pays 2  to install ice protecting R&D.
+Clamatius
+[9:17:37]
+ spends  and pays 2  to install ice protecting Server 1.
+Clamatius
+[9:17:41]
+ spends  to use Corp Basic Action Card to gain 1 .
+Clamatius
+[9:17:43]
+ is ending his turn 10 with 21  and 2 cards in HQ.
+ai-runner
+[9:18:17]
+ started their turn 10 with 8  and 1 card in their Grip.
+ai-runner
+[9:18:17]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[9:18:24]
+ spends  to make a run on HQ.
+ai-runner
+[9:18:28]
+ approaches ice protecting HQ at position 0.
+Clamatius
+[9:18:29]
+ pays 2  to rez Diviner protecting HQ at position 0.
+Clamatius
+[9:18:30]
+ has no further action.
+ai-runner
+[9:18:40]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:18:58]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:18:58]
+ has no further action.
+ai-runner
+[9:19:00]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:19:03]
+ approaches HQ.
+ai-runner
+[9:19:03]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:19:03]
+ breaches HQ.
+ai-runner
+[9:19:03]
+ accesses Whitespace from HQ.
+ai-runner
+[9:19:16]
+ spends  to make a run on HQ.
+ai-runner
+[9:19:19]
+ approaches Diviner protecting HQ at position 0.
+Clamatius
+[9:19:20]
+ has no further action.
+ai-runner
+[9:19:22]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:19:23]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:19:23]
+ has no further action.
+ai-runner
+[9:19:25]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:19:28]
+ approaches HQ.
+ai-runner
+[9:19:28]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:19:28]
+ breaches HQ.
+ai-runner
+[9:19:28]
+ accesses Whitespace from HQ.
+ai-runner
+[9:19:46]
+ spends  to make a run on HQ.
+ai-runner
+[9:19:48]
+ approaches Diviner protecting HQ at position 0.
+Clamatius
+[9:19:49]
+ has no further action.
+ai-runner
+[9:19:52]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:19:52]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:19:52]
+ has no further action.
+ai-runner
+[9:19:54]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:19:58]
+ approaches HQ.
+ai-runner
+[9:19:58]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:19:58]
+ breaches HQ.
+ai-runner
+[9:19:58]
+ accesses Tithe from HQ.
+ai-runner
+[9:20:11]
+ spends  to use Runner Basic Action Card to draw 1 card.
+ai-runner
+[9:20:12]
+ is ending their turn 10 with 3  and 2 cards in their Grip.
+Clamatius
+[9:20:16]
+ started his turn 11 with 19  and 2 cards in HQ.
+Clamatius
+[9:20:16]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:20:20]
+ spends  to use Corp Basic Action Card to draw 1 card.
+Clamatius
+[9:20:22]
+ spends  to use Corp Basic Action Card to draw 1 card.
+Clamatius
+[9:20:30]
+ spends  and pays 1  to install ice protecting HQ.
+Clamatius
+[9:20:31]
+ is ending his turn 11 with 18  and 4 cards in HQ.
+ai-runner
+[9:21:05]
+ started their turn 11 with 3  and 2 cards in their Grip.
+ai-runner
+[9:21:05]
+ uses Smartware Distributor to gain 1 .
+ai-runner
+[9:21:12]
+ spends  to use Pennyshaver to gain 4 .
+ai-runner
+[9:21:22]
+ spends  to make a run on HQ.
+ai-runner
+[9:21:24]
+ approaches ice protecting HQ at position 1.
+Clamatius
+[9:21:25]
+ pays 2  to rez Diviner protecting HQ at position 1.
+Clamatius
+[9:21:27]
+ has no further action.
+ai-runner
+[9:21:28]
+ encounters Diviner protecting HQ at position 1.
+ai-runner
+[9:21:28]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:21:28]
+ has no further action.
+ai-runner
+[9:21:30]
+ passes Diviner protecting HQ at position 1.
+ai-runner
+[9:21:33]
+ approaches Diviner protecting HQ at position 0.
+ai-runner
+[9:21:34]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:22:53]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:22:53]
+ has no further action.
+ai-runner
+[9:22:56]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:22:59]
+ approaches HQ.
+ai-runner
+[9:22:59]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:22:59]
+ breaches HQ.
+ai-runner
+[9:22:59]
+ accesses Whitespace from HQ.
+ai-runner
+[9:23:11]
+ spends  to make a run on HQ.
+Clamatius
+Clamatius
+[9:23:13]
+confused bc 2 diviners?
+ai-runner
+[9:23:16]
+ approaches Diviner protecting HQ at position 1.
+Clamatius
+[9:23:17]
+ has no further action.
+ai-runner
+[9:23:17]
+ encounters Diviner protecting HQ at position 1.
+ai-runner
+[9:23:18]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:23:18]
+ has no further action.
+ai-runner
+[9:23:19]
+ passes Diviner protecting HQ at position 1.
+ai-runner
+[9:23:24]
+ approaches Diviner protecting HQ at position 0.
+ai-runner
+[9:23:27]
+ encounters Diviner protecting HQ at position 0.
+Clamatius
+Clamatius
+[9:23:39]
+yep gotta be
+ai-runner
+[9:23:49]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:23:49]
+ has no further action.
+ai-runner
+[9:23:52]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:23:55]
+ will continue the run.
+ai-runner
+[9:23:57]
+ approaches HQ.
+ai-runner
+[9:23:57]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:23:57]
+ breaches HQ.
+ai-runner
+[9:23:57]
+ accesses Hedge Fund from HQ.
+Clamatius
+Clamatius
+[9:24:09]
+gj claude. we'll fix it later
+ai-runner
+[9:24:33]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:24:34]
+ is ending their turn 11 with 1  and 2 cards in their Grip.
+Clamatius
+[9:24:36]
+ started his turn 12 with 16  and 4 cards in HQ.
+Clamatius
+[9:24:36]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:24:42]
+ spends  and pays 5  to play Hedge Fund.
+Clamatius
+[9:24:42]
+ uses Hedge Fund to gain 9 .
+Clamatius
+[9:24:45]
+ spends  and pays 3  to install ice protecting Server 1.
+Clamatius
+[9:24:48]
+ spends  to use Corp Basic Action Card to gain 1 .
+Clamatius
+[9:24:49]
+ is ending his turn 12 with 18  and 3 cards in HQ.
+Clamatius
+Clamatius
+[9:24:59]
+go go gadget glacier
+Clamatius
+Clamatius
+[9:27:30]
+currently runner to start turn
+ai-runner
+[9:27:40]
+ started their turn 12 with 1  and 2 cards in their Grip.
+ai-runner
+[9:27:52]
+ spends  to use Pennyshaver to gain 3 .
+ai-runner
+[9:28:07]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:28:14]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:28:20]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:28:21]
+ is ending their turn 12 with 7  and 2 cards in their Grip.
+Clamatius
+[9:28:23]
+ started his turn 13 with 18  and 3 cards in HQ.
+Clamatius
+[9:28:23]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:28:27]
+ spends  to use Corp Basic Action Card to draw 1 card.
+Clamatius
+[9:28:32]
+ spends  to install a card in the root of Server 1.
+Clamatius
+[9:28:33]
+ spends  and pays 10  to play Government Subsidy.
+Clamatius
+[9:28:33]
+ uses Government Subsidy to gain 15 .
+Clamatius
+[9:28:34]
+ is ending his turn 13 with 23  and 3 cards in HQ.
+Clamatius
+Clamatius
+[9:30:38]
+ah once again the race condition I bet. I think we might need to mandate cursors on wait-for-diff
+ai-runner
+[9:30:57]
+ started their turn 13 with 7  and 2 cards in their Grip.
+ai-runner
+[9:31:04]
+ spends  to make a run on HQ.
+ai-runner
+[9:31:08]
+ approaches Diviner protecting HQ at position 1.
+Clamatius
+[9:31:09]
+ has no further action.
+ai-runner
+[9:31:11]
+ encounters Diviner protecting HQ at position 1.
+ai-runner
+[9:31:11]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:31:11]
+ has no further action.
+ai-runner
+[9:31:12]
+ passes Diviner protecting HQ at position 1.
+ai-runner
+[9:31:18]
+ approaches Diviner protecting HQ at position 0.
+ai-runner
+[9:31:18]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:32:01]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:32:01]
+ has no further action.
+ai-runner
+[9:32:03]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:32:06]
+ approaches HQ.
+ai-runner
+[9:32:06]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:32:06]
+ breaches HQ.
+ai-runner
+[9:32:06]
+ accesses Tithe from HQ.
+ai-runner
+[9:32:19]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:32:28]
+ spends  to make a run on HQ.
+ai-runner
+[9:32:30]
+ approaches Diviner protecting HQ at position 1.
+Clamatius
+[9:32:31]
+ has no further action.
+ai-runner
+[9:32:34]
+ encounters Diviner protecting HQ at position 1.
+ai-runner
+[9:32:35]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:32:35]
+ has no further action.
+ai-runner
+[9:32:37]
+ passes Diviner protecting HQ at position 1.
+ai-runner
+[9:32:40]
+ approaches Diviner protecting HQ at position 0.
+ai-runner
+[9:32:41]
+ encounters Diviner protecting HQ at position 0.
+ai-runner
+[9:32:47]
+ pays 2  to increase the strength of Unity to 4 and break all subroutines on Diviner.
+ai-runner
+[9:32:47]
+ has no further action.
+ai-runner
+[9:32:48]
+ passes Diviner protecting HQ at position 0.
+ai-runner
+[9:32:53]
+ approaches HQ.
+ai-runner
+[9:32:53]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:32:53]
+ breaches HQ.
+ai-runner
+[9:32:53]
+ accesses Urtica Cipher from HQ.
+ai-runner
+[9:33:07]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:33:08]
+ is ending their turn 13 with 1  and 2 cards in their Grip.
+Clamatius
+[9:33:09]
+ started his turn 14 with 23  and 3 cards in HQ.
+Clamatius
+[9:33:09]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:33:13]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[9:33:13]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[9:33:21]
+ spends  to install a card in the root of Server 3 (new remote).
+Clamatius
+[9:33:22]
+ is ending his turn 14 with 21  and 3 cards in HQ.
+ai-runner
+[9:35:45]
+ started their turn 14 with 1  and 2 cards in their Grip.
+ai-runner
+[9:35:51]
+ spends  to make a run on Server 3.
+ai-runner
+[9:35:57]
+ approaches Server 3.
+ai-runner
+[9:35:57]
+ uses Pennyshaver to place 1 .
+ai-runner
+[9:35:57]
+ breaches Server 3.
+ai-runner
+[9:35:57]
+ accesses Regolith Mining License from Server 3.
+ai-runner
+[9:36:15]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:36:22]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:36:28]
+ spends  to use Runner Basic Action Card to gain 1 .
+ai-runner
+[9:36:29]
+ is ending their turn 14 with 4  and 2 cards in their Grip.
+Clamatius
+[9:36:32]
+ started his turn 15 with 21  and 3 cards in HQ.
+Clamatius
+[9:36:32]
+ makes his mandatory start of turn draw.
+Clamatius
+[9:36:37]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[9:36:38]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[9:36:38]
+ spends  and pays 1  to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius
+[9:36:39]
+ scores Send a Message and gains 3 agenda points.
+Clamatius
+[9:36:39]
+ wins the game.
+Clamatius
+[9:36:45]
+ uses Send a Message to rez Brân 1.0 protecting R&D at position 0 at no cost.
+!
+Clamatius
+[9:36:47]
+ uses a command: /rez-all
+Clamatius
+[9:36:51]
+ uses /rez-all command to rez Tithe protecting R&D at position 1 at no cost.
+Clamatius
+[9:36:51]
+ uses /rez-all command to rez Brân 1.0 protecting R&D at position 2 at no cost.
+Clamatius
+[9:36:51]
+ uses /rez-all command to rez Palisade protecting Server 1 at position 2 at no cost.
+Clamatius
+[9:36:51]
+ uses /rez-all command to rez Karunā protecting Server 1 at position 3 at no cost.
+Clamatius
+[9:36:51]
+ uses /rez-all command to rez Regolith Mining License in Server 3 at no cost.
+Clamatius
+[9:36:52]
+ shows cards from HQ: Superconducting Hub, Tithe, Urtica Cipher, and Whitespace.
+!
+Clamatius
+[9:36:52]
+ uses a command: /show-hand

@@ -1,0 +1,29 @@
+Corp T1 [0-0]: Hedge Fund; ice HQ; ice S1
+Runner T1 [0-0]: Jailbreak; run R&D; breach R&D; access ?; access ?; Sure Gamble; install Smartware Distributor; use Smartware Distributor
+Corp T2 [0-0]: install S1; credit; Government Subsidy
+Runner T2 [0-0]: run R&D; breach R&D; access ?; install Carmen; Sure Gamble; draw
+Corp T3 [0-0]: install S1; ice S1; credit
+Runner T3 [0-0]: Jailbreak; run R&D; breach R&D; access ?; trash Urtica Cipher; access ?; run R&D; breach R&D; access ?; use Smartware Distributor; VRcation
+Corp T4 [0-0]: advance S1; advance S1; advance S1; score Superconducting Hub
+Runner T4 [1-0]: run R&D; breach R&D; access ?; install Telework Contract; use Telework Contract; VRcation
+Corp T5 [1-0]: ice R&D; install S1; Hedge Fund
+Runner T5 [1-0]: install Unity; install Pennyshaver; use Telework Contract; Sure Gamble
+Corp T6 [1-0]: Seamless Launch; advance S1; advance S1; score Offworld Office
+Runner T6 [3-0]: Overclock; run S1; rez Palisade@1 S1; encounter Palisade@1; install Mayfly; use Telework Contract; trash Telework Contract; run S1; encounter Palisade@1; break-all; rez Palisade@0 S1; encounter Palisade@0; break-all; rez Manegarm Skunkworks S1; breach S1; access Manegarm Skunkworks
+Corp T7 [3-0]: draw; install S2; install S1
+Runner T7 [3-0]: draw; draw; draw; run S2; breach S2; access Nico Campaign; trash Nico Campaign
+Corp T8 [3-0]: ice R&D; rez Regolith Mining License S1; use Regolith Mining License; use Regolith Mining License
+Runner T8 [3-0]: use Pennyshaver; install Cleaver; install Smartware Distributor; use Smartware Distributor
+Corp T9 [3-0]: use Regolith Mining License; use Regolith Mining License; use Regolith Mining License; trash Regolith Mining License
+Runner T9 [3-0]: draw; credit; credit; Creative Commission
+Corp T10 [3-0]: ice R&D; ice S1; credit
+Runner T10 [3-0]: run HQ; rez Diviner@0 HQ; encounter Diviner@0; break-all; breach HQ; access Whitespace; run HQ; encounter Diviner@0; break-all; breach HQ; access Whitespace; run HQ; encounter Diviner@0; break-all; breach HQ; access Tithe; draw
+Corp T11 [3-0]: draw; draw; ice HQ
+Runner T11 [3-0]: use Pennyshaver; run HQ; rez Diviner@1 HQ; encounter Diviner@1; break-all; encounter Diviner@0; break-all; breach HQ; access Whitespace; run HQ; encounter Diviner@1; break-all; encounter Diviner@0; break-all; breach HQ; access Hedge Fund; credit
+Corp T12 [3-0]: Hedge Fund; ice S1; credit
+Runner T12 [3-0]: use Pennyshaver; credit; credit; credit
+Corp T13 [3-0]: draw; install S1; Government Subsidy
+Runner T13 [3-0]: run HQ; encounter Diviner@1; break-all; encounter Diviner@0; break-all; breach HQ; access Tithe; credit; run HQ; encounter Diviner@1; break-all; encounter Diviner@0; break-all; breach HQ; access Urtica Cipher; credit
+Corp T14 [3-0]: advance S1; advance S1; install S3
+Runner T14 [3-0]: run S3; breach S3; access Regolith Mining License; credit; credit; credit
+Corp T15 [3-0]: advance S1; advance S1; advance S1; score Send a Message; rez Brân 1.0@0 R&D; rez Tithe@1 R&D; rez Brân 1.0@2 R&D; rez Palisade@2 S1; rez Karunā@3 S1; rez Regolith Mining License S3

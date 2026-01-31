@@ -286,7 +286,7 @@
           log (get-in state [:game-state :log])
           meaningful-log (filter-meaningful-log-entries (reverse log))
           recent-log (take 20 meaningful-log)
-          subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
+          subs-resolved? (some #(re-find (re-pattern (str "(?i)(resolves.*subroutines on|uses) " (java.util.regex.Pattern/quote ice-title)))
                                          (str (:text %)))
                                recent-log)]
       (when (and current-ice (:rezzed current-ice) subs-resolved?)

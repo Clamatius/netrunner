@@ -1,0 +1,13 @@
+{
+  "match_id": "level2-duel-001",
+  "description": "Level 2 Duelling Pistols - Heuristic vs Heuristic",
+  "rounds": 1,
+  "decks": {
+    "corp": "system-gateway-beginner-corp",
+    "runner": "system-gateway-beginner-runner"
+  },
+  "agents": {
+    "agent_a": "heuristic",
+    "agent_b": "heuristic"
+  }
+}
