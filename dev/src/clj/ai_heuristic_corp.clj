@@ -29,7 +29,6 @@
      (bot/play-full-turn) ; Play until no clicks remain
      (bot/respond-to-run!) ; React to Runner's run (call during their turn)"
   (:require [ai-state :as state]
-            [ai-core :as core]
             [ai-card-actions :as cards]
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
@@ -119,9 +118,7 @@
 (defn economy-operations
   "Find playable economy operations (gain credits)"
   []
-  (let [ops (operations-in-hand)
-        credits (my-credits)]
-    ;; Filter to operations we can afford and that are economy
+  (let [ops (operations-in-hand)]
     ;; Economy ops typically have "Gain" in their text
     (filter (fn [card]
               (and (:playable card)
@@ -991,8 +988,9 @@
     (let [clicks (my-clicks)]
       (if (and clicks (pos? clicks))
         (do
+          (println (str "🤖 Loop: Actions taken " actions-taken " | Clicks remaining: " clicks))
           (play-turn)
-          (Thread/sleep 300)  ; Brief pause between actions
+          (Thread/sleep 500)  ; Brief pause between actions
           (recur (inc actions-taken)))
         (do
           (println "\n" (str/join "" (repeat 60 "=")))
