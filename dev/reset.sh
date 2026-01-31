@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
             cat << EOF
 🔄 AI Test Game Reset
 
-Bounces both AI clients, creates fresh game, keeps hands, starts Corp turn.
+Bounces both AI clients, creates fresh game, stops at mulligan phase.
 
 Usage:
   ./dev/reset.sh           # Quiet mode (logs to file)
@@ -33,8 +33,8 @@ Usage:
 
 On success:
   - Returns exit code 0
-  - Game ready for Corp's first action
-  - Displays game ID and status
+  - Game at mulligan phase (both players need to keep/mulligan)
+  - Displays game ID and next steps
 
 On failure:
   - Returns non-zero exit code
@@ -62,7 +62,7 @@ run_step() {
     shift 2
     local cmd="$@"
 
-    echo "[$step_num/5] $step_name..." | tee -a "$LOG_FILE"
+    echo "[$step_num/2] $step_name..." | tee -a "$LOG_FILE"
 
     if [ "$VERBOSE" = true ]; then
         # Show output in real-time
@@ -105,16 +105,6 @@ run_step "Bouncing AI clients" 1 "$SCRIPT_DIR/ai-bounce.sh"
 # Step 2: Create and join game
 run_step "Creating self-play game" 2 "$SCRIPT_DIR/ai-self-play.sh"
 
-
-# Step 3: Corp keeps hand
-run_step "Corp keeping hand" 3 "$SCRIPT_DIR/send_command corp keep-hand"
-
-# Step 4: Runner keeps hand
-run_step "Runner keeping hand" 4 "$SCRIPT_DIR/send_command runner keep-hand"
-
-# Step 5: Start Corp's turn
-run_step "Starting Corp turn" 5 "$SCRIPT_DIR/send_command corp start-turn"
-
 # Verify game state
 echo ""
 echo "🎮 Verifying game state..."
@@ -129,12 +119,17 @@ fi
 # Show final status
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ Reset Complete - Game Ready!"
+echo "✅ Reset Complete - Mulligan Phase"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Corp's Turn - Ready for first action"
+echo "Both players need to keep/mulligan:"
+echo "  ./dev/send_command corp hand      # View Corp hand"
+echo "  ./dev/send_command runner hand    # View Runner hand"
+echo "  ./dev/send_command corp keep-hand"
+echo "  ./dev/send_command runner keep-hand"
 echo ""
-echo "Use ./dev/send_command help for usage instructions"
+echo "Then start Corp's turn:"
+echo "  ./dev/send_command corp start-turn"
 echo ""
 echo "Log file: $LOG_FILE"
 echo ""

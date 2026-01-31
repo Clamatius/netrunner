@@ -1031,7 +1031,7 @@ case "$COMMAND" in
         TITLE="${1:-AI Test Game}"
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
-        GATEWAY_TYPE="${4:-Beginner}"
+        GATEWAY_TYPE="${4:-Intermediate}"
         info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
@@ -1042,7 +1042,7 @@ case "$COMMAND" in
                                         :precon \"$PRECON\"
                                         :room \"casual\"
                                         :allow-spectator true
-                                        :spectatorhands false
+                                        :spectatorhands true
                                         :save-replay false
                                         :api-access false
                                         :password \"\"
