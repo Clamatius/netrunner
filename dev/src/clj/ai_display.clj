@@ -724,6 +724,24 @@
       (println (format "  %d. %s [%s]" idx (:title card) (:type card))))
     hand))
 
+(defn- extract-icebreaker-abilities
+  "Extract break/pump costs from icebreaker card text. Returns string like '1¢:break, 2¢:+1str' or nil."
+  [card-title]
+  (when-let [card (get @all-cards card-title)]
+    (let [text (or (:text card) "")
+          ;; Extract break cost: <strong>X[credit]:</strong> Break...
+          break-match (re-find #"<strong>(\d+)\[credit\]:</strong>\s*Break\s+(?:up to\s+)?(\d+)?" text)
+          ;; Extract pump cost: <strong>X[credit]:</strong> +Y strength
+          pump-match (re-find #"<strong>(\d+)\[credit\]:</strong>\s*\+(\d+)\s+strength" text)]
+      (when (or break-match pump-match)
+        (let [parts (cond-> []
+                      break-match (conj (str (nth break-match 1) "¢:break"
+                                            (when-let [n (nth break-match 2 nil)]
+                                              (str " " n))))
+                      pump-match (conj (str (nth pump-match 1) "¢:+" (nth pump-match 2) "str")))]
+          (when (seq parts)
+            (str/join ", " parts)))))))
+
 (defn- format-card-for-hand
   "Format a single card for hand display with type-specific info."
   [card]
@@ -781,8 +799,14 @@
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
           (doseq [[idx card] (map-indexed vector hand)]
             (let [card-name (core/format-card-name-with-index card hand)
-                  formatted (format-card-for-hand card)]
+                  formatted (format-card-for-hand card)
+                  ;; For icebreakers, show ability costs
+                  is-icebreaker? (some #{"Icebreaker"} (:subtypes card))
+                  ability-info (when is-icebreaker?
+                                (extract-icebreaker-abilities (:title card)))]
               (println (str "  " idx ". " card-name " " formatted))
+              (when ability-info
+                (println (str "     → " ability-info)))
               ;; Show card text for first-seen cards
               (core/show-card-on-first-sight! (:title card)))))
         hand))))
