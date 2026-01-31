@@ -169,7 +169,7 @@
                 (when-let [current-ice (core/current-run-ice @state/client-state)]
                   (when (:rezzed current-ice)
                     (let [ice-title (:title current-ice)
-                          ice-str (:strength current-ice)
+                          ice-str (or (:current-strength current-ice) (:strength current-ice))
                           ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
                           subs (:subroutines current-ice)
                           unbroken (count (filter #(not (:broken %)) subs))]
@@ -180,7 +180,7 @@
             (println "\n--- RUNNER ---")
             (println "Credits:" (state/runner-credits))
             (let [clicks runner-clicks]
-              (if (and (= "runner" active-side) (zero? clicks) (not end-turn))
+              (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
@@ -234,7 +234,7 @@
             (println "\n--- CORP ---")
             (println "Credits:" (state/corp-credits))
             (let [clicks corp-clicks]
-              (if (and (= "corp" active-side) (zero? clicks) (not end-turn))
+              (if (and (= "corp" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
@@ -856,7 +856,7 @@
   (when-let [current-ice (core/current-run-ice state)]
     (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
-            ice-str (:strength current-ice)
+            ice-str (or (:current-strength current-ice) (:strength current-ice))
             ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
             subs (:subroutines current-ice)
             unbroken (count (filter #(not (:broken %)) subs))]

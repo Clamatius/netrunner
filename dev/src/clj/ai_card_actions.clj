@@ -62,14 +62,22 @@
                   (let [after-state @state/client-state
                         after-credits (get-in after-state [:game-state side :credit])
                         after-clicks (get-in after-state [:game-state side :click])
-                        credit-delta (- after-credits before-credits)]
+                        credit-delta (- after-credits before-credits)
+                        ;; Check if playing created a prompt
+                        new-prompt (state/get-prompt)]
                     (println (str "🃏 Played: " card-title))
                     (when (not= credit-delta 0)
                       (println (str "   💰 Credits: " before-credits " → " after-credits
                                    " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+                    ;; Show prompt if card created one (e.g., Jailbreak asking for server)
+                    (when (and new-prompt (not= :waiting (:prompt-type new-prompt)))
+                      (println (str "   📋 " (:msg new-prompt)))
+                      (when-let [choices (:choices new-prompt)]
+                        (println (str "      Choices: " (clojure.string/join ", "
+                                       (map-indexed #(str %1 "." (:value %2)) choices))))))
                     ;; Show turn indicator only if we won't auto-end (which shows its own)
-                    (when (> after-clicks 0)
+                    (when (and (> after-clicks 0) (nil? new-prompt))
                       (core/show-turn-indicator))
                     (flush)
                     ;; Auto-end turn if no clicks remaining (will show its own indicator)
