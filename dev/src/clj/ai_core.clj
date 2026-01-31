@@ -381,10 +381,13 @@
    IMPORTANT: Only checks NEW log entries (after initial-size) to avoid false positives
    when abilities are used repeatedly (e.g., Regolith Mining License).
 
+   IMPORTANT: Pass pre-log-size and pre-prompt captured BEFORE sending the command
+   to avoid race conditions where the response arrives before we start polling.
+
    Waits up to max-wait-ms for the log entry to appear"
-  [card-name max-wait-ms]
-  (let [initial-size (get-log-size)
-        initial-prompt (state/get-prompt)
+  [card-name max-wait-ms {:keys [pre-log-size pre-prompt]}]
+  (let [initial-size (or pre-log-size (get-log-size))
+        initial-prompt (or pre-prompt (state/get-prompt))
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
                        (let [client-state @state/client-state

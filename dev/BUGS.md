@@ -18,7 +18,8 @@ Running list of issues found during testing.
 
 ### Medium Priority
 
-- [ ] **use-ability false failures**: Reports "Ability not confirmed in game log (timeout)" but ability actually fired. Timeout appears too short - ability works but confirmation check times out before log updates.
+- [x] **use-ability false failures**: Reports "Ability not confirmed in game log (timeout)" but ability actually fired. Timeout appears too short - ability works but confirmation check times out before log updates.
+  - **Fixed**: Race condition - log size was captured AFTER sending websocket message. If response arrived fast, initial-size already included the update, so "new entries" were never detected. Now capture log size BEFORE sending, pass to verification function.
 
 ### Low Priority
 

@@ -302,7 +302,11 @@
             ability (when (and abilities (< ability-index (count abilities)))
                      (nth abilities ability-index))
             ability-label (when ability (:label ability))
-            dynamic-type (:dynamic ability)]
+            dynamic-type (:dynamic ability)
+            ;; Capture state BEFORE sending to avoid race condition where
+            ;; response arrives before we start polling (fixes false timeouts)
+            pre-log-size (core/get-log-size)
+            pre-prompt (state/get-prompt)]
         ;; Send the ability command
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
@@ -318,7 +322,9 @@
                              :args {:card card-ref
                                     :ability ability-index}}))
         ;; Verify the ability fired by checking game log
-        (let [result (core/verify-ability-in-log card-name core/action-timeout)]
+        (let [result (core/verify-ability-in-log card-name core/action-timeout
+                                                  {:pre-log-size pre-log-size
+                                                   :pre-prompt pre-prompt})]
           (case (:status result)
             :success
             (do
