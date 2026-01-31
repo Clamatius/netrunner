@@ -130,6 +130,20 @@
                        (str/includes? (str (:text card)) "Gain"))))
             ops)))
 
+;; ============================================================================
+;; Threat Detection
+;; ============================================================================
+
+(def rd-threat-cards
+  "Cards that create R&D pressure requiring extra ICE"
+  #{"Conduit" "Medium" "The Maker's Eye"})
+
+(defn runner-has-rd-threat?
+  "Check if Runner has installed cards that pressure R&D (Conduit, etc.)"
+  []
+  (let [programs (state/runner-programs)]
+    (some #(rd-threat-cards (:title %)) programs)))
+
 (defn get-remote-servers
   "Get all remote servers with their content and ICE"
   []
@@ -551,6 +565,26 @@
                      (zero? rd) (str (:title (first (:ice-in-hand ctx))) " on R&D")
                      (zero? hq) (str (:title (first (:ice-in-hand ctx))) " on HQ")
                      :else "centrals protected")))}
+
+   {:id :ice-rd-threat
+    :label "ICE R&D THREAT"
+    :description "Layer R&D ICE when Runner has Conduit or similar pressure"
+    :condition-fn (fn [ctx]
+                    (let [{:keys [rd]} (central-ice-counts)]
+                      (and (runner-has-rd-threat?)
+                           (seq (:ice-in-hand ctx))
+                           (< rd 3))))  ; Want 3 ICE on R&D vs Conduit
+    :action-fn (fn [ctx]
+                 (let [ice (first (:ice-in-hand ctx))]
+                   {:action :install-ice
+                    :args {:card-name (:title ice) :server "R&D"}}))
+    :reason-fn (fn [ctx]
+                 (let [{:keys [rd]} (central-ice-counts)]
+                   (cond
+                     (not (runner-has-rd-threat?)) "no R&D threat detected"
+                     (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                     (>= rd 3) (str "R&D has " rd " ICE (enough)")
+                     :else (str "Conduit threat! R&D has " rd " ICE, adding more"))))}
 
    {:id :install-for-win
     :label "INSTALL FOR WIN"
