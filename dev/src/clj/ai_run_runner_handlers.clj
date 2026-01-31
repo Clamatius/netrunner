@@ -134,14 +134,13 @@
                     (println (format "🔍 DEBUG     [%d] %s | playable=%s dynamic=%s"
                                     idx (:label ab) (:playable ab) (:dynamic ab)))))
 
-              ;; Look for playable dynamic abilities (auto-pump-and-break)
+              ;; Look for dynamic break abilities (server will reject if unaffordable)
+              ;; NOTE: Dynamic abilities have playable=null, so don't require it
               breakable-abilities
               (for [program all-programs
                     [idx ability] (map-indexed vector (:abilities program))
-                    :when (and (:playable ability)
-                               (:dynamic ability)
-                               (when-let [dyn (:dynamic ability)]
-                                 (clojure.string/includes? (str dyn) "break")))]
+                    :when (and (:dynamic ability)
+                               (clojure.string/includes? (str (:dynamic ability)) "break"))]
                 {:card program
                  :card-name (:title program)
                  :ability-index idx

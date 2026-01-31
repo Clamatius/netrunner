@@ -220,12 +220,12 @@
       {:status :tactic-failed
        :reason (format "Card not found in rig: %s" card-name)}
       ;; Find the dynamic break ability
+      ;; NOTE: Dynamic abilities have playable=null, so don't require it
       (let [abilities (:abilities target-prog)
             break-ability (first
                            (keep-indexed
                             (fn [idx ab]
-                              (when (and (:playable ab)
-                                         (:dynamic ab)
+                              (when (and (:dynamic ab)
                                          (clojure.string/includes? (str (:dynamic ab)) "break"))
                                 {:index idx :label (:label ab)}))
                             abilities))]
