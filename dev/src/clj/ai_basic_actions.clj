@@ -956,15 +956,22 @@
 
 (defn find-card!
   "DEBUG HELPER: Multi-turn search for a card. Loops through turns until card is found.
-   Pattern: draw until out of clicks -> discard -> Corp bot-turn -> repeat
+   Pattern: draw until out of clicks -> discard -> opponent bot-turn -> repeat
 
    Usage: (find-card! \"Overclock\")
 
-   Requires Corp bot to be available. Max 10 turns as safety limit."
+   Works for both sides:
+   - Runner: Uses Corp bot for opponent turns
+   - Corp: Uses Runner bot (ai-heuristic-runner) for opponent turns
+
+   Max 10 turns as safety limit."
   [card-name]
-  (let [max-turns 10]
+  (let [max-turns 10
+        my-side (:side @state/client-state)
+        is-runner? (= "runner" (clojure.string/lower-case (str my-side)))]
+    (println (format "🔍 Searching for %s as %s..." card-name my-side))
     (loop [turn 0]
-      (println (format "\n🔍 Turn %d: Searching for %s..." (inc turn) card-name))
+      (println (format "\n🔍 Turn %d: Drawing for %s..." (inc turn) card-name))
       (let [result (draw-to-card! card-name)]
         (cond
           (= :success (:status result))
@@ -979,7 +986,7 @@
 
           (= :out-of-clicks (:status result))
           (do
-            ;; Discard to hand size - use prompts namespace
+            ;; Discard to hand size
             (println "   Discarding to hand size...")
             (try
               (require '[ai-prompts :as prompts])
@@ -988,17 +995,31 @@
                 (println (format "   ⚠️  Discard error: %s" (.getMessage e)))))
             (Thread/sleep 500)
 
-            ;; Corp takes a turn
-            (println "   Corp bot-turn...")
-            (try
-              (require '[ai-heuristic-corp :as bot])
-              ((resolve 'ai-heuristic-corp/play-full-turn))
-              (catch Exception e
-                (println (format "   ⚠️  Corp bot error: %s" (.getMessage e)))))
+            ;; Opponent takes a turn
+            (if is-runner?
+              (do
+                (println "   Corp bot-turn...")
+                (try
+                  (require '[ai-heuristic-corp :as bot])
+                  ((resolve 'ai-heuristic-corp/play-full-turn))
+                  (catch Exception e
+                    (println (format "   ⚠️  Corp bot error: %s" (.getMessage e))))))
+              (do
+                ;; No Runner bot yet - just spend clicks on credits
+                (println "   Runner simple-turn (credits)...")
+                (try
+                  (require '[ai-heuristic-runner :as bot])
+                  ((resolve 'ai-heuristic-runner/play-full-turn))
+                  (catch Exception _
+                    ;; Fallback: manually take credits
+                    (dotimes [_ 4]
+                      (take-credit!)
+                      (Thread/sleep 100))
+                    (end-turn!)))))
             (Thread/sleep 500)
 
-            ;; Start new Runner turn
-            (println "   Starting new turn...")
+            ;; Start new turn
+            (println (format "   Starting new %s turn..." my-side))
             (start-turn!)
             (Thread/sleep 300)
 
