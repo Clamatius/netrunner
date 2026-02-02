@@ -945,11 +945,66 @@
 
           (<= clicks 0)
           (do
-            (println (format "❌ Out of clicks after %d draws, %s not found (deck has %d cards)"
+            (println (format "⏸️  Out of clicks after %d draws, %s not found (deck has %d cards)"
                            draws card-name deck-size))
-            (core/with-cursor {:status :error :reason "Out of clicks"}))
+            (core/with-cursor {:status :out-of-clicks :reason "Out of clicks" :draws draws :deck-remaining deck-size}))
 
           :else
           (do
             (draw-card!)
-            (recur (inc draws))))))))
+            (recur (inc draws)))))))
+
+(defn find-card!
+  "DEBUG HELPER: Multi-turn search for a card. Loops through turns until card is found.
+   Pattern: draw until out of clicks -> discard -> Corp bot-turn -> repeat
+
+   Usage: (find-card! \"Overclock\")
+
+   Requires Corp bot to be available. Max 10 turns as safety limit."
+  [card-name]
+  (let [max-turns 10]
+    (loop [turn 0]
+      (println (format "\n🔍 Turn %d: Searching for %s..." (inc turn) card-name))
+      (let [result (draw-to-card! card-name)]
+        (cond
+          (= :success (:status result))
+          (do
+            (println (format "✅ Found %s after %d turn(s)" card-name (inc turn)))
+            result)
+
+          (>= turn max-turns)
+          (do
+            (println (format "❌ Max turns (%d) reached, %s not found" max-turns card-name))
+            (core/with-cursor {:status :error :reason "Max turns reached"}))
+
+          (= :out-of-clicks (:status result))
+          (do
+            ;; Discard to hand size - use prompts namespace
+            (println "   Discarding to hand size...")
+            (try
+              (require '[ai-prompts :as prompts])
+              ((resolve 'ai-prompts/discard-to-hand-size!))
+              (catch Exception e
+                (println (format "   ⚠️  Discard error: %s" (.getMessage e)))))
+            (Thread/sleep 500)
+
+            ;; Corp takes a turn
+            (println "   Corp bot-turn...")
+            (try
+              (require '[ai-heuristic-corp :as bot])
+              ((resolve 'ai-heuristic-corp/play-full-turn))
+              (catch Exception e
+                (println (format "   ⚠️  Corp bot error: %s" (.getMessage e)))))
+            (Thread/sleep 500)
+
+            ;; Start new Runner turn
+            (println "   Starting new turn...")
+            (start-turn!)
+            (Thread/sleep 300)
+
+            (recur (inc turn)))
+
+          :else
+          (do
+            (println (format "❌ Unexpected error: %s" (:reason result)))
+            result)))))))

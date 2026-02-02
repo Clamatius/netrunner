@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -294,6 +294,7 @@ ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits
   discard-card <name> - Move card to discard (for testing)
   draw-to-card <name> - Draw until card appears in hand
+  find-card <name>    - Multi-turn search (Corp bot takes turns)
   eval <expr>         - Execute arbitrary Clojure expression
   nuke-state          - Clear all cached game state
   debug-chat [on|off] - Toggle debug chat mode
@@ -584,6 +585,14 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command draw-to-card \"Card Name\""
         info "Drawing until $CARD_NAME appears in hand..."
         execute "(ai-actions/draw-to-card! \"$CARD_NAME\")"
+        ;;
+
+    find-card)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command find-card \"Card Name\""
+        info "Multi-turn search for $CARD_NAME (Corp bot will take turns)..."
+        execute "(ai-actions/find-card! \"$CARD_NAME\")"
         ;;
 
     # Dev/Testing commands

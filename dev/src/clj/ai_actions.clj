@@ -116,6 +116,7 @@
 ;; Debug helpers for testing discard pile interactions
 (def discard-card! basic/discard-card!)
 (def draw-to-card! basic/draw-to-card!)
+(def find-card! basic/find-card!)
 
 ;; Tag and virus actions
 (def remove-tag! basic/remove-tag!)
