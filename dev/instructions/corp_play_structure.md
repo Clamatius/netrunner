@@ -176,6 +176,121 @@ Access phase:
 
 ---
 
+## Corp Run Commands (send_command Reference)
+
+The Run Response Checklist above explains *what* to decide. This section explains *how* to execute those decisions using `send_command`.
+
+### Decision Points During a Run
+
+Corp gets priority at specific timing windows:
+1. **Approach ICE** → Can rez ICE, use paid abilities
+2. **Encounter ICE** → Can fire subroutines (if rezzed and unbroken)
+3. **Approach Server** → Can rez upgrades (Manegarm, etc.)
+4. **Access** → Traps fire automatically
+
+### Command Reference
+
+| Situation | Command | Notes |
+|-----------|---------|-------|
+| Pass priority (do nothing) | `continue` | Most common - just let the run proceed |
+| Rez ICE on approach | `continue --rez "ICE Name"` | **Critical**: Must rez during approach, not encounter |
+| Fire unbroken subs | `fire-subs` | After Runner declines to break |
+| Rez upgrade (Manegarm etc.) | `continue --rez "Upgrade Name"` | On approach to server |
+| Auto-handle full run | `monitor-run` | Convenience command (see caveats below) |
+| Sleep until run ends | `monitor-run --fire-if-asked` | Auto-fire, auto-continue, wake only for rez |
+| Fast-return check | `monitor-run --since <cursor>` | Immediately return if run already ended |
+
+### Typical Corp Run Flow
+
+```bash
+# Runner announces: run on "Server 1"
+# You have unrezzed Whitespace protecting it
+
+# 1. Approach ICE - REZ NOW if you want to rez
+./dev/send_command corp continue --rez "Whitespace"
+
+# 2. Runner encounters, may break. Check status to see what happened
+./dev/send_command corp status
+
+# 3. If subs unbroken, fire them
+./dev/send_command corp fire-subs
+
+# 4. If run continues to server, continue or rez upgrades
+./dev/send_command corp continue
+```
+
+### Common Patterns
+
+**Let them through (poor or want them to hit trap):**
+```bash
+./dev/send_command corp continue   # repeat until run ends
+```
+
+**Defend with ICE:**
+```bash
+./dev/send_command corp continue --rez "ICE Name"
+# ... Runner breaks or doesn't ...
+./dev/send_command corp fire-subs   # if subs unbroken
+```
+
+**Multiple ICE (outer to inner):**
+```bash
+# They hit outermost first
+./dev/send_command corp continue --rez "Outer ICE"
+./dev/send_command corp fire-subs
+# Then next ICE inward
+./dev/send_command corp continue --rez "Inner ICE"
+./dev/send_command corp fire-subs
+```
+
+### Alternative: monitor-run
+
+`monitor-run` auto-passes non-decision windows and pauses for real choices.
+
+**Basic usage:**
+```bash
+./dev/send_command corp monitor-run                     # Auto-pass until decision needed
+./dev/send_command corp monitor-run --no-rez            # Also auto-decline all rez
+./dev/send_command corp monitor-run --rez "Tithe"       # Only rez Tithe, decline others
+./dev/send_command corp monitor-run --fire-unbroken     # Auto-fire when Runner signals done
+```
+
+**Sleep mode (--fire-if-asked):**
+```bash
+# Sleep until run ends - handles rez (if --rez specified), fire, and empty windows
+./dev/send_command corp monitor-run --fire-if-asked --rez "Whitespace"
+```
+This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes. Ideal for AI-vs-AI play.
+
+**Fast-return (--since):**
+```bash
+# Get cursor from previous call
+cursor=$(./dev/send_command corp monitor-run --fire-if-asked | grep cursor | ...)
+
+# Later, check if anything happened without blocking
+./dev/send_command corp monitor-run --since $cursor
+```
+If the run already ended, returns immediately instead of blocking.
+
+**Caveats:**
+- Uses stuck-state detection instead of iteration limits (500 max as safety net)
+- Always wakes for rez decisions unless --rez or --no-rez specified
+- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails
+
+### Gotchas
+
+1. **Rez timing is approach, not encounter** - If you `continue` past approach without `--rez`, ICE stays unrezzed for that encounter. You missed the window.
+
+2. **Can't rez during encounter** - Once Runner is encountering ICE, it's too late to rez it. Plan ahead.
+
+3. **fire-subs only works if subs are unbroken** - Check status to see if Runner broke them first.
+
+4. **Upgrades rez on approach to server** - Manegarm Skunkworks must be rezzed as Runner approaches the server, not during ICE encounters.
+
+5. **continue without --rez passes priority** - The ICE stays unrezzed. Runner walks through. Don't forget your rez!
+
+---
+
 ## Common Errors
 
 **"I'll rez it next turn"** → Runner runs THIS turn. You can't.
