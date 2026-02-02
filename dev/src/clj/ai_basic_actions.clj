@@ -910,7 +910,7 @@
 
 (defn draw-to-card!
   "DEBUG HELPER: Draw cards until a specific card appears in hand.
-   Returns error if card not found after drawing entire deck.
+   Returns error if card not found after drawing entire deck or running out of clicks.
    Max 45 draws as safety limit.
 
    Usage: (draw-to-card! \"Hedge Fund\")
@@ -924,7 +924,9 @@
             side-kw (keyword side)
             hand (get-in client-state [:game-state side-kw :hand])
             found (first (filter #(= card-name (:title %)) hand))
-            deck-size (count (get-in client-state [:game-state side-kw :deck]))]
+            ;; Use :deck-count - server doesn't expose actual deck contents
+            deck-size (get-in client-state [:game-state side-kw :deck-count] 0)
+            clicks (get-in client-state [:game-state side-kw :click] 0)]
         (cond
           found
           (do
@@ -940,6 +942,12 @@
           (do
             (println (format "❌ Deck empty, %s not found" card-name))
             (core/with-cursor {:status :error :reason "Deck empty"}))
+
+          (<= clicks 0)
+          (do
+            (println (format "❌ Out of clicks after %d draws, %s not found (deck has %d cards)"
+                           draws card-name deck-size))
+            (core/with-cursor {:status :error :reason "Out of clicks"}))
 
           :else
           (do
