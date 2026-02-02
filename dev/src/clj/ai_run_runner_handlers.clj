@@ -67,12 +67,17 @@
 ;; Track position where Runner has signaled "let subs fire"
 (defonce signaled-fire-position (atom nil))
 
+;; Track failed ability attempts per position to detect unaffordable abilities
+;; Map of position -> count, cleared when position changes or run ends
+(defonce failed-ability-attempts (atom {}))
+
 (defn reset-state!
   "Reset all Runner handler state atoms (called when run ends)."
   []
   (reset! last-waiting-status nil)
   (reset! last-full-break-warning nil)
-  (reset! signaled-fire-position nil))
+  (reset! signaled-fire-position nil)
+  (reset! failed-ability-attempts {}))
 
 ;; ============================================================================
 ;; Runner Approach Handlers
@@ -198,8 +203,12 @@
                  :dynamic (:dynamic ability)})
 
               ;; Sort by cost - use cheapest first
-              sorted-abilities (sort-break-abilities breakable-abilities)]
-          (if (seq sorted-abilities)
+              sorted-abilities (sort-break-abilities breakable-abilities)
+              ;; Check how many times we've failed at this position
+              fail-count (get @failed-ability-attempts position 0)
+              max-retries 2]
+          ;; If we've failed too many times, skip straight to letting subs fire
+          (if (and (seq sorted-abilities) (< fail-count max-retries))
             ;; Use the cheapest available break ability
             (let [{:keys [card-name ability-index label cost-label]} (first sorted-abilities)]
               (reset! last-full-break-warning nil)
@@ -208,13 +217,22 @@
                 (println (format "   %s (cost: %s)" label cost-label)))
               (let [result (actions/use-ability! card-name ability-index)]
                 (if (= :success (:status result))
-                  {:status :ability-used
-                   :wake-reason :broke-ice
-                   :message (format "Auto-broke %s with %s" ice-title card-name)
-                   :ice ice-title
-                   :breaker card-name}
-                  nil)))
-            ;; No playable dynamic ability - try manual pump+break fallback
+                  (do
+                    ;; Success - clear failure count for this position
+                    (swap! failed-ability-attempts dissoc position)
+                    {:status :ability-used
+                     :wake-reason :broke-ice
+                     :message (format "Auto-broke %s with %s" ice-title card-name)
+                     :ice ice-title
+                     :breaker card-name})
+                  (do
+                    ;; Failure - increment failure count and return nil to retry
+                    ;; After max-retries, will fall through to let-subs-fire path
+                    (swap! failed-ability-attempts update position (fnil inc 0))
+                    (println (format "❌ Ability failed (attempt %d/%d) - may be unaffordable"
+                                   (inc fail-count) max-retries))
+                    nil))))
+            ;; No playable dynamic ability OR too many failures - try manual pump+break fallback
             (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
               fallback-result
               ;; Fallback also failed - let subs fire instead of returning nil (which causes infinite loop)

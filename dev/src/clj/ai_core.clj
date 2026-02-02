@@ -466,24 +466,41 @@
 ;; Display and Formatting Helpers
 ;; ============================================================================
 
+(defn- format-card-for-choice
+  "Format a card map for display in choice prompts.
+   Returns title with type info, e.g., 'Carmen [Killer]' or 'Sure Gamble [Event]'"
+  [card]
+  (let [title (:title card)
+        subtype (:subtype card)
+        card-type (:type card)]
+    (cond
+      subtype (str title " [" subtype "]")
+      card-type (str title " [" card-type "]")
+      :else title)))
+
 (defn format-choice
   "Format a choice for display, handling different prompt formats
    Used by prompt and display functions to consistently format choices
 
    Usage: (format-choice {:value \"HQ\"}) -> \"HQ\"
           (format-choice {:label \"Draw a card\"}) -> \"Draw a card\"
-          (format-choice \"Done\") -> \"Done\""
+          (format-choice \"Done\") -> \"Done\"
+          (format-choice {:value {:title \"Carmen\" :subtype \"Killer\"}}) -> \"Carmen [Killer]\""
   [choice]
   (cond
-    ;; Map with :value key (most common)
-    (and (map? choice) (:value choice))
-    (:value choice)
+    ;; Map with :value key - check if value is a card object
+    (and (map? choice) (contains? choice :value))
+    (let [v (:value choice)]
+      (if (and (map? v) (:title v))
+        (format-card-for-choice v)
+        (str v)))
 
-    ;; Map without :value - try :label or show keys
+    ;; Map without :value - might be a card object directly, or has :label/:title
     (map? choice)
-    (or (:label choice)
-        (:title choice)
-        (str "Option with keys: " (keys choice)))
+    (cond
+      (:title choice) (format-card-for-choice choice)
+      (:label choice) (:label choice)
+      :else (str "Option with keys: " (keys choice)))
 
     ;; String or number - show as-is
     :else
