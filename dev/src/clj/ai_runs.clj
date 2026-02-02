@@ -959,6 +959,7 @@
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
                   corp-handlers/handle-paid-ability-window
+                  runner-handlers/handle-auto-select-single-card
                   runner-handlers/handle-runner-approach-ice
                   tactics/handle-runner-tactics
                   runner-handlers/handle-runner-full-break

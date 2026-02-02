@@ -80,6 +80,41 @@
   (reset! failed-ability-attempts {}))
 
 ;; ============================================================================
+;; Auto-Select Single Card Prompts
+;; ============================================================================
+
+(defn handle-auto-select-single-card
+  "Auto-select when there's exactly one selectable card.
+   This handles credit source prompts (Overclock, Multithreader, etc.) where
+   there's only one alternative credit pool - no need for manual selection.
+
+   Returns nil if:
+   - Not a select prompt
+   - Multiple selectable cards (player must choose)
+   - Zero selectable cards (shouldn't happen)"
+  [{:keys [side my-prompt gameid]}]
+  (when (and my-prompt
+             (= "select" (:prompt-type my-prompt))
+             (= 1 (count (:selectable my-prompt))))
+    (let [selectable (:selectable my-prompt)
+          eid (:eid my-prompt)
+          cid-or-card (first selectable)
+          card (if (string? cid-or-card)
+                 (core/find-card-by-cid cid-or-card)
+                 cid-or-card)
+          card-title (or (:title card) "card")]
+      (when card
+        (println (format "✅ Auto-selecting: %s (only option)" card-title))
+        ;; Use select-card! which properly formats the selection with eid
+        (ws/select-card! card eid)
+        (Thread/sleep 100)
+        {:status :action-taken
+         :wake-reason :single-selectable
+         :action :auto-selected
+         :message (format "Auto-selected %s" card-title)
+         :card-title card-title}))))
+
+;; ============================================================================
 ;; Runner Approach Handlers
 ;; ============================================================================
 
