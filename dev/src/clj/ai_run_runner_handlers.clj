@@ -144,13 +144,26 @@
       (or (>= (count non-trivial) 2)
           (seq selectable)))))
 
+(defn- subs-already-resolved?
+  "Check if subroutines have already been resolved on this ICE (via game log).
+   Used to detect when we should pass ICE instead of trying to break."
+  [state ice-title]
+  (let [log (get-in state [:game-state :log])
+        recent-log (take 10 (reverse log))]
+    (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " (java.util.regex.Pattern/quote ice-title)))
+                    (str (:text %)))
+          recent-log)))
+
 (defn handle-runner-full-break
   "Priority 2.4: Auto-break with --full-break strategy.
    Finds the cheapest available break ability and uses it.
    Returns nil if no breaking possible (falls through to handle-runner-encounter-ice).
 
    IMPORTANT: Defers to on-encounter prompts (like Funhouse's 'Take 1 tag or end run')
-   by returning nil when there's a real decision to make."
+   by returning nil when there's a real decision to make.
+
+   Also defers when subs have already fired - lets handle-runner-pass-fired-ice
+   take over to continue past the ICE."
   [{:keys [side run-phase state strategy gameid my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
@@ -161,10 +174,13 @@
           position (:position run)
           current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)]
-      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs))
-        (let [ice-title (:title current-ice "ICE")
-              runner-rig (get-in state [:game-state :runner :rig])
+          ;; Check both :broken and :fired flags for actionable subs
+          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ice-title (:title current-ice "ICE")]
+      ;; Also check log in case :fired flag isn't set by server
+      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs)
+                 (not (subs-already-resolved? state ice-title)))
+        (let [runner-rig (get-in state [:game-state :runner :rig])
               all-programs (get runner-rig :program [])
 
               ;; Look for dynamic break abilities (server will reject if unaffordable)
