@@ -107,12 +107,16 @@
              ;; Lightweight profile for AI client REPLs - no heavy dev deps
              ;; Starts in ~8s vs ~35s with full dev profile
              ;; user.clj gracefully handles missing deps (kaocha, web.dev)
+             ;; If target/aot-classes exists (from 'make compile-deps'), loads pre-compiled
+             ;; classes for faster startup
              :ai-client {:source-paths ["src/clj" "src/cljc" "dev/src/clj"]
+                         :resource-paths ["target/aot-classes"]
                          :plugins [[cider/cider-nrepl "0.47.1"]]}
              :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}
              ;; AOT profile for pre-compiling stable dependencies
-             ;; Run: lein with-profile +aot-deps compile
-             ;; Then check-ai.sh will use pre-compiled classes
+             ;; Run: lein with-profile +aot-deps compile (or 'make compile-deps')
+             ;; Speeds up 'make check' cold start; REPL startup benefit is minimal
+             ;; Note: AI namespaces are NOT AOT'd due to transitive dep issues
              :aot-deps {:aot [jinteki.cards
                               jinteki.utils
                               jinteki.validator

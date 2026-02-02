@@ -1,14 +1,18 @@
 (ns ai-client-init
-  "Initialization script for AI Client REPL")
+  "Initialization script for AI Client REPL
+
+   Uses require instead of load-file so AOT-compiled classes are used
+   when available (from 'make compile-deps'). Falls back to source
+   compilation when AOT classes don't exist.")
 
 (println "\n=== AI Client REPL Starting ===")
 (println "Loading foundational modules...")
 
 ;; Load foundation modules first (no dependencies)
 (try
-  (load-file "dev/src/clj/ai_debug.clj")
-  (load-file "dev/src/clj/ai_state.clj")
-  (load-file "dev/src/clj/ai_hud_utils.clj")
+  (require 'ai-debug)
+  (require 'ai-state)
+  (require 'ai-hud-utils)
   (catch Exception e
     (println "❌ FATAL ERROR loading foundation modules:")
     (println (.getMessage e))
@@ -18,29 +22,29 @@
 (println "Loading WebSocket client and auth...")
 ;; Load the websocket client and auth module
 (try
-  (load-file "dev/src/clj/ai_websocket_client_v2.clj")
-  (load-file "dev/src/clj/ai_auth.clj")
+  (require 'ai-websocket-client-v2)
+  (require 'ai-auth)
   (catch Exception e
-    (println "❌ FATAL ERROR loading ai_websocket_client_v2.clj or ai_auth.clj:")
+    (println "❌ FATAL ERROR loading ai_websocket_client_v2 or ai_auth:")
     (println (.getMessage e))
     (.printStackTrace e)
     (throw e)))
 
 (println "Loading actions modules...")
-;; Load the 7 action modules in dependency order
+;; Load the action modules in dependency order
 (try
   ;; First load ai-core (no dependencies except websocket client)
-  (load-file "dev/src/clj/ai_core.clj")
+  (require 'ai-core)
   ;; Then load modules that depend only on ai-core
-  (load-file "dev/src/clj/ai_connection.clj")
-  (load-file "dev/src/clj/ai_basic_actions.clj")
-  (load-file "dev/src/clj/ai_prompts.clj")
-  (load-file "dev/src/clj/ai_card_actions.clj")
-  (load-file "dev/src/clj/ai_runs.clj")
+  (require 'ai-connection)
+  (require 'ai-basic-actions)
+  (require 'ai-prompts)
+  (require 'ai-card-actions)
+  (require 'ai-runs)
   ;; Load ai_display last (depends on ai-basic-actions)
-  (load-file "dev/src/clj/ai_display.clj")
+  (require 'ai-display)
   ;; Finally load the facade that re-exports everything
-  (load-file "dev/src/clj/ai_actions.clj")
+  (require 'ai-actions)
   (catch Exception e
     (println "❌ FATAL ERROR loading ai action modules:")
     (println (.getMessage e))
@@ -96,7 +100,7 @@
           (do
             (println "   Connecting WebSocket...")
             (ai-websocket-client-v2/connect! ws-url)
-            (Thread/sleep 2000))
+            (Thread/sleep 500))
           (println "❌ Authentication failed:" (:message auth-result)))))
 
     ;; === Fallback: Client-ID Mode (requires server hack) ===
@@ -118,7 +122,7 @@
 
       (println "   Connecting WebSocket...")
       (ai-websocket-client-v2/connect! ws-url)
-      (Thread/sleep 2000))))
+      (Thread/sleep 500))))
 
 (if (ai-websocket-client-v2/connected?)
   (do
