@@ -850,6 +850,22 @@
     (when (> facedown-count 0)
       (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
 
+(defn show-heap
+  "Show Runner's Heap (discard pile)"
+  []
+  (let [state @state/client-state
+        heap (get-in state [:game-state :runner :discard])]
+    (println "\n🗑️  Heap:")
+    (println (str "  Total: " (count heap) " cards"))
+    (when (seq heap)
+      (println "")
+      (doseq [card heap]
+        (let [cost-str (if-let [cost (:cost card)] (str cost "¢") "")
+              type-str (:type card)
+              subtype-str (when-let [st (:subtype card)] (str " - " st))
+              subtitle (str type-str subtype-str (when (not-empty cost-str) (str ", " cost-str)))]
+          (println (str "    • " (:title card) " (" subtitle ")")))))))
+
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
   [state run my-side]

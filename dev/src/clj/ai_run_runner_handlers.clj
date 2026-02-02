@@ -235,9 +235,13 @@
             ;; No playable dynamic ability OR too many failures - try manual pump+break fallback
             (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
               fallback-result
-              ;; Fallback also failed - let subs fire instead of returning nil (which causes infinite loop)
+              ;; Fallback also failed - PAUSE and let player decide (don't auto-tank)
+              ;; --full-break means "I want to break" - if we can't, player must choose:
+              ;;   tank <ice-name>   - authorize letting subs fire
+              ;;   jack-out          - abandon the run
+              ;;   (wait)            - maybe Corp won't rez, or situation changes
               (let [warning-key [position ice-title]
-                    already-signaled? (= @signaled-fire-position position)
+                    runner-credits (get-in state [:game-state :runner :credit] 0)
                     all-break-abilities
                     (for [program all-programs
                           [idx ability] (map-indexed vector (:abilities program))
@@ -250,22 +254,26 @@
                        :cost-label (:cost-label ability)})]
                 (when (not= @last-full-break-warning warning-key)
                   (reset! last-full-break-warning warning-key)
+                  (println "")
+                  (println (format "⛔ --full-break PAUSED: Can't break %s" ice-title))
                   (if (seq all-break-abilities)
                     (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                      (println (format "⚠️  --full-break: Can't afford to break %s, letting subs fire" ice-title))
-                      (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
-                    (println (format "⚠️  --full-break: No icebreaker can break %s, letting subs fire" ice-title))))
-                ;; Signal to Corp that we're done breaking (same as tank-authorized path)
-                (when-not already-signaled?
-                  (reset! signaled-fire-position position)
-                  (let-subs-fire-signal! gameid ice-title))
-                ;; Return waiting-for-corp-fire so loop pauses correctly
-                {:status :waiting-for-corp-fire
-                 :wake-reason (if (seq all-break-abilities) :cannot-break :no-breaker)
-                 :message (format "Can't break %s, waiting for Corp to fire subs" ice-title)
+                      (println (format "   %s has: %s (cost: %s)" card-name label (or cost-label "?")))
+                      (println (format "   Runner credits: %d¢" runner-credits)))
+                    (println "   No icebreaker can break this ICE"))
+                  (println "")
+                  (println "   Options:")
+                  (println (format "     tank \"%s\"   - let subs fire" ice-title))
+                  (println "     jack-out        - abandon run")
+                  (println "     (or wait for situation to change)"))
+                ;; Return paused status - don't send let-subs-fire signal
+                {:status :paused-cannot-break
+                 :wake-reason :player-decision-required
+                 :message (format "Can't afford to break %s - waiting for player decision" ice-title)
                  :ice ice-title
                  :unbroken-count (count unbroken-subs)
                  :position position
+                 :credits runner-credits
                  :reason (if (seq all-break-abilities) :cant-afford :no-breaker)}))))))))
 
 ;; ============================================================================

@@ -84,6 +84,7 @@
 (def show-credits display/show-credits)
 (def show-clicks display/show-clicks)
 (def show-archives display/show-archives)
+(def show-heap display/show-heap)
 (def show-prompt-detailed display/show-prompt-detailed)
 (def show-card-text display/show-card-text)
 (def show-cards display/show-cards)
