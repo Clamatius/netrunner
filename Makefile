@@ -1,10 +1,11 @@
-.PHONY: test test-behavioral check check-full clean reset resume status help
+.PHONY: test test-behavioral check check-full clean reset resume status help compile-deps
 
 # Default target
 help:
 	@echo "AI Development Commands:"
 	@echo ""
-	@echo "  make check         - Quick AI code compile check (~15s)"
+	@echo "  make check         - Quick AI code compile check"
+	@echo "                       (~1s with REPL+bb, ~30s cold start)"
 	@echo "  make test          - Run unit tests (~2s)"
 	@echo "  make verify        - check + test"
 	@echo ""
@@ -14,9 +15,11 @@ help:
 	@echo ""
 	@echo "  make check-full    - Full lein check (slow, entire codebase)"
 	@echo "  make test-behavioral - Behavioral tests (slow, ~30s per test)"
+	@echo "  make compile-deps  - AOT compile stable deps (one-time, speeds cold start)"
 	@echo "  make clean         - Kill background processes"
 
-# Quick AI-only compile check (fast, ~15s)
+# Quick AI-only compile check
+# Fast (~1s) when REPL running + Babashka installed, slower (~30s) cold start
 check:
 	@./dev/check-ai.sh
 
@@ -58,3 +61,10 @@ clean:
 # Combo: check + test (pre-commit quality gate)
 verify: check test
 	@echo "✅ All checks passed"
+
+# AOT compile stable dependencies (one-time, speeds up cold start check)
+compile-deps:
+	@echo "Compiling stable dependencies (one-time)..."
+	lein with-profile +aot-deps compile
+	@echo "✅ Dependencies compiled to target/aot-classes/"
+	@echo "   Future cold-start checks will be faster"

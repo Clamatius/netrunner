@@ -109,7 +109,16 @@
              ;; user.clj gracefully handles missing deps (kaocha, web.dev)
              :ai-client {:source-paths ["src/clj" "src/cljc" "dev/src/clj"]
                          :plugins [[cider/cider-nrepl "0.47.1"]]}
-             :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}}
+             :debugger {:jvm-opts ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5010"]}
+             ;; AOT profile for pre-compiling stable dependencies
+             ;; Run: lein with-profile +aot-deps compile
+             ;; Then check-ai.sh will use pre-compiled classes
+             :aot-deps {:aot [jinteki.cards
+                              jinteki.utils
+                              jinteki.validator
+                              differ.core
+                              cheshire.core]
+                        :compile-path "target/aot-classes"}}
 
   :aliases {"fetch" ^{:doc "Fetch card data and images from github"} ["run" "-m" "tasks.fetch/command"]
             "kaocha" ^{:doc "Run tests with kaocha"} ["run" "-m" "kaocha.runner"]
