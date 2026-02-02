@@ -1115,6 +1115,13 @@
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
+            ;; Prompt handled (e.g., credit source auto-select) - continue without stuck tracking
+            ;; This is progress but not run-phase progress, so don't add to history
+            (= status :prompt-handled)
+            (do
+              (Thread/sleep core/quick-delay)
+              (recur (inc iteration) state-history))  ; Keep OLD history, don't add new entry
+
             ;; Action taken - check for stuck state, then continue
             (= status :action-taken)
             (if (detect-stuck-state new-history stuck-threshold)

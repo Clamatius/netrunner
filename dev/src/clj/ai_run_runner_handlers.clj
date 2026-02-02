@@ -108,7 +108,9 @@
         ;; Use select-card! which properly formats the selection with eid
         (ws/select-card! card eid)
         (Thread/sleep 100)
-        {:status :action-taken
+        ;; Use :prompt-handled - progress but not run-phase progress
+        ;; This avoids triggering stuck detection (which tracks run phase changes)
+        {:status :prompt-handled
          :wake-reason :single-selectable
          :action :auto-selected
          :message (format "Auto-selected %s" card-title)
