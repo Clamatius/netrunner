@@ -297,7 +297,11 @@
              :position position}))
 
         ;; Other phases with prompt but no real decision - auto-continue
-        (and my-prompt (empty? (:choices my-prompt)) (empty? (:selectable my-prompt)))
+        ;; BUT NOT during success/access phases where Runner is active and Corp just waits
+        (and my-prompt
+             (empty? (:choices my-prompt))
+             (empty? (:selectable my-prompt))
+             (not (#{"success" "access"} run-phase)))
         (do
           (ws/send-message! :game/action
                            {:gameid gameid
