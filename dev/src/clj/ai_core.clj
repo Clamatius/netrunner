@@ -1449,13 +1449,15 @@
    - No ICE on the server"
   [state]
   (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)
-        ice-index (dec position)]
-    (when (and ice-list (> position 0) (<= position ice-count))
-      (nth ice-list ice-index nil))))
+        position (:position run)]
+    ;; Early return if no run or no position (run ended mid-loop)
+    (when (and run position (pos? position))
+      (let [server (:server run)
+            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+            ice-count (count ice-list)
+            ice-index (dec position)]
+        (when (<= position ice-count)
+          (nth ice-list ice-index nil))))))
 
 ;; ============================================================================
 ;; First-Seen Card Display
