@@ -934,7 +934,7 @@
               (do
                 (println (str "  ⚠️  MULTI-SELECT: Choose " cards-required " card(s)"))
                 (println "     Use: multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."))
-              (println "  Selectable cards: (Use choose-card! to select by index)"))
+              (println "  Selectable cards: (Use choose-card to select by index)"))
             (println (str "  Available (" (count selectable) " cards):"))
             (doseq [[idx cid-or-card] (map-indexed vector selectable)]
               ;; Selectable can be CID strings or card maps - resolve CIDs to cards
