@@ -101,7 +101,9 @@ The Runner now has the ability:
 
 Tag punishment possible other than resource trashing:
 - Orbital Superiority: 4/2 agenda. On score: tag (tagless) or 4 damage (tagged)
+If they score it, you're tagged and you have less than 4 cards you lose on the spot
 - Retribution: $1 operation. Trash 1 program/hardware if Runner is tagged
+Can be distressing to lose a vital icebreaker, so if in doubt keep a spare if possible instead of discarding
 
 Important upgrade:
 -AMAZE Amusements: +2 tags if you stole an agenda from the server
