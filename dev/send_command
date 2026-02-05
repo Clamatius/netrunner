@@ -388,6 +388,17 @@ show_last_log_if_enabled() {
 COMMAND="${1:-help}"
 shift || true
 
+# Determine project root for logging
+NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Command logging - log every command with timestamp
+LOG_FILE="${NETRUNNER_ROOT}/logs/commands.log"
+if [[ -n "$CLIENT_NAME" ]]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $CLIENT_NAME: $COMMAND $*" >> "$LOG_FILE"
+else
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE"
+fi
+
 check_client
 
 case "$COMMAND" in
@@ -558,7 +569,7 @@ case "$COMMAND" in
 
     trash-resource)
         ensure_connection
-        info "Trashing tagged runner's resource ($2 + click)..."
+        info "Trashing tagged runner's resource (\$2 + click)..."
         execute '(ai-actions/trash-resource!)'
         ;;
 
