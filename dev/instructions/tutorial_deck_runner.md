@@ -31,6 +31,8 @@ Corp cards of note:
 
 **Whitespace:** Annoying code gate. Can be beaten without decoder by having $10+
 
+**Diviner:** Code gate. 1 net damage, ETRs only if trashed card has odd install cost. If your grip is all even-cost cards, you pass through for 1 damage.
+
 **Karuna:** Potentially deadly sentry. 
 - 2 damage, then you can jack out if you want, then 2 more
 - Sometimes 4 damage is worth winning the game to access, but if the card is advanced you may flatline on Cipher

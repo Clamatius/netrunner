@@ -417,4 +417,10 @@ Action: Draw 3 cards first, THEN run
 
 **"I need to trash everything"** → Only trash if value > cost. Leave worthless stuff.
 
+**"I'll trash this trap so I don't run it again"** → You already know where it is. Save the credits.
+
 **"I have cards, I should play them"** → Hand is options, not a to-do list. Draw instead if nothing's urgent.
+
+**"I'll click for credits"** → Drawing is almost always better. You might draw economy cards worth more than $1/click.
+
+**"I'll install Carmen now to be ready"** → Run a central first. Carmen installs for $3 after a successful run instead of $5. Same for Mutual Favor (fetches AND installs on success).
