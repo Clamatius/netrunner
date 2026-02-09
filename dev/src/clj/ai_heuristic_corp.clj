@@ -4,7 +4,8 @@
    Decision priority (highest first):
    1. Score scorable agenda
    2. Protect unprotected agenda with ICE
-   3. Install agenda to protected/empty remote
+   3. ICE centrals (HQ + R&D) before any remote creation
+   4. Install agenda to protected/empty remote
    4. Play economy if credits low (before advancing - prevents stranding broke)
    4.5. Use rezzed click assets when low (Regolith gives 3¢, better than advancing)
    5. Advance installed agenda (smart: won't strand at scorable with 0 clicks)
@@ -128,6 +129,20 @@
                        ;; Generic check: card text mentions gaining credits
                        (str/includes? (str (:text card)) "Gain"))))
             ops)))
+
+;; ============================================================================
+;; Threat Detection
+;; ============================================================================
+
+(def rd-threat-cards
+  "Cards that create R&D pressure requiring extra ICE"
+  #{"Conduit" "Medium" "The Maker's Eye"})
+
+(defn runner-has-rd-threat?
+  "Check if Runner has installed cards that pressure R&D (Conduit, etc.)"
+  []
+  (let [programs (state/runner-programs)]
+    (some #(rd-threat-cards (:title %)) programs)))
 
 (defn get-remote-servers
   "Get all remote servers with their content and ICE"
@@ -446,16 +461,10 @@
             (and would-be-broke has-econ)
             nil
 
-            ;; If we need exactly 1 more advance and have 2+ clicks,
-            ;; advance now (next iteration will score)
-            (and (= advances-needed 1) (>= clicks 2))
+            ;; If we need exactly 1 more advance, do it.
+            ;; Scoring is instant (no click cost) so we'll score immediately after.
+            (= advances-needed 1)
             agenda
-
-            ;; If we need exactly 1 more advance but only 1 click,
-            ;; DON'T advance - we'd be scorable with 0 clicks
-            ;; Better to take credit and score next turn
-            (and (= advances-needed 1) (= clicks 1))
-            nil
 
             ;; If we need 2+ advances, safe to advance
             (> advances-needed 1)
@@ -536,6 +545,47 @@
                    (empty? (:ice-in-hand ctx)) "no ICE in hand"
                    :else (str "protect " (name (first (:unprotected-agenda-servers ctx))))))}
 
+   {:id :ice-central
+    :label "ICE CENTRAL"
+    :description "ICE unprotected central server (critical priority)"
+    :condition-fn (fn [ctx]
+                    (let [{:keys [hq rd]} (central-ice-counts)]
+                      (and (seq (:ice-in-hand ctx))
+                           (or (zero? hq) (zero? rd)))))
+    :action-fn (fn [ctx]
+                 (let [{:keys [hq rd]} (central-ice-counts)
+                       ice (first (:ice-in-hand ctx))
+                       server (if (zero? rd) "R&D" "HQ")]
+                   {:action :install-ice
+                    :args {:card-name (:title ice) :server server}}))
+    :reason-fn (fn [ctx]
+                 (let [{:keys [hq rd]} (central-ice-counts)]
+                   (cond
+                     (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                     (zero? rd) (str (:title (first (:ice-in-hand ctx))) " on R&D")
+                     (zero? hq) (str (:title (first (:ice-in-hand ctx))) " on HQ")
+                     :else "centrals protected")))}
+
+   {:id :ice-rd-threat
+    :label "ICE R&D THREAT"
+    :description "Layer R&D ICE when Runner has Conduit or similar pressure"
+    :condition-fn (fn [ctx]
+                    (let [{:keys [rd]} (central-ice-counts)]
+                      (and (runner-has-rd-threat?)
+                           (seq (:ice-in-hand ctx))
+                           (< rd 3))))  ; Want 3 ICE on R&D vs Conduit
+    :action-fn (fn [ctx]
+                 (let [ice (first (:ice-in-hand ctx))]
+                   {:action :install-ice
+                    :args {:card-name (:title ice) :server "R&D"}}))
+    :reason-fn (fn [ctx]
+                 (let [{:keys [rd]} (central-ice-counts)]
+                   (cond
+                     (not (runner-has-rd-threat?)) "no R&D threat detected"
+                     (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                     (>= rd 3) (str "R&D has " rd " ICE (enough)")
+                     :else (str "Conduit threat! R&D has " rd " ICE, adding more"))))}
+
    {:id :install-for-win
     :label "INSTALL FOR WIN"
     :description "Install agenda that wins the game"
@@ -552,19 +602,25 @@
 
    {:id :create-remote
     :label "CREATE REMOTE"
-    :description "Create remote if none exists"
+    :description "Create remote if none exists (after centrals protected)"
     :condition-fn (fn [ctx]
-                    (and (empty? (:remotes ctx))
-                         (seq (:ice-in-hand ctx))))
+                    (let [{:keys [hq rd]} (central-ice-counts)]
+                      (and (empty? (:remotes ctx))
+                           (seq (:ice-in-hand ctx))
+                           (pos? hq)   ; HQ must be protected first
+                           (pos? rd)))) ; R&D must be protected first
     :action-fn (fn [ctx]
                  (let [ice (first (:ice-in-hand ctx))]
                    {:action :install-ice
                     :args {:card-name (:title ice) :server "New remote"}}))
     :reason-fn (fn [ctx]
-                 (cond
-                   (seq (:remotes ctx)) "remote already exists"
-                   (empty? (:ice-in-hand ctx)) "no ICE in hand"
-                   :else "creating new remote"))}
+                 (let [{:keys [hq rd]} (central-ice-counts)]
+                   (cond
+                     (seq (:remotes ctx)) "remote already exists"
+                     (empty? (:ice-in-hand ctx)) "no ICE in hand"
+                     (zero? hq) "HQ unprotected"
+                     (zero? rd) "R&D unprotected"
+                     :else "creating new remote")))}
 
    {:id :install-agenda
     :label "INSTALL AGENDA"
@@ -993,6 +1049,13 @@
           (Thread/sleep 500)  ; Brief pause between actions
           (recur (inc actions-taken)))
         (do
+          ;; Check for scorable agendas at 0 clicks (scoring is instant, no click cost)
+          (when-let [scorables (seq (scorable-agendas))]
+            (let [agenda (first scorables)]
+              (log-decision "SCORE AT 0 CLICKS:" (:title agenda) "is scorable")
+              (cards/score-agenda! (:title agenda))
+              (Thread/sleep 500)))
+
           (println "\n" (str/join "" (repeat 60 "=")))
           (println (str "🤖 Turn complete. Took " actions-taken " actions."))
           (println (str/join "" (repeat 60 "=")))

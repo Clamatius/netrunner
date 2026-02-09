@@ -169,7 +169,7 @@
                 (when-let [current-ice (core/current-run-ice @state/client-state)]
                   (when (:rezzed current-ice)
                     (let [ice-title (:title current-ice)
-                          ice-str (:strength current-ice)
+                          ice-str (or (:current-strength current-ice) (:strength current-ice))
                           ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
                           subs (:subroutines current-ice)
                           unbroken (count (filter #(not (:broken %)) subs))]
@@ -180,7 +180,7 @@
             (println "\n--- RUNNER ---")
             (println "Credits:" (state/runner-credits))
             (let [clicks runner-clicks]
-              (if (and (= "runner" active-side) (zero? clicks) (not end-turn))
+              (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
@@ -234,7 +234,7 @@
             (println "\n--- CORP ---")
             (println "Credits:" (state/corp-credits))
             (let [clicks corp-clicks]
-              (if (and (= "corp" active-side) (zero? clicks) (not end-turn))
+              (if (and (= "corp" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
@@ -724,6 +724,24 @@
       (println (format "  %d. %s [%s]" idx (:title card) (:type card))))
     hand))
 
+(defn- extract-icebreaker-abilities
+  "Extract break/pump costs from icebreaker card text. Returns string like '1¢:break, 2¢:+1str' or nil."
+  [card-title]
+  (when-let [card (get @all-cards card-title)]
+    (let [text (or (:text card) "")
+          ;; Extract break cost: <strong>X[credit]:</strong> Break...
+          break-match (re-find #"<strong>(\d+)\[credit\]:</strong>\s*Break\s+(?:up to\s+)?(\d+)?" text)
+          ;; Extract pump cost: <strong>X[credit]:</strong> +Y strength
+          pump-match (re-find #"<strong>(\d+)\[credit\]:</strong>\s*\+(\d+)\s+strength" text)]
+      (when (or break-match pump-match)
+        (let [parts (cond-> []
+                      break-match (conj (str (nth break-match 1) "¢:break"
+                                            (when-let [n (nth break-match 2 nil)]
+                                              (str " " n))))
+                      pump-match (conj (str (nth pump-match 1) "¢:+" (nth pump-match 2) "str")))]
+          (when (seq parts)
+            (str/join ", " parts)))))))
+
 (defn- format-card-for-hand
   "Format a single card for hand display with type-specific info."
   [card]
@@ -781,8 +799,14 @@
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
           (doseq [[idx card] (map-indexed vector hand)]
             (let [card-name (core/format-card-name-with-index card hand)
-                  formatted (format-card-for-hand card)]
+                  formatted (format-card-for-hand card)
+                  ;; For icebreakers, show ability costs
+                  is-icebreaker? (some #{"Icebreaker"} (:subtypes card))
+                  ability-info (when is-icebreaker?
+                                (extract-icebreaker-abilities (:title card)))]
               (println (str "  " idx ". " card-name " " formatted))
+              (when ability-info
+                (println (str "     → " ability-info)))
               ;; Show card text for first-seen cards
               (core/show-card-on-first-sight! (:title card)))))
         hand))))
@@ -826,13 +850,29 @@
     (when (> facedown-count 0)
       (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
 
+(defn show-heap
+  "Show Runner's Heap (discard pile)"
+  []
+  (let [state @state/client-state
+        heap (get-in state [:game-state :runner :discard])]
+    (println "\n🗑️  Heap:")
+    (println (str "  Total: " (count heap) " cards"))
+    (when (seq heap)
+      (println "")
+      (doseq [card heap]
+        (let [cost-str (if-let [cost (:cost card)] (str cost "¢") "")
+              type-str (:type card)
+              subtype-str (when-let [st (:subtype card)] (str " - " st))
+              subtitle (str type-str subtype-str (when (not-empty cost-str) (str ", " cost-str)))]
+          (println (str "    • " (:title card) " (" subtitle ")")))))))
+
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
   [state run my-side]
   (when-let [current-ice (core/current-run-ice state)]
     (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
-            ice-str (:strength current-ice)
+            ice-str (or (:current-strength current-ice) (:strength current-ice))
             ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
             subs (:subroutines current-ice)
             unbroken (count (filter #(not (:broken %)) subs))]
@@ -894,7 +934,7 @@
               (do
                 (println (str "  ⚠️  MULTI-SELECT: Choose " cards-required " card(s)"))
                 (println "     Use: multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."))
-              (println "  Selectable cards: (Use choose-card! to select by index)"))
+              (println "  Selectable cards: (Use choose-card to select by index)"))
             (println (str "  Available (" (count selectable) " cards):"))
             (doseq [[idx cid-or-card] (map-indexed vector selectable)]
               ;; Selectable can be CID strings or card maps - resolve CIDs to cards

@@ -910,7 +910,7 @@
 
 (defn draw-to-card!
   "DEBUG HELPER: Draw cards until a specific card appears in hand.
-   Returns error if card not found after drawing entire deck.
+   Returns error if card not found after drawing entire deck or running out of clicks.
    Max 45 draws as safety limit.
 
    Usage: (draw-to-card! \"Hedge Fund\")
@@ -924,7 +924,9 @@
             side-kw (keyword side)
             hand (get-in client-state [:game-state side-kw :hand])
             found (first (filter #(= card-name (:title %)) hand))
-            deck-size (count (get-in client-state [:game-state side-kw :deck]))]
+            ;; Use :deck-count - server doesn't expose actual deck contents
+            deck-size (get-in client-state [:game-state side-kw :deck-count] 0)
+            clicks (get-in client-state [:game-state side-kw :click] 0)]
         (cond
           found
           (do
@@ -941,7 +943,89 @@
             (println (format "❌ Deck empty, %s not found" card-name))
             (core/with-cursor {:status :error :reason "Deck empty"}))
 
+          (<= clicks 0)
+          (do
+            (println (format "⏸️  Out of clicks after %d draws, %s not found (deck has %d cards)"
+                           draws card-name deck-size))
+            (core/with-cursor {:status :out-of-clicks :reason "Out of clicks" :draws draws :deck-remaining deck-size}))
+
           :else
           (do
             (draw-card!)
-            (recur (inc draws))))))))
+            (recur (inc draws)))))))
+
+(defn find-card!
+  "DEBUG HELPER: Multi-turn search for a card. Loops through turns until card is found.
+   Pattern: draw until out of clicks -> discard -> opponent bot-turn -> repeat
+
+   Usage: (find-card! \"Overclock\")
+
+   Works for both sides:
+   - Runner: Uses Corp bot for opponent turns
+   - Corp: Uses Runner bot (ai-heuristic-runner) for opponent turns
+
+   Max 10 turns as safety limit."
+  [card-name]
+  (let [max-turns 10
+        my-side (:side @state/client-state)
+        is-runner? (= "runner" (clojure.string/lower-case (str my-side)))]
+    (println (format "🔍 Searching for %s as %s..." card-name my-side))
+    (loop [turn 0]
+      (println (format "\n🔍 Turn %d: Drawing for %s..." (inc turn) card-name))
+      (let [result (draw-to-card! card-name)]
+        (cond
+          (= :success (:status result))
+          (do
+            (println (format "✅ Found %s after %d turn(s)" card-name (inc turn)))
+            result)
+
+          (>= turn max-turns)
+          (do
+            (println (format "❌ Max turns (%d) reached, %s not found" max-turns card-name))
+            (core/with-cursor {:status :error :reason "Max turns reached"}))
+
+          (= :out-of-clicks (:status result))
+          (do
+            ;; Discard to hand size
+            (println "   Discarding to hand size...")
+            (try
+              (require '[ai-prompts :as prompts])
+              ((resolve 'ai-prompts/discard-to-hand-size!))
+              (catch Exception e
+                (println (format "   ⚠️  Discard error: %s" (.getMessage e)))))
+            (Thread/sleep 500)
+
+            ;; Opponent takes a turn
+            (if is-runner?
+              (do
+                (println "   Corp bot-turn...")
+                (try
+                  (require '[ai-heuristic-corp :as bot])
+                  ((resolve 'ai-heuristic-corp/play-full-turn))
+                  (catch Exception e
+                    (println (format "   ⚠️  Corp bot error: %s" (.getMessage e))))))
+              (do
+                ;; No Runner bot yet - just spend clicks on credits
+                (println "   Runner simple-turn (credits)...")
+                (try
+                  (require '[ai-heuristic-runner :as bot])
+                  ((resolve 'ai-heuristic-runner/play-full-turn))
+                  (catch Exception _
+                    ;; Fallback: manually take credits
+                    (dotimes [_ 4]
+                      (take-credit!)
+                      (Thread/sleep 100))
+                    (end-turn!)))))
+            (Thread/sleep 500)
+
+            ;; Start new turn
+            (println (format "   Starting new %s turn..." my-side))
+            (start-turn!)
+            (Thread/sleep 300)
+
+            (recur (inc turn)))
+
+          :else
+          (do
+            (println (format "❌ Unexpected error: %s" (:reason result)))
+            result)))))))

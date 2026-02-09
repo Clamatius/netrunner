@@ -67,12 +67,54 @@
 ;; Track position where Runner has signaled "let subs fire"
 (defonce signaled-fire-position (atom nil))
 
+;; Track failed ability attempts per position to detect unaffordable abilities
+;; Map of position -> count, cleared when position changes or run ends
+(defonce failed-ability-attempts (atom {}))
+
 (defn reset-state!
   "Reset all Runner handler state atoms (called when run ends)."
   []
   (reset! last-waiting-status nil)
   (reset! last-full-break-warning nil)
-  (reset! signaled-fire-position nil))
+  (reset! signaled-fire-position nil)
+  (reset! failed-ability-attempts {}))
+
+;; ============================================================================
+;; Auto-Select Single Card Prompts
+;; ============================================================================
+
+(defn handle-auto-select-single-card
+  "Auto-select when there's exactly one selectable card.
+   This handles credit source prompts (Overclock, Multithreader, etc.) where
+   there's only one alternative credit pool - no need for manual selection.
+
+   Returns nil if:
+   - Not a select prompt
+   - Multiple selectable cards (player must choose)
+   - Zero selectable cards (shouldn't happen)"
+  [{:keys [side my-prompt gameid]}]
+  (when (and my-prompt
+             (= "select" (:prompt-type my-prompt))
+             (= 1 (count (:selectable my-prompt))))
+    (let [selectable (:selectable my-prompt)
+          eid (:eid my-prompt)
+          cid-or-card (first selectable)
+          card (if (string? cid-or-card)
+                 (core/find-card-by-cid cid-or-card)
+                 cid-or-card)
+          card-title (or (:title card) "card")]
+      (when card
+        (println (format "✅ Auto-selecting: %s (only option)" card-title))
+        ;; Use select-card! which properly formats the selection with eid
+        (ws/select-card! card eid)
+        (Thread/sleep 100)
+        ;; Use :prompt-handled - progress but not run-phase progress
+        ;; This avoids triggering stuck detection (which tracks run phase changes)
+        {:status :prompt-handled
+         :wake-reason :single-selectable
+         :action :auto-selected
+         :message (format "Auto-selected %s" card-title)
+         :card-title card-title}))))
 
 ;; ============================================================================
 ;; Runner Approach Handlers
@@ -100,6 +142,7 @@
             (println "⏸️  Waiting for corp rez decision")
             (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count)))
           {:status :waiting-for-corp-rez
+           :wake-reason :rez-decision
            :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
            :ice ice-title
            :position position})))))
@@ -108,64 +151,134 @@
 ;; Runner Breaking Handlers
 ;; ============================================================================
 
+(defn- extract-cost
+  "Extract numeric cost from cost-label string like '1[c]' -> 1.
+   Returns nil if can't parse."
+  [cost-label]
+  (when cost-label
+    (try
+      (Integer/parseInt (re-find #"\d+" cost-label))
+      (catch Exception _ nil))))
+
+(defn- sort-break-abilities
+  "Sort break abilities by cost (cheapest first).
+   Abilities with unparseable cost go last."
+  [abilities]
+  (sort-by (fn [{:keys [cost-label]}]
+             (or (extract-cost cost-label) 999))
+           abilities))
+
+(defn- has-real-decision?
+  "True if prompt has 2+ meaningful choices (not just Done/Continue),
+   or has 1+ selectable cards. Used to detect on-encounter prompts that
+   must be resolved before breaking."
+  [prompt]
+  (when prompt
+    (let [choices (:choices prompt)
+          selectable (:selectable prompt)
+          non-trivial (remove (fn [choice]
+                               (let [value (clojure.string/lower-case (:value choice ""))]
+                                 (or (= value "continue")
+                                     (= value "done")
+                                     (= value "ok")
+                                     (= value ""))))
+                             choices)]
+      (or (>= (count non-trivial) 2)
+          (seq selectable)))))
+
+(defn- subs-already-resolved?
+  "Check if subroutines have already been resolved on this ICE (via game log).
+   Used to detect when we should pass ICE instead of trying to break."
+  [state ice-title]
+  (let [log (get-in state [:game-state :log])
+        recent-log (take 10 (reverse log))]
+    (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " (java.util.regex.Pattern/quote ice-title)))
+                    (str (:text %)))
+          recent-log)))
+
 (defn handle-runner-full-break
   "Priority 2.4: Auto-break with --full-break strategy.
-   Returns nil if no breaking possible (falls through to handle-runner-encounter-ice)."
-  [{:keys [side run-phase state strategy gameid]}]
+   Finds the cheapest available break ability and uses it.
+   Returns nil if no breaking possible (falls through to handle-runner-encounter-ice).
+
+   IMPORTANT: Defers to on-encounter prompts (like Funhouse's 'Take 1 tag or end run')
+   by returning nil when there's a real decision to make.
+
+   Also defers when subs have already fired - lets handle-runner-pass-fired-ice
+   take over to continue past the ICE."
+  [{:keys [side run-phase state strategy gameid my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
-             (:full-break strategy))
+             (:full-break strategy)
+             ;; Don't break if there's an on-encounter prompt to handle first
+             (not (has-real-decision? my-prompt)))
     (let [run (get-in state [:game-state :run])
           position (:position run)
           current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)]
-      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs))
-        (let [ice-title (:title current-ice "ICE")
-              runner-rig (get-in state [:game-state :runner :rig])
+          ;; Check both :broken and :fired flags for actionable subs
+          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ice-title (:title current-ice "ICE")]
+      ;; Also check log in case :fired flag isn't set by server
+      (when (and current-ice (:rezzed current-ice) (seq unbroken-subs)
+                 (not (subs-already-resolved? state ice-title)))
+        (let [runner-rig (get-in state [:game-state :runner :rig])
               all-programs (get runner-rig :program [])
 
-              ;; DEBUG: Log what we see during encounter-ice
-              _ (println (format "🔍 DEBUG --full-break: phase=%s ice=%s (rezzed=%s, %d unbroken subs)"
-                                run-phase ice-title (:rezzed current-ice) (count unbroken-subs)))
-              _ (doseq [p all-programs]
-                  (println (format "🔍 DEBUG   %s abilities:" (:title p)))
-                  (doseq [[idx ab] (map-indexed vector (:abilities p))]
-                    (println (format "🔍 DEBUG     [%d] %s | playable=%s dynamic=%s"
-                                    idx (:label ab) (:playable ab) (:dynamic ab)))))
-
-              ;; Look for playable dynamic abilities (auto-pump-and-break)
+              ;; Look for dynamic break abilities (server will reject if unaffordable)
+              ;; NOTE: Dynamic abilities have playable=null, so don't require it
               breakable-abilities
               (for [program all-programs
                     [idx ability] (map-indexed vector (:abilities program))
-                    :when (and (:playable ability)
-                               (:dynamic ability)
-                               (when-let [dyn (:dynamic ability)]
-                                 (clojure.string/includes? (str dyn) "break")))]
+                    :when (and (:dynamic ability)
+                               (clojure.string/includes? (str (:dynamic ability)) "break"))]
                 {:card program
                  :card-name (:title program)
                  :ability-index idx
                  :label (:label ability)
-                 :dynamic (:dynamic ability)})]
-          (if (seq breakable-abilities)
-            ;; Use the first available break ability
-            (let [{:keys [card-name ability-index label]} (first breakable-abilities)]
+                 :cost-label (:cost-label ability)
+                 :dynamic (:dynamic ability)})
+
+              ;; Sort by cost - use cheapest first
+              sorted-abilities (sort-break-abilities breakable-abilities)
+              ;; Check how many times we've failed at this position
+              fail-count (get @failed-ability-attempts position 0)
+              max-retries 2]
+          ;; If we've failed too many times, skip straight to letting subs fire
+          (if (and (seq sorted-abilities) (< fail-count max-retries))
+            ;; Use the cheapest available break ability
+            (let [{:keys [card-name ability-index label cost-label]} (first sorted-abilities)]
               (reset! last-full-break-warning nil)
               (println (format "🔨 Auto-breaking %s with %s" ice-title card-name))
-              (println (format "   Using: %s (ability %d)" label ability-index))
+              (when cost-label
+                (println (format "   %s (cost: %s)" label cost-label)))
               (let [result (actions/use-ability! card-name ability-index)]
                 (if (= :success (:status result))
-                  {:status :ability-used
-                   :message (format "Auto-broke %s with %s" ice-title card-name)
-                   :ice ice-title
-                   :breaker card-name}
-                  nil)))
-            ;; No playable dynamic ability - try manual pump+break fallback
+                  (do
+                    ;; Success - clear failure count for this position
+                    (swap! failed-ability-attempts dissoc position)
+                    {:status :ability-used
+                     :wake-reason :broke-ice
+                     :message (format "Auto-broke %s with %s" ice-title card-name)
+                     :ice ice-title
+                     :breaker card-name})
+                  (do
+                    ;; Failure - increment failure count and return nil to retry
+                    ;; After max-retries, will fall through to let-subs-fire path
+                    (swap! failed-ability-attempts update position (fnil inc 0))
+                    (println (format "❌ Ability failed (attempt %d/%d) - may be unaffordable"
+                                   (inc fail-count) max-retries))
+                    nil))))
+            ;; No playable dynamic ability OR too many failures - try manual pump+break fallback
             (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
               fallback-result
-              ;; Fallback also failed - let subs fire instead of returning nil (which causes infinite loop)
+              ;; Fallback also failed - PAUSE and let player decide (don't auto-tank)
+              ;; --full-break means "I want to break" - if we can't, player must choose:
+              ;;   tank <ice-name>   - authorize letting subs fire
+              ;;   jack-out          - abandon the run
+              ;;   (wait)            - maybe Corp won't rez, or situation changes
               (let [warning-key [position ice-title]
-                    already-signaled? (= @signaled-fire-position position)
+                    runner-credits (get-in state [:game-state :runner :credit] 0)
                     all-break-abilities
                     (for [program all-programs
                           [idx ability] (map-indexed vector (:abilities program))
@@ -178,21 +291,26 @@
                        :cost-label (:cost-label ability)})]
                 (when (not= @last-full-break-warning warning-key)
                   (reset! last-full-break-warning warning-key)
+                  (println "")
+                  (println (format "⛔ --full-break PAUSED: Can't break %s" ice-title))
                   (if (seq all-break-abilities)
                     (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                      (println (format "⚠️  --full-break: Can't afford to break %s, letting subs fire" ice-title))
-                      (println (format "   %s has: %s (%s)" card-name label (or cost-label "cost unknown"))))
-                    (println (format "⚠️  --full-break: No icebreaker can break %s, letting subs fire" ice-title))))
-                ;; Signal to Corp that we're done breaking (same as tank-authorized path)
-                (when-not already-signaled?
-                  (reset! signaled-fire-position position)
-                  (let-subs-fire-signal! gameid ice-title))
-                ;; Return waiting-for-corp-fire so loop pauses correctly
-                {:status :waiting-for-corp-fire
-                 :message (format "Can't break %s, waiting for Corp to fire subs" ice-title)
+                      (println (format "   %s has: %s (cost: %s)" card-name label (or cost-label "?")))
+                      (println (format "   Runner credits: %d¢" runner-credits)))
+                    (println "   No icebreaker can break this ICE"))
+                  (println "")
+                  (println "   Options:")
+                  (println (format "     tank \"%s\"   - let subs fire" ice-title))
+                  (println "     jack-out        - abandon run")
+                  (println "     (or wait for situation to change)"))
+                ;; Return paused status - don't send let-subs-fire signal
+                {:status :paused-cannot-break
+                 :wake-reason :player-decision-required
+                 :message (format "Can't afford to break %s - waiting for player decision" ice-title)
                  :ice ice-title
                  :unbroken-count (count unbroken-subs)
                  :position position
+                 :credits runner-credits
                  :reason (if (seq all-break-abilities) :cant-afford :no-breaker)}))))))))
 
 ;; ============================================================================
@@ -237,8 +355,10 @@
                 (println "   Options:")
                 (println (format "   → tank \"%s\"         - let subs fire, continue run" ice-title))
                 (println "   → jack-out            - end the run")
-                (println (format "   → Or break subs with: break \"%s\" <breaker>" ice-title)))
+                (println "   → Or break: use-ability \"<breaker>\" <index>")
+                (println "              (run 'abilities \"<breaker>\"' to see options)"))
               {:status :fire-decision-required
+               :wake-reason :decision-required
                :message (format "%s has %d unbroken sub(s) - use 'tank' to let fire or 'jack-out'" ice-title sub-count)
                :ice ice-title
                :unbroken-count sub-count
@@ -254,6 +374,7 @@
                 (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
                                ice-title sub-count (if (= sub-count 1) "" "s"))))
               {:status :waiting-for-corp-fire
+               :wake-reason :waiting-for-opponent
                :message (format "Waiting for Corp to fire subs on %s or pass" ice-title)
                :ice ice-title
                :unbroken-count sub-count

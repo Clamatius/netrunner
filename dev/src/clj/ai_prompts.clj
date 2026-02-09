@@ -378,7 +378,11 @@
    Supports [N] suffix for duplicates: \"Sure Gamble [1]\"
 
    Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
-          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy"
+          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy
+
+   NOTE: During end-of-turn discard prompts, the selectable cards are in the
+   prompt's :selectable list, not the raw :hand. Use choose-card or multi-choose
+   for those prompts instead."
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
         client-state @state/client-state
@@ -387,29 +391,16 @@
         gs (state/get-game-state)
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])]
-    (if (and (= "select" (:prompt-type prompt))
-             (seq names-vec))
-      (let [;; Find cards in hand matching the requested names with [N] support
-            cards-to-discard (remove nil?
-                               (for [card-ref names-vec]
-                                 (let [{:keys [title index]} (core/parse-card-reference card-ref)
-                                       matches (filter #(= (:title %) title) hand)]
-                                   (nth (vec matches) index nil))))
-            _ (when (seq cards-to-discard)
-                (println "Discarding:" (clojure.string/join ", " (map :title cards-to-discard))))]
-        (if (seq cards-to-discard)
-          (do
-            (doseq [card cards-to-discard]
-              (ws/select-card! card (:eid prompt))
-              (Thread/sleep core/quick-delay))
-            (println "✅ Discarded" (count cards-to-discard) "card(s)")
-            (core/with-cursor {:status :success :discarded (count cards-to-discard)}))
-          (do
-            (println "❌ No matching cards found in hand for:" (clojure.string/join ", " names-vec))
-            (core/with-cursor {:status :error :reason "No matching cards found"}))))
+    ;; Check if there's a select prompt - if so, guide user to choose-card instead
+    (if (= "select" (:prompt-type prompt))
       (do
-        (println "❌ No discard prompt active or no card names provided")
-        (core/with-cursor {:status :error :reason "No discard prompt or no card names"})))))
+        (println "⚠️  Active select prompt detected.")
+        (println "   Use `choose-card <index>` or `multi-choose` instead.")
+        (println "   Run `prompt` to see available cards.")
+        (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
+      (do
+        (println "❌ No select prompt active - nothing to discard")
+        (core/with-cursor {:status :error :reason "No select prompt active"})))))
 
 ;; ============================================================================
 ;; Auto-resolve Info Prompts

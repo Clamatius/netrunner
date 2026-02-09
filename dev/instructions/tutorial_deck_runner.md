@@ -31,6 +31,8 @@ Corp cards of note:
 
 **Whitespace:** Annoying code gate. Can be beaten without decoder by having $10+
 
+**Diviner:** Code gate. 1 net damage, ETRs only if trashed card has odd install cost. If your grip is all even-cost cards, you pass through for 1 damage.
+
 **Karuna:** Potentially deadly sentry. 
 - 2 damage, then you can jack out if you want, then 2 more
 - Sometimes 4 damage is worth winning the game to access, but if the card is advanced you may flatline on Cipher
@@ -101,7 +103,9 @@ The Runner now has the ability:
 
 Tag punishment possible other than resource trashing:
 - Orbital Superiority: 4/2 agenda. On score: tag (tagless) or 4 damage (tagged)
+If they score it, you're tagged and you have less than 4 cards you lose on the spot
 - Retribution: $1 operation. Trash 1 program/hardware if Runner is tagged
+Can be distressing to lose a vital icebreaker, so if in doubt keep a spare if possible instead of discarding
 
 Important upgrade:
 -AMAZE Amusements: +2 tags if you stole an agenda from the server

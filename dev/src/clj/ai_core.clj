@@ -381,10 +381,13 @@
    IMPORTANT: Only checks NEW log entries (after initial-size) to avoid false positives
    when abilities are used repeatedly (e.g., Regolith Mining License).
 
+   IMPORTANT: Pass pre-log-size and pre-prompt captured BEFORE sending the command
+   to avoid race conditions where the response arrives before we start polling.
+
    Waits up to max-wait-ms for the log entry to appear"
-  [card-name max-wait-ms]
-  (let [initial-size (get-log-size)
-        initial-prompt (state/get-prompt)
+  [card-name max-wait-ms {:keys [pre-log-size pre-prompt]}]
+  (let [initial-size (or pre-log-size (get-log-size))
+        initial-prompt (or pre-prompt (state/get-prompt))
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
                        (let [client-state @state/client-state
@@ -463,24 +466,41 @@
 ;; Display and Formatting Helpers
 ;; ============================================================================
 
+(defn- format-card-for-choice
+  "Format a card map for display in choice prompts.
+   Returns title with type info, e.g., 'Carmen [Killer]' or 'Sure Gamble [Event]'"
+  [card]
+  (let [title (:title card)
+        subtype (:subtype card)
+        card-type (:type card)]
+    (cond
+      subtype (str title " [" subtype "]")
+      card-type (str title " [" card-type "]")
+      :else title)))
+
 (defn format-choice
   "Format a choice for display, handling different prompt formats
    Used by prompt and display functions to consistently format choices
 
    Usage: (format-choice {:value \"HQ\"}) -> \"HQ\"
           (format-choice {:label \"Draw a card\"}) -> \"Draw a card\"
-          (format-choice \"Done\") -> \"Done\""
+          (format-choice \"Done\") -> \"Done\"
+          (format-choice {:value {:title \"Carmen\" :subtype \"Killer\"}}) -> \"Carmen [Killer]\""
   [choice]
   (cond
-    ;; Map with :value key (most common)
-    (and (map? choice) (:value choice))
-    (:value choice)
+    ;; Map with :value key - check if value is a card object
+    (and (map? choice) (contains? choice :value))
+    (let [v (:value choice)]
+      (if (and (map? v) (:title v))
+        (format-card-for-choice v)
+        (str v)))
 
-    ;; Map without :value - try :label or show keys
+    ;; Map without :value - might be a card object directly, or has :label/:title
     (map? choice)
-    (or (:label choice)
-        (:title choice)
-        (str "Option with keys: " (keys choice)))
+    (cond
+      (:title choice) (format-card-for-choice choice)
+      (:label choice) (:label choice)
+      :else (str "Option with keys: " (keys choice)))
 
     ;; String or number - show as-is
     :else
@@ -1429,13 +1449,15 @@
    - No ICE on the server"
   [state]
   (let [run (get-in state [:game-state :run])
-        server (:server run)
-        position (:position run)
-        ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
-        ice-count (count ice-list)
-        ice-index (dec position)]
-    (when (and ice-list (> position 0) (<= position ice-count))
-      (nth ice-list ice-index nil))))
+        position (:position run)]
+    ;; Early return if no run or no position (run ended mid-loop)
+    (when (and run position (pos? position))
+      (let [server (:server run)
+            ice-list (get-in state [:game-state :corp :servers (keyword (last server)) :ices])
+            ice-count (count ice-list)
+            ice-index (dec position)]
+        (when (<= position ice-count)
+          (nth ice-list ice-index nil))))))
 
 ;; ============================================================================
 ;; First-Seen Card Display

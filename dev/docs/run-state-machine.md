@@ -283,9 +283,14 @@ Setup: Whitespace (Code Gate, rez 2, str 0) on Archives, Mayfly (AI, str 1) inst
 {:abilities [{:label "Break 1 subroutine" :playable true}
              {:label "Add 1 strength" :playable true}
              {:label "Fully break Whitespace"  ; Dynamic ability
-              :playable true
+              :playable null       ; <-- IMPORTANT: Dynamic abilities have :playable null, NOT true!
               :dynamic "auto-pump-and-break"}]}
 ```
+
+**⚠️ Dynamic Ability Gotcha:**
+Dynamic abilities (`:dynamic "auto-pump-and-break"`) have `:playable null` (or missing), NOT `:playable true`.
+The server generates these on-the-fly based on ICE being encountered. Don't filter by `:playable true`
+when looking for break abilities - check for `:dynamic` containing `"break"` instead.
 
 ### Breaking Mechanics
 
@@ -439,6 +444,117 @@ ENCOUNTER-ICE           │  │              │
 (continue-run!)  ; Take one action based on state
 (auto-continue-loop!)  ; Loop until decision needed
 ```
+
+---
+
+## Handler Chain Priority Order
+
+The `continue-run!` function uses a handler chain pattern. Each handler examines the context
+and either returns nil (not handled, try next) or returns a result map (stop chain).
+
+**Handler Priority (from ai_runs.clj):**
+
+| Priority | Handler | Side | Description |
+|----------|---------|------|-------------|
+| 0 | `handle-force-mode` | Both | `--force` bypasses ALL checks |
+| 1 | `handle-opponent-wait` | Both | Opponent pressed WAIT button |
+| 1.5 | `handle-corp-rez-strategy` | Corp | Auto-handle rez with `--no-rez`/`--rez` |
+| 1.6 | `handle-corp-fire-unbroken` | Corp | Auto-fire subs with `--fire-unbroken` |
+| 1.7 | `handle-corp-rez-decision` | Corp | Pause for manual rez decision |
+| 1.7 | `handle-corp-fire-decision` | Corp | Pause for manual fire decision |
+| 1.74 | `handle-corp-all-subs-resolved` | Corp | All subs broken/fired, continue |
+| 1.75 | `handle-corp-waiting-after-subs-fired` | Corp | Wait for Runner after subs resolve |
+| 1.8 | `handle-paid-ability-window` | Both | General priority passing |
+| 2 | `handle-runner-approach-ice` | Runner | Wait for Corp rez decision |
+| 2.3 | `handle-runner-tactics` | Runner | Tactics system (if configured) |
+| 2.4 | `handle-runner-full-break` | Runner | Auto-break with `--full-break` |
+| 2.5 | `handle-runner-encounter-ice` | Runner | Wait for Corp fire decision |
+| 2.6 | `handle-runner-pass-broken-ice` | Runner | All subs broken, continue |
+| 2.7 | `handle-runner-pass-fired-ice` | Runner | Subs fired, continue |
+| 3 | `handle-waiting-for-opponent` | Both | Generic opponent wait |
+| 3 | `handle-real-decision` | Both | I have a real choice to make |
+| 4 | `handle-events` | Both | Pause for rez/ability/sub events |
+| 5 | `handle-access-display` | Runner | Show access info (returns nil) |
+| 5 | `handle-auto-choice` | Both | Auto-click single mandatory choice |
+| 5.5 | `handle-recently-passed-in-log` | Both | Backup wait detection via log |
+| 6 | `handle-auto-continue` | Both | Auto-pass empty paid ability windows |
+| 7 | `handle-run-complete` | Both | Run finished |
+| 8 | `handle-no-run` | Both | No active run |
+
+---
+
+## Run Strategy Flags
+
+Flags can be passed to `run!`, `continue-run!`, or `monitor-run!` to automate decisions.
+
+### Runner Flags
+
+| Flag | Description |
+|------|-------------|
+| `--full-break` | Auto-break all ICE. Tries first affordable break ability. If unaffordable, signals Corp to fire subs. |
+| `--tank <ice>` | Pre-authorize letting subs fire on specific ICE (can repeat) |
+| `--tank-all` | Pre-authorize letting subs fire on ALL ICE (yolo mode) |
+| `--no-continue` | Don't auto-continue after run starts (stop at first decision) |
+
+### Corp Flags
+
+| Flag | Description |
+|------|-------------|
+| `--no-rez` | Auto-decline all rez opportunities |
+| `--rez <ice>` | Only rez specified ICE, decline others (can repeat) |
+| `--fire-unbroken` | Auto-fire unbroken subs when Runner signals done breaking |
+| `--fire-if-asked` | Wait silently while Runner breaks, auto-fire when signaled, wake only for rez decisions |
+
+### Both Sides
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Bypass ALL smart checks, just send continue. **AI-vs-AI only!** |
+| `--since <cursor>` | Fast-return if state has advanced past cursor |
+
+### Combined Usage Examples
+
+```bash
+# Runner: auto-break everything, tank if can't afford
+./dev/send_command runner run "HQ" --full-break
+
+# Corp: rez Tithe only, auto-fire when Runner signals
+./dev/send_command corp monitor-run --rez "Tithe" --fire-unbroken
+
+# Corp: sleep until run ends, handling rez/fire automatically
+./dev/send_command corp monitor-run --fire-if-asked --since 892
+```
+
+---
+
+## Runner Signaling Pattern (Encounter-ICE)
+
+During encounter-ice, Runner and Corp need to coordinate:
+
+1. **Runner breaks or decides not to break**
+2. **Runner signals "done breaking"** via system message:
+   `"indicates to fire all unbroken subroutines on <ICE>"`
+3. **Corp sees signal** and can fire subs or pass
+4. **Both pass** to move to next phase
+
+### Detection Functions
+
+```clojure
+;; Corp detects Runner signal:
+(runner-signaled-let-fire? state ice-title)
+;; Looks for "indicates to fire" + ice-title in recent log
+
+;; Runner sends signal (internal):
+(let-subs-fire-signal! gameid ice-title)
+;; Sends system-msg with the signal pattern
+```
+
+### Auto-Continue Exception: Unrezzed ICE
+
+Corp should NOT auto-continue during `approach-ice` with unrezzed ICE:
+- Rez decisions are too important to auto-pass
+- The `can-auto-continue?` function explicitly checks for this
+- Use `--no-rez` to explicitly decline, or `--rez <ice>` to specify
 
 ---
 

@@ -22,7 +22,7 @@
      :title - game title (required)
      :side - \"Corp\", \"Runner\", or \"Any Side\" (default: \"Any Side\")
      :format - game format (default: \"system-gateway\" for beginner fixed decks)
-     :gateway-type - \"Beginner\" or \"Intermediate\" (default: \"Beginner\")
+     :gateway-type - \"Beginner\" or \"Intermediate\" (default: \"Intermediate\")
      :room - \"casual\" or \"competitive\" (default: \"casual\")
      :allow-spectator - allow spectators (default: true)
      :spectatorhands - spectators can see hands (default: true for AI testing)
@@ -34,7 +34,7 @@
          {:keys [title side format gateway-type room allow-spectator spectatorhands save-replay]
           :or {side "Any Side"
                format "system-gateway"
-               gateway-type "Beginner"
+               gateway-type "Intermediate"
                room "casual"
                allow-spectator true
                spectatorhands true

@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -204,6 +204,7 @@ ${GREEN}Status Commands:${NC}
   credits         - Show current credits
   clicks          - Show remaining clicks
   archives        - Show Corp's Archives (faceup/facedown cards)
+  heap            - Show Runner's Heap (discard pile)
   log [N]         - Show last N game log entries (default: 20)
   card-text <name>   - Look up card information (type, cost, text)
   abilities <name>   - Show abilities for installed card
@@ -293,6 +294,7 @@ ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits
   discard-card <name> - Move card to discard (for testing)
   draw-to-card <name> - Draw until card appears in hand
+  find-card <name>    - Multi-turn search (Corp bot takes turns)
   eval <expr>         - Execute arbitrary Clojure expression
   nuke-state          - Clear all cached game state
   debug-chat [on|off] - Toggle debug chat mode
@@ -386,6 +388,17 @@ show_last_log_if_enabled() {
 COMMAND="${1:-help}"
 shift || true
 
+# Determine project root for logging
+NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Command logging - log every command with timestamp
+LOG_FILE="${NETRUNNER_ROOT}/logs/commands.log"
+if [[ -n "$CLIENT_NAME" ]]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $CLIENT_NAME: $COMMAND $*" >> "$LOG_FILE"
+else
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE"
+fi
+
 check_client
 
 case "$COMMAND" in
@@ -439,6 +452,10 @@ case "$COMMAND" in
 
     archives)
         execute '(ai-actions/show-archives)'
+        ;;
+
+    heap)
+        execute '(ai-actions/show-heap)'
         ;;
 
     log)
@@ -552,7 +569,7 @@ case "$COMMAND" in
 
     trash-resource)
         ensure_connection
-        info "Trashing tagged runner's resource ($2 + click)..."
+        info "Trashing tagged runner's resource (\$2 + click)..."
         execute '(ai-actions/trash-resource!)'
         ;;
 
@@ -579,6 +596,14 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command draw-to-card \"Card Name\""
         info "Drawing until $CARD_NAME appears in hand..."
         execute "(ai-actions/draw-to-card! \"$CARD_NAME\")"
+        ;;
+
+    find-card)
+        ensure_connection
+        CARD_NAME="${1:-}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command find-card \"Card Name\""
+        info "Multi-turn search for $CARD_NAME (Corp bot will take turns)..."
+        execute "(ai-actions/find-card! \"$CARD_NAME\")"
         ;;
 
     # Dev/Testing commands
@@ -1031,7 +1056,7 @@ case "$COMMAND" in
         TITLE="${1:-AI Test Game}"
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
-        GATEWAY_TYPE="${4:-Beginner}"
+        GATEWAY_TYPE="${4:-Intermediate}"
         info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
@@ -1042,7 +1067,7 @@ case "$COMMAND" in
                                         :precon \"$PRECON\"
                                         :room \"casual\"
                                         :allow-spectator true
-                                        :spectatorhands false
+                                        :spectatorhands true
                                         :save-replay false
                                         :api-access false
                                         :password \"\"

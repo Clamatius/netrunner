@@ -142,11 +142,32 @@
           (= arg "--fire-unbroken")
           (recur rest-args server (assoc flags :fire-unbroken true))
 
+          (= arg "--fire-if-asked")
+          (recur rest-args server (assoc flags :fire-if-asked true))
+
           (= arg "--no-continue")
           (recur rest-args server (assoc flags :no-continue true))
 
           (= arg "--force")
           (recur rest-args server (assoc flags :force true))
+
+          ;; --since <cursor> (takes integer argument)
+          (= arg "--since")
+          (if (empty? rest-args)
+            (do
+              (println "⚠️  --since requires cursor argument")
+              (recur rest-args server flags))
+            (let [cursor-str (first rest-args)
+                  cursor (try
+                           (Long/parseLong cursor-str)
+                           (catch NumberFormatException _
+                             (println "⚠️  --since requires numeric cursor, got:" cursor-str)
+                             nil))]
+              (recur (rest rest-args)
+                     server
+                     (if cursor
+                       (assoc flags :since cursor)
+                       flags))))
 
           ;; --rez <ice-name> (takes argument)
           (= arg "--rez")
@@ -580,7 +601,8 @@
         ;; Run is complete, don't send spurious continues
         (do
           (println "✅ Run complete (force mode)")
-          {:status :run-complete})
+          {:status :run-complete
+           :wake-reason :run-complete})
         ;; Run is active, send continue
         (do
           (println "⚡ FORCE mode - bypassing all checks, sending continue")
@@ -589,7 +611,8 @@
                             :command "continue"
                             :args nil})
           {:status :action-taken
-           :action :forced-continue})))))
+           :action :forced-continue
+           :wake-reason :forced})))))
 
 (defn handle-opponent-wait
   "Priority 1: Opponent pressed WAIT button (indicate-action)"
@@ -597,6 +620,7 @@
   (when (opponent-indicated-action? state side)
     (println "⏸️  PAUSED - Opponent pressed WAIT button")
     {:status :waiting-for-opponent
+     :wake-reason :opponent-indicated-action
      :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")}))
 
 (defn handle-run-complete
@@ -605,7 +629,8 @@
   (let [run (get-in state [:game-state :run])]
     (when (nil? run)
       (println "✅ Run complete")
-      {:status :run-complete})))
+      {:status :run-complete
+       :wake-reason :run-complete})))
 
 (defn handle-no-run
   "Priority 8: No active run"
@@ -615,7 +640,8 @@
                (or (nil? my-prompt)
                    (not= (:prompt-type my-prompt) "run")))
       (println "⚠️  No active run detected")
-      {:status :no-run})))
+      {:status :no-run
+       :wake-reason :no-run})))
 
 (defn handle-access-display
   "Display accessed cards during run - returns nil to allow auto-continue.
@@ -692,6 +718,7 @@
               (reset! last-waiting-status status-key)
               (println (format "⏸️  Waiting for %s paid abilities (%s phase)" opp-side run-phase)))
             {:status :waiting-for-opponent-paid-abilities
+             :wake-reason :waiting-for-opponent
              :message (format "Waiting for %s to pass or use paid abilities" opp-side)
              :phase run-phase
              :we-passed true}))))))
@@ -729,6 +756,7 @@
             (println (format "     %d. [unknown card: %s]" idx cid))))
         (println "   → Use 'choose-card <index>' to select")))
     {:status :decision-required
+     :wake-reason :decision-required
      :prompt my-prompt}))
 
 (defn handle-waiting-for-opponent
@@ -759,6 +787,7 @@
           (println (format "⏸️  Waiting for opponent: %s" reason))
           (debug-chat! (format "WAIT: %s" reason)))
         {:status :waiting-for-opponent
+         :wake-reason :waiting-for-opponent
          :message reason}))))
 
 (defn handle-events
@@ -770,28 +799,28 @@
       (println "⚠️  Run paused - ICE rezzed!")
       (println (format "   %s" (:text rez-event)))
       (println "   → Use 'continue-run' again to proceed")
-      {:status :ice-rezzed :event rez-event})
+      {:status :ice-rezzed :wake-reason :ice-rezzed :event rez-event})
 
     ability-event
     (do
       (println "⚠️  Run paused - ability triggered!")
       (println (format "   %s" (:text ability-event)))
       (println "   → Use 'continue-run' again to proceed")
-      {:status :ability-used :event ability-event})
+      {:status :ability-used :wake-reason :ability-used :event ability-event})
 
     fired-event
     (do
       (println "⚠️  Run paused - subroutines fired!")
       (println (format "   %s" (:text fired-event)))
       (println "   → Use 'continue-run' again to proceed")
-      {:status :subs-fired :event fired-event})
+      {:status :subs-fired :wake-reason :subs-fired :event fired-event})
 
     tag-damage-event
     (do
       (println "⚠️  Run paused - tag or damage!")
       (println (format "   %s" (:text tag-damage-event)))
       (println "   → Use 'continue-run' again to proceed")
-      {:status :tag-or-damage :event tag-damage-event})))
+      {:status :tag-or-damage :wake-reason :tag-or-damage :event tag-damage-event})))
 
 (defn handle-unexpected-state
   "Fallback: Unknown state - wait and retry rather than give up"
@@ -804,6 +833,7 @@
       (println (format "⏳ Waiting (phase: %s, side: %s)..." run-phase side)))
     ;; Return waiting status so loop retries
     {:status :waiting-for-opponent
+     :wake-reason :unexpected-state
      :message "Unclear state, waiting for game to advance"
      :prompt my-prompt
      :phase run-phase}))
@@ -914,6 +944,12 @@
                   handle-opponent-wait
                   corp-handlers/handle-corp-rez-strategy
                   corp-handlers/handle-corp-rez-decision
+                  ;; fire-if-asked is "sleep mode" - handles fire and empty windows
+                  (fn [ctx]  ; Wrapper to update strategy after firing
+                    (when-let [result (corp-handlers/handle-corp-fire-if-asked ctx)]
+                      (when-let [pos (:fired-at-position result)]
+                        (set-strategy! {:fired-at-position pos}))
+                      result))
                   (fn [ctx]  ; Wrapper to update strategy after firing
                     (when-let [result (corp-handlers/handle-corp-fire-unbroken ctx)]
                       (when-let [pos (:fired-at-position result)]
@@ -923,6 +959,7 @@
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
                   corp-handlers/handle-paid-ability-window
+                  runner-handlers/handle-auto-select-single-card
                   runner-handlers/handle-runner-approach-ice
                   tactics/handle-runner-tactics
                   runner-handlers/handle-runner-full-break
@@ -969,6 +1006,27 @@
   [status]
   (contains? #{:ice-rezzed :ability-used :subs-fired :tag-or-damage} status))
 
+(defn- get-run-state-key
+  "Extract state key for stuck detection: [phase position ice-title]"
+  []
+  (let [state @state/client-state
+        run (get-in state [:game-state :run])
+        phase (:phase run)
+        position (:position run)
+        ice (core/current-run-ice state)
+        ;; nil-safe: ice is nil during access phase (no ICE being encountered)
+        ice-title (when ice (:title ice))]
+    [phase position ice-title]))
+
+(defn- detect-stuck-state
+  "Check if we're stuck in the same state.
+   Returns true if state-history has same state for threshold consecutive iterations.
+   state-history is a vector of recent state keys (newest first)."
+  [state-history threshold]
+  (when (>= (count state-history) threshold)
+    (let [recent (take threshold state-history)]
+      (apply = recent))))
+
 (defn auto-continue-loop!
   "Runs continue-run! in a loop until run ends or decision required.
 
@@ -985,31 +1043,36 @@
    - :run-complete - run finished successfully
    - :no-run - no active run
    - :waiting-for-corp-rez - runner waiting for corp (corp should call their loop)
+   - stuck in same state (5 consecutive :action-taken with same [phase position ice])
    - max iterations or timeout reached
 
    Options:
-   :max-iterations  - Safety guard (default 50)
+   :max-iterations  - Safety guard (default 500, high because stuck-detection handles loops)
    :timeout-ms      - Max time to loop (default 30000ms = 30s)
    :wait-delay-ms   - Delay when waiting for opponent (default 200ms)
+   :stuck-threshold - Same state iterations before declaring stuck (default 5)
    :pause-on-events - Pause on events like :ice-rezzed (default true)
 
    Returns the final result from continue-run! plus:
    :iterations - how many times continue-run! was called
    :elapsed-ms - how long the loop ran"
-  [& {:keys [max-iterations timeout-ms wait-delay-ms pause-on-events]
-      :or {max-iterations 50
+  [& {:keys [max-iterations timeout-ms wait-delay-ms stuck-threshold pause-on-events]
+      :or {max-iterations 500    ; Raised from 50 - stuck detection handles loops
            timeout-ms 30000
            wait-delay-ms 200
+           stuck-threshold 5
            pause-on-events true}}]
   (let [start-time (System/currentTimeMillis)
         deadline (+ start-time timeout-ms)]
-    (loop [iteration 0]
+    (loop [iteration 0
+           state-history []]   ; Track [phase position ice] for stuck detection
       (cond
-        ;; Safety: max iterations
+        ;; Safety: max iterations (should rarely trigger with stuck-detection)
         (>= iteration max-iterations)
         (do
           (println (format "⚠️  Auto-continue stopped: max iterations (%d) reached" max-iterations))
           {:status :max-iterations
+           :wake-reason :max-iterations
            :iterations iteration
            :elapsed-ms (- (System/currentTimeMillis) start-time)})
 
@@ -1018,12 +1081,15 @@
         (do
           (println (format "⚠️  Auto-continue stopped: timeout (%dms) reached" timeout-ms))
           {:status :timeout
+           :wake-reason :timeout
            :iterations iteration
            :elapsed-ms (- (System/currentTimeMillis) start-time)})
 
         :else
         (let [result (continue-run!)
-              status (:status result)]
+              status (:status result)
+              current-state-key (get-run-state-key)
+              new-history (cons current-state-key (take (dec stuck-threshold) state-history))]
           (cond
             ;; Terminal status - stop loop
             (terminal-status? status)
@@ -1035,7 +1101,7 @@
             (= status :waiting-for-runner-signal)
             (do
               (Thread/sleep wait-delay-ms)
-              (recur (inc iteration)))
+              (recur (inc iteration) []))  ; Reset history on wait
 
             ;; Waiting for opponent - terminal status, stop loop
             ;; The other client needs to run their own loop (e.g., Corp runs monitor-run!)
@@ -1049,12 +1115,30 @@
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
-            ;; Action taken - immediately continue
-            (= status :action-taken)
+            ;; Prompt handled (e.g., credit source auto-select) - continue without stuck tracking
+            ;; This is progress but not run-phase progress, so don't add to history
+            (= status :prompt-handled)
             (do
-              (reset! last-waiting-status nil)  ; Clear so new waiting messages will print
-              (Thread/sleep core/quick-delay)   ; Brief sync pause
-              (recur (inc iteration)))
+              (Thread/sleep core/quick-delay)
+              (recur (inc iteration) state-history))  ; Keep OLD history, don't add new entry
+
+            ;; Action taken - check for stuck state, then continue
+            (= status :action-taken)
+            (if (detect-stuck-state new-history stuck-threshold)
+              ;; Stuck! Same state for N iterations despite :action-taken
+              (do
+                (println (format "⚠️  Stuck in same state for %d iterations: %s" stuck-threshold current-state-key))
+                (println "   This usually means a handler is sending continues without making progress")
+                {:status :stuck
+                 :wake-reason :stuck
+                 :state-key current-state-key
+                 :iterations (inc iteration)
+                 :elapsed-ms (- (System/currentTimeMillis) start-time)})
+              ;; Not stuck - continue
+              (do
+                (reset! last-waiting-status nil)  ; Clear so new waiting messages will print
+                (Thread/sleep core/quick-delay)   ; Brief sync pause
+                (recur (inc iteration) new-history)))
 
             ;; Unknown status - treat as terminal
             :else
@@ -1076,34 +1160,71 @@
    This enables the 'both sides auto-pass' flow where neither player
    has to manually pass empty windows.
 
+   Flags:
+     --no-rez            Auto-decline all rez opportunities
+     --rez <ice-name>    Only rez specified ICE, decline others
+     --fire-unbroken     Auto-fire unbroken subs when Runner signals
+     --fire-if-asked     Sleep mode: auto-fire, auto-continue, wake only for rez
+     --since <cursor>    Fast-return: immediately return if run ended/started since cursor
+
    Usage:
-     (monitor-run!)                    ; Auto-pass until decision needed
-     (monitor-run! \"--no-rez\")       ; Also auto-decline all rez opportunities
-     (monitor-run! \"--rez\" \"Tithe\") ; Only rez Tithe, decline others"
+     (monitor-run!)                           ; Auto-pass until decision needed
+     (monitor-run! \"--no-rez\")              ; Also auto-decline all rez opportunities
+     (monitor-run! \"--rez\" \"Tithe\")        ; Only rez Tithe, decline others
+     (monitor-run! \"--fire-if-asked\")       ; Sleep until run ends
+     (monitor-run! \"--since\" \"892\")        ; Fast-return if state advanced"
   [& args]
-  (let [run (get-in @state/client-state [:game-state :run])]
-    (if (nil? run)
+  (let [{:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
+        since-cursor (:since flags)
+        current-cursor (state/get-cursor)
+        run (get-in @state/client-state [:game-state :run])]
+    (cond
+      ;; --since fast-return: check if state already advanced
+      (and since-cursor (> current-cursor since-cursor) (nil? run))
+      (do
+        (println (format "⚡ Fast-return: run ended (cursor %d > %d)" current-cursor since-cursor))
+        {:status :run-complete
+         :wake-reason :run-complete
+         :cursor current-cursor
+         :fast-return true})
+
+      (and since-cursor (> current-cursor since-cursor) run)
+      (do
+        (println (format "⚡ Fast-return: new run active (cursor %d > %d)" current-cursor since-cursor))
+        {:status :new-run
+         :wake-reason :new-run
+         :cursor current-cursor
+         :fast-return true})
+
+      ;; No active run
+      (nil? run)
       (do
         (println "⚠️  No active run to monitor")
-        {:status :no-run})
+        {:status :no-run
+         :wake-reason :no-run
+         :cursor current-cursor})
+
+      ;; Normal monitoring flow
+      :else
       (do
         ;; Reset strategy at start of monitoring (Corp has separate atom from Runner)
         ;; This prevents stale --rez sets from previous runs
         (reset-strategy!)
-        ;; Apply new strategy flags if provided
-        (when (seq args)
-          (let [{:keys [flags]} (parse-run-flags (vec args))]
-            (set-strategy! flags)
-            (when (seq flags)
-              (println (format "🎯 Strategy: %s"
-                              (clojure.string/join ", "
-                                                   (map (fn [[k v]]
-                                                          (if (set? v)
-                                                            (str (name k) " " (clojure.string/join "," v))
-                                                            (name k)))
-                                                        flags)))))))
+        ;; Apply new strategy flags (excluding :since which is just for fast-return check)
+        (let [strategy-flags (dissoc flags :since)]
+          (when (seq strategy-flags)
+            (set-strategy! strategy-flags)
+            (println (format "🎯 Strategy: %s"
+                            (clojure.string/join ", "
+                                                 (map (fn [[k v]]
+                                                        (if (set? v)
+                                                          (str (name k) " " (clojure.string/join "," v))
+                                                          (name k)))
+                                                      strategy-flags))))))
         (println "👁️  Monitoring run... (auto-passing boring windows)")
-        (auto-continue-loop!)))))
+        (let [result (auto-continue-loop!)]
+          ;; Include cursor in result for caller to track
+          (assoc result :cursor (state/get-cursor)))))))
 
 ;; ============================================================================
 ;; Convenience Wrapper

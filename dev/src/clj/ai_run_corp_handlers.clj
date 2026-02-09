@@ -139,6 +139,7 @@
             (println (format "Rez decision: %s (cost %d)" ice-title (get current-ice :cost 0)))
             (println "   Use continue with '--rez <name>' to rez, or '--no-rez' to decline"))
           {:status :decision-required
+           :wake-reason :rez-decision
            :message (format "Corp must decide: rez %s or continue" ice-title)
            :ice ice-title
            :position position})))))
@@ -214,6 +215,7 @@
                 (println "   fire-subs <name>  - fire the unbroken subs")
                 (println "   continue          - pass without firing"))
               {:status :decision-required
+               :wake-reason :fire-decision
                :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
                :ice ice-title
                :unbroken-count sub-count
@@ -225,10 +227,92 @@
                 (println (format "⏳ Waiting for Runner to break or signal on %s (%d unbroken sub%s)..."
                                ice-title sub-count (if (= sub-count 1) "" "s"))))
               {:status :waiting-for-runner-signal
+               :wake-reason :waiting-for-opponent
                :message (format "Waiting for Runner to break or signal on %s" ice-title)
                :ice ice-title
                :unbroken-count sub-count
                :position position})))))))
+
+(defn handle-corp-fire-if-asked
+  "Priority 1.65: Corp --fire-if-asked strategy - sleeps through run, wakes only for rez.
+   Unlike --fire-unbroken which wakes for each fire decision, this:
+   1. Silently waits while Runner breaks (no output)
+   2. Auto-fires when Runner signals
+   3. Auto-continues through empty windows
+   4. ALWAYS wakes for rez decisions (rez is a real choice)"
+  [{:keys [side run-phase my-prompt strategy state gameid]}]
+  (when (and (= side "corp")
+             (:fire-if-asked strategy))
+    (let [run (get-in state [:game-state :run])
+          position (:position run)
+          current-ice (core/current-run-ice state)]
+      (cond
+        ;; Approach-ice with unrezzed ICE - WAKE UP for rez decision
+        ;; Unless --rez or --no-rez strategy already handles it
+        (and (= run-phase "approach-ice")
+             current-ice
+             (not (:rezzed current-ice))
+             (not (:no-rez strategy))
+             (not (:rez strategy)))
+        nil  ; Fall through to rez-decision handler
+
+        ;; Encounter-ice - check for unbroken subs
+        (= run-phase "encounter-ice")
+        (let [ice-title (:title current-ice "ICE")
+              subroutines (:subroutines current-ice)
+              unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+              runner-signaled? (runner-signaled-let-fire? state ice-title)
+              already-fired-here? (= (:fired-at-position strategy) position)]
+          (cond
+            ;; Already fired at this position - continue
+            already-fired-here?
+            nil
+
+            ;; No unbroken subs - silently continue
+            (or (nil? current-ice) (empty? unbroken-subs))
+            nil
+
+            ;; Runner signaled - auto-fire!
+            runner-signaled?
+            (do
+              (println (format "   --fire-if-asked: Runner signaled, firing %d sub(s) on %s"
+                              (count unbroken-subs) ice-title))
+              (let [card-ref (core/create-card-ref current-ice)]
+                (ws/send-message! :game/action
+                                 {:gameid gameid
+                                  :command "unbroken-subroutines"
+                                  :args {:card card-ref}})
+                {:status :action-taken
+                 :action :auto-fired-subs
+                 :ice ice-title
+                 :sub-count (count unbroken-subs)
+                 :fired-at-position position}))
+
+            ;; Runner hasn't signaled yet - silently wait (poll again)
+            :else
+            {:status :waiting-for-runner-signal
+             :wake-reason :waiting-for-opponent
+             :message (format "Waiting for Runner to break or signal on %s" ice-title)
+             :ice ice-title
+             :position position}))
+
+        ;; Other phases with prompt but no real decision - auto-continue
+        ;; BUT NOT during success/access phases where Runner is active and Corp just waits
+        (and my-prompt
+             (empty? (:choices my-prompt))
+             (empty? (:selectable my-prompt))
+             (not (#{"success" "access"} run-phase)))
+        (do
+          (ws/send-message! :game/action
+                           {:gameid gameid
+                            :command "continue"
+                            :args nil})
+          (Thread/sleep 100)
+          {:status :action-taken
+           :action :auto-continue-fire-if-asked})
+
+        ;; Default - don't handle, let other handlers run
+        :else nil))))
 
 (defn handle-corp-all-subs-resolved
   "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired)."
@@ -272,6 +356,7 @@
                 (reset! last-waiting-status status-key)
                 (println (format "   Waiting for Runner to continue past %s (subs resolved)" ice-title)))
               {:status :waiting-for-opponent
+               :wake-reason :waiting-for-opponent
                :message (format "Waiting for Runner to continue past %s" ice-title)
                :phase run-phase})))))))
 
@@ -298,6 +383,7 @@
           (println (format "   Waiting for %s paid abilities (%s phase)"
                           (clojure.string/capitalize opp-side) run-phase)))
         {:status :waiting-for-opponent-paid-abilities
+         :wake-reason :waiting-for-opponent
          :message (format "Waiting for %s to pass or use paid abilities" opp-side)
          :phase run-phase
          :we-passed true}))))

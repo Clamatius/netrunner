@@ -131,6 +131,18 @@ Fresh context wakes up, reads the handover, continues without 150k tokens of pre
 
 **For complex features:** Create a feature branch, implement against RFC specs, then PR for review.
 
+## Issue Tracker
+
+GitHub Issues on the fork: **https://github.com/Clamatius/netrunner/issues**
+
+This is the issue tracker for this AI player project. The upstream (mtgred/netrunner) is the main game codebase - our fork tracks AI-specific issues.
+
+```bash
+gh issue list --repo Clamatius/netrunner           # List open issues
+gh issue view <N> --repo Clamatius/netrunner       # View issue details
+gh issue create --repo Clamatius/netrunner         # Create new issue
+```
+
 ## References
 
 - `make` or `Makefile` - All build/test commands (source of truth)
