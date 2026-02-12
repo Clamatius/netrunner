@@ -9,7 +9,9 @@
             [ai-card-actions :as actions]
             [ai-run-tactics :as tactics]
             [ai-run-corp-handlers :as corp-handlers]
-            [ai-run-runner-handlers :as runner-handlers]))
+            [ai-run-runner-handlers :as runner-handlers]
+            [clojure.edn]
+            [clojure.string]))
 
 ;; ============================================================================
 ;; Run Strategy State
@@ -669,7 +671,7 @@
               (when (> (count choices) 1)
                 (println "   Options:")
                 (doseq [[idx choice] (map-indexed vector choices)]
-                  (println (format "     %d. %s" idx (:value choice)))))))))))
+                  (println (format "     %d. %s" idx (core/format-choice choice)))))))))))
   ;; Always return nil - let subsequent handlers (auto-choice/auto-continue) handle it
   nil)
 
@@ -746,7 +748,7 @@
       (when (seq choices)
         (println (format "   Choices: %d options" (count choices)))
         (doseq [[idx choice] (map-indexed vector choices)]
-          (println (format "     %d. %s" idx (:value choice)))))
+          (println (format "     %d. %s" idx (core/format-choice choice)))))
       ;; Display selectable cards for "select" type prompts
       (when (seq selectable)
         (println (format "   Selectable cards: %d" (count selectable)))

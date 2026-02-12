@@ -5,6 +5,7 @@
             [ai-core :as core]
             [ai-basic-actions :as actions]
             [clojure.string :as str]
+            [clojure.pprint]
             [jinteki.cards :refer [all-cards]]))
 
 ;; ============================================================================
@@ -693,7 +694,7 @@
     ;; Display choices
     (when choices
       (doseq [[idx choice] (map-indexed vector choices)]
-        (println (str "  [" idx "] " (:value choice)))))
+        (println (str "  [" idx "] " (core/format-choice choice)))))
 
     prompt))
 
@@ -711,7 +712,7 @@
         (when-let [choices (:choices prompt)]
           (println "Choices:")
           (doseq [[idx choice] (map-indexed vector choices)]
-            (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
+            (println (str "  " idx ". " (core/format-choice choice) " [UUID: " (:uuid choice) "]"))))
         prompt))
     (println "No active prompt")))
 
@@ -868,7 +869,7 @@
 
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
-  [state run my-side]
+  [state _run my-side]
   (when-let [current-ice (core/current-run-ice state)]
     (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
@@ -1132,7 +1133,7 @@
   "Execute a simple Corp turn: click for credit 3 times, end turn"
   []
   (println "\n=== SIMPLE CORP TURN ===")
-  (dotimes [i 3]
+  (dotimes [_ 3]
     (actions/take-credits))
   (actions/end-turn)
   (println "=== TURN COMPLETE ===\n"))
@@ -1141,7 +1142,7 @@
   "Execute a simple Runner turn: click for credit 4 times, end turn"
   []
   (println "\n=== SIMPLE RUNNER TURN ===")
-  (dotimes [i 4]
+  (dotimes [_ 4]
     (actions/take-credits))
   (actions/end-turn)
   (println "=== TURN COMPLETE ===\n"))

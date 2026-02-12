@@ -4,7 +4,8 @@
             [ai-state :as state]
             [ai-core :as core]
             [ai-basic-actions :as basic]
-            [ai-prompts :as prompts]))
+            [ai-prompts :as prompts]
+            [clojure.string :as str]))
 
 ;; ============================================================================
 ;; Card Actions
@@ -74,8 +75,10 @@
                     (when (and new-prompt (not= :waiting (:prompt-type new-prompt)))
                       (println (str "   📋 " (:msg new-prompt)))
                       (when-let [choices (:choices new-prompt)]
-                        (println (str "      Choices: " (clojure.string/join ", "
-                                       (map-indexed #(str %1 "." (:value %2)) choices))))))
+                        (println (str "      Choices: " (str/join ", "
+                                       (map-indexed (fn [idx choice]
+                                                     (str idx "." (core/format-choice choice)))
+                                                   choices))))))
                     ;; Show turn indicator only if we won't auto-end (which shows its own)
                     (when (and (> after-clicks 0) (nil? new-prompt))
                       (core/show-turn-indicator))
