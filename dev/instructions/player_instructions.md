@@ -17,7 +17,7 @@ Where `<side>` is `runner` or `corp`. The help text is the authoritative referen
 ### Game Structure
 - **Sides:** Corp (defending servers, plays first) vs Runner (attacking servers)
 - **Win conditions:** 
-- First to 7 agenda points (6 in tutorial)
+- First to 7 agenda points
 - Corp scores agenda points via advancing enough to pay cost then scoring after the last click (scoring does not require a click)
 - Runner wins if Corp must draw from empty R&D
 - Corp wins if Runner must discard but cannot (flatline)
@@ -119,7 +119,7 @@ Each ICE has subroutines (→ symbols). Unbroken subs fire and resolve top-to-bo
 - **Do N damage** - Runner discards cards randomly. 0 cards + damage = flatline (Runner loses).
 - **Lose credits / gain tags / etc** - Various effects.
 
-Breakers must match ICE type (Barrier→Fracter, Code Gate→Decoder, Sentry→Killer).
+Breakers must match ICE type (Barrier→Fracter, Code Gate→Decoder, Sentry→Killer, AI breakers variable).
 
 ---
 
@@ -166,28 +166,3 @@ It ignores minor events (opponent credits, draws) to avoid spurious wakeups. Use
 Always use exact format:
 - **Central servers:** `"HQ"`, `"R&D"`, `"Archives"`
 - **Remote servers:** `"Server 1"`, `"Server 2"`, etc.
-
-### Timing
-Commands go through a persistent REPL with WebSocket connection. Allow 1-2 seconds between rapid commands for server responses.
-
-### Game IDs
-UUIDs from `list-lobbies`. Example: `1806d5c9-f540-4158-ab66-8182433dcf10`
-
-### Error Recovery
-```bash
-./send_command connect              # Reconnect WebSocket
-./send_command resync <game-id>     # Rejoin game in progress
-```
-Both are required
-
-### Debug Mode
-```bash
-AI_DEBUG_LEVEL=true ./send_command runner status
-```
-Shows internal WebSocket messages for debugging.
-
-### If confused on what to plan
-```bash
-./send_command dashboard-compact
-```
-Shows the default plan for the heuristic-based player.

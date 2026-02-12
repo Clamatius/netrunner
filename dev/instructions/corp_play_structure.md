@@ -27,7 +27,7 @@ Card effects and board state always beat every heuristic given here, given combi
     * If they are secure HQ is less important.
     * It's invariably a bad idea to defend more than 1 remote
 *   **Agendas**: NEVER install naked (without ICE). Ideally at least 1 ICE that ends the run.
-*   **Econ Assets**: Install `Drip Assets` behind light ICE, `Click Assets` in the scoring remote when poor or no agenda to score.
+*   **Econ Assets**: Install `Drip Assets` as bait or when no agenda to score, `Click Assets` in the scoring remote when poor.
 
 ### 4. ICE Layering
 *   Mix ICE types on important servers. Palisade + Tithe beats Palisade alone.
@@ -95,11 +95,12 @@ Can rez Brân (6¢) next turn? YES ✓
 □ Can I afford to rez this ICE?
 □ SHOULD I rez? (Consider: save money, bluff, no point if they break easily)
 □ If rezzing: say the cost out loud, subtract from credits
+□ After last ICE broken, rez any upgrades
 
 ### Access Phase
 □ Trap? Trigger it.
 □ Agenda? They steal. Note the score change.
-□ Asset? They may trash (check trash cost vs their credits).
+□ Asset/Upgrade? They may trash (check trash cost vs their credits).
 
 ---
 
@@ -123,7 +124,7 @@ Can rez Brân (6¢) next turn? YES ✓
 - If Runner is attacking less important server, make sure you can afford to defend the important one
 
 **Advancement counters are lost if stolen.**
-- Agenda with 3 counters stolen = you wasted 3 clicks + 3 credits
+- Agenda with 3 counters stolen = you wasted 4 clicks + 3 credits
 - Don't over-advance vulnerable agendas
 
 **Install costs for ICE:**
@@ -143,7 +144,7 @@ Can rez Brân (6¢) next turn? YES ✓
 
 A = Advance (costs 1¢ each)
 
-**Critical insight:** A 4/2 installed and advanced once is a HUGE signal. Runner knows it's likely an agenda. Either protect it well or score fast.
+**Critical insight:** A 4/2 installed and advanced once is a HUGE signal. Runner knows it's likely an agenda. Either protect it well or score fast. Cards that can advance agendas are therefore important since they let you bluff important agendas as assets.
 
 ---
 
@@ -176,9 +177,7 @@ Access phase:
 
 ---
 
-## Corp Run Commands (send_command Reference)
-
-The Run Response Checklist above explains *what* to decide. This section explains *how* to execute those decisions using `send_command`.
+## Corp Run Commands
 
 ### Decision Points During a Run
 
@@ -195,99 +194,16 @@ Corp gets priority at specific timing windows:
 | Pass priority (do nothing) | `continue` | Most common - just let the run proceed |
 | Rez ICE on approach | `continue --rez "ICE Name"` | **Critical**: Must rez during approach, not encounter |
 | Fire unbroken subs | `fire-subs` | After Runner declines to break |
-| Rez upgrade (Manegarm etc.) | `continue --rez "Upgrade Name"` | On approach to server |
-| Auto-handle full run | `monitor-run` | Convenience command (see caveats below) |
-| Sleep until run ends | `monitor-run --fire-if-asked` | Auto-fire, auto-continue, wake only for rez |
-| Fast-return check | `monitor-run --since <cursor>` | Immediately return if run already ended |
+| Rez upgrade on approach to server | `continue --rez "Upgrade Name"` | On approach to server |
+| Auto-handle full run | `monitor-run` | See `help` for full flags (--rez, --fire-if-asked, --since) |
 
-### Typical Corp Run Flow
-
-```bash
-# Runner announces: run on "Server 1"
-# You have unrezzed Whitespace protecting it
-
-# 1. Approach ICE - REZ NOW if you want to rez
-./dev/send_command corp continue --rez "Whitespace"
-
-# 2. Runner encounters, may break. Check status to see what happened
-./dev/send_command corp status
-
-# 3. If subs unbroken, fire them
-./dev/send_command corp fire-subs
-
-# 4. If run continues to server, continue or rez upgrades
-./dev/send_command corp continue
-```
-
-### Common Patterns
-
-**Let them through (poor or want them to hit trap):**
-```bash
-./dev/send_command corp continue   # repeat until run ends
-```
-
-**Defend with ICE:**
-```bash
-./dev/send_command corp continue --rez "ICE Name"
-# ... Runner breaks or doesn't ...
-./dev/send_command corp fire-subs   # if subs unbroken
-```
-
-**Multiple ICE (outer to inner):**
-```bash
-# They hit outermost first
-./dev/send_command corp continue --rez "Outer ICE"
-./dev/send_command corp fire-subs
-# Then next ICE inward
-./dev/send_command corp continue --rez "Inner ICE"
-./dev/send_command corp fire-subs
-```
-
-### Alternative: monitor-run
-
-`monitor-run` auto-passes non-decision windows and pauses for real choices.
-
-**Basic usage:**
-```bash
-./dev/send_command corp monitor-run                     # Auto-pass until decision needed
-./dev/send_command corp monitor-run --no-rez            # Also auto-decline all rez
-./dev/send_command corp monitor-run --rez "Tithe"       # Only rez Tithe, decline others
-./dev/send_command corp monitor-run --fire-unbroken     # Auto-fire when Runner signals done
-```
-
-**Sleep mode (--fire-if-asked):**
-```bash
-# Sleep until run ends - handles rez (if --rez specified), fire, and empty windows
-./dev/send_command corp monitor-run --fire-if-asked --rez "Whitespace"
-```
-This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes. Ideal for AI-vs-AI play.
-
-**Fast-return (--since):**
-```bash
-# Get cursor from previous call
-cursor=$(./dev/send_command corp monitor-run --fire-if-asked | grep cursor | ...)
-
-# Later, check if anything happened without blocking
-./dev/send_command corp monitor-run --since $cursor
-```
-If the run already ended, returns immediately instead of blocking.
-
-**Caveats:**
-- Uses stuck-state detection instead of iteration limits (500 max as safety net)
-- Always wakes for rez decisions unless --rez or --no-rez specified
-- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails
+For each ICE (outer to inner): `continue --rez` on approach → Runner encounters → `fire-subs` if unbroken → repeat. To let them through: just `continue` repeatedly.
 
 ### Gotchas
 
-1. **Rez timing is approach, not encounter** - If you `continue` past approach without `--rez`, ICE stays unrezzed for that encounter. You missed the window.
-
-2. **Can't rez during encounter** - Once Runner is encountering ICE, it's too late to rez it. Plan ahead.
-
-3. **fire-subs only works if subs are unbroken** - Check status to see if Runner broke them first.
-
-4. **Upgrades rez on approach to server** - Manegarm Skunkworks must be rezzed as Runner approaches the server, not during ICE encounters.
-
-5. **continue without --rez passes priority** - The ICE stays unrezzed. Runner walks through. Don't forget your rez!
+1. **Rez timing is approach, not encounter** — `continue` past approach without `--rez` = ICE stays unrezzed. You missed the window.
+2. **Upgrades rez on approach to server** — Manegarm must be rezzed as Runner approaches the server, not during ICE encounters.
+3. **`continue` without `--rez` passes priority** — Runner walks through. Don't forget your rez!
 
 ---
 
@@ -301,4 +217,7 @@ If the run already ended, returns immediately instead of blocking.
 
 **"I have 3 ICE on this server"** → All unrezzed? That's 0 protection.
 
-**"They're poor, they can't run"** → They have 5¢. Your ICE costs 4¢ to break. They run.
+**"They're poor, they can't run"** → They have 2¢. Your ICE costs 4¢ to break. They click for credits and run, even without cards in hand.
+
+**"I shouldn't install, the remote isn't safe"** → You need to force the Runner's runs to cost as much as possible. They will access sometimes. Make them expected amount paid as high as possible. If you don't install quickly enough, HQ will become unsafe too.
+

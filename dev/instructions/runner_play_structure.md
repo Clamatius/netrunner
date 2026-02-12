@@ -9,31 +9,30 @@ The cards and board always beat every rule given here, given combinations of eff
 
 ## Operational Heuristics (Hardest Constraints)
 
-### 1. The Credit Floor (3¢)
-*   **Rule**: Never run or install if it leaves you with < 3 credits.
+### 1. The Credit Floor (4¢)
+*   **Rule**: Never run or install if it leaves you with < 4 credits.
 *   **Reason**: You need money to steal (trash upgrades, pay for ICE breaking, etc).
-*   **Priority**: If < 3 credits, your ONLY priority is **Economy** cards, `take-credit` (your least efficient action).
+*   **Priority**: If < 4 credits, your ONLY priority is **Economy** cards, last resort `take-credit` (your least efficient action - the baseline 1:1 awful exchange rate).
 
 ### 2. Just-in-Time Rig
-*   **Rule**: Do not install things unless you have a use for them
+*   **Rule**: Do not install things unless you have a use for them right now
 *   **Exceptions**:
     *   You are rich (> 10 credits).
-    *   You are about to run a dangerous face-down server and need safety.
-    *   You are preparing a specific "Go Turn" (e.g., Deep Dive/Docklands).
-*   **Waste**: Installing `Carmen` (Killer) when Corp has no Sentries is a waste of tempo.
+    *   You are about to run a dangerous face-down server and need to ensure access.
+    *   You are preparing a specific "Go Turn" (e.g., Deep Dive/Docklands) in the late game
+    *   Do not worry too much about assembling a full rig at all - force rezzes and attack where the Corp is weakest
+*   **Waste**: Example: installing `Carmen` (Killer) when Corp has no Sentries is a waste of tempo and may lose by itself
 
 ### 3. Action Priority (The Decision Loop)
 1.  **WIN**: If less than 3 points to win and remote/R&D is open -> RUN.
 2.  **ECONOMY**: If < 5 credits -> Play economy events / `take-credit`.
-3.  **PRESSURE**: If rich (> 6 credits) -> Run weak servers (R&D/HQ). Facecheck if necessary for info.
+3.  **PRESSURE**: If rich (> 10 credits) -> Run weak servers (R&D/HQ or simply get more rich if the Corp cannot score). Facecheck if necessary for info.
 4.  **BUILD**: If locked out -> Install **needed** breakers only.
 5.  **DRAW**: If hand empty or digging for breakers.
 
----
-
 ## Ballpark Credit Model
 
-Credit = $1 - basic unit
+Credit = $1 - basic unit. Every one counts
 $0 - so broke can't even play econ cards. Often difficult to dig out of here without clicking for credits
 $5 - enough to play Sure Gamble again for +$4 - but can't install breakers and credibly run without it
 $10 - threatening run on most servers - especially with run events, can crack big servers.
@@ -45,6 +44,7 @@ Comparable to Chess, your effective assessed position is:
 - [discounted] threat to do things, e.g. cards in hand could be unknown breakers for corp
 
 Typical unrezzed budgets for breakables: $5 / unrezzed ICE, $4 / unrezzed asset / upgrade
+Clicks are your most valuable resource. A game might typically take 12-16 turns, so 48-64 clicks total.
 
 ## Turn Template
 
@@ -215,57 +215,15 @@ When you hit ICE, in order:
 | Sentry     | Killer       | Carmen, Bukhgalter |
 
 **AI breakers** (like Mayfly) can break any ICE type, but usually have a drawback (trash after use).
+A Fracter cannot break Code Gates. A Killer cannot break Barriers. Wrong breaker = can't break.
 
-**Critical rule:** A Fracter cannot break Code Gates. A Killer cannot break Barriers. If you run with the wrong breaker, you cannot break the ICE.
+### Breaking During Encounters
 
-### Ability Indices During Encounters
+Use `abilities "<breaker>"` during an encounter. **Always use the "Fully break" ability [2] when it appears.** This is the auto-calculated efficient break.
 
-When you encounter ICE, use `abilities "<breaker>"` to see available actions:
+If [2] doesn't appear: you're not in an encounter, your breaker doesn't match this ICE type, or you can't afford the break cost.
 
-```bash
-./send_command abilities "Cleaver"
-```
-
-**Outside a run (or wrong ICE type):**
-```
-[0] Break up to 2 Barrier subroutines  (1¢)
-[1] Add 1 strength                      (2¢)
-```
-
-**During encounter with matching ICE type:**
-```
-[0] Break up to 2 Barrier subroutines  (1¢)
-[1] Add 1 strength                      (2¢)
-[2] Fully break Palisade               (1¢)   ← USE THIS
-```
-
-**Key insight:** If ability [2] doesn't appear, either:
-1. You're not in an encounter phase, OR
-2. Your breaker can't break this ICE type, OR
-3. You can't afford the full break cost
-
-### The Recommended Workflow
-
-**ALWAYS use the "Fully break" ability [2] when available** (unless you want some subs to fire).
-
-```bash
-./send_command run "R&D"
-./send_command continue                    # Approach ICE
-./send_command continue                    # Encounter ICE
-./send_command use-ability "Cleaver" 2     # Fully break
-./send_command continue                    # Done breaking, proceed
-```
-
-### Manual Breaking (Situational)
-
-When you only want to break some subroutines:
-
-```bash
-./send_command use-ability "Mayfly" 0      # "Break 1 subroutine"
-./send_command choose 0                     # Break first sub
-./send_command choose 1                     # Done (let remaining fire)
-./send_command continue                     # Pass priority
-```
+To break selectively: `use-ability "<breaker>" 0` to break individual subs, then `choose` which ones. See `help` for full syntax.
 
 ---
 
@@ -290,10 +248,11 @@ When you only want to break some subroutines:
 
 **Bioroids can be clicked through.**
 - 1 click breaks 1 subroutine
-- Brân 1.0: 3 clicks to fully break (vs 8¢ with Cleaver)
+- Example: Brân 1.0: 3 clicks to fully break (vs 8¢ with Cleaver)
 - Check clicks remaining before deciding
 - ⚠️ **Clicks spent DURING the encounter, not banked across turns**
-- Can't click through Brân #1, then click through Brân #2 on same run—each encounter is fresh
+- Can't click through subroutine #1, then click through subroutine #2 on same run—each encounter is fresh
+- Hugely expensive in tempo terms but maybe less than $ for big ICE
 
 **Conditional subroutines exist.**
 - "End the run IF Runner has 6¢ or less" - stay above threshold
@@ -309,6 +268,7 @@ When you only want to break some subroutines:
 **HQ is the worst server in general to run.**
 - HQ Access is random, so you may not see agendas in hand even if there
 - Worth running at least once through ice to force a rez
+- Becomes more valuable the longer no agendas are stolen/scored due to accumulation
 
 **HQ/R&D accesses.**
 - Remember what you see - has to go somewhere
@@ -424,3 +384,5 @@ Action: Draw 3 cards first, THEN run
 **"I'll click for credits"** → Drawing is almost always better. You might draw economy cards worth more than $1/click.
 
 **"I'll install Carmen now to be ready"** → Run a central first. Carmen installs for $3 after a successful run instead of $5. Same for Mutual Favor (fetches AND installs on success).
+
+**I'm scared of net damage
