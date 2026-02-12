@@ -7,6 +7,7 @@
 Card effects and board state always beat every heuristic given here, given combinations of effects.
 
 ## Operational Heuristics (Hard Constraints)
+Netrunner is won mostly on relative credit efficiency.
 
 ### 1. The Credit Floor (4¢)
 *   **Rule**: Never end turn with < 4 credits voluntarily.
@@ -38,13 +39,34 @@ Card effects and board state always beat every heuristic given here, given combi
 
 ## Turn Template
 
-Write this out before taking actions:
+Work through these phases **in order** after mandatory draw.
+
+### Phase 0: PRE-TURN
+□ Do I need to rez anything before my turn starts?
+□ MANDATORY DRAW. (Then plan with what you have.)
+□ Have a future plan for every card. In mid/late game the plan being nothing helps passive HQ defense for 0¢
+
+### Phase 1: SCORE CHECK
+□ Agenda installed and scoreable? → **Score it.** Nothing else matters.
+
+### Phase 2: SURVIVAL
+□ Credits below floor (4¢)? → Emergency econ: events / assets in ICEd remote / take-credit
+□ Central server (HQ/R&D) naked? → Install ICE.
+□ Can I afford to rez my ICE if Runner runs my most important server? If not, get credits.
+
+### Phase 3: DEVELOP (only if Phase 2 is clear)
+□ **Before installing an agenda, check:**
+  - Can I rez the protecting ICE/Upgrades RIGHT NOW or next turn?
+  - What breakers does Runner have? Can they break my ICE?
+  - What's their credit pool?
+  - If no to rez costs: DON'T INSTALL unless deliberately bluffing.
+□ Rich (>8¢) and remote protected? → Install agenda/asset, advance.
+□ Expensive (>5¢ cost) cards to rez/play? Try to have a plan to play the high EV ones
+□ No remote? → Build one (ICE first, then install behind it).
+
+**Then write out your turn plan and any multi-turn plan updates:**
 
 ```
-Before turn: do I need to rez anything?
-Then, MANDATORY DRAW.
-NOW: Build your plan for the turn. Write it down so you can check the clicks and credits.
-
 TURN [N] — [credits]¢, ||| clicks
 Plan:
   | [action 1]     [cost]¢  → [remaining]¢
@@ -71,24 +93,6 @@ Can rez Brân (6¢) next turn? YES ✓
 
 ---
 
-## Before Installing an Agenda
-
-□ What ICE protects this server? List it.
-□ What's the total rez cost of that ICE?
-□ Do I have that many credits RIGHT NOW?
-□ If no: Do I have it NEXT TURN with income?
-□ If no: DON'T INSTALL THE AGENDA EXCEPT IF DELIBERATELY BLUFFING.
-
-□ What breakers does Runner have installed?
-□ Can they break my ICE? Which pieces?
-□ Therefore how much does each of my ICE cost to break, and how much is the total cost to break each server?
-□ If position complex, consider making a table of this to keep track, but it will go out of date on rig/server changes
-□ Finally, what's Runner's credit pool?
-□ Can they afford to break AND steal?
-□ For subroutines don't need to be broken if the subroutine is worse than the cost to break
-
----
-
 ## When Runner Runs
 
 ### Approach Phase (ICE)
@@ -108,9 +112,9 @@ Can rez Brân (6¢) next turn? YES ✓
 □ As a general rule, drawing as Corp is risky as you can draw agendas faster than you can score them
 □ Every agenda in hand/play is a huge liability
 □ The two usual cases: 
-    □ Rich (have ICE rez costs + ~$8) and need agenda to score. Drawing last click is risky unless HQ is safer than the remote.
+    □ Rich (have ICE rez costs + ~5¢) and need agenda to score. Drawing last click is risky unless HQ is safer than the remote.
     □ Desperate (need ICE for a server)
-□ Taking credits is a low-efficiency action but unlike the Runner, we can't simply draw for $ cards when poor
+□ Taking credits is a low-efficiency action but unlike the Runner, we can't simply draw for ¢ cards when poor
 
 ## Don't Forget
 
@@ -165,6 +169,7 @@ If rezzed, Runner must:
   □ Pay [X]¢ to break — can they afford?
   □ Or let subs fire — survivable?
   □ Or jack out — they lose the run
+  □ Etiquette: don't fire subroutines unless Runner indicates ok
 
 Repeat for each ICE (outer to inner)
 
@@ -215,9 +220,8 @@ For each ICE (outer to inner): `continue --rez` on approach → Runner encounter
 
 **"The ICE will stop them"** → Is it rezzed? Do you have credits to rez?
 
-**"I have 3 ICE on this server"** → All unrezzed? That's 0 protection.
+**"I have 3 ICE on this server"** → All unrezzed+unaffordable? That's 0 protection.
 
 **"They're poor, they can't run"** → They have 2¢. Your ICE costs 4¢ to break. They click for credits and run, even without cards in hand.
 
-**"I shouldn't install, the remote isn't safe"** → You need to force the Runner's runs to cost as much as possible. They will access sometimes. Make them expected amount paid as high as possible. If you don't install quickly enough, HQ will become unsafe too.
-
+**"I shouldn't install, the remote isn't safe"** → Force the Runner to run and it to cost as much as possible. They will access sometimes. If you don't score quickly enough, HQ will become unsafe or R&D will give up too many points - sometimes you must trade an expensive steal to get your points.

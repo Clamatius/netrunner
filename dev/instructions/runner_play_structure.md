@@ -32,46 +32,52 @@ The cards and board always beat every rule given here, given combinations of eff
 
 ## Ballpark Credit Model
 
-Credit = $1 - basic unit. Every one counts
-$0 - so broke can't even play econ cards. Often difficult to dig out of here without clicking for credits
-$5 - enough to play Sure Gamble again for +$4 - but can't install breakers and credibly run without it
-$10 - threatening run on most servers - especially with run events, can crack big servers.
+Credit = 1¢ - basic unit. Every one counts
+0¢ - so broke can't even play econ cards. Often difficult to dig out of here without clicking for credits
+5¢ - enough to play Sure Gamble again for +4¢ - but can't install breakers and credibly run without it
+10¢ - threatening run on most servers - especially with run events, can crack big servers.
 NOTE: Losing the actual threat can lead to Corp scoring since you cannot run the remote.
 Due to this, being poor is usually awful unless you win on the spot.
 Comparable to Chess, your effective assessed position is:
-- $ (flexible)
-- Currently KNOWN useful cards with enough $ to install and/or use (sometimes required)
+- ¢ (flexible)
+- Currently KNOWN useful cards with enough ¢ to install and/or use (sometimes required)
 - [discounted] threat to do things, e.g. cards in hand could be unknown breakers for corp
 
-Typical unrezzed budgets for breakables: $5 / unrezzed ICE, $4 / unrezzed asset / upgrade
+Typical unrezzed budgets for breakables: 5¢ / unrezzed ICE, 4¢ / unrezzed asset / upgrade
 Clicks are your most valuable resource. A game might typically take 12-16 turns, so 48-64 clicks total.
 
 ## Turn Template
 
-**Before planning, ask:**
-□ Is there something URGENT I must do this turn? (Contest remote, survive threat)
-□ If not, and hand < 5 cards: **Draw click 1**, then re-plan with full options.
-□ Still not urgent after drawing? Strongly consider drawing again.
-Exception: some cards lose you a click if you play them. They cost you positionally ~$1.5 unless you play last click.
+Work through these phases **in order**. Each phase gates the next — don't plan attacks until survival is clear.
 
-□ The cards in your hand are known. The cards in your deck might be better.
-□ You frequently don't need to install much if you _make_ Corp rez ICE and tell you what you need / where is weak.
-□ Hidden info makes calculation difficult, so where possible reveal it for future planning and probe for weaknesses.
-□ Running unrezzed servers defending something unknown always tells you something, but not running empty ones.
+### Phase 1: SURVIVAL (check before anything else)
+□ **Hand size vs damage:** Hand < 3 with damage ICE/traps possible? → Draw first.
+□ **Credits vs floor (4¢):** Below floor? → Economy is your ONLY action this turn.
+  - Play econ cards if available. Draw for more econ. Click for credit as last resort.
+□ **Tags:** Do I have tags to clear? Tag punishment can be lethal (Orbital Superiority: 4 meat damage, Retribution: blow up a breaker).
 
-Important plan inputs:
-□ If hand < 3 and damage ICE/traps possible: draw if possible
-□ Credit check: Do I have 5¢? (Sure Gamble threshold) If not in order consider:
-- use econ cards if helpful
-- draw for more econ
-- click for credit (generally worst action but sometimes unavoidable)
-□ Do I contest advanced remotes? (1+ counters = potential 2+ point score next turn)
-□ Do I run R&D if it's cheap? (Deny Corp draws)
-□ Do I need to use clicks on a known Bioroid ICE this turn?
-□ Do I need to remove tags after a run?
-□ HQ is generally only worth running if:
-- Corp hasn't scored in 2+ turns, e.g. via threatened remote lockdown / previous score
-- Corp is agenda flooded at game start - e.g. plays little or no ICE
+→ If any survival issue exists, address it before moving on.
+
+### Phase 2: THREATS (what demands a response THIS turn?)
+□ **Advanced card in remote?**
+  - 1 counter → Corp can score a 4/2 (2 pts) next turn
+  - 2 counters → Corp can score a 5/3 (3 pts) next turn
+  - 3+ counters → unusual: failed trap, slow-roll, or Orbital Superiority prep
+  - In tutorials, advanced cards are always agenda or trap
+□ **Corp near winning?** (5+ points → contest every remote you can afford)
+□ **Nothing urgent?** → **Draw click 1**, re-evaluate with new cards. Still nothing? Draw again.
+  - The cards in your hand are known. The cards in your deck might be better.
+  - Exception: cards that cost a click to play (e.g. Creative Commission) — play those last click.
+
+→ If a threat exists, check: can I actually get in and afford it? (See Before Running)
+
+### Phase 3: OPPORTUNITIES (pick highest-value actions for remaining clicks)
+□ Cheap R&D run? (Deny Corp draws. R&D access is ordered — top card stays until drawn.)
+□ Econ cards to play? (Sure Gamble at 5¢+, drip to activate, Telework to click)
+□ Info to reveal? (Facecheck unrezzed ICE to learn what you need. Forces Corp to pay or reveal weakness.)
+□ HQ worth running? (Only if: Corp hasn't scored in 2+ turns, or agenda-flooded early — plays little/no ICE)
+□ Known Bioroid ICE to click through? (Budget the clicks now)
+□ Don't install breakers speculatively — force rezzes first, then you know what you actually need.
 
 **Then write out your plan:**
 
@@ -154,7 +160,7 @@ Enough? [YES/NO]
 
 **Before trashing, ask:** "If they draw this, how bad?"
 
-- Best: only trash if you can run again easily to get next cord: add mental $2 to R&D trash costs, $1 to R&D to represent draw & install
+- Best: only trash if you can run again easily to get next card: add mental 2¢ to R&D trash costs, 1¢ to R&D to represent draw & install
 - If you don't trash, corp is now guaranteed to draw non-agenda and now next card may be agenda again if you access
 
 ---
@@ -252,7 +258,7 @@ To break selectively: `use-ability "<breaker>" 0` to break individual subs, then
 - Check clicks remaining before deciding
 - ⚠️ **Clicks spent DURING the encounter, not banked across turns**
 - Can't click through subroutine #1, then click through subroutine #2 on same run—each encounter is fresh
-- Hugely expensive in tempo terms but maybe less than $ for big ICE
+- Hugely expensive in tempo terms but maybe less than ¢ for big ICE
 
 **Conditional subroutines exist.**
 - "End the run IF Runner has 6¢ or less" - stay above threshold
@@ -375,14 +381,14 @@ Action: Draw 3 cards first, THEN run
 
 **"R&D is too expensive"** → Is it though? 1-2¢ per access is worth it every turn.
 
-**"I need to trash everything"** → Only trash if value > cost. Leave worthless stuff.
+**"I need to trash everything"** → Only trash if value > cost. Effective cost of central trashes: HQ +1.5¢ R&D +3¢ since Corp didn't spend clicks on them
 
 **"I'll trash this trap so I don't run it again"** → You already know where it is. Save the credits.
 
 **"I have cards, I should play them"** → Hand is options, not a to-do list. Draw instead if nothing's urgent.
 
-**"I'll click for credits"** → Drawing is almost always better. You might draw economy cards worth more than $1/click.
+**"I'll click for credits"** → Drawing is almost always better. You might draw economy cards worth more than 1¢/click.
 
-**"I'll install Carmen now to be ready"** → Run a central first. Carmen installs for $3 after a successful run instead of $5. Same for Mutual Favor (fetches AND installs on success).
+**"I'll install Carmen now to be ready"** → Run a central first. Carmen installs for 3¢ after a successful run instead of 5¢. Same for Mutual Favor (fetches AND installs on success).
 
-**I'm scared of net damage
+**I'm scared of net damage** → Only really matters on _only_ copy of a given breaker. Make hidden info known.

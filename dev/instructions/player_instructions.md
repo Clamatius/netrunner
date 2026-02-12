@@ -21,7 +21,7 @@ Where `<side>` is `runner` or `corp`. The help text is the authoritative referen
 - Corp scores agenda points via advancing enough to pay cost then scoring after the last click (scoring does not require a click)
 - Runner wins if Corp must draw from empty R&D
 - Corp wins if Runner must discard but cannot (flatline)
-- **Resources:** Credits (money, $), Clicks (actions per turn)
+- **Resources:** Credits (¢), Clicks (actions per turn)
 - **Servers:** Corp installs cards in servers (HQ, R&D, Archives, remote servers)
 - **Runs:** Runner attacks servers to access cards. Agendas accessed must be stolen
 
@@ -56,28 +56,28 @@ Players start with a "basic action card" that grants initial abilities.
 
 Both sides:
 click: draw card from R&D (Corp) / Stack (Runner)
-click: gain $1
+click: gain 1¢
 
 Corp:
 click: play operation
 click: install card in server
-click, $1 per existing ICE on server: install ICE
-click, $2: trash a Runner resource if Runner tagged
+click, 1¢ per existing ICE on server: install ICE
+click, 2¢: trash a Runner resource if Runner tagged
 3x click: purge all virus counters (entire turn)
-click, $1: advance an installed card in a server
+click, 1¢: advance an installed card in a server
 
 Runner:
 click: install program/hardware/resource
 click: play event
 click: initiate a run on a server
-click, $2: remove a tag
+click, 2¢: remove a tag
 
 Tags represent that the Corp knows something about the Runner and so can use conditionals based on that.
 
 ### Card Wording
 - Effects are worded as <cost>: <effect>
 - You must pay the cost, e.g. if you need to spend a click, you must have one remaining
-- As much effect as can happen happens, e.g. if you lose $2 and have $1, you lose $1
+- As much effect as can happen happens, e.g. if you lose 2¢ and have 1¢, you lose 1¢
 
 ### Conditionals
 - Many cards have a conditional clause about when you can play them or use the ability
