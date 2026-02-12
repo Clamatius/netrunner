@@ -13,6 +13,8 @@ AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
 TIMEOUT="${TIMEOUT:-20}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
+SEND_COMMAND_LOCK_WRITES="${SEND_COMMAND_LOCK_WRITES:-1}"
+SEND_COMMAND_LOCK_TIMEOUT_MS="${SEND_COMMAND_LOCK_TIMEOUT_MS:-10000}"
 
 # Multi-client support: detect if first arg is a client name
 # Valid client names: runner, corp, or any custom name
@@ -66,6 +68,34 @@ info() {
 
 warn() {
     echo -e "${YELLOW}⚠️  $1${NC}"
+}
+LOCK_DIR=""
+
+acquire_write_lock() {
+    [[ "$SEND_COMMAND_LOCK_WRITES" != "1" ]] && return 0
+    local waited=0
+    local step_ms=50
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        if (( waited >= SEND_COMMAND_LOCK_TIMEOUT_MS )); then
+            error "Timed out waiting for command lock ($LOCK_DIR). Another command may be stuck."
+        fi
+        sleep 0.05
+        waited=$((waited + step_ms))
+    done
+    echo "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
+}
+
+release_write_lock() {
+    [[ -z "$LOCK_DIR" ]] && return 0
+    if [[ -f "$LOCK_DIR/pid" ]]; then
+        local pid
+        pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+        if [[ "$pid" == "$$" ]]; then
+            rm -rf "$LOCK_DIR" 2>/dev/null || true
+        fi
+    else
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+    fi
 }
 
 # Check if AI client is running
@@ -367,7 +397,11 @@ execute() {
     else
         # Suppress all status map noise - we print human-readable messages instead
         # Filter out any line starting with {:status (success, error, waiting, etc.)
-        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$' || true
+        if [[ "$COMMAND" == "eval" ]] || [[ "$DEBUG" == "1" ]]; then
+            echo "$RESULT" | grep -v '^nil$' || true
+        else
+            echo "$RESULT" | grep -v '^{:status ' | grep -v '^\{:' | grep -v '^nil$' || true
+        fi
     fi
 
     return $RET
@@ -387,6 +421,24 @@ show_last_log_if_enabled() {
 # Main command dispatcher
 COMMAND="${1:-help}"
 shift || true
+
+LOCK_DIR="/tmp/netrunner-send_command.${CLIENT_NAME:-default}.${CLIENT_PORT}.lockdir"
+
+command_is_readonly() {
+    case "$COMMAND" in
+        help|--help|-h|status|status-compact|board|board-compact|hand|prompt|credits|clicks|archives|heap|log|log-compact|card-text|hand-text|abilities|list-playables|get-cursor|wait-my-turn|wait-run|wait-for-diff|wait-for-relevant-diff|wait-for-log-past|dashboard|dashboard-compact|bot-status)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if ! command_is_readonly; then
+    acquire_write_lock
+    trap release_write_lock EXIT INT TERM
+fi
 
 # Determine project root for logging
 NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
