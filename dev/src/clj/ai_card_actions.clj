@@ -559,6 +559,14 @@
               (flush)
               {:status :blocked :reason :overadvance})
 
+            ;; Insufficient credits (advance costs 1¢)
+            (< before-credits 1)
+            (do
+              (println (str "❌ Cannot advance: " card-name))
+              (println (str "   Insufficient credits: need 1, have " before-credits))
+              (flush)
+              {:status :error :reason "Insufficient credits"})
+
             ;; Proceed with advance
             :else
             (let [gameid (:gameid client-state)
