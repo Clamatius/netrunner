@@ -634,7 +634,8 @@
                       runner-score (get-in after-state [:game-state :runner :agenda-point])]
                   (println (str "🎯 Scored: " card-name
                                (when agenda-points (str " (+" agenda-points " points)"))))
-                  (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner")))
+                  (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner"))
+                  (basic/check-auto-end-turn!))
                 (println (str "⚠️  Sent score command for: " card-name " - but action not confirmed in game log (may have failed)"))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
           (println (str "❌ Card not found installed: " card-name)))))))

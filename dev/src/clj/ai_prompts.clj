@@ -2,7 +2,8 @@
   "Prompt handling, choices, mulligan, and discard management"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [ai-basic-actions :as basic]))
 
 ;; ============================================================================
 ;; Prompts & Choices
@@ -71,6 +72,9 @@
                            :args {:choice {:uuid choice-uuid}}})
         ;; Wait for prompt to change instead of fixed sleep
         (wait-for-prompt-change! old-eid)
+        ;; After prompt resolves, check if turn should auto-end
+        ;; (guards: 0 clicks, no prompt, no scorable agendas)
+        (basic/check-auto-end-turn!)
         (core/with-cursor {:status :success :choice choice}))
       (do
         (println (str "❌ Invalid choice index: " index))

@@ -400,7 +400,7 @@ execute() {
         if [[ "$COMMAND" == "eval" ]] || [[ "$DEBUG" == "1" ]]; then
             echo "$RESULT" | grep -v '^nil$' || true
         else
-            echo "$RESULT" | grep -v '^{:status ' | grep -v '^\{:' | grep -v '^nil$' || true
+            echo "$RESULT" | grep -v '^{:' | grep -v '^nil$' || true
         fi
     fi
 

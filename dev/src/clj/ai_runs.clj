@@ -330,12 +330,15 @@
                 (println "🏃" (:text run-entry))
                 ;; Auto-continue unless --no-continue flag set
                 (if (:no-continue flags)
-                  {:status :success
-                   :data {:server normalized :log-entry (:text run-entry) :flags flags}}
+                  (do
+                    (basic/check-auto-end-turn!)
+                    {:status :success
+                     :data {:server normalized :log-entry (:text run-entry) :flags flags}})
                   (do
                     (println "⏩ Auto-continuing run...")
                     (Thread/sleep core/quick-delay)  ; Brief pause for state sync
                     (let [loop-result (auto-continue-loop!)]
+                      (basic/check-auto-end-turn!)
                       (merge {:status :success
                               :data {:server normalized :log-entry (:text run-entry) :flags flags}}
                              {:run-result loop-result})))))
