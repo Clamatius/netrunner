@@ -1,0 +1,216 @@
+Problem 1: break-001-runner
+Goal: Access the advanced card in Server 1 this turn.
+
+Credits: 7, Clicks: 4
+Server 1: Whitespace → Palisade, both rezzed
+Grip: Sure Gamble, Cleaver, Unity, Carmen, Docklands
+Key costs:
+
+Whitespace (code gate, str 0):
+Install Unity (3).
+Unity already ≥ 0 strength, so breaking both subs costs 2 (1 per sub).
+Palisade (barrier, str 4 in a remote):
+Install Cleaver (3).
+Cleaver str 3 → pump +1 (2 credits) to str 4.
+1 credit to break the only sub (up to 2 barrier subs).
+Line:
+
+Click 1: Play Sure Gamble.
+Pay 5 → go from 7 to 2, gain 9 → 11 credits.
+Click 2: Install Unity (decoder).
+Pay 3 → 8 credits.
+Click 3: Install Cleaver (fracter).
+Pay 3 → 5 credits.
+Click 4: Run Server 1.
+Encounter Whitespace:
+Pay 2 with Unity to break both subs → 3 credits, no credit loss, no ETR.
+Encounter Palisade:
+Pump Cleaver +1 strength (2 credits) → 1 credit, now str 4 vs str 4.
+Pay 1 to break the barrier sub → 0 credits.
+Pass all ICE, breach Server 1 and access the card.
+You end at 0 credits but you do access this turn.
+
+Problem 2: midgame-001-runner
+Remote: Brân 1.0 → Palisade → 2-advanced card.
+You have full breaker suite, but only 2 credits in pool (plus some hosted econ).
+
+What the card could be (from decklist):
+
+Send a Message (5 adv, 3 pts) – possible, but needs 3 more turns.
+Offworld Office and Superconducting Hub are already each scored once, so this remote is not those specific copies.
+Urtica Cipher – very plausible, especially since you saw one in HQ already; there can be a second.
+Timing:
+
+At 2 advancement counters, nothing is scoreable next turn from this deck. Even Superconducting Hub needs 3 counters.
+If it’s Urtica Cipher, 2 counters = 2 + 2 = 4 net damage. That’s painful but not lethal from a full grip.
+Access feasibility:
+
+To get through Brân using only clicks, you need 3 unspent clicks when you encounter it.
+That means the run must be your first click (you start with 4).
+But if you run first click, you enter with your current 2 credits (no Telework / Pennyshaver / Smartware usage beforehand).
+After clicking through Brân (3 clicks), you have 0 clicks left and only 2 credits to deal with a remote-strength Palisade:
+Cleaver needs 3 credits to pump+break (2 pump, 1 interface). You only have 2.
+So you cannot reliably get through the remote this turn.
+Strategic answer:
+
+The 2-advanced card is either:
+A slowly developing Send a Message you have multiple turns to contest, or
+An Urtica Cipher that would inflict 4 net damage.
+You do not have a safe, realistic line to access it this turn.
+Best line: ignore the remote this turn, build economy, and set up for cheaper / safer contest later.
+Example plan (one good reasonable line):
+
+Click 1: Use Telework Contract for 3 credits.
+Click 2: Use Pennyshaver ability to cash out +3.
+Click 3: Install Red Team (long-term central pressure econ).
+Click 4: Install Verbal Plasticity or draw, depending on how much you want to lean into sustained econ vs card flow.
+Core idea: treat the remote as a bluff or slow plan and invest this turn into a strong board; you’re not forced to contest yet.
+
+Problem 3: mull-001-corp
+Hand: Hedge Fund, Ice Wall, Enigma, Urtica Cipher, Offworld Office.
+
+You have:
+Two solid, cheap ICE (Ice Wall, Enigma) to cover centrals and/or a remote.
+Premium early econ (Hedge Fund).
+A 4/2 agenda (Offworld Office) and an ambush (Urtica) for remote mind games.
+This is an excellent opening hand: econ, ICE, agenda, and a trap.
+
+Answer: Keep.
+
+Problem 4: mull-002-corp
+Hand: Superconducting Hub, Send a Message, Offworld Office, Government Subsidy, Brân 1.0.
+
+Problems:
+3 agendas, 1 ICE, 1 econ → you’re heavily agenda-flooded.
+Brân 1.0 is expensive to rez; not ideal as only early ICE.
+Government Subsidy is unplayable at 5 credits (needs 10 to start).
+You risk:
+Naked centrals with multiple agendas in HQ.
+No immediate econ play.
+This is exactly the kind of hand you mulligan: too many agendas, no early playable econ, only 1 big piece of ICE.
+
+Answer: Mulligan.
+
+Problem 5: mull-003-runner
+Hand: Sure Gamble, Smartware Distributor, Cleaver, Carmen, Jailbreak.
+
+You have:
+Great early econ: Sure Gamble, plus long-term drip (Smartware).
+Two breakers: Cleaver (barriers) and Carmen (sentries).
+A run event (Jailbreak) to pressure HQ or R&D with multi-access + draw.
+This hand supports the playbook priorities: early economy + first breaker + early pressure.
+Answer: Keep.
+
+Problem 6: mull-004-runner
+Hand: Cleaver, Cleaver, Carmen, Unity, Overclock.
+
+Pros:
+You have full breaker suite immediately (barrier, sentry, code gate).
+Overclock gives temporary run credits.
+Cons:
+No real econ: no Sure Gamble, no Telework, no drip (Smartware, etc.).
+Playbook priority: economy first, then breakers. Here you’re paying 3–5 credits per breaker with no way to refill.
+This hand will struggle to afford actually installing and using those breakers; you’ll be forced into clicking for credits a lot early.
+
+Answer: Mulligan (you want at least one strong econ card in your opener).
+
+Problem 7: score-001-corp
+Score: 5–4 in your favor. HQ has Regolith, Seamless Launch, Government Subsidy, Superconducting Hub, Palisade.
+Runner has Cleaver + Unity, no Killer, 4 credits, and 1 card in grip.
+
+Key observations:
+
+Both your remote (Whitespace → Karunā) and R&D (Brân → Karunā) have sentry on them and Runner has no Killer.
+Any run through a Karunā is extremely dangerous (up to 4 net damage), and with only 1 card in hand they are already in flatline territory if they hit your sentries.
+This is a big scoring window: they’re unlikely to safely contest a remote.
+Best line:
+
+Use your good remote (Server 1: Whitespace → Karunā) as a scoring remote and set up for efficient scoring next turn while boosting econ.
+Example strong line:
+
+Click 1: Install Superconducting Hub in Server 1.
+Click 2: Advance Superconducting Hub once.
+You now have a 1-advanced agenda behind taxing ICE they can’t safely contest.
+Click 3: Play Government Subsidy.
+Pay 10, gain 15 → massive econ swing; you end the turn very rich with an advanced agenda in a dangerous remote.
+Next turn, you can play Seamless Launch on the Hub (goes to 3 counters) and then score it with strong credit totals and still a scary remote. Even though Hub only scores 1 point, you move closer to 7 while keeping the Runner under huge pressure.
+
+Answer (in words): Jam Superconducting Hub into the existing taxing remote, advance it once, and play Government Subsidy to be rich. You exploit the window created by their missing Killer and tiny grip.
+
+Problem 8: turn1-001-corp
+State: Turn 1, 5 credits, empty board.
+Hand: Hedge Fund, Palisade, 2×Whitespace, Urtica Cipher, Offworld Office.
+
+Goals: Get econ online and ICE centrals; avoid naked agenda.
+
+Best turn:
+
+Click 1: Play Hedge Fund.
+5 → 9 credits.
+Click 2: Install Palisade protecting HQ.
+HQ is most valuable early location; Palisade is good, cheap central ICE.
+Click 3: Install Whitespace protecting R&D.
+Now both centrals are iced; Offworld and Urtica can be jammed in a remote later when you can defend it.
+Answer: Hedge Fund → ICE HQ with Palisade → ICE R&D with Whitespace.
+
+Problem 9: turn1-002-corp
+State: Turn 1, 5 credits, empty board.
+Hand: Government Subsidy, Brân 1.0, Karunā, Send a Message, Seamless Launch, Diviner.
+
+Goals:
+
+You can’t play Government Subsidy yet (need 10).
+You have 3 strong ICE and 1 agenda.
+Avoid naked agenda; prioritize central protection and drawing into econ.
+Good conservative line:
+
+Click 1: Install Diviner on R&D (cheap, punishing facechecks).
+Click 2: Install Karunā on HQ (scary sentry vs early runs).
+Click 3: Draw 1 card looking for playable econ (e.g., Hedge Fund, Nico, Regolith).
+You end with both centrals iced, 3 credits, and one agenda safely in HQ behind Karunā.
+
+Answer: ICE R&D with Diviner, ICE HQ with Karunā, then draw.
+
+Problem 10: turn1-003-runner
+State: Turn 1, Runner, 5 credits, 4 clicks.
+Corp: ICE on R&D and HQ, 7 credits, no remotes.
+Hand: Sure Gamble, Smartware Distributor, Cleaver, VRcation, Jailbreak.
+
+Priorities:
+
+Early econ and first breaker, then some early pressure (especially HQ/R&D with Jailbreak).
+Solid turn:
+
+Click 1: Play Sure Gamble.
+5 → 9 credits.
+Click 2: Install Smartware Distributor.
+Sets up drip from next turn.
+Click 3: Install Cleaver.
+First breaker online; ready for barrier ICE.
+Click 4: Play Jailbreak on HQ or R&D (I prefer HQ here).
+Pressure a central, force ICE rezzes, and get multi-access + draw.
+Answer: SG → Smartware → Cleaver → Jailbreak (HQ or R&D).
+
+Problem 11: turn1-004-runner
+State: Turn 1, Runner, 5 credits, 4 clicks.
+Corp: 1 facedown card in remote, no ICE, 7 credits.
+Hand: Sure Gamble, Overclock, Carmen, Tread Lightly, Smartware Distributor.
+
+Key principle from the runner playbook:
+
+With 0 ICE on a remote, you run immediately – free info, free chance at an agenda or early asset denial.
+Good turn:
+
+Click 1: Run Server 1 (the naked remote).
+No ICE, free access.
+If it’s an agenda, you probably steal; if it’s a key econ asset, you likely trash.
+Click 2: Play Sure Gamble.
+Refill back up after any trash costs, aim to be rich.
+Click 3: Install Smartware Distributor (early drip).
+Click 4: Either:
+Draw a card (dig for more econ/breakers), or
+Run a central (R&D or HQ) to start early pressure, depending on how much you spent on the remote trash.
+Overclock and Tread Lightly are overkill when there’s no ICE; save them for when servers are actually defended.
+
+Answer: First-click run the naked remote, then SG, then set up Smartware, and use remaining click for draw or a central run.
+

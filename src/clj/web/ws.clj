@@ -21,8 +21,17 @@
                     (get-sch-adapter)
                     {:ws-kalive-ms 2500
                      :user-id-fn (fn [ring-req]
-                                   (or (-> ring-req :session :uid)
-                                       (:client-id ring-req)))})
+                                   ;; Priority order for user identification:
+                                   ;; 1. User authenticated via wrap-user (from session token or cookie)
+                                   ;; 2. Session uid from previous login
+                                   ;; 3. AI player client-id param (fallback for dev)
+                                   (or (-> ring-req :user :username)
+                                       (-> ring-req :session :uid)
+                                       (-> ring-req :params :client-id)
+                                       (:client-id ring-req)))
+                     ;; TEMP: Disable CSRF checks for AI player development
+                     :csrf-token-fn nil
+                     :authorized?-fn (constantly true)})
       {:keys [ch-recv send-fn connected-uids
               ajax-post-fn ajax-get-or-ws-handshake-fn private]} chsk-server
       conns_ (:conns_ private)]
@@ -93,6 +102,10 @@
   "Wraps `-msg-handler` with logging, error catching, etc."
   [event]
   (try
+    ;; TEMP DEBUG: Log all incoming events for AI client debugging
+    (when (or (= :lobby/list (:id event))
+              (= :chsk/bad-event (:id event)))
+      (timbre/info "🔍 DEBUG EVENT:" (pr-str (select-keys event [:id :?data :event :uid]))))
     (-msg-handler (assoc event :timestamp (inst/now)))
     (catch Exception e
       (timbre/error e "Caught an error in the message handler"))))

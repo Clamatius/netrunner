@@ -1,0 +1,370 @@
+Problem Requirements: Access the card in Server 1 this turn as Runner with $7 and specific cards in grip.
+
+Server 1 ICE Configuration:
+
+Whitespace (Code Gate, rezzed)
+Subroutines: Lose 3 credits, end run if ≤6 credits
+Palisade (Barrier, rezzed)
+Strength: 4 (2 base +2 from protecting remote)
+Subroutine: End the run
+Available Icebreakers:
+
+Unity (Decoder) for Whitespace
+Cleaver (Fracter) for Palisade
+Solution Steps:
+
+Install Unity (costs 3, new balance $4)
+Install Cleaver (costs 3, new balance $1)
+Run Server 1:
+Break Whitespace: Unity at strength 2 (needs boost to match Whitespace strength 0)
+Break Palisade: Cleaver at strength 3 (needs boost to match Palisade strength 4)
+However, with only $1 left after installs, we can't afford the break costs. Alternative approach:
+
+Optimal Solution:
+
+Play Sure Gamble (costs 5, gain 9, new balance $11)
+Install Unity (costs 3, new balance $8)
+Install Cleaver (costs 3, new balance $5)
+Run Server 1:
+Break Whitespace: Unity at strength 2 (no boost needed vs strength 0)
+Pay 1 credit to break subroutine (new balance $4)
+Break Palisade: Cleaver at strength 3
+Pay 2 to boost to strength 4 (new balance $2)
+Pay 1 to break subroutine (new balance $1)
+Access the card with 2 advancement counters
+This sequence successfully accesses the card while maintaining positive credit balance.
+
+Let me proceed to solve the next problem.
+
+Solve Problem 1: break-001-runner
+
+2
+Solve Problem 2: midgame-001-runner
+
+1 more
+Let me properly read Problem 2 to analyze it.
+
+The error occurred because I attempted to make an empty read_file tool call without providing the required parameters. I need to specify the file path and optionally offset/limit to read specific portions of the file.
+
+How would you like me to proceed with analyzing Problem 2? Should I:
+
+Read the full problem section
+Focus on specific parts
+Take a different approach
+Let me properly read Problem 2 to analyze it.
+
+Let me analyze Problem 2 (midgame-001-runner) systematically:
+
+Problem Requirements: Decide optimal action as Runner in midgame with specific board state and known information.
+
+Key Observations:
+
+Remote server has 2 advancement counters on an unrezzed card
+From known HQ cards, possible remote contents:
+Send a Message (agenda needing 5 advancements)
+Urtica Cipher (trap, already seen in HQ)
+Server is protected by:
+Brân 1.0 (Barrier, Bioroid, 3 subs)
+Palisade (Barrier, strength 4)
+Runner Resources:
+
+$2 cash
+Telework Contract (6 credits remaining)
+Pennyshaver (2 credits)
+Smartware Distributor (1 credit)
+Full breaker suite installed (Cleaver, Unity, Carmen)
+Optimal Strategy:
+
+Take 3 credits from Telework Contract (new balance $5)
+Take 2 credits from Pennyshaver (new balance $7)
+Take 1 credit from Smartware Distributor (new balance $8)
+Run Server 1:
+Brân 1.0: Use click-through ability (3 clicks to break all subs)
+Palisade: Cleaver at strength 3, pay 2 to boost to 4, pay 1 to break (total $5 spent)
+Access the card:
+If agenda (Send a Message): Steal it for 3 points (winning the game)
+If trap (Urtica Cipher): Take 2 net damage (hand size 5 is safe)
+This approach maximizes chance to win immediately while managing risk appropriately.
+
+Let me proceed to the next problem.
+
+1 more
+Solve Problem 2: midgame-001-runner
+
+3
+Solve Problem 3: mull-001-corp
+
+Let me analyze Problem 3 (mull-001-corp) systematically:
+
+Hand Evaluation:
+
+Hedge Fund (strong economy)
+Ice Wall (early game barrier)
+Enigma (early game code gate)
+Urtica Cipher (trap/bluff)
+Offworld Office (agenda)
+Pros of Keeping:
+
+Strong economy with Hedge Fund
+Early ICE coverage (Barrier and Code Gate)
+Agenda can be installed safely behind ICE
+Trap for bluffing potential
+Cons of Keeping:
+
+Agenda in opening hand risks early pressure
+No immediate scoring potential (4 advancements needed)
+Verdict: Keep the hand. It provides:
+
+Economic foundation (Hedge Fund)
+Early defense (Ice Wall + Enigma)
+Strategic options (agenda + trap)
+This hand offers a balanced start with both defense and economy.
+
+Let me proceed to the next problem.
+
+2 more
+Solve Problem 3: mull-001-corp
+
+4
+Solve Problem 4: mull-002-corp
+
+Let me properly read Problem 4 to analyze it.
+
+I encountered an error because I attempted to make an empty read_file tool call without providing the required parameters (file path and optionally offset/limit).
+
+How would you like me to proceed with analyzing Problem 4? Should I:
+
+Specify the exact file path and line range to read
+Take a different approach to solving the problems
+Focus on summarizing the solutions so far
+Let me properly read Problem 4 to analyze it by specifying the exact file path and line range.
+
+Let me analyze Problem 4 (mull-002-corp) systematically:
+
+Hand Evaluation:
+
+Superconducting Hub (agenda, 3 advancements)
+Send a Message (agenda, 5 advancements)
+Offworld Office (agenda, 4 advancements)
+Government Subsidy (high-cost economy)
+Brân 1.0 (expensive ICE)
+Pros of Keeping:
+
+Strong late-game potential with Brân 1.0
+High-value economy card (Government Subsidy)
+Cons of Keeping:
+
+Three agendas in opening hand (high risk)
+No early-game ICE or economy
+Government Subsidy too expensive to play early
+Verdict: Mulligan this hand. The high agenda density and lack of early-game tools make it too risky to keep.
+
+Let me proceed to the next problem.
+
+3 more
+Solve Problem 4: mull-002-corp
+
+5
+Solve Problem 5: mull-003-runner
+
+Let me analyze Problem 5 (mull-003-runner) systematically:
+
+Hand Evaluation:
+
+Sure Gamble (strong economy)
+Smartware Distributor (drip economy)
+Cleaver (Fracter icebreaker)
+Carmen (Killer icebreaker)
+Jailbreak (multi-access event)
+Pros of Keeping:
+
+Strong economy foundation (Sure Gamble + Smartware)
+Two essential icebreakers (Fracter + Killer)
+Multi-access potential (Jailbreak)
+No dead cards
+Cons of Keeping:
+
+Missing Decoder (Unity) for complete breaker suite
+Jailbreak requires successful run to be valuable
+Verdict: Keep this hand. It provides:
+
+Immediate economy
+Core breaker coverage
+Early pressure potential
+No weak cards
+This hand offers a balanced start with both economy and breaker coverage.
+
+Let me proceed to the next problem.
+
+4 more
+Solve Problem 5: mull-003-runner
+
+6
+Solve Problem 6: mull-004-runner
+
+Let me analyze Problem 6 (mull-004-runner) systematically:
+
+Hand Evaluation:
+
+Cleaver (Fracter icebreaker)
+Cleaver (duplicate Fracter)
+Carmen (Killer icebreaker)
+Unity (Decoder icebreaker)
+Overclock (run event)
+Pros of Keeping:
+
+Complete breaker suite (Fracter, Killer, Decoder)
+Run potential with Overclock
+No economy cards but full breaker coverage
+Cons of Keeping:
+
+Duplicate Cleaver is redundant
+No economy cards (hard to install breakers)
+Overclock requires credits to be effective
+Verdict: Mulligan this hand. While it has complete breaker coverage, the lack of economy and redundant breaker make it too slow to start effectively.
+
+Let me proceed to the next problem.
+
+5 more
+Solve Problem 6: mull-004-runner
+
+7
+Solve Problem 7: score-001-corp
+
+Let me analyze Problem 7 (score-001-corp) systematically:
+
+Problem Requirements: Determine optimal play as Corp to win the game (Corp at 5 points, Runner at 4).
+
+Key Observations:
+
+Runner lacks Killer breaker (can't break Karunā)
+Runner has only 1 card in grip (vulnerable to damage)
+Server 1 is protected by:
+Whitespace (Code Gate)
+Karunā (Sentry, 2 net damage subs)
+Optimal Strategy:
+
+Install Superconducting Hub in Server 1
+Advance it 3 times (using Seamless Launch for 2 advancements)
+Score the agenda (1 point) to reach 6 points and win
+Execution:
+
+Click 1: Install Superconducting Hub in Server 1
+Click 2: Play Seamless Launch (place 2 advancement counters)
+Click 3: Advance once manually (total 3 advancements)
+Score the agenda (no click cost)
+This sequence:
+
+Leverages Runner's vulnerability (no Killer for Karunā)
+Scores safely behind protected server
+Wins the game immediately
+Let me proceed to the next problem.
+
+6 more
+Solve Problem 7: score-001-corp
+
+8
+Solve Problem 8: turn1-001-corp
+
+Let me analyze Problem 8 (turn1-001-corp) systematically:
+
+Optimal Turn 1 Plan:
+
+Click 1: Play Hedge Fund (cost 5, gain 9, net +4 → new balance $9)
+Click 2: Install Palisade protecting R&D (cost 1 per existing ICE, none → $9)
+Click 3: Install Whitespace protecting HQ (cost 1 per existing ICE, none → $9)
+Rationale:
+
+Hedge Fund first to maximize economy
+Protect key servers (R&D and HQ) with ICE
+Palisade on R&D is strong early defense
+Whitespace on HQ taxes Runner's economy
+Leaves $9 for next turn operations
+This sequence establishes strong early defense while building economy.
+
+Let me proceed to the next problem.
+
+7 more
+Solve Problem 8: turn1-001-corp
+
+9
+Solve Problem 9: turn1-002-corp
+
+Let me analyze Problem 9 (turn1-002-corp) systematically:
+
+Optimal Turn 1 Plan:
+
+Click 1: Install Brân 1.0 protecting R&D (cost 1 per existing ICE, none → $5)
+Click 2: Install Diviner protecting HQ (cost 1 per existing ICE, none → $5)
+Click 3: Install Send a Message in remote server (cost 1 click, $5)
+Rationale:
+
+Brân 1.0 on R&D provides strong early defense
+Diviner on HQ offers damage threat
+Send a Message in remote creates scoring pressure
+Government Subsidy is too expensive to play early
+Seamless Launch needs an installed target
+This sequence establishes defense while setting up scoring potential.
+
+Let me proceed to the next problem.
+
+8 more
+Solve Problem 9: turn1-002-corp
+
+10
+Solve Problem 10: turn1-003-runner
+
+Let me analyze Problem 10 (turn1-003-runner) systematically:
+
+Optimal Turn 1 Plan:
+
+Click 1: Install Smartware Distributor (cost 0, $5)
+Click 2: Play Sure Gamble (cost 5, gain 9 → new balance $9)
+Click 3: Install Cleaver (cost 3, $6)
+Click 4: Run HQ (with Jailbreak in hand for future turns)
+Rationale:
+
+Smartware first for drip economy
+Sure Gamble maximizes credits early
+Cleaver provides essential barrier breaker
+HQ run tests Corp defenses while building pressure
+Preserves Jailbreak for multi-access when rig is complete
+This sequence builds economy and essential breaker while applying early pressure.
+
+Let me proceed to the final problem.
+
+9 more
+Solve Problem 10: turn1-003-runner
+
+11
+Solve Problem 11: turn1-004-runner
+
+Let me analyze Problem 11 (turn1-004-runner) systematically:
+
+Optimal Turn 1 Plan:
+
+Click 1: Install Smartware Distributor (cost 0, $5)
+Click 2: Play Sure Gamble (cost 5, gain 9 → new balance $9)
+Click 3: Run Server 1 using Tread Lightly (cost 1, $8)
+Forces Corp to pay +3 to rez any ICE (none installed)
+Access the facedown card (likely asset/agenda)
+Click 4: Install Carmen (cost 5, $3) if successful run
+Rationale:
+
+Smartware first for drip economy
+Sure Gamble maximizes credits early
+Tread Lightly run pressures Corp's unprotected remote
+Carmen installation prepares for future ICE encounters
+Takes advantage of Corp's weak board state
+This sequence builds economy while applying maximum early pressure.
+
+Summary
+Successfully solved all 11 Netrunner puzzles in the problemset file. The solutions covered:
+
+Mulligan decisions
+Early game setups
+Midgame strategies
+Breaking ICE sequences
+Scoring opportunities
+Turn planning for both Corp and Runner
+All problems were addressed systematically using core game mechanics and strategic principles.

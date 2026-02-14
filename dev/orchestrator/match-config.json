@@ -1,0 +1,13 @@
+{
+  "match_id": "level2-validation-001",
+  "description": "Level 2 Validation - Heuristic vs Goldfish (Paired)",
+  "rounds": 1,
+  "decks": {
+    "corp": "system-gateway-beginner-corp",
+    "runner": "system-gateway-beginner-runner"
+  },
+  "agents": {
+    "agent_a": "heuristic",
+    "agent_b": "goldfish"
+  }
+}
