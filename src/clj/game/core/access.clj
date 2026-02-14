@@ -375,10 +375,11 @@
                         ; and we're still accessing the card
                         (if (and (get-card state c)
                                  (same-card? c (:access @state)))
-                          (if (agenda? c)
-                            (access-agenda state side eid c)
-                            ;; Accessing a non-agenda
-                            (access-non-agenda state side eid c))
+                          (let [c (get-card state c)]
+                            (if (agenda? c)
+                              (access-agenda state side eid c)
+                              ;; Accessing a non-agenda
+                              (access-non-agenda state side eid c)))
                           (access-end state side eid c
                                       {:trashed (find-cid (:cid c) (get-in @state [:corp :discard]))
                                        :stolen (and (agenda? c)
@@ -551,7 +552,8 @@
                                   args)
                                  nil nil)))}
         {:prompt "Click a card to access it. You must access all cards in this server."
-         :choices {:card (fn [card] (some #(same-card? card %) available))}
+         :choices {:card (fn [card] (some #(same-card? card %) available))
+                   :all true}
          :async true
          :effect (req (wait-for (access-card state side target)
                                 (continue-ability

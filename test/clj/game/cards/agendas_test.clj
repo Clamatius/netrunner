@@ -1366,6 +1366,7 @@
     (play-from-hand state :corp "Tithe" "HQ")
     (is (changed? [(:credit (get-corp)) -4]
           (expend state :corp (find-card "Eminent Domain" (:hand (get-corp))))
+          (click-card state :corp "Eminent Domain") ;; cannot target self - no error
           (click-card state :corp "Pharos")
           (click-prompt state :corp "HQ")
           (is (= "Pharos" (get-title (get-ice state :hq 1))))
@@ -2756,6 +2757,17 @@
     (click-card state :corp (:title (second (:hand (get-corp)))))
     (click-prompt state :corp "Done")
     (is (= 2 (count (:hand (get-corp)))) "Next Big Thing shuffled 2 cards")))
+
+(deftest next-big-thing-shuffle-all-back-test
+  (do-game
+    (new-game {:corp {:hand ["Next Big Thing" "Subliminal Messaging" "Ice Wall" "Vanilla"]
+                      :deck ["Hedge Fund" "NGO Front" "Project Atlas" "IPO"]}})
+    (play-and-score state "Next Big Thing")
+    (card-ability state :corp (get-scored state :corp 0) 0)
+    (is (= 7 (count (:hand (get-corp)))) "Next Big Thing drew 2 cards")
+    (doseq [c (map :title (:hand (get-corp)))]
+      (click-card state :corp c))
+    (is (= 0 (count (:hand (get-corp)))) "Next Big Thing shuffled 7 cards")))
 
 (deftest next-wave-2
   ;; NEXT Wave 2
@@ -4630,6 +4642,16 @@
                   (click-card state :corp (get-content state :remote3 0)))
         "Corp gained 2 credits (+1 from Hyobu because the agenda was revealed) and put 1 advancement counter on a card")))
 
+(deftest stoke-vs-trust-op
+  (do-game
+    (new-game {:corp {:hand ["Trust Operation"]
+                      :discard ["Stoke the Embers"]}
+               :runner {:tags 1}})
+    (play-cards state :corp ["Trust Operation" "Done"
+                             "Stoke the Embers" "New remote"
+                             "Yes" "Stoke the Embers"])
+    (is (= 1 (get-counters (get-content state :remote1 0) :advancement)) "1 adv")))
+
 (deftest stoke-vs-ip-enforcement
   (testing "1 floating tag"
     (do-game
@@ -4647,6 +4669,21 @@
       (click-prompts state :corp "2" "Stoke the Embers" "New remote" "Yes" "Stoke the Embers")
       (is (no-prompt? state :corp) "Stoke did not trigger twice")
       (is (= 1 (get-counters (get-content state :remote1 0) :advancement)) "1+0 adv"))))
+
+(deftest stoke-vs-ip-enforcement-double-fire
+  (do-game
+    (new-game {:corp {:hand ["IP Enforcement" "IP Enforcement" "Stoke the Embers"]
+                      :credits 15}
+               :runner {:tags 15}})
+    (play-from-hand state :corp "Stoke the Embers" "New remote")
+    (take-credits state :corp)
+    (run-empty-server state "Server 1")
+    (click-prompt state :runner "Steal")
+    (take-credits state :runner)
+    (play-from-hand state :corp "IP Enforcement")
+    (click-prompts state :corp "2" "Stoke the Embers" "New remote")
+    (click-prompts state :corp "Yes" "Stoke the Embers")
+    (is (no-prompt? state :corp) "No second trigger")))
 
 (deftest stoke-the-embers-reveal-check
   (do-game

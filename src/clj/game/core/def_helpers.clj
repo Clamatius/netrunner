@@ -26,8 +26,8 @@
     [game.core.toasts :refer [toast]]
     [game.core.tags :refer [gain-tags]]
     [game.macros :refer [continue-ability effect msg req wait-for]]
-    [game.utils :refer [enumerate-str remove-once same-card? server-card to-keyword quantify]]
-    [jinteki.utils :refer [other-side]]))
+    [game.utils :refer [enumerate-cards remove-once same-card? server-card to-keyword quantify]]
+    [jinteki.utils :refer [faction-label other-side]]))
 
 (defn combine-abilities
   "Combines two or more abilities to a single one. Labels are joined together with a period between parts."
@@ -84,9 +84,9 @@
   ([reorder-side wait-side chosen original dest]
    {:prompt (if (= dest "bottom")
               (str "The bottom cards of " (if (= reorder-side :corp) "R&D" "the stack")
-                   " will be " (enumerate-str (map :title (reverse chosen))) ".")
+                   " will be " (enumerate-cards (reverse chosen)) ".")
               (str "The top cards of " (if (= reorder-side :corp) "R&D" "the stack")
-                   " will be " (enumerate-str (map :title chosen)) "."))
+                   " will be " (enumerate-cards chosen) "."))
    :choices ["Done" "Start over"]
    :async true
    :effect (req
@@ -303,6 +303,7 @@
     {:label "Take all hosted credits"
      :change-in-game-state {:req (req (pos? (get-counters card :credit)))}
      :async true
+     :msg (msg "gain " (get-counters card :credit) " [Credits]")
      :effect (req (when (:action ab-base) (play-tiered-sfx state side "click-credit" 3 (get-counters card :credit)))
                   (take-credits state side eid card :credit :all))}
     ab-base))
@@ -517,6 +518,22 @@
    :effect (req (trash state :runner eid card {:cause :purge
                                                :cause-card card}))})
 
+(defn scry
+  "Looks at the top QUANT cards of target-side's deck. Completes an eid."
+  [state side eid card target-side quant]
+  (let [target-cards (take quant (get-in @state [target-side :deck]))
+        zone-name (if (= :corp target-side) "R&D" "the stack")]
+    (resolve-ability
+      state side eid
+      {:player side
+       :waiting-prompt true
+       :req (req (seq target-cards))
+       :choices ["OK"]
+       :prompt (if (= 1 (count target-cards))
+                 (msg "the top card of " zone-name " is " (:title (first target-cards)))
+                 (msg "the top " (quantify quant "card") " of " zone-name " are (top->bottom): " (enumerate-cards target-cards)))}
+      card nil)))
+
 (defn with-revealed-hand
   "Resolves an ability while a player has their hand revealed (so you can click cards in their hand)
   You can set the side that triggers the reveal (event-side) and if it displays as a forced reveal
@@ -553,6 +570,10 @@
                                  (when-not was-open? (conceal-hand state target-side))
                                  (unregister-ev-callback)
                                  (effect-completed state side eid)))))})))
+
+(defn make-icon
+  [text card]
+  [text (:cid card) (faction-label card)])
 
 (defmacro defcard
   "Define a card to be returned from card-def. The definition consists of the

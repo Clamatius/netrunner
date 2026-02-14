@@ -34,8 +34,8 @@
    [game.core.hosting :refer [host]]
    [game.core.ice :refer [get-current-ice update-all-ice update-all-icebreakers]]
    [game.core.initializing :refer [card-init]]
-   [game.core.installing :refer [corp-install corp-install-msg]]
-   [game.core.moving :refer [forfeit mill move move-zone swap-cards swap-cards-async swap-ice
+   [game.core.installing :refer [corp-install corp-install-msg swap-cards-async]]
+   [game.core.moving :refer [forfeit mill move move-zone swap-cards swap-ice
                              trash trash-cards]]
    [game.core.optional :refer [get-autoresolve set-autoresolve]]
    [game.core.payment :refer [can-pay? ->c]]
@@ -185,7 +185,7 @@
                       (resolve-ability state side
                                        {:async true
                                         :prompt (str "The top cards of R&D are (top->bottom): "
-                                                     (enumerate-str (map get-title choices)))
+                                                     (enumerate-cards choices))
                                         :choices ["OK"]}
                                        card nil)
                       (continue-ability state side (abt choices) card nil))))}}}}))
@@ -258,7 +258,7 @@
     :effect (req (continue-ability
                    state side
                    {:prompt (msg "The top cards of R&D are (top->bottom): "
-                                 (enumerate-str (map :title (take 5 (:deck corp)))))
+                                 (enumerate-cards (take 5 (:deck corp))))
                     :choices ["OK"]
                     :async true
                     :req (req (not-empty (:deck corp)))
@@ -335,12 +335,12 @@
    :on-access {:async true
                :req (req (not-empty (filter #(can-be-advanced? state %) (all-installed state :corp))))
                :waiting-prompt true
-               :prompt "How many advancement tokens do you want to place?"
+               :prompt "How many advancement counters do you want to place?"
                :choices ["0" "1" "2"]
                :effect (effect (continue-ability
                                  (let [c (str->int target)]
                                    {:choices {:req (req (can-be-advanced? state target))}
-                                    :msg (msg "place " (quantify c "advancement token")
+                                    :msg (msg "place " (quantify c "advancement counter")
                                               " on " (card-str state target))
                                     :async true
                                     :effect (req (add-prop state :corp eid target :advance-counter c {:placed true}))})
@@ -828,8 +828,9 @@
   (let [expend-abi {:req (req (some corp-installable-type? (:hand corp)))
                     :cost [(->c :credit 1)]
                     :prompt "Choose 1 card to install and rez, paying 5 [Credits] less"
-                    :choices {:card #(and (in-hand? %)
-                                          (corp-installable-type? %))}
+                    :choices {:req (req (and (in-hand? target)
+                                             (corp-installable-type? target)
+                                             (not (same-card? card target))))}
                     :msg "install and rez 1 card from HQ, paying 5 [Credits] less"
                     :async true
                     :effect (req (corp-install state side eid target nil
@@ -1141,7 +1142,7 @@
                               state side
                               {:choices {:not-self true
                                          :req (req (can-be-advanced? state target))}
-                               :msg (msg "place " (quantify n "advancement token")
+                               :msg (msg "place " (quantify n "advancement counter")
                                          " on " (card-str state target))
                                :async true
                                :effect (effect (add-prop :corp eid target :advance-counter n {:placed true}))}
@@ -1228,10 +1229,10 @@
      :req (req (some #(and (= (last (get-zone %)) :content)
                            (is-remote? (second (get-zone %))))
                      (all-installed state :corp)))
-     :prompt "Choose a card to place 2 advancement tokens on"
+     :prompt "Choose a card to place 2 advancement counters on"
      :choices {:card #(and (= (last (get-zone %)) :content)
                            (is-remote? (second (get-zone %))))}
-     :msg (msg "place 2 advancement token on " (card-str state target))
+     :msg (msg "place 2 advancement counters on " (card-str state target))
      :async true
      :effect (effect (add-prop :corp eid target :advance-counter 2 {:placed true}))}]})
 
@@ -1524,19 +1525,18 @@
                           (play-sfx state side "click-card-2")
                           (wait-for
                                (draw state side 4)
-                               (let [c-hand (count (:hand corp))]
-                                 (continue-ability
-                                   state side
-                                   {:prompt "Shuffle any number of cards into R&D"
-                                    :waiting-prompt true
-                                    :choices {:max c-hand
-                                              :card (every-pred corp? in-hand?)}
-                                    :msg (msg "shuffle " (quantify (count targets) "card")
-                                              " from HQ into R&D")
-                                    :effect (req (doseq [t targets]
-                                                   (move state side t :deck))
-                                                 (shuffle! state side :deck))}
-                                   card nil))))}]})
+                               (continue-ability
+                                 state side
+                                 {:prompt "Shuffle any number of cards into R&D"
+                                  :waiting-prompt true
+                                  :choices {:max (req (count (:hand corp)))
+                                            :card (every-pred corp? in-hand?)}
+                                  :msg (msg "shuffle " (quantify (count targets) "card")
+                                            " from HQ into R&D")
+                                  :effect (req (doseq [t targets]
+                                                 (move state side t :deck))
+                                               (shuffle! state side :deck))}
+                                 card nil)))}]})
 
 (defcard "NEXT Wave 2"
   {:on-score
@@ -1726,13 +1726,13 @@
                 :msg (msg "force the Runner to trash " (trash-count-str (:card context)) " and take 1 bad publicity")
                 :async true
                 :effect (req (wait-for (trash-cards state side targets {:cause-card card :cause :forced-to-trash})
-                                       (system-msg state side (str "trashes " (enumerate-str (map :title targets))))
+                                       (system-msg state side (str "trashes " (enumerate-cards targets)))
                                        (gain-bad-publicity state :corp eid 1)))}}))
 
 (defcard "Project Atlas"
   project-agenda
   {:abilities [{:cost [(->c :agenda 1)]
-                :keep-menu-open false ; not using :while-agenda-tokens-left as the typical use case is only one token, even if there are multiple
+                :keep-menu-open false ;; not using :while-agenda-tokens-left as the typical use case is only one token, even if there are multiple
                 :prompt "Choose a card"
                 :label "Search R&D and add 1 card to HQ"
                 ;; we need the req or the prompt will still show
@@ -1802,7 +1802,7 @@
                      (effect-completed state side eid)))
    :events [{:event :runner-turn-begins
              :req (req (pos? (get-counters card :agenda)))
-             :msg (msg "remove 1 agenda token from " (:title card))
+             :msg (msg "remove 1 agenda counter from " (:title card))
              :async true
              :effect (req (if (pos? (get-counters card :agenda))
                             (wait-for
@@ -1887,9 +1887,9 @@
              :skippable true
              :interactive (req true)
              :waiting-prompt true
-             :prompt "Choose a card that can be advanced to place 1 advancement token on"
+             :prompt "Choose a card that can be advanced to place 1 advancement counter on"
              :choices {:req (req (can-be-advanced? state card))}
-             :msg (msg "place 1 advancement token on " (card-str state target))
+             :msg (msg "place 1 advancement counter on " (card-str state target))
              :async true
              :effect (effect (add-prop :corp eid target :advance-counter 1 {:placed true}))}]})
 
@@ -1949,7 +1949,7 @@
 
 (defcard "Reeducation"
   (letfn [(corp-final [chosen original]
-            {:prompt (str "The bottom cards of R&D will be " (enumerate-str (map :title chosen)))
+            {:prompt (str "The bottom cards of R&D will be " (enumerate-cards chosen))
              :choices ["Done" "Start over"]
              :async true
              :msg (req (let [n (count chosen)]
@@ -2022,8 +2022,8 @@
 (defcard "Remastered Edition"
   {:on-score (agenda-counters 1)
    :abilities [{:cost [(->c :agenda 1)]
-                :msg (msg "place 1 advancement token on " (card-str state target))
-                :label "place 1 advancement token"
+                :msg (msg "place 1 advancement counter on " (card-str state target))
+                :label "place 1 advancement counter"
                 :keep-menu-open :while-agenda-tokens-left
                 :choices {:card installed?}
                 :async true
@@ -2499,7 +2499,7 @@
                :req (req (same-card? card (:card context)))
                :msg (msg (if (pos? (count (:deck runner)))
                            (str "trash "
-                                (enumerate-str (map :title (take (adv4? state card) (:deck runner))))
+                                (enumerate-cards (take (adv4? state card) (:deck runner)))
                                 " from the stack")
                            "trash no cards from the stack (it is empty)"))
                :effect (effect (mill :corp eid :runner (adv4? state card)))}]}))

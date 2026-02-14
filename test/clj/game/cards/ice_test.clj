@@ -210,7 +210,7 @@
         (card-ability state :runner cor 0)
         (click-prompt state :runner "End the run")
         (is (not (no-prompt? state :runner)) "Prompt to break second sub open")
-        (click-prompt state :runner "Gain 1 [Credit]. Place 1 advancement token")
+        (click-prompt state :runner "Gain 1 [Credit]. Place 1 advancement counter")
         (is (no-prompt? state :runner) "Prompt now closed")
         (is (empty? (remove :broken (:subroutines (refresh akhet)))) "All subroutines broken")
         (run-continue state :movement)
@@ -1144,6 +1144,14 @@
     (is (= 1 (count (:discard (get-runner)))) (str "Trashed kati")))
   ;; etr
   (do-game (etr-sub "Biawak" 2)))
+
+(deftest biawak-fire-all-subs
+  (do-game
+    (run-and-encounter-ice-test "Biawak" nil {:rig ["Fermenter" "Daily Casts"]})
+    (fire-subs state (get-ice state :hq 0))
+    (click-prompts state :corp "Trash a program" "Fermenter" "Trash a resource" "Daily Casts")
+    (is (not (:run @state)) "Run ended")
+    (is (no-prompt? state :runner))))
 
 (deftest blockchain-face-up-transactions
   ;; Face up transactions
@@ -3293,7 +3301,7 @@
       (is (= :select (prompt-type :corp)))
       (click-card state :corp "Hedge Fund")
       (click-card state :corp clea)
-      (is (:icon (refresh clea)) "Cleaver has an icon")
+      (is (has-icon? state (refresh clea) "H") "Cleaver has an icon")
       (run-continue state)
       (card-ability state :runner (refresh clea) 0)
       (is (no-prompt? state :runner) "Cleaver cannot be used")
@@ -3306,7 +3314,7 @@
       (card-ability state :runner (refresh clea) 0)
       (is (no-prompt? state :runner) "Cleaver still cannot be used")
       (fire-subs state (refresh iw1))
-      (is (nil? (:icon (refresh clea))))
+      (is (no-icons? state (refresh clea)))
       (run-on state "R&D")
       (rez state :corp iw2)
       (run-continue state)
@@ -3601,6 +3609,20 @@
     (click-prompt state :runner "Give the Runner 1 tag")
     (is (no-prompt? state :runner) "Can no longer break stuff")))
 
+(deftest hammer-restrictions-while-hushed
+  (do-game
+    (new-game {:corp {:hand ["Hammer"] :credits 10}
+               :runner {:hand ["Botulus" "Cookbook" "Hush"] :credits 15}})
+    (play-from-hand state :corp "Hammer" "HQ")
+    (take-credits state :corp)
+    (rez state :corp (get-ice state :hq 0))
+    (play-cards state :runner "Cookbook" ["Botulus" "Hammer"] ["Hush" "Hammer"])
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (card-ability state :runner (first (:hosted (get-ice state :hq 0))) 0)
+    (click-prompts state :runner "Choose a resource or piece of hardware to trash" "Give the Runner 1 tag")
+    (is (no-prompt? state :runner) "No more virus counters")))
+
 (deftest harvester
   ;; Harvester - draw 3, then discard
   (do-game
@@ -3626,6 +3648,18 @@
       (is (= 5 (count (:hand (get-runner)))) "Harvester discarded some cards")
       (is (no-prompt? state :runner) "No more prompts for the Runner")
       (is (no-prompt? state :corp) "No more prompts for the Corp"))))
+
+(deftest harvester-actually-is-a-discard
+  (do-game
+    (subroutine-test "Harvester" 0 {:runner {:id "Magdalene Keino-Chemutai: Cryptarchitect"
+                                             :hand [(qty "Sure Gamble" 4) "Rezeki"]
+                                             :deck ["Strike Fund" "Ika" "Steelskin Scarring"]}})
+    (is (= 8 (count (:hand (get-runner)))) "Drew 3")
+    (click-prompts state :runner "Strike Fund" "Rezeki" "Steelskin Scarring")
+    (is (= 3 (count (:discard (get-runner)))) "Discarded 3")
+    (click-prompt state :runner "Rezeki")
+    (is (= "Rezeki" (:title (get-program state 0))) "Rezeki installed from discard")
+    (is (no-prompt? state :runner) "No prompts for strike fund/steelskin")))
 
 (deftest herald
   ;; Herald
@@ -3681,7 +3715,7 @@
       (is (= "Herald" (:title (core/get-current-ice state))) "Encountering Herald on access")
       (is (= 3 (count (:abilities (refresh unity)))) "Has auto break abilities")
       (card-ability state :runner unity 0)
-      (click-prompt state :runner "Pay up to 2 [Credits] to place up to 2 advancement tokens")
+      (click-prompt state :runner "Pay up to 2 [Credits] to place up to 2 advancement counters")
       (fire-subs state (core/get-current-ice state))
       (is (= 9 (:credit (get-corp))))
       (is (not= "How many advancement tokens?" (:msg (prompt-map :corp))) "Second subroutine did not fire"))))
@@ -5713,6 +5747,29 @@
     (click-prompt state :corp "End the run")
     (is (not (:run @state)) "Run ended by Guard")))
 
+(deftest mycoweb-sentry-self-test
+  ;; Mycoweb - can fire 3rd sub if turned into sentry
+  (do-game
+    (new-game {:corp {:deck ["Mycoweb" "Ice Wall"] :credits 100}
+               :runner {:deck ["Chromatophores"]}})
+    (play-from-hand state :corp "Mycoweb" "HQ")
+    (play-from-hand state :corp "Ice Wall" "R&D")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Chromatophores")
+    (click-card state :runner "Mycoweb")
+    (let [mycoweb (get-ice state :hq 0)
+          icewall (get-ice state :rd 0)]
+      (run-on state "HQ")
+      (rez state :corp mycoweb)
+      (run-continue state)
+      (card-subroutine state :corp mycoweb 2)
+      (click-card state :corp "Mycoweb")
+      (is (changed? [(:credit (get-corp)) 0]
+                    (click-prompt state :corp "Rez an ice, paying 2 less"))
+          "able to fire another sub on same Mycoweb")
+      (click-card state :corp icewall)
+      (is (rezzed? (refresh icewall))))))
+
 (deftest n-pot-full-subs-test
   (do-game (etr-sub "N-Pot" 0))
   ;; threat 2 - etr
@@ -6282,6 +6339,12 @@
       (run-continue state)
       (fire-subs state png1)
       (is (not (:run @state)) "Run ended"))))
+
+(deftest ping-no-tag-outside-of-run
+  (do-game
+    (new-game {:corp {:hand ["Ping"]}})
+    (play-cards state :corp ["Ping" "HQ" :rezzed])
+    (is (zero? (count-tags state)) "Did not take a tag")))
 
 (deftest piranhas-take-bad-pub
   (do-game

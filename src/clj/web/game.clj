@@ -13,6 +13,7 @@
    [game.main :as main]
    [jinteki.preconstructed :as preconstructed]
    [jinteki.utils :refer [side-from-str]]
+   [jinteki.chimera :as chimera]
    [medley.core :refer [find-first]]
    [web.app-state :as app-state]
    [web.lobby :as lobby]
@@ -154,7 +155,11 @@
   [game]
   (if-let [precon (:precon game)]
     (set-precon-match game (preconstructed/matchup-by-key precon))
-    game))
+    (if (= "chimera" (:format game))
+      (let [corp-deck (chimera/make-corp-deck)
+            runner-deck (chimera/make-runner-deck)]
+        (set-precon-match game {:corp corp-deck :runner runner-deck}))
+      game)))
 
 (defn handle-start-game [lobbies gameid players now]
   (if-let [lobby (get lobbies gameid)]
@@ -171,15 +176,9 @@
       (assoc lobbies gameid g))
     lobbies))
 
-(defmethod ws/-msg-handler :game/start
-  game--start
-  [{{db :system/db} :ring-req
-    uid :uid
-    {gameid :gameid} :?data
-    id :id
-    timestamp :timestamp}]
-  (lobby/lobby-thread
-    (let [{:keys [players started] :as lobby} (app-state/get-lobby gameid)]
+(defn try-start-game
+  [db uid gameid]
+  (let [{:keys [players started] :as lobby} (app-state/get-lobby gameid)]
       (when (and lobby (lobby/first-player? uid lobby) (not started))
         (let [now (inst/now)
               new-app-state
@@ -190,7 +189,20 @@
             (stats/game-started db lobby?)
             (lobby/send-lobby-state lobby?)
             (lobby/broadcast-lobby-list)
-            (send-state-to-participants :game/start lobby? (diffs/public-states (:state lobby?)))))))
+            (send-state-to-participants :game/start lobby? (diffs/public-states (:state lobby?))))))))
+
+(defmethod ws/-msg-handler :game/start
+  game--start
+  [{{db :system/db} :ring-req
+    uid :uid
+    {gameid :gameid} :?data
+    id :id
+    timestamp :timestamp}]
+  (lobby/lobby-thread
+    (if (:block-game-creation @app-state/app-state)
+      (ws/chsk-send! uid [:lobby/toast {:message :lobby_creation-paused
+                                        :type "error"}])
+      (try-start-game db uid gameid))
     (lobby/log-delay! timestamp id)))
 
 (defmethod ws/-msg-handler :game/leave

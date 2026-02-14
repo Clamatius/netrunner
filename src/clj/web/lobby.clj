@@ -10,7 +10,7 @@
    [crypto.password.bcrypt :as bcrypt]
    [game.core :as core]
    [game.utils :refer [server-card]]
-   [jinteki.utils :refer [select-non-nil-keys side-from-str superuser?]]
+   [jinteki.utils :refer [select-non-nil-keys side-from-str superuser? to?]]
    [jinteki.preconstructed :refer [all-matchups]]
    [jinteki.validator :as validator]
    [medley.core :refer [find-first]]
@@ -106,8 +106,7 @@
     user :user
     {:keys [gameid now
             allow-spectator api-access format mute-spectators password room save-replay
-            precon gateway-type side singleton spectatorhands timer title open-decklists
-            turmoil]
+            precon gateway-type side singleton spectatorhands timer title open-decklists description]
      :or {gameid (random-uuid)
           now (inst/now)}} :options}]
   (let [player {:user user
@@ -128,10 +127,10 @@
      :allow-spectator allow-spectator
      :api-access api-access
      :format format
+     :description description
      :mute-spectators mute-spectators
      :password (when (not-empty password) (bcrypt/encrypt password))
      :room room
-     :turmoil turmoil
      :save-replay save-replay
      :spectatorhands spectatorhands
      :singleton (when (some #{format} `("standard" "startup" "casual" "eternal")) singleton)
@@ -212,7 +211,6 @@
    :save-replay
    :singleton
    :spectators
-   :turmoil
    :corp-spectators
    :runner-spectators
    :spectatorhands
@@ -220,6 +218,7 @@
    :timer
    :title
    :old
+   :description
    ;; for tournament system
    :time-extension
    :excluded?
@@ -339,6 +338,19 @@
 (defn send-message [lobby message]
   (update lobby :messages conj message))
 
+(defn try-create-lobby
+  [uid user ?data]
+  (let [lobby (-> (create-new-lobby {:uid uid :user user :options ?data})
+                  (send-message
+                   (core/make-system-message (str (:username user) " has created the game."))))
+        new-app-state (swap! app-state/app-state update :lobbies
+                             register-lobby lobby uid)
+        lobby? (get-in new-app-state [:lobbies (:gameid lobby)])]
+    (when lobby?
+      (assign-tournament-properties lobby?)
+      (send-lobby-state lobby?)
+      (broadcast-lobby-list))))
+
 (defmethod ws/-msg-handler :lobby/create
   lobby--create
   [{{user :user} :ring-req
@@ -348,18 +360,11 @@
     timestamp :timestamp}]
   (println "DEBUG :lobby/create - user:" (:username user) "uid:" uid "data:" ?data)
   (lobby-thread
-    (let [lobby (-> (create-new-lobby {:uid uid :user user :options ?data})
-                    (send-message
-                      (core/make-system-message (str (:username user) " has created the game."))))
-          new-app-state (swap! app-state/app-state update :lobbies
-                               register-lobby lobby uid)
-          lobby? (get-in new-app-state [:lobbies (:gameid lobby)])]
-      (println "DEBUG :lobby/create - created lobby?" (some? lobby?) "gameid:" (:gameid lobby))
-      (when lobby?
-        (assign-tournament-properties lobby?)
-        (send-lobby-state lobby?)
-        (broadcast-lobby-list))
-      (log-delay! timestamp id))))
+    (if (:block-game-creation @app-state/app-state)
+      (ws/chsk-send! uid [:lobby/toast {:message :lobby_creation-paused
+                                        :type "error"}])
+      (try-create-lobby uid user ?data))
+    (log-delay! timestamp id)))
 
 (defn clear-lobby-state [uid]
   (when uid
@@ -380,6 +385,17 @@
     id :id
     timestamp :timestamp}]
   (lobby-thread (send-lobby-list uid)
+                (ws/chsk-send! uid [:lobby/block-game-creation
+                                    (:block-game-creation @app-state/app-state)])
+                (log-delay! timestamp id)))
+
+(defmethod ws/-msg-handler :lobby/block-game-creation
+  lobby--block-game-creation
+  [{uid :uid
+    id :id
+    timestamp :timestamp}]
+  (lobby-thread (ws/chsk-send! uid [:lobby/block-game-creation
+                                    (:block-game-creation @app-state/app-state)])
                 (log-delay! timestamp id)))
 
 (defn player?
@@ -730,6 +746,30 @@
           (broadcast-lobby-list))))
     (log-delay! timestamp id)))
 
+(defmethod ws/-msg-handler :lobby/shift-game
+  lobby--shift-game
+  [{{db :system/db user :user} :ring-req
+    {:keys [gameid room]} :?data
+    id :id
+    timestamp :timestamp}]
+  (lobby-thread
+    (when-let [lobby (app-state/get-lobby gameid)]
+      (when (or (superuser? user) (to? user))
+        (let [player-name (-> lobby :original-players first :user :username)
+              game-name (:title lobby)
+              new-app-state (swap! app-state/app-state assoc-in [:lobbies gameid :room] room)]
+          (send-lobby-state (get-in new-app-state [:lobbies (:gameid lobby)]))
+          (broadcast-lobby-list)
+          (broadcast-lobby-list [id])
+          (mc/insert db "moderator_actions"
+                     {:moderator (:username user)
+                      :action :shift-game
+                      :game-name game-name
+                      :first-player player-name
+                      :target-room room
+                      :date (inst/now)}))))
+    (log-delay! timestamp id)))
+
 (defmethod ws/-msg-handler :lobby/rename-game
   lobby--rename-game
   [{{db :system/db user :user} :ring-req
@@ -744,6 +784,7 @@
               new-app-state (swap! app-state/app-state assoc-in [:lobbies gameid :title] (str player-name "'s game"))]
           (send-lobby-state (get-in new-app-state [:lobbies (:gameid lobby)]))
           (broadcast-lobby-list)
+          (broadcast-lobby-list [id])
           (mc/insert db "moderator_actions"
                      {:moderator (:username user)
                       :action :rename-game
@@ -765,6 +806,7 @@
       (when (and (superuser? user) lobby)
         (close-lobby! db lobby)
         (broadcast-lobby-list)
+        (broadcast-lobby-list [id])
         (mc/insert db "moderator_actions"
                    {:moderator (:username user)
                     :action :delete-game

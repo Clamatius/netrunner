@@ -118,6 +118,11 @@
     :sync? true
     :validate-fn #(contains? valid-card-back-display %)
     :doc "Which card backs to display (them/me/ffg/nsg)"}
+   {:key :card-language
+    :default "en"
+    :sync? true
+    :validate-fn #(contains? valid-languages %)
+    :doc "Card language preference"}
    {:key :card-resolution
     :default "default"
     :sync? false  ; device-specific
@@ -223,6 +228,11 @@
     :sync? true
     :validate-fn boolean?
     :doc "Keep card zoom window pinned open"}
+   {:key :pin-base-art
+    :default false
+    :sync? true
+    :validate-fn boolean?
+    :doc "Zoom window will always use base art if possible"}
    {:key :player-stats-icons
     :default true
     :sync? false  ; device-specific

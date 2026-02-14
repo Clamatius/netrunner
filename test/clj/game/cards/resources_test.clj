@@ -2150,11 +2150,11 @@
             vbg (get-resource state 1)]
         (click-prompt state :runner "Dr. Lovegood")
         (click-card state :runner blackfile)
-        (is (:icon (refresh blackfile)) "The Black File has an icon")
+        (is (has-icon? state (refresh blackfile) "DL") "The Black File has an icon")
         (is (= 0 (get-counters (refresh blackfile) :power)) "Black File has still 0 power counters")
         (is (= 1 (get-counters (refresh vbg) :virus)) "Virus Breeding Ground has 1 virus counter")
         (take-credits state :runner)
-        (is (nil? (:icon (refresh blackfile)))))))
+        (is (no-icons? state (refresh blackfile))))))
 
 (deftest dr-nuka-vrolyck
   (do-game
@@ -2243,7 +2243,7 @@
       (play-from-hand state :runner "Dummy Box")
       (play-from-hand state :runner "Cache")
       (take-credits state :runner)
-      (trash state :corp (get-program state 0))
+      (core/trash state :corp (core/make-eid state) (get-program state 0))
       (is (not (no-prompt? state :runner)) "Dummy Box prompting to prevent program trash")
       (click-prompt state :runner "Dummy Box (Program)")
       (click-card state :runner (find-card "Clot" (:hand (get-runner))))
@@ -5769,13 +5769,13 @@
     (play-from-hand state :runner "Motivation")
     (play-from-hand state :runner "Astrolabe")
     (take-credits state :runner)
-    (trash state :runner (get-resource state 2))
+    (core/trash state :runner (core/make-eid state) (get-resource state 2))
     (is (no-prompt? state :runner) "Sac Con not prompting to prevent resource trash")
-    (trash state :runner (get-program state 0))
+    (core/trash state :runner (core/make-eid state) (get-program state 0))
     (click-prompt state :runner "Sacrificial Construct")
     (is (= 2 (count (:discard (get-runner)))) "Sac Con trashed")
     (is (= 1 (count (get-program state))) "Cache still installed")
-    (trash state :runner (get-hardware state 0))
+    (core/trash state :runner (core/make-eid state) (get-hardware state 0))
     (click-prompt state :runner "Sacrificial Construct")
     (is (= 3 (count (:discard (get-runner)))) "Sac Con trashed")
     (is (= 1 (count (get-hardware state))) "Astrolabe still installed")))
@@ -7676,6 +7676,25 @@
     (is (= 0 (count (:discard (get-runner)))) "took 0 net damage")
     (is (not (:run @state)) "Run ended")))
 
+(deftest underdome-irregulars
+  (doseq [opt [:draw :tag]]
+    (do-game
+      (new-game {:corp {:hand ["Vanilla"]}
+                 :runner {:tags 3 :hand ["Underdome Irregulars"] :deck ["Ika" "Ika"]}})
+      (play-from-hand state :corp "Vanilla" "HQ")
+      (take-credits state :corp)
+      (play-from-hand state :runner "Underdome Irregulars")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :runner)
+      (case opt
+        :tag  (is (changed? [(count-tags state) -1]
+                    (click-prompt state :runner "Remove 1 tag")))
+        :draw (is (changed? [(count (:hand (get-runner))) 2]
+                    (click-prompt state :runner "Draw 2 cards"))))
+      (take-credits state :corp)
+      (take-credits state :runner)
+      (is (no-prompt? state :runner)))))
+
 (deftest urban-art-vernissage
   (do-game
       (new-game {:runner {:hand ["Urban Art Vernissage" "Botulus" "Monkeywrench"]
@@ -7915,6 +7934,22 @@
     (card-ability state :runner (get-resource state 1) 0)
     (is (= 4 (count (:discard (get-runner)))) "Fall Guy trashed")
     (is (= 8 (:credit (get-runner))) "Gained 2c from Fall Guy but no credits from Wasteland")))
+
+(deftest wasteland-vs-cond-counter
+  ;; Wasteland - Gain 1c the first time you trash an installed card of yours each turn
+  (do-game
+    (new-game {:corp {:hand ["IPO"]}
+               :runner {:hand ["Wasteland" "Jarogniew Mercs" "On the Lam" "Isolation"]
+                        :credits 7}})
+    (take-credits state :corp)
+    (play-cards state :runner "Wasteland" ["On the Lam" "Wasteland"] "Jarogniew Mercs")
+    (is (changed? [(:credit (get-runner)) 0
+                   (count-tags state) 0]
+          (click-prompts state :runner "On the Lam" "Yes" "1"))
+        "Did not gain a credit from wasteland")
+    (is (changed? [(:credit (get-runner)) (+ 5 1)]
+          (play-cards state :runner ["Isolation" "Jarogniew Mercs"]))
+        "Gained from isolation")))
 
 (deftest whistleblower-agenda-interactions
   (doseq [agenda-name ["The Future Perfect" "NAPD Contract" "Degree Mill" "Ikawah Project" "Obokata Protocol"]]

@@ -17,12 +17,12 @@
    [game.core.costs :refer [total-available-credits]]
    [game.core.damage :refer [damage]]
    [game.core.def-helpers :refer [combine-abilities corp-recur defcard
-                                  do-brain-damage do-net-damage draw-abi give-tags offer-jack-out
+                                  do-brain-damage do-net-damage draw-abi give-tags make-icon offer-jack-out
                                   reorder-choice get-x-fn with-revealed-hand]]
    [game.core.drawing :refer [draw maybe-draw draw-up-to]]
    [game.core.effects :refer [any-effects get-effects is-disabled? is-disabled-reg? register-lingering-effect unregister-effects-for-card unregister-effect-by-uuid unregister-static-abilities update-disabled-cards]]
    [game.core.eid :refer [complete-with-result effect-completed make-eid make-result]]
-   [game.core.engine :refer [gather-events pay register-default-events register-events
+   [game.core.engine :refer [checkpoint gather-events pay queue-event register-default-events register-events
                              resolve-ability trigger-event trigger-event-simult unregister-events
                              ]]
    [game.core.events :refer [first-event? run-events]]
@@ -38,15 +38,15 @@
                           update-ice-strength]]
    [game.core.identities :refer [disable-card enable-card]]
    [game.core.initializing :refer [card-init]]
-   [game.core.installing :refer [corp-install corp-install-msg]]
+   [game.core.installing :refer [corp-install corp-install-msg swap-cards-async]]
    [game.core.memory :refer [available-mu init-mu-cost]]
-   [game.core.moving :refer [as-agenda forfeit mill move swap-cards swap-cards-async
+   [game.core.moving :refer [as-agenda forfeit mill move swap-cards
                              swap-ice swap-installed trash
                              trash-cards]]
    [game.core.optional :refer [get-autoresolve set-autoresolve]]
    [game.core.payment :refer [can-pay? cost->string build-cost-label ->c]]
    [game.core.prompts :refer [cancellable clear-wait-prompt]]
-   [game.core.props :refer [add-counter add-icon add-prop remove-icon]]
+   [game.core.props :refer [add-counter add-prop]]
    [game.core.purging :refer [purge]]
    [game.core.revealing :refer [reveal reveal-loud]]
    [game.core.rezzing :refer [can-pay-to-rez? derez get-rez-cost rez]]
@@ -785,7 +785,7 @@
                   :effect (req (system-msg
                                  state :corp
                                  (str "uses " (:title card) " to trash "
-                                      (enumerate-str (map :title (take 3 (:deck runner))))
+                                      (enumerate-cards (take 3 (:deck runner)))
                                       " from the top of the stack and trash itself"))
                                (wait-for
                                  (mill state :corp (make-eid state eid) :runner 3)
@@ -799,9 +799,9 @@
                             (empty? (filter #(and (:broken %) (:printed %)) (:subroutines card)))
                             :unrestricted))]
     {:advanceable :always
-     :subroutines [{:label "Gain 1 [Credit]. Place 1 advancement token"
+     :subroutines [{:label "Gain 1 [Credit]. Place 1 advancement counter"
                     :breakable breakable-fn
-                    :msg (msg "gain 1 [Credit] and place 1 advancement token on " (card-str state target))
+                    :msg (msg "gain 1 [Credit] and place 1 advancement counter on " (card-str state target))
                     :prompt "Choose an installed card"
                     :choices {:card installed?}
                     :async true
@@ -875,7 +875,7 @@
                   :change-in-game-state {:silent (req true) :req (req (seq (:deck corp)))}
                   :label "Look at the top 5 cards of R&D"
                   :msg "look at the top 5 cards of R&D"
-                  :prompt (msg "The top cards of R&D are (top->bottom) " (enumerate-str (map :title (take 5 (:deck corp)))))
+                  :prompt (msg "The top cards of R&D are (top->bottom) " (enumerate-cards (take 5 (:deck corp))))
                   :choices ["OK"]
                   :req (req (not-empty (:deck corp)))
                   :effect
@@ -1110,8 +1110,8 @@
                                       :value (req {:subroutines (vec (repeat sub-count (do-brain-damage 1)))})})))}})
 
 (defcard "Builder"
-  (let [sub {:label "Place 1 advancement token on a piece of ice that can be advanced protecting this server"
-             :msg (msg "place 1 advancement token on " (card-str state target))
+  (let [sub {:label "Place 1 advancement counter on a piece of ice that can be advanced protecting this server"
+             :msg (msg "place 1 advancement counter on " (card-str state target))
              :choices {:req (req (and (ice? target)
                                       (can-be-advanced? state target)))}
              :async true
@@ -1312,10 +1312,10 @@
                                                  (seq (remove :broken (:subroutines (:ice context)))))))])))}]))}]})
 
 (defcard "Clairvoyant Monitor"
-  {:subroutines [(do-psi {:label "Place 1 advancement token and end the run"
+  {:subroutines [(do-psi {:label "Place 1 advancement counter and end the run"
                           :async true
-                          :prompt "Choose an installed card to place 1 advancement token on"
-                          :msg (msg "place 1 advancement token on "
+                          :prompt "Choose an installed card to place 1 advancement counter on"
+                          :msg (msg "place 1 advancement counter on "
                                     (card-str state target) " and end the run")
                           :choices {:card installed?}
                           :effect (req (wait-for
@@ -1616,6 +1616,7 @@
   {:subroutines [{:label "Draw 1 card. You may add 1 card from HQ to the top of R&D."
                   :msg "draw 1 card"
                   :async true
+                  :waiting-prompt true
                   :effect (req (wait-for (draw state side 1)
                                          (continue-ability
                                            state side
@@ -1699,7 +1700,7 @@
              :label "Reveal the grip"
              :change-in-game-state {:silent (req true)
                                     :req (req (:hand runner))}
-             :msg (msg "reveal " (enumerate-str (map :title (:hand runner))) " from the grip")
+             :msg (msg "reveal " (enumerate-cards (:hand runner) :sorted) " from the grip")
              :effect (effect (reveal eid (:hand runner)))}]
     {:on-encounter {:prompt "Choose a card type"
                     :choices ["Event" "Hardware" "Program" "Resource"]
@@ -2079,11 +2080,12 @@
                                      (:title target)
                                      " abilities for the remainder of the run")
                            :effect (req (let [t target]
-                                          (add-icon state side card target "H" (faction-label card))
-                                          (register-events state side card
-                                            [{:event :run-ends
-                                              :duration :end-of-run
-                                              :effect (effect (remove-icon card t))}])
+                                          (register-lingering-effect
+                                            state side card
+                                            {:type :icon
+                                             :duration :end-of-run
+                                             :req (req (same-card? t target))
+                                             :value (make-icon "H" card)})
                                           (register-lingering-effect state side card (prevent-sub-break-by t))
                                           (effect-completed state side eid)))}
                           card nil))}
@@ -2193,28 +2195,14 @@
                                    (in-discard? %)))}
                    :async true
                    :show-discard true
-                   :effect
-                   (req (wait-for
-                          (reveal state side targets)
-                          (doseq [c targets]
-                            (move state :corp c :deck))
-                          (shuffle! state :corp :deck)
-                          (let [from-hq (map :title (filter in-hand? targets))
-                                from-archives (map :title (filter in-discard? targets))]
-                            (system-msg
-                              state side
-                              (str "uses " (:title card) " to reveal "
-                                   (enumerate-str
-                                     (filter identity
-                                             [(when (not-empty from-hq)
-                                                (str (enumerate-str from-hq)
-                                                     " from HQ"))
-                                              (when (not-empty from-archives)
-                                                (str (enumerate-str from-archives)
-                                                     " from Archives"))]))
-                                   ", shuffle them into R&D")))
-                          (effect-completed state side eid)))}
-                card nil)))}]
+                   :effect (req (wait-for
+                                  (reveal-loud state side card {:and-then "shuffle [them] into R&D"}
+                                               targets)
+                                  (doseq [c targets]
+                                    (move state :corp c :deck))
+                                  (shuffle! state :corp :deck)
+                                  (effect-completed state side eid)))}
+                  card nil)))}]
     {:events [{:event :corp-turn-begins
                :skippable true
                :interactive (req true)
@@ -2239,11 +2227,12 @@
                                            :choices {:max delta
                                                      :card #(in-hand? %)}
                                            :async true
-                                           :effect (req (wait-for (trash-cards state :runner targets)
-                                                                  (system-msg
-                                                                    state :runner
-                                                                    (str "trashes " (enumerate-str (map :title targets))))
-                                                                  (effect-completed state side eid)))}))
+                                           :display-side :runner
+                                           :msg (msg "discard " (enumerate-cards targets))
+                                           :effect (req (let [discard (seq (map #(move state side % :discard) targets))
+                                                              ev (if (= side :runner) :runner-discard-to-hand-size :corp-discard-to-hand-size)]
+                                                          (queue-event state ev {:cards discard})
+                                                          (checkpoint state nil eid {:durations [ev]})))}))
                                       card nil)))}]
     {:subroutines [sub
                    sub]}))
@@ -2266,8 +2255,8 @@
   {:flags {:rd-reveal (req true)}
    :subroutines [(gain-credits-sub 2)
                  {:async true
-                  :label "Pay up to 2 [Credits] to place up to 2 advancement tokens"
-                  :prompt "How many advancement tokens do you want to place?"
+                  :label "Pay up to 2 [Credits] to place up to 2 advancement counters"
+                  :prompt "How many advancement counters do you want to place?"
                   :choices (req (map str (range (inc (min 2 (:credit corp))))))
                   :effect (req (let [c (str->int target)]
                                  (if (can-pay? state side (assoc eid :source card :source-type :subroutine) card (:title card) (->c :credit c))
@@ -2276,7 +2265,7 @@
                                                (system-msg state :corp (:msg async-result))
                                                (continue-ability
                                                  state side
-                                                 {:msg (msg "pay " c " [Credits] and place " (quantify c "advancement token")
+                                                 {:msg (msg "pay " c " [Credits] and place " (quantify c "advancement counter")
                                                             " on " (card-str state target))
                                                   :choices {:req (req (can-be-advanced? state target))}
                                                   :async true
@@ -2815,14 +2804,13 @@
                                       (effect-completed state side eid))))}]})
 
 (defcard "Loot Box"
-  (letfn [(top-3 [state] (take 3 (get-in @state [:runner :deck])))
-          (top-3-names [state] (map :title (top-3 state)))]
+  (letfn [(top-3 [state] (take 3 (get-in @state [:runner :deck])))]
     {:subroutines [(end-the-run-unless-runner-pays (->c :credit 2))
                    {:label "Reveal the top 3 cards of the Stack"
                     :async true
                     :effect (req (if (seq (:deck runner))
                                    (do (system-msg state side (str "uses " (:title card) " to reveal "
-                                                                   (enumerate-str (top-3-names state))
+                                                                   (enumerate-cards (top-3 state))
                                                                    " from the top of the stack"))
                                        (wait-for
                                          (reveal state side (top-3 state))
@@ -3284,7 +3272,8 @@
                  (rez-an-ice {:cost-bonus -2})
                  (resolve-another-subroutine
                    #(has-subtype? % "Sentry")
-                   "Resolve subroutine on another rezzed Sentry")
+                   "Resolve subroutine on a rezzed Sentry"
+                   true)
                  (resolve-another-subroutine
                    #(has-subtype? % "Code Gate")
                    "Resolve subroutine on another rezzed Code Gate")]})
@@ -3394,7 +3383,7 @@
                   :msg (msg "add "
                             (let [seen (filter :seen targets)
                                   m (count (filter #(not (:seen %)) targets))]
-                              (str (enumerate-str (map :title seen))
+                              (str (enumerate-cards seen :sorted)
                                    (when (pos? m)
                                      (str (when-not (empty? seen) " and ")
                                           (quantify m "unseen card")))))
@@ -3454,8 +3443,8 @@
 
 (defcard "Otoroshi"
   {:subroutines [{:async true
-                  :label "Place 3 advancement tokens on an installed card"
-                  :msg "place 3 advancement tokens on an installed card"
+                  :label "Place 3 advancement counters on an installed card"
+                  :msg "place 3 advancement counters on an installed card"
                   :prompt "Choose an installed card in the root of a remote server"
                   :req (req (some (complement ice?) (all-installed state :corp)))
                   :choices {:card #(and (corp? %)
@@ -3512,7 +3501,7 @@
                     :effect (req (let [n (count (filter #(is-type? % target) (:hand runner)))]
                                    (system-msg state side
                                                (str "uses " (:title card) " to name " target ", reveal "
-                                                    (enumerate-str (map :title (:hand runner)))
+                                                    (enumerate-cards (:hand runner) :sorted)
                                                     " from the grip, and gain " (quantify n "subroutine")))
                                    (wait-for
                                      (reveal state side (:hand runner))
@@ -3675,10 +3664,9 @@
                   :async true
                   :effect
                   (effect (continue-ability
-                            (let [top-cards (take 3 (:deck corp))
-                                  top-names (map :title top-cards)]
+                            (let [top-cards (take 3 (:deck corp))]
                               {:waiting-prompt true
-                               :prompt (str "The top cards of R&D are (top->bottom): " (enumerate-str top-names))
+                               :prompt (str "The top cards of R&D are (top->bottom): " (enumerate-cards top-cards))
                                :choices ["Arrange cards" "Shuffle R&D"]
                                :async true
                                :effect
@@ -3912,9 +3900,9 @@
 
 (defcard "Slot Machine"
   (letfn [(top-3 [state] (take 3 (get-in @state [:runner :deck])))
+          (top-3-names [cards] (map #(str (:title %) " (" (:type %) ")") cards))
           (effect-type [card] (keyword (str "slot-machine-top-3-" (:cid card))))
           (name-builder [card] (str (:title card) " (" (:type card) ")"))
-          (top-3-names [cards] (map name-builder cards))
           (top-3-types [state card et]
             (->> (get-effects state :corp et card)
                  first
@@ -3957,7 +3945,7 @@
                                      (do (system-msg state :corp (str "uses " (:title card) " to gain 3 [Credits]"))
                                          (gain-credits state :corp eid 3))
                                      (effect-completed state side eid))))}
-                   {:label "Place 3 advancement tokens"
+                   {:label "Place 3 advancement counters"
                     :async true
                     :effect (effect
                               (continue-ability
@@ -3967,16 +3955,14 @@
                                              (= 1 unique-types))
                                     {:choices {:card installed?}
                                      :prompt "Choose an installed card"
-                                     :msg (msg "place 3 advancement tokens on "
+                                     :msg (msg "place 3 advancement counters on "
                                                (card-str state target))
                                      :async true
                                      :effect (effect (add-prop eid target :advance-counter 3 {:placed true}))}))
                                 card nil))}]}))
 
 (defcard "Snoop"
-  {:on-encounter {:msg (msg "reveal "
-                            (enumerate-str (map :title (:hand runner)))
-                            " from the grip")
+  {:on-encounter {:msg (msg "reveal " (enumerate-cards (:hand runner) :sorted) " from the grip")
                   :async true
                   :effect (effect (reveal eid (:hand runner)))}
    :abilities [{:req (req (pos? (get-counters card :power)))
@@ -4536,7 +4522,7 @@
   {:subroutines [(trace-ability
                    5 {:label "Reveal the grip and trash cards"
                       :msg (msg "reveal "
-                                (enumerate-str (map :title (:hand runner)))
+                                (enumerate-cards (:hand runner) :sorted)
                                 " from the grip")
                       :async true
                       :effect (req (wait-for
@@ -4544,7 +4530,7 @@
                                      (let [delta (- target (second targets))
                                            cards (filter #(<= (:cost %) delta) (:hand runner))]
                                        (system-msg state side (str "uses " (:title card) " to trash "
-                                                                   (enumerate-str (map :title cards))))
+                                                                   (enumerate-cards cards)))
                                        (trash-cards state side eid cards {:cause :subroutine}))))})]})
 
 (defcard "Wall of Static"

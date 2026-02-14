@@ -19,7 +19,8 @@
 
 (let [chsk-server (sente/make-channel-socket-server!
                     (get-sch-adapter)
-                    {:user-id-fn (fn [ring-req]
+                    {:ws-kalive-ms 2500
+                     :user-id-fn (fn [ring-req]
                                    ;; Priority order for user identification:
                                    ;; 1. User authenticated via wrap-user (from session token or cookie)
                                    ;; 2. Session uid from previous login

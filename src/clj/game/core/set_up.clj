@@ -11,6 +11,7 @@
    [game.core.initializing :refer [card-init make-card]]
    [game.core.player :refer [new-corp new-runner]]
    [game.core.prompts :refer [clear-wait-prompt show-prompt show-wait-prompt]]
+   [game.core.quick-draft :refer [check-quick-draft]]
    [game.core.say :refer [system-msg system-say implementation-msg]]
    [game.core.shuffling :refer [shuffle-into-deck]]
    [game.core.state :refer [new-state]]
@@ -78,7 +79,7 @@
 
 (defn- init-game-state
   "Initialises the game state"
-  [{:keys [players gameid timer spectatorhands api-access save-replay room turmoil] :as game}]
+  [{:keys [players gameid timer spectatorhands api-access save-replay room] :as game}]
   (let [corp (some #(when (corp? %) %) players)
         runner (some #(when (runner? %) %) players)
         corp-deck (create-deck (:deck corp))
@@ -106,7 +107,6 @@
         (inst/now)
         {:timer timer
          :spectatorhands spectatorhands
-         :turmoil turmoil
          :api-access api-access
          :save-replay save-replay}
         (new-corp (:user corp) corp-identity corp-options (map #(assoc % :zone [:deck]) corp-deck) corp-deck-id corp-quote)
@@ -125,10 +125,27 @@
                      :type "Basic Action"
                      :title "Runner Basic Action Card"})))
 
+(defn- sort-deck-for-display
+  "Sorts deck cards by type then title for display in decklist with type dividers"
+  [deck]
+  (->> deck
+       (group-by :title)
+       (map (fn [[title cards]]
+              [title (count cards) (:type (first cards))]))
+       (sort-by (fn [[title _qty card-type]]
+                  [card-type title]))
+       (partition-by (fn [[_title _qty card-type]] card-type))
+       (mapcat (fn [type-group]
+                 (let [card-type (nth (first type-group) 2)]
+                   (cons [card-type "divider"]
+                         (map (fn [[title qty _type]]
+                                [title qty])
+                              type-group)))))))
+
 (defn- set-deck-lists
   [state]
-  (let [runner-cards (sort-by key (frequencies (map :title (get-in @state [:runner :deck]))))
-        corp-cards (sort-by key (frequencies (map :title (get-in @state [:corp :deck]))))]
+  (let [runner-cards (sort-deck-for-display (get-in @state [:runner :deck]))
+        corp-cards (sort-deck-for-display (get-in @state [:corp :deck]))]
     (swap! state assoc :decklists {:corp corp-cards :runner runner-cards})))
 
 (defn init-game
@@ -149,10 +166,12 @@
     (create-basic-action-cards state)
     (fake-checkpoint state)
     (let [eid (make-eid state)]
-      (wait-for (trigger-event-sync state :corp :pre-start-game nil)
-                (wait-for (trigger-event-sync state :runner :pre-start-game nil)
-                          (init-hands state)
-                          (fake-checkpoint state)
-                          (effect-completed state nil eid))))
+      (wait-for
+        (check-quick-draft state (:format game))
+        (wait-for (trigger-event-sync state :corp :pre-start-game nil)
+                  (wait-for (trigger-event-sync state :runner :pre-start-game nil)
+                            (init-hands state)
+                            (fake-checkpoint state)
+                            (effect-completed state nil eid)))))
     (swap! state assoc :history [(:hist-state (public-states state))])
     state))

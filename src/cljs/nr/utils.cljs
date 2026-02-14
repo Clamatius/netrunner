@@ -9,9 +9,10 @@
    [goog.string :as gstring]
    [goog.string.format]
    [nr.appstate :refer [app-state]]
-   [nr.translations :refer [tr tr-data]]
+   [nr.translations :refer [tr tr-span tr-data]]
    [flatland.ordered.map :refer [ordered-map]]
-   [reagent.dom :as rd]))
+   [reagent.dom :as rd]
+   [reagent.dom.server :as rdom-server]))
 
 ;; Dot definitions
 (def zws "\u200B")                  ; zero-width space for wrapping dots
@@ -111,6 +112,16 @@
    (let [f (aget js/toastr toast-type)]
      (f msg))))
 
+(defn tr-non-game-toast
+  "Display a toast warning with the specified translation vector."
+  ([tr-vec toast-type] (tr-non-game-toast tr-vec toast-type nil))
+  ([tr-vec toast-type options] (tr-non-game-toast tr-vec nil toast-type options))
+  ([tr-vec tr-params toast-type options]
+   (set! (.-options js/toastr) (toastr-options options))
+   (let [f (aget js/toastr toast-type)
+         msg (rdom-server/render-to-string (tr-span tr-vec tr-params))]
+     (f msg))))
+
 (defn map-longest
   [f default & colls]
   (lazy-seq
@@ -124,9 +135,11 @@
    "standard" "Standard"
    "throwback" "Throwback"
    "startup" "Startup"
+   "quick-draft" "Quick Draft"
    "system-gateway" "System Gateway"
    "core" "Core"
    "preconstructed" "Preconstructed"
+   "chimera" "Chimera"
    "eternal" "Eternal"
    "casual" "Casual"))
 
@@ -135,9 +148,11 @@
    "Standard" "standard"
    "Throwback" "throwback"
    "Startup" "startup"
+   "Quick Draft" "quick-draft"
    "System Gateway" "system-gateway"
    "Core" "core"
    "Preconstructed" "preconstructed"
+   "Chimera" "chimera"
    "Eternal" "eternal"
    "Casual" "casual"))
 
@@ -202,11 +217,13 @@
      (->> (:all-cards-and-flips @app-state)
           (vals)
           (remove :replaced_by)
+          (filter :title)
           (map (fn [c] [(:title c) (span-of (:title c) (tr-data :title c))]))
           (sort-by (comp count str first) >))
      (->> (:all-cards-and-flips @app-state)
           (vals)
           (remove :replaced_by)
+          (filter :title)
           (map (fn [c] [(tr-data :title c) (span-of (:title c) (tr-data :title c))]))
           (sort-by (comp count str first) >))))))
 
@@ -332,10 +349,14 @@
     "log-player-highlight-red-blue"))
 
 (defn cond-button
-  [text cond f]
-  (if cond
-    [:button {:on-click f :key text} text]
-    [:button.disabled {:key text} text]))
+  "Conditional button component. Renders enabled/disabled button based on condition.
+  Accepts optional attributes map to merge into button element."
+  ([text cond f]
+   (cond-button text cond f nil))
+  ([text cond f attrs]
+   (if cond
+     [:button (merge {:on-click f :key text} attrs) text]
+     [:button.disabled (merge {:key text} attrs) text])))
 
 (defn checkbox-button [on-text off-text on-cond f]
   (if on-cond

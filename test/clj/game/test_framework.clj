@@ -8,7 +8,9 @@
    [game.core.board :refer [server-list]]
    [game.core.card :refer [active? get-card get-counters get-title installed?
                            rezzed?]]
+   [game.core.diffs :refer [icon-summary]]
    [game.core.eid :as eid]
+   [game.core.events :refer [turn-events]]
    [game.core.ice :refer [active-ice?]]
    [game.core.initializing :refer [make-card]]
    [game.core.threat :refer [threat-level]]
@@ -103,7 +105,7 @@
 (defn expect-type
   [type-name choice]
   (str "Expected a " type-name ", received [ " choice
-                                            " ] of type " (type choice) "."))
+       " ] of type " (type choice) "."))
 
 (defn click-card-impl
   [state side card]
@@ -415,10 +417,24 @@
      (core/fake-checkpoint state)
      state)))
 
+(defn maybe-card
+  "Query a card by name if possible, for the use of card abilities"
+  [state card]
+  (if (map? card)
+    (get-card state card)
+    (let [all-cards (core/get-all-cards state)
+          matching-cards (filter #(= card (core/get-title %)) all-cards)]
+      (if (= (count matching-cards) 1)
+        (first matching-cards)
+        (is' (= 1 (count matching-cards))
+             (str "Expected to use ability for card [ " card
+                  " ] but found " (count matching-cards)
+                  " matching cards."))))))
+
 ;;; Card related functions
 (defn card-ability-impl
   [state side card ability & targets]
-  (let [card (get-card state card)
+  (let [card (maybe-card state card)
         ability (cond
                   (number? ability) ability
                   (string? ability) (some #(when (= (:label (second %)) ability) (first %)) (map-indexed vector (:abilities card)))
@@ -602,6 +618,17 @@
   ([state side title server]
    `(error-wrapper (play-from-hand-impl ~state ~side ~title ~server))))
 
+(defn- split-on-keywords [coll]
+  (reduce (fn [acc x]
+            (if (keyword? x)
+              (conj acc x)
+              (let [last-el (peek acc)]
+                (if (vector? last-el)
+                  (conj (pop acc) (conj last-el x))
+                  (conj acc [x])))))
+          []
+          coll))
+
 (defn play-from-hand-with-prompts-impl
   [state side title choices]
   (let [card (find-card title (get-in @state [side :hand]))]
@@ -613,7 +640,20 @@
               (println title " was instead found in the opposing hand - was the wrong side used?")))
           true)
       (when-let [played (core/process-action "play" state side {:card card})]
-        (click-prompts-impl state side choices)))))
+        (let [choice-sets (split-on-keywords choices)]
+          (doseq [cs choice-sets]
+            (cond
+              (vector? cs) (click-prompts-impl state side cs)
+              (#{:rez :rezzed} cs)
+              (if-let [tgt (->> (turn-events state side :corp-install)
+                                (apply concat)
+                                (map :card)
+                                (filter #(= (:title %) title))
+                                (filter (complement rezzed?))
+                                last)]
+                (core/process-action "rez" state :corp {:card tgt})
+                (throw (Exception. (str title " not found in an unrezzed state to be rezzed")))))))))))
+
 
 (defmacro play-from-hand-with-prompts
   "Play a card from hand based on it's title, and then click any number of prompts
@@ -621,6 +661,18 @@
   ([state side title] `(play-from-hand ~state ~side ~title nil))
   ([state side title & prompts]
    `(error-wrapper (play-from-hand-with-prompts-impl ~state ~side ~title ~(vec prompts)))))
+
+(defn play-cards-impl
+  ([state side plays]
+   (doseq [play plays]
+     (if (string? play)
+       (play-from-hand state side play)
+       (play-from-hand-with-prompts-impl state side (first play) (rest play))))))
+
+(defmacro play-cards
+  ([state side] `nil)
+  ([state side & plays]
+   `(error-wrapper (play-cards-impl ~state ~side ~(vec plays)))))
 
 ;;; Run functions
 (defn run-on-impl
@@ -810,7 +862,7 @@
 (defn rez-impl
   ([state side card] (rez-impl state side card nil))
   ([state _side card {:keys [expect-rez] :or {expect-rez true}}]
-   (let [card (get-card state card)]
+   (let [card (maybe-card state card)]
      (is' (installed? card) (str (:title card) " is installed"))
      (is' (not (rezzed? card)) (str (:title card) " is unrezzed"))
      (when (and (installed? card)
@@ -1204,6 +1256,18 @@
      (fire-subs state ice)
      state)))
 
+(defn card-icons
+  [state card]
+  (when-let [icons (seq (:icon (icon-summary card state)))]
+    (mapv first icons)))
+
+(defn has-icon?
+  [state card icon]
+  (some #(= % icon) (card-icons state card)))
+
+(defn no-icons?
+  [state card]
+  (not (card-icons state card)))
 
 (defn is-deck-stacked-impl
   [state side expected-deck]

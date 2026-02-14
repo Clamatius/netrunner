@@ -570,7 +570,6 @@
    remove-from-currently-drawing
    swap-agendas
    swap-cards
-   swap-cards-async
    swap-ice
    swap-installed
    trash
@@ -624,9 +623,7 @@
 (expose-vars
   [game.core.props
    add-counter
-   add-icon
    add-prop
-   remove-icon
    set-prop])
 
 (expose-vars
