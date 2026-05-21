@@ -7,7 +7,8 @@
             [test-helpers :refer :all]
             [ai-basic-actions :as actions]
             [ai-core :as core]
-            [ai-state :as state]))
+            [ai-state :as state]
+            [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
 ;; Test Helpers - Log Entry Builders
@@ -29,18 +30,23 @@
   (make-log-entry (format "%s started their turn %d" username turn)))
 
 (defn make-game-state-with-log
-  "Create game state with specified log entries and click counts"
-  [& {:keys [my-side my-clicks opp-clicks log turn my-username]
+  "Create game state with specified log entries and click counts.
+
+   :active-player defaults to (name my-side) — i.e. it's my turn."
+  [& {:keys [my-side my-clicks opp-clicks log turn my-username active-player my-prompt]
       :or {my-side :runner my-clicks 0 opp-clicks 0 log [] turn 1 my-username "AI-runner"}}]
-  (let [opp-side (if (= my-side :runner) :corp :runner)]
+  (let [opp-side (if (= my-side :runner) :corp :runner)
+        active-player (or active-player (name my-side))]
     {:connected true
      :uid my-username
      :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
      :side (name my-side)
      :game-state {my-side {:click my-clicks
-                           :user {:username my-username}}
+                           :user {:username my-username}
+                           :prompt-state my-prompt}
                   opp-side {:click opp-clicks}
                   :turn turn
+                  :active-player active-player
                   :log log}}))
 
 ;; ============================================================================
@@ -322,6 +328,66 @@
              (make-start-turn-entry "AI-corp" 2)]     ; This is NOT my start
        :my-username "AI-runner")
       (is (true? (actions/turn-started-since-last-opp-end?))))))
+
+;; ============================================================================
+;; check-auto-end-turn! — guards against ending a turn that's not ours
+;; ============================================================================
+;; Bug #16: a forced runner prompt during the corp's turn (e.g. Public Trail
+;; "Take 1 tag") would land the runner client in (clicks=0, no prompt, not
+;; already ended) once resolved, and check-auto-end-turn! would dispatch
+;; end-turn — corrupting server-side turn tracking.
+
+(defn- captured-ws-sends
+  "Run body with ws/send-message! mocked, return [result sent-vec].
+   sent-vec is a vector of {:type ..., :data ...} maps."
+  [body-fn]
+  (let [sent (atom [])]
+    (with-redefs [ws/send-message!
+                  (fn [event-type data]
+                    (swap! sent conj {:type event-type :data data})
+                    nil)
+                  core/show-turn-indicator (fn [& _] nil)]
+      (let [result (with-out-str (body-fn))]
+        [result @sent]))))
+
+(deftest test-auto-end-turn-skipped-when-not-my-turn
+  (testing "check-auto-end-turn! does NOT fire end-turn when active-player is opponent
+            (regression for issue #16: runner answering forced prompt during corp turn)"
+    (with-mock-state
+      (make-game-state-with-log
+       :my-side :runner
+       :my-clicks 0                      ; ← runner hasn't started turn yet
+       :opp-clicks 0
+       :turn 12
+       :active-player "corp"             ; ← it's the CORP's turn
+       ;; Repro: runner's recent log has NO "AI-runner is ending" entry —
+       ;; the corp just played Public Trail forcing a runner prompt that was
+       ;; resolved, leaving runner client at (clicks=0, no prompt, not ended).
+       :log [(make-start-turn-entry "AI-corp" 12)
+             (make-log-entry "Clamatius spends [Click] to play Public Trail.")
+             (make-log-entry "Clamatius uses Public Trail to give the runner 1 tag.")]
+       :my-username "AI-runner")
+      (let [[_ sent] (captured-ws-sends #(actions/check-auto-end-turn!))]
+        (is (empty? (filter #(= "end-turn" (get-in % [:data :command])) sent))
+            "must not dispatch end-turn during opponent's turn")))))
+
+(deftest test-auto-end-turn-fires-when-my-turn
+  (testing "check-auto-end-turn! DOES fire end-turn when active-player is me,
+            0 clicks, no prompt, and not already ended"
+    (with-mock-state
+      (make-game-state-with-log
+       :my-side :runner
+       :my-clicks 0
+       :opp-clicks 0
+       :turn 12
+       :active-player "runner"          ; ← it's MY turn
+       :log [(make-end-turn-entry "AI-corp" 12)
+             (make-start-turn-entry "AI-runner" 12)
+             (make-log-entry "AI-runner spends [Click] to draw a card.")]
+       :my-username "AI-runner")
+      (let [[_ sent] (captured-ws-sends #(actions/check-auto-end-turn!))]
+        (is (seq (filter #(= "end-turn" (get-in % [:data :command])) sent))
+            "must dispatch end-turn when conditions are met and it's our turn")))))
 
 ;; ============================================================================
 ;; Test Suite Main

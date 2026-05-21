@@ -507,6 +507,8 @@
         log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
         my-username (get-my-username)
+        active-player (get-in client-state [:game-state :active-player])
+        my-turn? (= (name side) active-player)
         ;; Check if WE already ended (not opponent) - prevents double auto-end
         already-ended? (some #(let [text (:text %)]
                                 (and text
@@ -517,6 +519,11 @@
         scorable-agendas (core/find-scorable-agendas)]
 
     (cond
+      ;; Not our turn — never auto-end (issue #16: a forced prompt during the
+      ;; opponent's turn must not trigger our end-turn).
+      (not my-turn?)
+      nil
+
       ;; Have scorable agendas - DON'T auto-end!
       (seq scorable-agendas)
       (do
