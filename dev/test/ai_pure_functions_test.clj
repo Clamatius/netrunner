@@ -428,13 +428,14 @@
 ;; ============================================================================
 ;; my-turn-to-act? tests (ai-core)
 ;;
-;; This predicate is the authoritative "is it my turn yet" check shared by
-;; relevance-reason (wait-for-relevant-diff) and ai-display/wait-for-my-turn.
-;; Prior to 2026-05-23, wait-for-my-turn had its own duplicate logic that
-;; fired spuriously when BOTH players were at 0 clicks (which happens every
-;; time the Runner spends their last click on a run — Runner is still
-;; resolving the run, but the duplicate predicate said "ready to start
-;; turn"). Both Opus agents in run #2 reported this on every transition.
+;; This predicate is the authoritative "is it my turn yet" check used by
+;; relevance-reason (the wake decision for the `wait` command). Prior to
+;; 2026-05-23, a now-removed duplicate predicate in wait-for-my-turn fired
+;; spuriously when BOTH players were at 0 clicks (which happens every time
+;; the Runner spends their last click on a run — Runner is still resolving
+;; the run, but the duplicate said "ready to start turn"). Both Opus agents
+;; in run #2 reported this on every transition. wait-for-my-turn has since
+;; been removed in favor of the unified `wait` command.
 ;; ============================================================================
 
 (deftest test-my-turn-to-act-my-turn-with-clicks

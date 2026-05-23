@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-relevant-diff|wait-for-log-past|wait-my-turn|wait-run|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -160,10 +160,21 @@ ${GREEN}Card Actions:${NC}
 ${GREEN}Running:${NC}
   run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
   continue         Continue run / pass priority
+  monitor-run      Corp: participate in opponent's run (auto-pass priority
+                   windows, surface rez/fire decisions). Required during
+                   opponent runs — see 'help --full' for flags.
 
 ${GREEN}Prompts:${NC}
   choose <N>       Choose option N (0 = first)
   choose-card <N>  Select card N from selectable cards
+
+${GREEN}Waiting:${NC}
+  get-cursor       Current state cursor (capture BEFORE acting)
+  wait [seconds] [--since N]  Block until something we care about happens
+                              (prompt, run start/end, my turn, ping).
+                              Default 300s timeout. Always pass --since
+                              with the cursor you captured before acting.
+  ping             Send 'ping' chat to wake opponent's wait
 
 ${GREEN}Lobby:${NC}
   create-game <title>   Create new game
@@ -261,22 +272,19 @@ ${GREEN}Prompts:${NC}
   multi-choose <cards...> - Select MULTIPLE cards
 
 ${GREEN}Waiting / Synchronization:${NC}
-  wait-for-relevant-diff [seconds] [--since N] - PREFERRED. Block until
-                            something we care about happens. Wakes on:
-                              run started, prompt for us, run ended,
-                              our turn to act, opponent 'ping' chat,
-                              or timeout (default 300s).
-                            Ignores opponent economy/draws/installs.
-                            Use --since with a cursor captured BEFORE
-                            your last action to avoid the 'opponent
-                            already acted' race.
+  wait [seconds] [--since N] - Block until something you care about happens.
+                            Wakes on (non-configurable, you always want all):
+                              opponent 'ping' chat (explicit "look here")
+                              a prompt for us (decision required)
+                              run started (even mid 'wait my turn')
+                              run ended
+                              our turn to act
+                              timeout (default 300s)
+                            Silent on opponent economy/draws/installs.
+                            ALWAYS pair with --since: capture a cursor
+                            BEFORE your action, then pass it here. The wait
+                            returns immediately if state already advanced.
   get-cursor              - Current state cursor (for --since)
-  wait-my-turn            - Wait until it's our turn (thin wrapper)
-  wait-run                - Corp: wait until Runner starts a run
-  wait-for-diff [seconds] - Wait for ANY state change (low-level, noisy;
-                            prefer wait-for-relevant-diff)
-  wait-for-log-past <marker> [timeout]
-                          - Wait until log advances past a marker string
   ping                    - Send 'ping' chat to wake opponent's wait
 
 ${GREEN}Lobby:${NC}
@@ -513,18 +521,6 @@ case "$COMMAND" in
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
         show_last_log_if_enabled
-        ;;
-
-    wait-my-turn)
-        ensure_connection
-        info "Waiting for my turn..."
-        execute '(ai-actions/wait-for-my-turn)'
-        ;;
-
-    wait-run)
-        ensure_connection
-        info "Waiting for run (Corp only)..."
-        execute '(ai-actions/wait-for-run)'
         ;;
 
     indicate-action)
@@ -1011,18 +1007,10 @@ case "$COMMAND" in
                     (println "🏳️ Conceded game")))'
         ;;
 
-    wait-for-diff)
-        ensure_connection
-        TIMEOUT="${1:-60}"
-        info "Waiting for game state change (timeout: ${TIMEOUT}s)..."
-        execute "(ai-actions/wait-for-diff $TIMEOUT)"
-        ;;
-
-    wait-for-relevant-diff)
+    wait)
         ensure_connection
         TIMEOUT="300"
         SINCE=""
-        # Parse args
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --since)
@@ -1030,7 +1018,6 @@ case "$COMMAND" in
                     shift 2
                     ;;
                 *)
-                    # Assume it's timeout if numeric
                     if [[ "$1" =~ ^[0-9]+$ ]]; then
                         TIMEOUT="$1"
                     fi
@@ -1039,24 +1026,12 @@ case "$COMMAND" in
             esac
         done
         if [[ -n "$SINCE" ]]; then
-            info "Waiting for relevant events (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
+            info "Waiting (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
             execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})"
         else
-            info "Waiting for relevant events (timeout: ${TIMEOUT}s)..."
+            info "Waiting (timeout: ${TIMEOUT}s)..."
             execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
         fi
-        ;;
-
-    wait-for-log-past)
-        ensure_connection
-        if [ -z "$1" ]; then
-            error "Usage: wait-for-log-past <marker-text> [timeout]"
-            exit 1
-        fi
-        MARKER="$1"
-        TIMEOUT="${2:-60}"
-        info "Waiting for log entries past marker: \"${MARKER}\"..."
-        execute "(ai-actions/wait-for-log-past \"$MARKER\" $TIMEOUT)"
         ;;
 
     get-cursor)

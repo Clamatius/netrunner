@@ -137,25 +137,28 @@ CURSOR=$(./send_command runner get-cursor)
 ./send_command runner end-turn
 
 # Wait for state to advance past that point
-./send_command runner wait-for-relevant-diff 300 --since $CURSOR
+./send_command runner wait --since $CURSOR
 ```
 
-The `--since` flag makes the wait return immediately if the game state already advanced (e.g., opponent already acted). Without it, you might miss fast responses.
+The `--since` flag makes `wait` return immediately if the game state already advanced past that cursor (e.g., the opponent already acted). Without it, you might wait full timeout for something that just happened.
 
-### Relevant Events
+### What `wait` Wakes On
 
-`wait-for-relevant-diff` wakes on:
-- Runs starting or ending
-- Prompts appearing
-- Turn changes
-- Your priority to act
+`wait` always wakes on the full set of things any player needs to care about — the wake set is NOT configurable, because waiting for *less* is a footgun (you'd miss a run started during 'wait my turn', etc.). It wakes on:
+- An opponent `ping` chat message (explicit "look over here")
+- A prompt for us (decision required — encounter, rez window, access, etc.)
+- A run starting (even if you were just waiting for your turn — Corp must participate)
+- A run ending
+- It becomes your turn to act
+- Timeout (default 300s)
 
-It ignores minor events (opponent credits, draws) to avoid spurious wakeups. Use a cursor to avoid starting to wait for something that just happened.
+It is silent on opponent economy/draws/installs — those don't require you to act.
 
 ### Tips
 - LLM opponent turns are SLOW — a single Opus turn can run several minutes. Default timeout is 300s and that is usually the right value. Do not lower it.
-- A timeout expiring is NOT proof the opponent is stuck. Before concluding deadlock: send `chat "ping"`, then re-issue `wait-for-relevant-diff 300 --since $CURSOR`. Only after a second full timeout with no log activity should you assume something is actually broken.
+- A timeout expiring is NOT proof the opponent is stuck. Before concluding deadlock: send `chat "ping"`, then re-issue `wait --since $CURSOR`. Only after a second full timeout with no log activity should you assume something is actually broken.
 - During a run you initiated, the Corp gets paid-ability windows for rez/fire-subs decisions — these can take a while. Stay patient; do not jack out preemptively just because waiting is slow.
+- During the opponent's run against you (Corp side), use `monitor-run` to participate — it auto-handles priority windows and surfaces real decisions. `wait` alone is NOT enough during runs against you.
 - Humans use the Jinteki web UI, not send_command
 - For AI-vs-AI, both sides should use cursor pattern
 

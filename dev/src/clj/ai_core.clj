@@ -978,55 +978,6 @@
         (println "⏱️  Timeout waiting for prompt")
         nil))))
 
-(defn wait-for-diff
-  "Wait for game state to change, return what changed
-   Monitors game-state updates via WebSocket diffs
-   Useful for waiting for opponent actions, run phases, etc.
-
-   Usage: (wait-for-diff)                    ;; default 60s timeout, verbose
-          (wait-for-diff 120)                ;; custom timeout seconds
-          (wait-for-diff {:verbose false})   ;; quiet mode"
-  ([]
-   (wait-for-diff 60))
-  ([timeout-or-opts]
-   (let [opts (if (number? timeout-or-opts)
-                {:timeout timeout-or-opts :verbose true}
-                (merge {:timeout 60 :verbose true} timeout-or-opts))
-         timeout-seconds (:timeout opts)
-         initial-state @state/client-state
-         initial-log (get-in initial-state [:game-state :log])
-         initial-log-count (count initial-log)
-         deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
-
-     (println (format "⏳ Waiting for game state change (timeout: %ds)..." timeout-seconds))
-
-     (loop [checks 0]
-       (Thread/sleep quick-delay)
-       (let [current-state @state/client-state
-             current-log (get-in current-state [:game-state :log])
-             current-log-count (count current-log)
-             new-entries (drop initial-log-count current-log)
-             state-changed? (not= initial-state current-state)]
-
-         (cond
-           state-changed?
-           (do
-             (when (:verbose opts)
-               (println "✅ Game state changed - recent actions:")
-               (doseq [entry (take-last 3 new-entries)]
-                 (println (format "  • %s" (:text entry)))))
-             {:status :state-changed
-              :new-log-entries new-entries
-              :log-count {:before initial-log-count :after current-log-count}})
-
-           (> (System/currentTimeMillis) deadline)
-           (do
-             (println "⏱️  Timeout waiting for state change")
-             {:status :timeout})
-
-           :else
-           (recur (inc checks))))))))
-
 ;; ============================================================================
 ;; Log Summarization
 ;; ============================================================================
@@ -1152,43 +1103,6 @@
                  (conj result {:text simplified})
                  false nil 0 []))))))
 
-(defn wait-for-log-past
-  "Wait until log has entries AFTER the given text marker
-   Useful for avoiding race conditions when opponent is mid-turn
-
-   Usage: (wait-for-log-past \"Clamatius makes his mandatory start of turn draw\")
-          (wait-for-log-past \"ending his turn\" 120)  ;; custom timeout"
-  [marker-text & [timeout]]
-  (let [timeout-seconds (or timeout 60)
-        deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
-
-    (println (format "⏳ Waiting for log entries past marker: \"%s\"" (subs marker-text 0 (min 50 (count marker-text)))))
-
-    (loop []
-      (Thread/sleep quick-delay)
-      (let [current-log (get-in @state/client-state [:game-state :log])
-            marker-idx (first (keep-indexed
-                               #(when (clojure.string/includes? (:text %2) marker-text) %1)
-                               current-log))
-            entries-after (when marker-idx (drop (inc marker-idx) current-log))]
-
-        (cond
-          (and marker-idx (seq entries-after))
-          (do
-            (println (format "✅ Found %d new log entries:" (count entries-after)))
-            (doseq [entry (take 5 entries-after)]
-              (println (format "  • %s" (:text entry))))
-            {:status :new-entries
-             :entries entries-after})
-
-          (> (System/currentTimeMillis) deadline)
-          (do
-            (println "⏱️  Timeout")
-            {:status :timeout})
-
-          :else
-          (recur))))))
-
 ;; ============================================================================
 ;; Cursor Helpers (for race-condition-free waiting)
 ;; ============================================================================
@@ -1244,9 +1158,9 @@
    Crucially NOT a wake condition: 'both players at 0 clicks'. That
    scenario fires every time the Runner spends their last click on a run
    (Runner=0, Corp=0, but Runner is still resolving the run). An earlier
-   duplicate predicate in `wait-for-my-turn` had that bug and woke
-   spuriously on every opponent run-transition; this predicate is the
-   authoritative source of truth — `wait-for-my-turn` delegates here."
+   duplicate predicate had that bug and woke spuriously on every
+   opponent run-transition; this predicate is the authoritative source
+   of truth for the `wait` command (via `relevance-reason`)."
   [state side]
   (let [my-side (keyword side)
         active-player (get-in state [:game-state :active-player])

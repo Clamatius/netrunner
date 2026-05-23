@@ -562,71 +562,6 @@
   (show-board-compact))
 
 ;; ============================================================================
-;; Snooze / Wait Commands (Token Optimization)
-;; ============================================================================
-
-(defn wait-for-my-turn
-  "Wait until it's my turn to act. Delegates to `ai-core/my-turn-to-act?`
-   for the wake decision so the predicate is shared with
-   `wait-for-relevant-diff` (no drift between the two).
-
-   Returns:
-     {:status :ready          :turn N :side \"Corp\" :clicks N}  ; my turn + clicks
-     {:status :ready-to-start :turn N :side \"Corp\"}            ; engine ready for start-turn
-
-   Usage: (wait-for-my-turn)"
-  []
-  (let [my-side (:side @state/client-state)]
-    (println (str "💤 Waiting for my turn (" my-side ")..."))
-    (loop [checks 0]
-      (let [client-state @state/client-state
-            active-player (state/active-player)]
-        (if (core/my-turn-to-act? client-state my-side)
-          (let [clicks (get-in client-state [:game-state (keyword my-side) :click] 0)]
-            (if (and (= my-side active-player) (> clicks 0))
-              (do
-                (println (str "✅ Your turn! (" my-side " - " clicks " clicks remaining)"))
-                {:status :ready :turn (state/turn-number) :side my-side :clicks clicks})
-              (do
-                (println (str "✅ Ready to start turn! (use 'start-turn')"))
-                {:status :ready-to-start :turn (state/turn-number) :side my-side})))
-          (do
-            (when (= 0 (mod checks 5))
-              (println (str "  ...waiting (opponent's turn: " active-player ")")))
-            (Thread/sleep core/standard-delay)
-            (recur (inc checks))))))))
-
-(defn wait-for-run
-  "Wait until Runner initiates a run, then return run details.
-   Corp-only command. Polls every 1s.
-
-   Returns: {:status :run-active :server \"HQ\" :phase \"approach-ice\"}
-
-   Usage: (wait-for-run)"
-  []
-  (let [my-side (:side @state/client-state)]
-    (when (not= my-side "corp")
-      (println "❌ wait-for-run is Corp-only (use wait-for-my-turn as Runner)")
-      (throw (Exception. "wait-for-run is Corp-only")))
-
-    (println "💤 Waiting for Runner to initiate run...")
-    (loop [checks 0]
-      (let [state (state/get-game-state)
-            run-state (get-in state [:run])]
-        (if run-state
-          (do
-            (println (str "🏃 Run started on " (:server run-state) " (phase: " (:phase run-state) ")"))
-            {:status :run-active
-             :server (:server run-state)
-             :phase (:phase run-state)
-             :position (:position run-state)})
-          (do
-            (when (= 0 (mod checks 10))
-              (println "  ...waiting for run"))
-            (Thread/sleep core/short-delay)
-            (recur (inc checks))))))))
-
-;; ============================================================================
 ;; Access Prompt Display
 ;; ============================================================================
 
@@ -1288,10 +1223,9 @@
   (println "\nPrompts:")
   (println "  (choose 0)                         - Choose first option")
   (println "  (wait-for-prompt 10)               - Wait for prompt")
-  (println "  (wait-for-my-turn 30)              - Wait for my turn")
-  (println "  (wait-for-diff)                    - Wait for any state change (shows recent log)")
-  (println "  (wait-for-diff 120)                - Wait with custom timeout")
-  (println "  (wait-for-log-past \"marker text\")  - Wait for log entries after marker")
+  (println "  (wait-for-relevant-diff)           - Block until anything we care about happens")
+  (println "  (wait-for-relevant-diff 120)       - Custom timeout (default 300s)")
+  (println "  (wait-for-relevant-diff {:since N}) - Race-free wait from a cursor")
   (println "\nWorkflows:")
   (println "  (simple-corp-turn)                 - 3x credit, end")
   (println "  (simple-runner-turn)               - 4x credit, end")
