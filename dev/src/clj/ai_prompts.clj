@@ -51,29 +51,58 @@
 
 (defn choose-option!
   "Choose from prompt by index (side-aware).
-   Waits for prompt state to change after sending choice."
+   Waits for prompt state to change after sending choice.
+
+   For prompts of type 'select' (card-selection prompts like Mutual Favor or
+   Send a Message), use `choose-card!` instead — `choose 0` against a select
+   prompt either errors or picks an unrelated meta-choice like 'Done'."
   [index]
   (let [client-state @state/client-state
         side (:side client-state)
-        ;; Normalize side to lowercase to match game state keys (:runner, :corp)
         side-kw (when side (keyword (clojure.string/lower-case side)))
         gameid (:gameid client-state)
         prompt (get-in client-state [:game-state side-kw :prompt-state])
+        prompt-type (:prompt-type prompt)
         old-eid (:eid prompt)
-        choice (nth (:choices prompt) index nil)
+        choices (:choices prompt)
+        choice (nth choices index nil)
         choice-uuid (:uuid choice)]
-    (if choice-uuid
+    (cond
+      ;; Select prompts need choose-card, not choose. Warn LOUDLY rather than
+      ;; silently picking a meta-choice (e.g. "Done") from :choices.
+      (= "select" prompt-type)
+      (let [selectable (:selectable prompt)]
+        (println (format "⚠️  This is a SELECT prompt (%d selectable card(s)) — use choose-card <N>, not choose <N>."
+                        (count selectable)))
+        (when (seq choices)
+          (println "    (`choose` would pick from these meta-options, probably not what you want:)")
+          (doseq [[i c] (map-indexed vector choices)]
+            (println (format "      %d. %s" i (:value c)))))
+        (println "    Selectable cards:")
+        (doseq [[i cid-or-card] (map-indexed vector selectable)]
+          (let [card (if (string? cid-or-card)
+                       (core/find-card-by-cid cid-or-card)
+                       cid-or-card)]
+            (println (format "      %d. %s" i (or (:title card) cid-or-card)))))
+        (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
+
+      choice-uuid
       (do
         (println (str "✅ Chose: " (:value choice)))
         (ws/send-message! :game/action
                           {:gameid gameid
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
-        ;; Wait for prompt to change instead of fixed sleep
         (wait-for-prompt-change! old-eid)
         (core/with-cursor {:status :success :choice choice}))
+
+      :else
       (do
         (println (str "❌ Invalid choice index: " index))
+        (when (seq choices)
+          (println "    Available choices:")
+          (doseq [[i c] (map-indexed vector choices)]
+            (println (format "      %d. %s" i (:value c)))))
         (core/with-cursor {:status :error :reason "Invalid choice index"})))))
 
 (defn choose-by-value!

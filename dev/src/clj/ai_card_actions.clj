@@ -500,20 +500,36 @@
   (let [client-state @state/client-state
         side (:side client-state)]
     (if (not (core/side= "Corp" side))
-      (println "❌ Only Corp can fire ICE subroutines")
+      (do (println "❌ Only Corp can fire ICE subroutines")
+          (core/with-cursor {:status :error :reason "Wrong side"}))
       (let [card (core/find-installed-corp-card ice-name)]
-        (if card
+        (if-not card
+          (do (println (str "❌ ICE not found installed: " ice-name))
+              (core/with-cursor {:status :error :reason "ICE not found"}))
           (let [gameid (:gameid client-state)
                 card-ref {:cid (:cid card)
                          :zone (:zone card)
                          :side (:side card)
-                         :type (:type card)}]
+                         :type (:type card)}
+                old-cursor (state/get-cursor)
+                old-log-count (count (get-in client-state [:game-state :log]))]
+            (println (str "⚡ Firing unbroken subroutines on " (:title card) "..."))
             (ws/send-message! :game/action
                               {:gameid gameid
                                :command "unbroken-subroutines"
                                :args {:card card-ref}})
-            (Thread/sleep core/medium-delay))
-          (println (str "❌ ICE not found installed: " ice-name)))))))
+            (Thread/sleep core/medium-delay)
+            (let [new-state @state/client-state
+                  new-cursor (state/get-cursor)
+                  new-log (get-in new-state [:game-state :log])
+                  new-entries (drop old-log-count new-log)]
+              (println (format "✅ Fire request acknowledged (cursor %d → %d)"
+                              old-cursor new-cursor))
+              (if (seq new-entries)
+                (doseq [entry new-entries]
+                  (println (str "  • " (:text entry))))
+                (println "  (no new log entries — subs may have been already broken or run already ended)"))
+              (core/with-cursor {:status :success :ice (:title card)}))))))))
 
 (defn advance-card!
   "Advance an installed Corp card (agenda, ICE, or asset).

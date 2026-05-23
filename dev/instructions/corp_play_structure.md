@@ -133,6 +133,47 @@ Can rez Brân (6¢) next turn? YES ✓
 
 ---
 
+## Card Abilities (`use-ability`)
+
+Installed cards often have abilities you can fire — economy assets like NGO
+Front, recursion like Spin Doctor, on-rez tricks, etc. These are NOT played
+or installed; they are fired from existing cards.
+
+### Discover what's available
+```bash
+./dev/send_command corp abilities "NGO Front"   # list ability indices for this card
+./dev/send_command corp list-playables          # everything you can do right now
+```
+
+### Fire an ability
+```bash
+./dev/send_command corp use-ability "NGO Front" 0       # ability index 0
+./dev/send_command corp use-ability "Spin Doctor" 0
+```
+
+### Paid abilities during opponent's run
+
+Many abilities are usable in paid-ability windows (during runs). You'll
+see them surfaced by `monitor-run` when the run pauses. Two patterns:
+
+- **Pre-rezzed asset with paid ability** (e.g., a rezzed NGO Front you'd
+  rather sac for the credit before Runner trashes it): fire it before
+  letting the Runner access. Use `use-ability` in the paid-ability window
+  before `continue`-ing the run.
+- **Upgrade rez on server approach** (e.g., Manegarm Skunkworks): you
+  must rez during the *approach-to-server* window, not during ICE
+  encounters. If you're using `monitor-run --fire-if-asked` with no
+  `--rez <upgrade>` pre-specified, the loop will silently auto-pass that
+  window and you LOSE the rez opportunity. Always pre-specify upgrade
+  rezzes you might want, e.g.:
+  ```bash
+  ./dev/send_command corp monitor-run --fire-if-asked --rez "Manegarm Skunkworks"
+  ```
+  Or skip `--fire-if-asked` and handle the run manually with `continue
+  --rez "Manegarm Skunkworks"` at the approach-to-server window.
+
+---
+
 ## Quick Reference: Scoring Math
 
 | Agenda | Adv Needed | Minimum Turns | Click Pattern |

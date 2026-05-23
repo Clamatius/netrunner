@@ -62,7 +62,7 @@ ICE Roles and "favourite" server, typical cost to break:
 ** BOOSTER cards if using
 
 2× Orbital Superiority: agenda 4/2, 4 meat to tagged runners / tag to untagged. Generally better to score than try for a kill if you don't have the combo.
-2× Funhouse: ice $5: code gate 4str. tag on encounter, tag or $4. Expensive but will tag runners a lot.
+2× Funhouse: ice $5: code gate 4str. On-encounter Runner takes a tag UNLESS they spend [click]. Subroutine: take a tag or pay $4. Cheap for Runner to break (~$4 with Gordian) but the on-encounter click-tax piles up and tags accumulate fast if they ever run poor.
 2× Public Trail: event $4 to tag runner UNLESS runner pays $8. The other half of the Orbital combo. Net: you also need the runner to be poor AND low cards AND running to kill.
 2× Predictive Planogram: event $0: gain $3 / draw $3, both if runner tagged. Nice cheap spike econ
 1× Retribution: $1 event: trash program or hardware of tagged runner. Great if they've already discarded a Decoder or Fracter - blow up the other one and they can't break the ETRs.
