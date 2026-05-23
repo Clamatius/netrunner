@@ -10,24 +10,40 @@
 
 (defn wait-for-prompt-change!
   "Wait for prompt state to change after making a choice.
-   Returns true if prompt changed (different eid or disappeared), false on timeout.
+   Returns true if prompt changed (different eid, disappeared, or message
+   updated), false on timeout.
 
-   This fixes the multi-step prompt sync issue (e.g., Mutual Favor):
-   Server processes choice → sends diff with new prompt → we wait for it."
-  [old-eid & {:keys [timeout-ms] :or {timeout-ms 3000}}]
-  (loop [waited 0]
-    (if (>= waited timeout-ms)
-      (do
-        (println "⚠️  Timeout waiting for prompt change")
-        false)
-      (let [current-prompt (state/get-prompt)
-            current-eid (:eid current-prompt)]
-        (if (or (nil? current-prompt)
-                (not= current-eid old-eid))
-          true  ; Prompt changed or disappeared
-          (do
-            (Thread/sleep 100)
-            (recur (+ waited 100))))))))
+   This fixes the multi-step prompt sync issue (e.g., Mutual Favor): server
+   processes choice → sends diff with new prompt → we wait for it.
+
+   For multi-step prompts that re-use the same eid (e.g., credit-source
+   prompts: \"Choose a credit providing card (0 of 4)\" → \"1 of 4\" → ...),
+   the eid stays constant across iterations but the :msg field updates. We
+   treat a :msg change as progress so we don't spuriously print 'Timeout'
+   after each successful pay-step."
+  [old-eid & {:keys [timeout-ms old-msg] :or {timeout-ms 3000}}]
+  (let [baseline-msg (or old-msg (:msg (state/get-prompt)))]
+    (loop [waited 0]
+      (if (>= waited timeout-ms)
+        (do
+          ;; Only warn if the prompt truly didn't move at all. Same eid AND
+          ;; same msg AND still present = real stall worth flagging.
+          (let [final-prompt (state/get-prompt)]
+            (when (and final-prompt
+                       (= (:eid final-prompt) old-eid)
+                       (= (:msg final-prompt) baseline-msg))
+              (println "⚠️  Timeout waiting for prompt change (prompt unchanged)")))
+          false)
+        (let [current-prompt (state/get-prompt)
+              current-eid (:eid current-prompt)
+              current-msg (:msg current-prompt)]
+          (if (or (nil? current-prompt)
+                  (not= current-eid old-eid)
+                  (not= current-msg baseline-msg))
+            true  ; Prompt changed, disappeared, or message updated
+            (do
+              (Thread/sleep 100)
+              (recur (+ waited 100)))))))))
 
 (defn choose-by-index!
   "Make a choice from current prompt by index or UUID.

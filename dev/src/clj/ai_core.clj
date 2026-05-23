@@ -1136,6 +1136,12 @@
   [state]
   (some? (get-in state [:game-state :run])))
 
+(defn- run-phase
+  "Current run phase keyword/string (approach-ice, encounter-ice, movement,
+   approach-server, etc.) or nil if no run."
+  [state]
+  (get-in state [:game-state :run :phase]))
+
 (defn- has-prompt?
   "Check if the given side has an actionable prompt"
   [state side]
@@ -1193,40 +1199,61 @@
    Returns keyword indicating wake reason.
 
    Wake reasons (in priority order):
-     :run-started — a run started this poll cycle
-     :has-prompt  — we have an actionable prompt (encounter, rez window,
-                    paid-ability window, access decision, etc.)
-     :run-ended   — a run that was in progress has ended
-     :my-turn     — it's our turn to act
+     :run-started        — a run started this poll cycle
+     :has-prompt         — we have an actionable prompt (encounter, rez
+                           window, paid-ability window, access decision)
+     :run-ended          — a run that was in progress has ended
+     :run-phase-change   — run still active but phase transitioned
+                           (approach-ice → encounter-ice → movement →
+                            approach-server). Catches the case where Runner
+                            breaks all subs but the run keeps going and Corp
+                            needs to participate via monitor-run.
+     :my-turn            — it's our turn to act
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
    run produces a prompt for our side (:has-prompt) or transitions on/off
-   (:run-started / :run-ended). Otherwise we sit silently. The earlier
-   :run-active behaviour caused wait-for-relevant-diff to return after one
-   polling tick during every opponent run, defeating the wait."
-  [state side initial-run-active?]
-  (let [current-run-active? (run-active? state)
-        has-actionable-prompt? (has-prompt? state side)]
-    (cond
-      ;; Run started - high priority, wake up!
-      (and current-run-active? (not initial-run-active?))
-      :run-started
+   (:run-started / :run-ended) or moves between phases. Otherwise we sit
+   silently. The earlier :run-active behaviour caused
+   wait-for-relevant-diff to return after one polling tick during every
+   opponent run, defeating the wait.
 
-      ;; We have a prompt to respond to
-      has-actionable-prompt?
-      :has-prompt
+   The 4-arg form (with initial-run-phase) enables :run-phase-change
+   detection. The 3-arg form retains the old behavior for callers (mostly
+   tests) that don't track phase."
+  ([state side initial-run-active?]
+   (relevance-reason state side initial-run-active? nil))
+  ([state side initial-run-active? initial-run-phase]
+   (let [current-run-active? (run-active? state)
+         current-phase (run-phase state)
+         has-actionable-prompt? (has-prompt? state side)]
+     (cond
+       ;; Run started - high priority, wake up!
+       (and current-run-active? (not initial-run-active?))
+       :run-started
 
-      ;; Run just ended - might need cleanup
-      (and initial-run-active? (not current-run-active?))
-      :run-ended
+       ;; We have a prompt to respond to
+       has-actionable-prompt?
+       :has-prompt
 
-      ;; It's our turn to act (need to start-turn or take action)
-      (my-turn-to-act? state side)
-      :my-turn
+       ;; Run just ended - might need cleanup
+       (and initial-run-active? (not current-run-active?))
+       :run-ended
 
-      ;; Nothing relevant
-      :else nil)))
+       ;; Run phase transitioned mid-run (e.g., subs broken, encounter ends).
+       ;; Requires a baseline phase to compare against; nil baseline means
+       ;; the caller isn't tracking phase, so skip this check.
+       (and initial-run-active? current-run-active?
+            initial-run-phase
+            (not= initial-run-phase current-phase))
+       :run-phase-change
+
+       ;; It's our turn to act (need to start-turn or take action)
+       (my-turn-to-act? state side)
+       :my-turn
+
+       ;; Nothing relevant
+       :else nil))))
 
 (defn wait-for-relevant-diff
   "Block until something we care about happens, then return.
@@ -1286,14 +1313,17 @@
 
        ;; Normal path: wait for state change
        (let [deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
-             initial-run-active? (run-active? @state/client-state)
-             initial-log-count (count (get-in @state/client-state [:game-state :log]))]
+             initial-state @state/client-state
+             initial-run-active? (run-active? initial-state)
+             initial-run-phase (run-phase initial-state)
+             initial-log-count (count (get-in initial-state [:game-state :log]))]
 
          (when (:verbose opts)
            (println (format "💤 Waiting for relevant events (timeout: %ds, cursor: %d)..."
                            timeout-seconds current-cursor))
            (when initial-run-active?
-             (println "   ⚡ Run is in progress — will wake on prompt, run-end, or my-turn")))
+             (println (format "   ⚡ Run is in progress (phase: %s) — will wake on prompt, phase-change, run-end, or my-turn"
+                             (or initial-run-phase "unknown")))))
 
          (loop [last-log-count initial-log-count]
            (Thread/sleep polling-delay)
@@ -1305,7 +1335,7 @@
                  new-entries-raw (when (> current-log-count last-log-count)
                                    (take-last (- current-log-count last-log-count) current-log))
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
-                 reason (relevance-reason current-state side initial-run-active?)]
+                 reason (relevance-reason current-state side initial-run-active? initial-run-phase)]
 
              ;; Calculate ALL entries since we started waiting (not just last poll)
              ;; Log is oldest-first, so take-last gets newest entries

@@ -1048,7 +1048,13 @@
 
    Options:
    :max-iterations  - Safety guard (default 500, high because stuck-detection handles loops)
-   :timeout-ms      - Max time to loop (default 30000ms = 30s)
+   :timeout-ms      - Max time to loop (default 300000ms = 300s). Matches
+                      `wait` because LLM agents take minutes per turn, and
+                      monitor-run regularly sits idle while the opponent
+                      thinks. 30s (the prior default) bailed prematurely
+                      after Runner had just jacked out but before the state
+                      diff arrived. If you genuinely need a short bail
+                      (e.g., a quick fast-return check), pass it explicitly.
    :wait-delay-ms   - Delay when waiting for opponent (default 200ms)
    :stuck-threshold - Same state iterations before declaring stuck (default 5)
    :pause-on-events - Pause on events like :ice-rezzed (default true)
@@ -1058,7 +1064,7 @@
    :elapsed-ms - how long the loop ran"
   [& {:keys [max-iterations timeout-ms wait-delay-ms stuck-threshold pause-on-events]
       :or {max-iterations 500    ; Raised from 50 - stuck detection handles loops
-           timeout-ms 30000
+           timeout-ms 300000     ; Was 30000 — too short for LLM-paced games
            wait-delay-ms 200
            stuck-threshold 5
            pause-on-events true}}]

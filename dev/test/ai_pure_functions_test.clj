@@ -362,17 +362,18 @@
 
 (defn- state-with
   "Build a minimal client-state shape for relevance testing."
-  [{:keys [run? prompt? side active-player my-clicks end-turn turn]
+  [{:keys [run? prompt? side active-player my-clicks end-turn turn run-phase]
     :or   {side "runner" active-player "runner" my-clicks 0 turn 1}}]
   (let [my-key (keyword side)]
     {:game-state (cond-> {:active-player active-player
                           :turn          turn
                           my-key         {:click my-clicks}}
-                   end-turn (assoc :end-turn true)
-                   run?     (assoc :run {:server [:hq] :position 0})
-                   prompt?  (assoc-in [my-key :prompt-state]
-                              {:prompt-type "select"
-                               :choices [{:value "A"} {:value "B"}]}))}))
+                   end-turn  (assoc :end-turn true)
+                   run?      (assoc :run (cond-> {:server [:hq] :position 0}
+                                           run-phase (assoc :phase run-phase)))
+                   prompt?   (assoc-in [my-key :prompt-state]
+                               {:prompt-type "select"
+                                :choices [{:value "A"} {:value "B"}]}))}))
 
 (deftest test-relevance-run-started
   (testing "transition from no-run to run-active wakes with :run-started"
@@ -424,6 +425,44 @@
                              :active-player "runner" :my-clicks 0})]
       (is (nil? (relevance-reason state "corp" true))
           "active run without actionable prompt should not wake"))))
+
+(deftest test-relevance-run-phase-change
+  ;; REGRESSION: in run #3, Corp's `wait --since N 120` timed out at 120s
+  ;; despite Runner finishing the break action on Palisade. Subs were broken
+  ;; but the run kept going (engine waiting for Corp paid-ability ack), so
+  ;; :run-ended didn't fire, :has-prompt didn't fire (no actionable prompt
+  ;; for Corp yet), and Corp's wait stayed asleep through the whole encounter
+  ;; resolution. The wake reason we want is :run-phase-change.
+  (testing "phase transition during an active run wakes with :run-phase-change"
+    (let [state (state-with {:run? true :side "corp" :run-phase "movement"
+                             :active-player "runner" :my-clicks 0})]
+      (is (= :run-phase-change
+             (relevance-reason state "corp" true "encounter-ice"))
+          "phase change while run still active should wake"))))
+
+(deftest test-relevance-same-phase-does-not-wake
+  (testing "same phase across polls → nil (don't wake)"
+    (let [state (state-with {:run? true :side "corp" :run-phase "encounter-ice"
+                             :active-player "runner" :my-clicks 0})]
+      (is (nil? (relevance-reason state "corp" true "encounter-ice"))
+          "same phase should not wake"))))
+
+(deftest test-relevance-phase-change-skipped-when-no-baseline
+  ;; The 3-arg form (no initial-phase) should not fire phase-change wake —
+  ;; it has no baseline to compare against. This preserves the old test
+  ;; surface for callers that only track run-active.
+  (testing "3-arg form (no initial-phase) skips phase-change check"
+    (let [state (state-with {:run? true :side "corp" :run-phase "movement"
+                             :active-player "runner" :my-clicks 0})]
+      (is (nil? (relevance-reason state "corp" true))
+          "3-arg form with no phase baseline should not wake on phase"))))
+
+(deftest test-relevance-prompt-still-priority-over-phase-change
+  (testing "actionable prompt takes priority over phase-change (more specific signal)"
+    (let [state (state-with {:run? true :prompt? true :side "corp"
+                             :run-phase "approach-server"})]
+      (is (= :has-prompt
+             (relevance-reason state "corp" true "encounter-ice"))))))
 
 ;; ============================================================================
 ;; my-turn-to-act? tests (ai-core)
