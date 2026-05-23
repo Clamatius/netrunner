@@ -1,4 +1,4 @@
-.PHONY: test test-behavioral check check-full clean reset resume status help compile-deps
+.PHONY: test test-behavioral check check-full clean reset resume status help compile-deps watch-corp watch-runner
 
 # Default target
 help:
@@ -12,6 +12,9 @@ help:
 	@echo "  make reset         - Fresh game (bounce REPLs, new game)"
 	@echo "  make resume        - Reload code, keep game state"
 	@echo "  make status        - Show current game status"
+	@echo ""
+	@echo "  make watch-corp    - Stream corp game events (for Monitor)"
+	@echo "  make watch-runner  - Stream runner game events (for Monitor)"
 	@echo ""
 	@echo "  make check-full    - Full lein check (slow, entire codebase)"
 	@echo "  make test-behavioral - Behavioral tests (slow, ~30s per test)"
@@ -57,6 +60,13 @@ clean:
 	@echo "Cleaning up background processes..."
 	@pkill -f "lein repl" || true
 	@echo "Done"
+
+# Watch game events (for Claude Code Monitor tool or standalone)
+watch-corp:
+	@./dev/watch_game.sh corp
+
+watch-runner:
+	@./dev/watch_game.sh runner
 
 # Combo: check + test (pre-commit quality gate)
 verify: check test
