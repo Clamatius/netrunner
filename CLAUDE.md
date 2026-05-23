@@ -15,6 +15,8 @@ make verify             # check + test (pre-commit gate)
 make reset              # Fresh game (bounce REPLs, new game)
 make resume             # Reload code, keep game state
 make status             # Show current game status
+make watch-corp         # Stream corp game events (for Monitor)
+make watch-runner       # Stream runner game events (for Monitor)
 ```
 
 **Always use `make` for build/test commands** - it's the single source of truth.
@@ -142,6 +144,24 @@ gh issue list --repo Clamatius/netrunner           # List open issues
 gh issue view <N> --repo Clamatius/netrunner       # View issue details
 gh issue create --repo Clamatius/netrunner         # Create new issue
 ```
+
+## Game Event Watcher (Monitor Integration)
+
+`./dev/watch_game.sh <side>` streams game events to stdout, one batch per relevant state change. Designed for Claude Code's Monitor tool but works standalone.
+
+```bash
+# Standalone
+./dev/watch_game.sh runner
+
+# Via Monitor tool (in Claude Code)
+Monitor({command: "./dev/watch_game.sh runner", description: "runner game events", persistent: true})
+
+# Claude vs Claude — two monitors, one per side
+Monitor({command: "./dev/watch_game.sh corp", description: "corp game events", persistent: true})
+Monitor({command: "./dev/watch_game.sh runner", description: "runner game events", persistent: true})
+```
+
+The watcher blocks on `wait-for-relevant-diff` (REPL-side), so no shell busy-polling. Irrelevant opponent actions (economy, draw) are filtered out. Each event batch includes a separator with side, cursor, and timestamp.
 
 ## References
 
