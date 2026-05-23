@@ -84,6 +84,8 @@ data/cards-zh-hant.edn
 # Coding agents
 .claude/
 CLAUDE.local.md
+hudfile.txt
+hudfile.txt.lock
 dev/.repl-counter
 dev/.error-state
 .env
