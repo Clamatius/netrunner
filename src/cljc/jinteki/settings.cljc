@@ -21,7 +21,7 @@
 
 (def valid-pronouns
   #{"none" "any" "myodb" "blank" "they" "she" "sheit" "shethey"
-    "he" "heit" "hethey" "heshe" "it" "faefaer" "ne" "ve" "ey"
+    "he" "heit" "hethey" "heshe" "heshe2" "it" "faefaer" "ne" "ve" "ey"
     "zehir" "zezir" "xe" "xi"})
 
 (def valid-stats-options #{"always" "competitive" "none"})
@@ -64,13 +64,15 @@
   "Validates bespoke-sounds is a map with keyword keys and boolean values"
   (validate-map-of keyword? boolean?))
 
-(defn- validate-card-sleeve [value]
+(defn- validate-card-sleeve
   "Validates card sleeve value - accepts base sleeves and any string (for prize sleeves)"
+  [value]
   (or (contains? valid-card-sleeves value)
       (string? value)))
 
-(defn- validate-prizes [value]
+(defn- validate-prizes
   "Validates prizes structure - nil or map with :card-backs containing keyword->boolean map"
+  [value]
   (or (nil? value)
       (and (map? value)
            (or (nil? (:card-backs value))
@@ -118,6 +120,11 @@
     :sync? true
     :validate-fn #(contains? valid-card-back-display %)
     :doc "Which card backs to display (them/me/ffg/nsg)"}
+   {:key :card-language
+    :default "en"
+    :sync? true
+    :validate-fn #(contains? valid-languages %)
+    :doc "Card language preference"}
    {:key :card-resolution
     :default "default"
     :sync? false  ; device-specific
@@ -223,6 +230,11 @@
     :sync? true
     :validate-fn boolean?
     :doc "Keep card zoom window pinned open"}
+   {:key :pin-base-art
+    :default false
+    :sync? true
+    :validate-fn boolean?
+    :doc "Zoom window will always use base art if possible"}
    {:key :player-stats-icons
     :default true
     :sync? false  ; device-specific

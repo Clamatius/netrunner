@@ -68,9 +68,12 @@
    "professional-contacts"
    "rez-ice"
    "rez-other"
+   "redirect"
    "run-successful"
    "run-unsuccessful"
+   "shuffle"
    "time-out"
+   "vic"
    "virus-purge"])
 
 (defn random-sound

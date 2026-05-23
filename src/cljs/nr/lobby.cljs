@@ -1,25 +1,27 @@
 (ns nr.lobby
   (:require-macros [cljs.core.async.macros :refer [go]])
   (:require
-   [cljs.core.async :refer [<!] :as async]
-   [clojure.set :refer [difference union]]
-   [nr.ajax :refer [GET]]
-   [nr.angel-arena.lobby :as angel-arena]
-   [nr.appstate :refer [app-state current-gameid]]
-   [nr.auth :refer [authenticated] :as auth]
-   [nr.game-row :refer [game-row]]
-   [nr.local-storage :as ls]
-   [nr.gameboard.actions :refer [leave-game!]]
-   [nr.new-game :refer [create-new-game]]
-   [nr.password-game :refer [password-game]]
-   [nr.pending-game :refer [pending-game]]
-   [nr.replay-game :refer [start-replay-div]]
-   [nr.sounds :refer [play-sound resume-sound]]
-   [nr.translations :refer [tr tr-format]]
-   [nr.utils :refer [cond-button non-game-toast slug->format]]
-   [nr.ws :as ws]
-   [reagent.core :as r]
-   [taoensso.sente :as sente]))
+    [cljs.core.async :refer [<!] :as async]
+    [clojure.set :refer [difference union]]
+    [clojure.string :as str]
+    [game.replay :as game-replay]
+    [nr.ajax :refer [GET]]
+    [nr.angel-arena.lobby :as angel-arena]
+    [nr.appstate :refer [app-state current-gameid]]
+    [nr.auth :refer [authenticated] :as auth]
+    [nr.game-row :refer [game-row]]
+    [nr.local-storage :as ls]
+    [nr.gameboard.actions :refer [leave-game!]]
+    [nr.new-game :refer [create-new-game]]
+    [nr.password-game :refer [password-game]]
+    [nr.pending-game :refer [pending-game]]
+    [nr.replay-game :refer [start-replay-div]]
+    [nr.sounds :refer [play-sound resume-sound]]
+    [nr.translations :refer [tr tr-span tr-element tr-format]]
+    [nr.utils :refer [cond-button non-game-toast tr-non-game-toast slug->format]]
+    [nr.ws :as ws]
+    [reagent.core :as r]
+    [taoensso.sente :as sente]))
 
 (defmethod ws/event-msg-handler :lobby/list [{data :?data}]
   (swap! app-state assoc :games data))
@@ -33,15 +35,20 @@
 (defmethod ws/event-msg-handler :lobby/notification [{data :?data}]
   (play-sound data))
 
-(defmethod ws/event-msg-handler :lobby/toast [{{:keys [message type]} :?data}]
-  (non-game-toast message type {:time-out 30000 :close-button true}))
+(defmethod ws/event-msg-handler :lobby/toast
+  [{{:keys [message type]} :?data}]
+  (let [msg (if (keyword? message) (tr message) message)]
+    (non-game-toast msg type {:time-out 30000 :close-button true})))
+
+(defmethod ws/event-msg-handler :lobby/block-game-creation
+  lobby__pause-game-creation
+  [{data :?data}]
+  (swap! app-state assoc :block-game-creation data))
 
 (defmethod ws/event-msg-handler :lobby/timeout
   [{{:keys [gameid]} :?data}]
   (when (= gameid (:gameid @app-state))
-    (non-game-toast (tr [:lobby_closed-msg "Game lobby closed due to inactivity"])
-                    "error"
-                    {:time-out 0 :close-button true})
+    (tr-non-game-toast [:lobby_closed-msg "Game lobby closed due to inactivity"] "error" {:time-out 0 :close-button true})
     (swap! app-state assoc :gameid nil)))
 
 (defn replay-game [s]
@@ -69,12 +76,7 @@
              (case status
                200
                (let [replay (js->clj json :keywordize-keys true)
-                     history (:history replay)
-                     init-state (first history)
-                     init-state (assoc init-state :gameid gameid)
-                     init-state (assoc-in init-state [:options :spectatorhands] true)
-                     diffs (rest history)
-                     init-state (assoc init-state :replay-diffs diffs)]
+                     init-state (game-replay/replay-init-state-from-history replay gameid)]
                  (ws/event-msg-handler-wrapper
                    {:id :game/start
                     :?data (.stringify js/JSON (clj->js
@@ -82,8 +84,7 @@
                                                    (assoc init-state :replay-jump-to jump-to)
                                                    init-state)))}))
                404
-               (non-game-toast (tr [:lobby_replay-link-error "Replay link invalid."])
-                               "error" {:time-out 0 :close-button true}))))))))
+               (tr-non-game-toast [:lobby_replay-link-error "Replay link invalid."] "error" {:time-out 0 :close-button true}))))))))
 
 (defn leave-game []
   (if (= "local-replay" (:gameid @app-state))
@@ -126,7 +127,8 @@
        {:class "current"}
        {:on-click #(do (swap! s assoc :room room)
                        (swap! s dissoc :editing))})
-     room-name (room-count-str open-count closed-count)]))
+     [tr-span [(keyword (str "lobby_" room-name)) (str/capitalize room-name)] {:type room-name}]
+     (room-count-str open-count closed-count)]))
 
 (defn game-list [state user games current-game]
   (r/with-let [editing (r/cursor state [:editing])
@@ -134,18 +136,16 @@
                visible-formats (r/cursor app-state [:visible-formats])]
     (let [room-games (filter #(= (:room %) @room) @games)
           filtered-games (filter-games @user room-games @visible-formats)]
-    [:<>
-     [:div.game-count
-      [:h4 (if (= (count slug->format) (count @visible-formats))
-             (tr [:lobby_game-count] {:cnt (count filtered-games)})
-             (tr [:lobby_game-count-filtered] {:cnt (count filtered-games)}))]]
-     [:div.game-list
-      (if (empty? filtered-games)
-        [:h4 (tr [:lobby_no-games "No games"])]
-        (doall
-          (for [game filtered-games]
-            ^{:key (:gameid game)}
-            [game-row state game @current-game @editing])))]])))
+      [:<>
+       [:div.game-count
+        [tr-element :h4 (if (= (count slug->format) (count @visible-formats)) [:lobby_game-count] [:lobby_game-count-filtered]) {:cnt (count filtered-games)}]]
+       [:div.game-list
+        (if (empty? filtered-games)
+          [tr-element :h4 [:lobby_no-games "No games"]]
+          (doall
+            (for [game filtered-games]
+              ^{:key (:gameid game)}
+              [game-row state game @current-game @editing])))]])))
 
 (defn format-visible? [slug] (contains? (:visible-formats @app-state) slug))
 
@@ -170,7 +170,7 @@
       (-> slug slug->format tr-format)]]))
 
 (defn new-game-button [s games gameid user]
-  [cond-button (tr [:lobby_new-game "New game"])
+  [cond-button [tr-span [:lobby_new-game "New game"]]
    ;; TODO: rewrite this check
    (and (not (or @gameid
                  (:editing @s)
@@ -181,6 +181,7 @@
              empty?))
    #(authenticated
       (fn [_]
+        (ws/ws-send! [:lobby/block-game-creation])
         (swap! s assoc :editing true)
         (-> ".game-title" js/$ .select)
         (resume-sound)))])
@@ -188,10 +189,10 @@
 (defn reload-lobby-button []
   [:button.reload-button {:type "button"
                           :on-click #(ws/ws-send! [:lobby/list])}
-   (tr [:lobby_reload "Reload list"])])
+   [tr-span [:lobby_reload "Reload list"]]])
 
 (defn load-replay-button [s games gameid user]
-  [cond-button (tr [:lobby_load-replay "Load replay"])
+  [cond-button [tr-span [:lobby_load-replay "Load replay"]]
    ;; TODO: rewrite this check
    (and (not (or @gameid
                  (:editing @s)
@@ -205,22 +206,22 @@
 
 (defn button-bar [s games current-game user visible-formats]
   [:div.button-bar
-    [:div.rooms
-     [:div#filter.dropdown
-      [:a.dropdown-toggle {:href "" :data-toggle "dropdown"}
-       (tr [:lobby_filter "Filter"])
-       [:b.caret]]
-       [:div.dropdown-menu.blue-shade
-        (doall (for [[k] slug->format]
-                 ^{:key k}
-                 [format-toggle k (contains? visible-formats k)]))]]
-     [room-tab user s games "casual" (tr [:lobby_type "Casual"] {:type "casual"})]
-     [room-tab user s games "competitive" (tr [:lobby_type "Tournament"] {:type "tournament"})]]
-    (when-not (= "angel-arena" (:room @s))
-      [:div.lobby-buttons
-       [new-game-button s games current-game user]
-       [reload-lobby-button]
-       [load-replay-button s games current-game user]])])
+   [:div.rooms
+    [:div#filter.dropdown
+     [:a.dropdown-toggle {:href "" :data-toggle "dropdown"}
+      [tr-span [:lobby_filter "Filter"]]
+      [:b.caret]]
+     [:div.dropdown-menu.blue-shade
+      (doall (for [[k] slug->format]
+               ^{:key k}
+               [format-toggle k (contains? visible-formats k)]))]]
+    [room-tab user s games "casual" "casual"]
+    [room-tab user s games "competitive" "tournament"]]
+   (when-not (= "angel-arena" (:room @s))
+     [:div.lobby-buttons
+      [new-game-button s games current-game user]
+      [reload-lobby-button]
+      [load-replay-button s games current-game user]])])
 
 (defn games-list-panel [state games current-game user visible-formats]
   (r/create-class

@@ -8,7 +8,7 @@
    [game.core.ice :refer [pump-ice update-all-icebreakers]]
    [game.core.payment :refer [->c]]
    [game.core.props :refer [add-counter]]
-   [game.core.threat :refer [threat-level get-threat-level]]
+   [game.core.threat :refer [threat-level]]
    [game.test-framework :refer :all]
    [game.utils :as utils]))
 
@@ -1002,6 +1002,72 @@
                     ;; fairie strength boost
                     (card-ability state :runner (refresh baba) 2))
           "Spent 1c to boost baba yaga"))))
+
+(deftest baker-stealth-hq
+  (do-game
+    (new-game {:runner {:hand ["Baker" "Mantle"]}
+               :corp {:hand [(qty "Rashida Jaheem" 3)]
+                      :deck ["Hostile Takeover"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Baker")
+    (play-from-hand state :runner "Mantle")
+    (card-ability state :runner (get-program state 0) 0)
+    (run-continue-until state :success)
+    (click-prompt state :runner "Pay 1 [Credits]: Switch to HQ")
+    (click-card state :runner "Mantle")
+    (do-trash-prompt state 1)
+    (run-empty-server state :archives)
+    (is (no-prompt? state :runner))))
+
+(deftest baker-stealth-rd
+  (do-game
+    (new-game {:runner {:hand ["Baker" "Mantle"]}
+               :corp {:hand [(qty "Rashida Jaheem" 3)]
+                      :deck ["Hostile Takeover"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Baker")
+    (play-from-hand state :runner "Mantle")
+    (card-ability state :runner (get-program state 0) 0)
+    (run-continue-until state :success)
+    (click-prompt state :runner "Pay 1 [Credits]: Switch to R&D")
+    (click-card state :runner "Mantle")
+    (click-prompt state :runner "Steal")
+    (run-empty-server state :archives)
+    (is (no-prompt? state :runner))))
+
+(deftest baker-vs-skunkworks
+  (do-game
+    (new-game {:runner {:hand ["Baker" "Mantle"]}
+               :corp {:hand [(qty "Rashida Jaheem" 3) "Manegarm Skunkworks"]
+                      :deck ["Hostile Takeover"]}})
+    (play-cards state :corp ["Manegarm Skunkworks" "HQ" :rezzed])
+    (take-credits state :corp)
+    (play-from-hand state :runner "Baker")
+    (play-from-hand state :runner "Mantle")
+    (card-ability state :runner (get-program state 0) 0)
+    (run-continue-until state :success)
+    (click-prompt state :runner "Pay 1 [Credits]: Switch to HQ")
+    (click-card state :runner "Mantle")
+    (click-prompt state :runner "End the run")
+    (is (not (:run @state)) "Skunkworks fired on HQ approach")))
+
+(deftest baker-trashed-mid-run-8569
+  (do-game
+    (new-game {:runner {:hand ["Baker" "\"Knickknack\" O'Brian" "Mantle"]
+                        :credits 10}
+               :corp {:hand [(qty "Rashida Jaheem" 3)]
+                      :deck ["Hostile Takeover"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Baker")
+    (play-from-hand state :runner "\"Knickknack\" O'Brian")
+    (play-from-hand state :runner "Mantle")
+    (card-ability state :runner (get-program state 0) 0)
+    (click-card state :runner (get-program state 0))
+    (is (is-discard? state :runner ["Baker"]))
+    (run-continue-until state :success)
+    (click-prompt state :runner "Pay 1 [Credits]: Switch to HQ")
+    (click-card state :runner "Mantle")
+    (do-trash-prompt state 1)))
 
 (deftest bankroll
   ;; Bankroll - Includes check for Issue #4334
@@ -2332,6 +2398,16 @@
       (click-prompt state :runner "No action")
       (is (no-prompt? state :runner) "No prompt with only 1 installed ice")))
 
+(deftest corsair-test
+  (do-game
+    (run-and-encounter-ice-test "Ice Wall" nil {:rig ["Mantle" "Corsair"]})
+    (is (changed? [(get-strength (get-ice state :hq 0)) -3]
+          (card-ability state :runner (get-program state 1) 1)
+          (click-card state :runner "Mantle"))
+        "Spent a stealth")
+    (card-ability state :runner (get-program state 1) 0)
+    (click-prompt state :runner "End the run")))
+
 (deftest corroder
   ;; Corroder
   (do-game
@@ -2988,6 +3064,35 @@
     (run-continue state)
     (click-prompt state :runner "Yes")
     (is (= 2 (:random-access-limit (core/num-cards-to-access state :runner :rd nil))))))
+
+(deftest devas-work-with-mu-blanking-hosts
+  (do-game
+    (new-game {:corp {:hand ["IPO"]}
+               :runner {:hand ["Sadyojata" "Aghora" "NetChip"]
+                        :credits 20}})
+    (take-credits state :corp)
+    (core/gain state :runner :click 10)
+    (play-cards state :runner "NetChip" ["Aghora" "NetChip"])
+    (is (changed? [(core/available-mu state) 0]
+          (card-ability state :runner "Aghora" 2)
+          (click-card state :runner "Sadyojata"))
+        "No memory")))
+
+(deftest devas-fire-events-on-swap-async-install
+  (do-game
+    (new-game {:corp {:hand ["IPO"]}
+               :runner {:hand ["Vamadeva" "Aghora" "Scheherazade"
+                               "Technical Writer"]
+                        :credits 20}})
+    (take-credits state :corp)
+    (core/gain state :runner :click 10)
+    (play-cards state :runner "Technical Writer" "Scheherazade" ["Aghora" "Scheherazade"])
+    (is (changed? [(core/available-mu state) 0
+                   (:credit (get-runner)) -1
+                   (get-counters (get-resource state 0) :credit) 1]
+          (card-ability state :runner "Aghora" 2)
+          (click-card state :runner "Vamadeva"))
+        "Scheherezade and tech writer fired")))
 
 (deftest dhegdheer-with-credit-savings
   ;; with credit savings
@@ -4090,7 +4195,7 @@
       (is (= 2 (get-strength (refresh akhet))) "No str gain while hushed")
       (run-continue-until state :encounter-ice)
       (card-ability state :runner cleaver 0)
-      (click-prompt state :runner "Gain 1 [Credit]. Place 1 advancement token")
+      (click-prompt state :runner "Gain 1 [Credit]. Place 1 advancement counter")
       (click-prompt state :runner "End the run"))))
 
 (deftest hush-vs-anansi
@@ -5137,6 +5242,41 @@
         (is (not (has-subtype? (get-ice state :hq 0) "Barrier")) "Enigma doesn't has Barrier subtype")
         (is (prompt-is-card? state :runner laamb) "Laamb opens the prompt a second time"))))
 
+(deftest lampades-test
+  (doseq [c ["PAD Campaign" "Tiered Subscription"]]
+    (do-game
+      (new-game {:runner {:hand ["Lampades" "Ghost Runner" "Ika"]}
+                 :corp {:hand [c]}})
+      (take-credits state :corp)
+      (play-from-hand state :runner "Lampades")
+      (play-from-hand state :runner "Ghost Runner")
+      (run-empty-server state :hq)
+      (click-prompt state :runner "[Lampades] Trash card")
+      (when (= c "PAD Campaign") (click-prompts state :runner "Ghost Runner" "Ghost Runner"))
+      (is (no-prompt? state :runner))
+      (is (= 1 (count (:discard (get-corp)))))
+      (is (= 0 (count (:discard (get-runner)))) "0 in discard"))))
+
+(deftest lampades-not-once-per-turn
+  (do-game
+    (new-game {:corp {:hand ["Tiered Subscription" "Tiered Subscription"]}
+               :runner {:hand ["Lampades" "Jailbreak"]}})
+    (take-credits state :corp)
+    (play-cards state :runner "Lampades" ["Jailbreak" "HQ"])
+    (run-continue-until state :success)
+    (click-prompts state :runner "[Lampades] Trash card" "[Lampades] Trash card")
+    (is (= 2 (count (:discard (get-corp)))) "Trashed both")))
+
+(deftest lampades-cost-actually-checks
+  (do-game
+    (new-game {:corp {:hand ["PAD Campaign" "PAD Campaign"]}
+               :runner {:hand ["Lampades" "Jailbreak"]}})
+    (take-credits state :corp)
+    (play-cards state :runner "Lampades" ["Jailbreak" "HQ"])
+    (run-continue-until state :success)
+    (is (= ["Pay 4 [Credits] to trash" "No action"] (prompt-titles :runner))
+        "Can't pay without sufficient stealth credits")))
+
 (deftest lamprey
   ;; Lamprey - Corp loses 1 credit for each successful HQ run; trashed on purge
   (do-game
@@ -5453,6 +5593,21 @@
     ;; No Malandragem prompt because it's once per turn
     (is (no-prompt? state :runner))))
 
+(deftest malandragem-vs-chisel
+  (do-game
+    (new-game {:runner {:hand ["Malandragem" "Chisel"]
+                        :credits 20}
+               :corp {:hand ["Tree Line"]}})
+    (play-from-hand state :corp "Tree Line" "HQ")
+    (take-credits state :corp)
+    (play-cards state :runner "Malandragem" ["Chisel" "Tree Line"])
+    (run-on state :hq)
+    (rez state :corp (get-ice state :hq 0))
+    (run-continue-until state :encounter-ice)
+    (click-prompt state :runner "Chisel")
+    (is (= 3 (get-strength (get-ice state :hq 0))) "Runner given option to hit chisel first")
+    (click-prompt state :runner "Yes")))
+
 (deftest malandragem-once-per-turn
   (do-game
     (new-game {:runner {:hand ["Malandragem"]}
@@ -5503,7 +5658,8 @@
     (rez state :corp (get-ice state :archives 0))
     (run-continue state)
     (is (changed? [(count (:rfg (get-runner))) 1]
-                  (click-prompt state :runner "Yes"))
+          (click-prompt state :runner "Malandragem (rfg)")
+          (click-prompt state :runner "Yes"))
         "RFG Malandragem")
     (is (= :movement (:phase (get-run))) "Run has bypassed Lotus Field")))
 
@@ -7348,6 +7504,39 @@
             (click-prompt state :runner "End the run"))
           "Spent 1 credit to break"))))
 
+(deftest read-write-share
+  (do-game
+    (new-game {:runner {:hand ["Read-Write Share" "Rezeki" "Corroder"]
+                        :deck [(qty "Ika" 2)]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Read-Write Share")
+    (click-card state :runner "Rezeki")
+    (take-credits state :runner)
+    (take-credits state :corp)
+    (start-turn state :runner)
+    (click-card state :runner "Corroder")
+    (card-ability state :runner (get-program state 0) 0)
+    (is-deck? state :runner ["Corroder" "Rezeki"])))
+
+(deftest read-write-share-limit-4-hosted-8568
+  (do-game
+    (new-game {:runner {:hand ["Read-Write Share" "Sure Gamble" "Sure Gamble" "Sure Gamble" "Sure Gamble"]
+                        :deck [(qty "Sure Gamble" 10)]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Read-Write Share")
+    (click-card state :runner (first (:hand (get-runner))))
+    (is (= 1 (count (:hosted (get-program state 0)))) "1 hosted card")
+    (dotimes [i 3]
+      (take-credits state :runner)
+      (take-credits state :corp)
+      (start-turn state :runner)
+      (click-card state :runner (first (:hand (get-runner))))
+      (is (= (+ 2 i) (count (:hosted (get-program state 0)))) (str (+ 2 i) " hosted cards")))
+    (take-credits state :runner)
+    (take-credits state :corp)
+    (start-turn state :runner)
+    (is (no-prompt? state :runner) "No prompt to host a 5th card")))
+
 (deftest reaver
   ;; Reaver - Draw a card the first time you trash an installed card each turn
   (do-game
@@ -7850,6 +8039,20 @@
       (play-from-hand state :runner "Fall Guy")
       (is (no-prompt? state :runner) "Can't host non-program"))))
 
+(deftest scheherazade-hosted-card-order
+  ;; Scheherazade - hosted cards appear in installation order (oldest left, newest right)
+  (do-game
+    (new-game {:runner {:hand ["Scheherazade" "Inti" "Cache"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Scheherazade")
+    (let [sch (get-program state 0)]
+      (play-from-hand state :runner "Inti")
+      (click-prompt state :runner "Scheherazade")
+      (play-from-hand state :runner "Cache")
+      (click-prompt state :runner "Scheherazade")
+      (is (= "Inti" (:title (first (:hosted (refresh sch))))) "First installed program is first in hosted list")
+      (is (= "Cache" (:title (second (:hosted (refresh sch))))) "Second installed program is second in hosted list"))))
+
 (deftest self-modifying-code-trash-pay-2-to-search-deck-for-a-program-and-install-it-shuffle
     ;; Trash & pay 2 to search deck for a program and install it. Shuffle
     (do-game
@@ -7936,6 +8139,31 @@
       (play-from-hand state :runner "Access to Globalsec")
       (is (= 2 (get-link state)) "2 link")
       (is (= 2 (core/available-mu state)) "Shiv stops using MU when 2+ link"))))
+
+(deftest sipa-test
+  (do-game
+    (new-game {:corp {:hand ["Vanilla" "Ice Wall"]}
+               :runner {:hand ["Sipa" "Corroder"] :credits 15}})
+    (play-from-hand state :corp "Vanilla" "HQ")
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (rez state :corp (get-ice state :hq 0))
+    (rez state :corp (get-ice state :hq 1))
+    (take-credits state :corp)
+    (play-from-hand state :runner "Sipa")
+    (play-from-hand state :runner "Corroder")
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (auto-pump-and-break state (get-program state 1))
+    (run-continue state)
+    (click-card state :runner "Vanilla")
+    (is (= "Ice Wall" (:title (get-ice state :hq 0))) "Ice wall outer")
+    (is (= "Vanilla" (:title (get-ice state :hq 1))) "Ice wall outer")
+    (run-continue-until state :success)
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (auto-pump-and-break state (get-program state 1))
+    (run-continue-until state :movement)
+    (is (no-prompt? state :runner))))
 
 (deftest slap-vandal
   (do-game
@@ -8397,6 +8625,19 @@
        (is (-> (get-corp) :discard first :seen) "Troll is faceup")
        (is (= "Troll" (-> (get-corp) :discard first :title)) "Troll was trashed")
        (is (= "Herald" (-> (get-corp) :deck first :title)) "Herald now on top of R&D"))))
+
+(deftest stowaway-test
+  (do-game
+    (new-game {:runner {:hand ["Stowaway"]}
+               :corp {:hand ["Ice Wall"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Stowaway")
+    (click-card state :runner "Ice Wall")
+    (run-on state :hq)
+    (is (changed? [(:credit (get-runner)) 2]
+          (run-continue-until state :success))
+        "Gained 2c for a successful run on stowaway server")))
 
 (deftest study-guide
   ;; Study Guide - 2c to add a power counter; +1 strength per counter

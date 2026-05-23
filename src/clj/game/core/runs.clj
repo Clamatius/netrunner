@@ -1,7 +1,7 @@
 (ns game.core.runs
   (:require
     [game.core.access :refer [breach-server]]
-    [game.core.board :refer [get-zones server->zone]]
+    [game.core.board :refer [get-zones server->zone card->server]]
     [game.core.card :refer [get-card get-zone rezzed?]]
     [game.core.card-defs :refer [card-def]]
     [game.core.cost-fns :refer [jack-out-cost run-cost run-additional-cost-bonus]]
@@ -10,7 +10,7 @@
     [game.core.engine :refer [checkpoint end-of-phase-checkpoint register-pending-event pay queue-event resolve-ability trigger-event trigger-event-simult]]
     [game.core.flags :refer [can-run? clear-run-register!]]
     [game.core.gaining :refer [gain-credits]]
-    [game.core.ice :refer [active-ice? break-subs-event-context get-current-ice get-run-ices update-ice-strength reset-all-ice reset-all-subs! set-current-ice]]
+    [game.core.ice :refer [active-ice? all-subs-broken? break-subs-event-context get-current-ice get-run-ices update-ice-strength reset-all-ice reset-all-subs! set-current-ice]]
     [game.core.mark :refer [is-mark?]]
     [game.core.payment :refer [build-cost-string build-spend-msg can-pay? merge-costs ->c]]
     [game.core.prevention :refer [resolve-encounter-prevention resolve-end-run-prevention resolve-jack-out-prevention]]
@@ -159,8 +159,8 @@
                    (wait-for
                      (gain-run-credits state side
                                        (make-eid state eid)
-                                       (+ (or (get-in @state [:runner :next-run-credit]) 0)
-                                          (count-bad-pub state)))
+                                       (get-in @state [:runner :next-run-credit] 0))
+                     (swap! state assoc-in [:run :bad-publicity-available] (count-bad-pub state))
                      (swap! state assoc-in [:runner :next-run-credit] 0)
                      (swap! state update-in [:runner :register :made-run] conj (first s))
                      (swap! state update-in [:stats side :runs :started] (fnil inc 0))
@@ -332,9 +332,9 @@
 (defn- preventable-encounter-abi
   [abi ice]
   {:async true
-   :interactive (req true)
+   :interactive (effect true)
    :ability-name (str (or (:ability-name abi) (:title ice)) " encounter")
-   :effect (req (wait-for (resolve-encounter-prevention state side {:title (str (or (:ability-name abi) (:title ice)) " encounter") :card ice})
+   :effect (effect (wait-for (resolve-encounter-prevention state side {:title (str (or (:ability-name abi) (:title ice)) " encounter") :card ice})
                           (if (pos? (:remaining async-result))
                             (do (register-pending-event state :resolve-ice-encounter-abi ice abi)
                                 (queue-event state :resolve-ice-encounter-abi {:ice ice})
@@ -443,7 +443,12 @@
     (swap! state assoc-in [:run :no-action] false)
     (when pass-ice?
       (system-msg state :runner (str "passes " (card-str state ice)))
-      (queue-event state :pass-ice {:ice (get-card state ice)}))
+      (let [nice (get-card state ice)]
+        (queue-event state :pass-ice
+                     {:ice nice
+                      :outermost (when-let [server-ice (:ices (card->server state nice))]
+                                   (same-card? nice (last server-ice)))
+                      :all-subs-broken (all-subs-broken? ice)})))
     (swap! state assoc-in [:run :position] new-position)
     (when passed-all-ice
       (queue-event state :pass-all-ice {:ice (get-card state ice)}))
@@ -551,6 +556,7 @@
        (trigger-event state side :pre-redirect-server
                       {:server (first (:server (:run @state)))
                        :new-server dest})
+       (play-sfx state side "redirect")
        (swap! state update :run
               assoc
               :position num-ice
@@ -587,16 +593,16 @@
         duration (:duration props)]
     {:event :successful-run
      :duration duration
-     :req (req (and (if use-this-card-run this-card-run true)
+     :req (req (if use-this-card-run this-card-run true)
                     (case attacked-server
                       (:archives :rd :hq)
                       (= attacked-server (target-server context))
                       :remote
                       (is-remote? (target-server context))
                       ; else
-                      true)))
-     :silent (req true)
-     :effect (req (add-run-effect state card ability props))}))
+                      true))
+     :silent true
+     :effect (effect (add-run-effect state card ability props))}))
 
 (defn choose-replacement-ability
   [state handlers]
@@ -626,7 +632,7 @@
         {:prompt "Choose a breach replacement ability"
          :choices (if mandatory titles (conj titles (str "Breach " (zone->name (:server (:run @state))))))
          :async true
-         :effect (req (let [chosen (some #(when (same-card? target (:card %)) %) handlers)
+         :effect (effect (let [chosen (some #(when (same-card? target (:card %)) %) handlers)
                             ability (:ability chosen)
                             card (:card chosen)]
                         (if chosen
@@ -664,8 +670,8 @@
             {:prompt (str "You are prevented from breaching " (zone->name server) " this run.")
              :choices ["OK"]
              :async true
-             :effect (effect (system-msg :runner (str "is prevented from breaching " (zone->name server) " this run."))
-                             (handle-end-run eid))}
+             :effect (effect (system-msg state :runner (str "is prevented from breaching " (zone->name server) " this run."))
+                             (handle-end-run state side eid))}
             nil nil)
 
           ;; Any number of replace-breach effects

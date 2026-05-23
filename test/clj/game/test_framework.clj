@@ -8,7 +8,9 @@
    [game.core.board :refer [server-list]]
    [game.core.card :refer [active? get-card get-counters get-title installed?
                            rezzed?]]
+   [game.core.diffs :refer [icon-summary]]
    [game.core.eid :as eid]
+   [game.core.events :refer [turn-events]]
    [game.core.ice :refer [active-ice?]]
    [game.core.initializing :refer [make-card]]
    [game.core.threat :refer [threat-level]]
@@ -45,7 +47,7 @@
 (load-all-cards)
 
 (defn is-zone-impl
-  "Is the hand exactly equal to a given set of cards?"
+  "Is the zone exactly equal to a given set of cards?"
   [state side zone expected]
   (let [expected (seq (sort (flatten expected)))
         contents (seq (sort (map :title (get-in @state [side zone]))))]
@@ -57,12 +59,12 @@
   `(error-wrapper (is-zone-impl ~state ~side :hand ~expected-hand)))
 
 (defmacro is-deck?
-  "Is the hand exactly equal to a given set of cards?"
+  "Is the deck exactly equal to a given set of cards?"
   [state side expected-deck]
   `(error-wrapper (is-zone-impl ~state ~side :deck ~expected-deck)))
 
 (defmacro is-discard?
-  "Is the hand exactly equal to a given set of cards?"
+  "Is the discard pile exactly equal to a given set of cards?"
   [state side expected-discard]
   `(error-wrapper (is-zone-impl ~state ~side :discard ~expected-discard)))
 
@@ -103,7 +105,7 @@
 (defn expect-type
   [type-name choice]
   (str "Expected a " type-name ", received [ " choice
-                                            " ] of type " (type choice) "."))
+       " ] of type " (type choice) "."))
 
 (defn click-card-impl
   [state side card]
@@ -227,6 +229,11 @@
 (defn do-trash-prompt
   [state cost]
   (click-prompt state :runner (str "Pay " cost " [Credits] to trash")))
+
+(defn select-bad-pub
+  [state shift-held?]
+  (core/process-action "bad-pub-choice" state :runner {:eid (:eid (get-prompt state :runner))
+                                                       :shift-key-held shift-held?}))
 
 ;; General utilities necessary for starting a new game
 (defn find-card
@@ -415,10 +422,24 @@
      (core/fake-checkpoint state)
      state)))
 
+(defn maybe-card
+  "Query a card by name if possible, for the use of card abilities"
+  [state card]
+  (if (map? card)
+    (get-card state card)
+    (let [all-cards (core/get-all-cards state)
+          matching-cards (filter #(= card (core/get-title %)) all-cards)]
+      (if (= (count matching-cards) 1)
+        (first matching-cards)
+        (is' (= 1 (count matching-cards))
+             (str "Expected to use ability for card [ " card
+                  " ] but found " (count matching-cards)
+                  " matching cards."))))))
+
 ;;; Card related functions
 (defn card-ability-impl
   [state side card ability & targets]
-  (let [card (get-card state card)
+  (let [card (maybe-card state card)
         ability (cond
                   (number? ability) ability
                   (string? ability) (some #(when (= (:label (second %)) ability) (first %)) (map-indexed vector (:abilities card)))
@@ -602,6 +623,17 @@
   ([state side title server]
    `(error-wrapper (play-from-hand-impl ~state ~side ~title ~server))))
 
+(defn- split-on-keywords [coll]
+  (reduce (fn [acc x]
+            (if (keyword? x)
+              (conj acc x)
+              (let [last-el (peek acc)]
+                (if (vector? last-el)
+                  (conj (pop acc) (conj last-el x))
+                  (conj acc [x])))))
+          []
+          coll))
+
 (defn play-from-hand-with-prompts-impl
   [state side title choices]
   (let [card (find-card title (get-in @state [side :hand]))]
@@ -613,7 +645,20 @@
               (println title " was instead found in the opposing hand - was the wrong side used?")))
           true)
       (when-let [played (core/process-action "play" state side {:card card})]
-        (click-prompts-impl state side choices)))))
+        (let [choice-sets (split-on-keywords choices)]
+          (doseq [cs choice-sets]
+            (cond
+              (vector? cs) (click-prompts-impl state side cs)
+              (#{:rez :rezzed} cs)
+              (if-let [tgt (->> (turn-events state side :corp-install)
+                                (apply concat)
+                                (map :card)
+                                (filter #(= (:title %) title))
+                                (filter (complement rezzed?))
+                                last)]
+                (core/process-action "rez" state :corp {:card tgt})
+                (throw (Exception. (str title " not found in an unrezzed state to be rezzed")))))))))))
+
 
 (defmacro play-from-hand-with-prompts
   "Play a card from hand based on it's title, and then click any number of prompts
@@ -621,6 +666,18 @@
   ([state side title] `(play-from-hand ~state ~side ~title nil))
   ([state side title & prompts]
    `(error-wrapper (play-from-hand-with-prompts-impl ~state ~side ~title ~(vec prompts)))))
+
+(defn play-cards-impl
+  ([state side plays]
+   (doseq [play plays]
+     (if (string? play)
+       (play-from-hand state side play)
+       (play-from-hand-with-prompts-impl state side (first play) (rest play))))))
+
+(defmacro play-cards
+  ([state side] `nil)
+  ([state side & plays]
+   `(error-wrapper (play-cards-impl ~state ~side ~(vec plays)))))
 
 ;;; Run functions
 (defn run-on-impl
@@ -810,7 +867,7 @@
 (defn rez-impl
   ([state side card] (rez-impl state side card nil))
   ([state _side card {:keys [expect-rez] :or {expect-rez true}}]
-   (let [card (get-card state card)]
+   (let [card (maybe-card state card)]
      (is' (installed? card) (str (:title card) " is installed"))
      (is' (not (rezzed? card)) (str (:title card) " is unrezzed"))
      (when (and (installed? card)
@@ -1013,6 +1070,7 @@
 
 (defn log-str [state]
   (->> (:log @state)
+       (keep :public)
        (map :text)
        (str/join " ")))
 
@@ -1066,23 +1124,33 @@
 (defn escape-log-string [s]
   (str/escape s {\[ "\\[" \] "\\]"}))
 
+(defn- side-log
+  [side log]
+  (into [] (keep #(or (side %) (:public %)) log)))
+
 (defn last-log-contains?
-  [state content]
-  (->> (-> @state :log last :text)
-       (re-find (re-pattern (escape-log-string content)))
-       some?))
+  ([state content] (last-log-contains? state content :public))
+  ([state content side]
+   (->> (->> @state :log (side-log side) last :text)
+        (re-find (re-pattern (escape-log-string content)))
+        some?)))
 
 (defn second-last-log-contains?
-  [state content]
-  (->> (-> @state :log butlast last :text)
-       (re-find (re-pattern (escape-log-string content)))
-       some?))
+  ([state content] (second-last-log-contains? state content :public))
+  ([state content side]
+   (->> (->> @state :log (side-log side) butlast last :text)
+        (re-find (re-pattern (escape-log-string content)))
+        some?)))
 
 (defn last-n-log-contains?
-  [state n content]
-  (->> (-> @state :log reverse (nth n) :text)
-       (re-find (re-pattern (escape-log-string content)))
-       some?))
+  ([state n content]
+   (last-n-log-contains? state n content :public))
+  ([state n content side]
+   (let [log (->> @state :log (side-log side) (mapv :text))
+         index (- (count log) 1 n)
+         log-entry (nth log index "")
+         res (re-find (re-pattern (escape-log-string content)) log-entry)]
+     (some? res))))
 
 (defn- make-zone
   [zone replacement]
@@ -1107,7 +1175,7 @@
 (defn run-and-encounter-ice-test
   ([card] (run-and-encounter-ice-test card nil))
   ([card players] (run-and-encounter-ice-test card players nil))
-  ([card players {:keys [counters disable rig server threat] :as args}]
+  ([card players {:keys [counters disable rig server threat run-event] :as args}]
    (let [;; sometimes the number of cards are the only important things - this lets us do :hand X
          ;; or :deck X on either side (so we can reduce noise when reading tests)
          players (update-zones players [[[:corp :hand] "IPO"]
@@ -1116,6 +1184,14 @@
                                         [[:runner :deck] "Inti"]])
          players (update-in players [:corp :hand] conj card)
          players (update-in players [:runner :hand] concat rig)
+         run-event-card (if run-event
+                          (if (string? run-event)
+                            run-event
+                            (first run-event))
+                          nil)
+         players (if run-event-card
+                   (update-in players [:runner :hand] conj run-event-card)
+                   players)
          state (new-game players)
          server (or server "HQ")
          server-key (cond
@@ -1156,7 +1232,9 @@
            (core/gain state :runner :click 1)
            (play-from-hand state :runner r)))
        ;; runner should have the default click/credit count (- 1 click for the run)
-       (run-on state server-key)
+       (if run-event
+         (play-cards state :runner run-event)
+         (run-on state server-key))
        (run-continue-until state :encounter-ice)
        state))))
 
@@ -1204,6 +1282,18 @@
      (fire-subs state ice)
      state)))
 
+(defn card-icons
+  [state card]
+  (when-let [icons (seq (:icon (icon-summary card state)))]
+    (mapv first icons)))
+
+(defn has-icon?
+  [state card icon]
+  (some #(= % icon) (card-icons state card)))
+
+(defn no-icons?
+  [state card]
+  (not (card-icons state card)))
 
 (defn is-deck-stacked-impl
   [state side expected-deck]

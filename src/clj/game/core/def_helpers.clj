@@ -3,8 +3,9 @@
     [clojure.string :as str]
     [game.core.access :refer [access-bonus]]
     [game.core.board :refer [all-installed get-all-cards]]
-    [game.core.card :refer [active? can-be-advanced? corp? faceup? get-card get-counters has-subtype? in-discard? in-hand? operation? runner? ]]
+    [game.core.card :refer [active? can-be-advanced? corp? faceup? get-card get-counters has-subtype? in-discard? in-hand? installed? operation? runner? ]]
     [game.core.card-defs :as card-defs]
+    [game.core.choose-one :refer [choose-one-helper]]
     [game.core.damage :refer [damage]]
     [game.core.drawing :refer [draw]]
     [game.core.eid :refer [effect-completed make-eid]]
@@ -16,25 +17,27 @@
     [game.core.payment :refer [build-cost-string can-pay?]]
     [game.core.play-instants :refer [async-rfg]]
     [game.core.prompts :refer [cancellable clear-wait-prompt]]
-    [game.core.props :refer [add-counter]]
+    [game.core.props :refer [add-counter add-prop]]
     [game.core.revealing :refer [conceal-hand reveal reveal-hand reveal-loud]]
     [game.core.runs :refer [can-run-server? make-run jack-out]]
     [game.core.say :refer [play-sfx system-msg system-say]]
-    [game.core.servers :refer [zone->name]]
+    [game.core.servers :refer [zone->name name-zone]]
+    [game.core.shuffling :refer [shuffle! fail-to-find!]]
+    [game.core.servers :refer [zone->name name-zone]]
     [game.core.shuffling :refer [shuffle!]]
     [game.core.to-string :refer [card-str]]
     [game.core.toasts :refer [toast]]
     [game.core.tags :refer [gain-tags]]
     [game.macros :refer [continue-ability effect msg req wait-for]]
-    [game.utils :refer [enumerate-str remove-once same-card? server-card to-keyword quantify]]
-    [jinteki.utils :refer [other-side]]))
+    [game.utils :refer [enumerate-cards remove-once same-card? server-card to-keyword quantify]]
+    [jinteki.utils :refer [faction-label other-side]]))
 
 (defn combine-abilities
   "Combines two or more abilities to a single one. Labels are joined together with a period between parts."
   ([ab-x ab-y]
    {:label (str (:label ab-x) ". " (:label ab-y))
     :async true
-    :effect (req (wait-for (resolve-ability state side ab-x card nil)
+    :effect (effect (wait-for (resolve-ability state side ab-x card nil)
                            (continue-ability state side ab-y card nil)))})
   ([ab-x ab-y & ab-more]
    (reduce combine-abilities (combine-abilities ab-x ab-y) ab-more)))
@@ -43,7 +46,7 @@
   "Effect to be placed with `:runner-turn-ends` to remind players of 'when turn begins'
   triggers"
   {:event :runner-turn-ends
-   :effect (req (toast state :corp "Reminder: You have unrezzed cards with \"when turn begins\" abilities." "info"))})
+   :effect (effect (toast state :corp "Reminder: You have unrezzed cards with \"when turn begins\" abilities." "info"))})
 
 (declare reorder-final) ; forward reference since reorder-choice and reorder-final are mutually recursive
 
@@ -65,7 +68,7 @@
                    (if (= reorder-side :corp) "R&D" "the stack"))
       :choices remaining
       :async true
-      :effect (req (let [chosen (cons target chosen)]
+      :effect (effect (let [chosen (cons target chosen)]
                      (if (< (count chosen) n)
                        (continue-ability
                          state side
@@ -84,12 +87,12 @@
   ([reorder-side wait-side chosen original dest]
    {:prompt (if (= dest "bottom")
               (str "The bottom cards of " (if (= reorder-side :corp) "R&D" "the stack")
-                   " will be " (enumerate-str (map :title (reverse chosen))) ".")
+                   " will be " (enumerate-cards (reverse chosen)) ".")
               (str "The top cards of " (if (= reorder-side :corp) "R&D" "the stack")
-                   " will be " (enumerate-str (map :title chosen)) "."))
+                   " will be " (enumerate-cards chosen) "."))
    :choices ["Done" "Start over"]
    :async true
-   :effect (req
+   :effect (effect
              (cond
                (and (= dest "bottom") (= target "Done"))
                (do (swap! state update-in [reorder-side :deck]
@@ -104,6 +107,10 @@
                (= target "Done")
                (do (swap! state update-in [reorder-side :deck]
                           #(vec (concat chosen (drop (count chosen) %))))
+                   (system-msg state side (str "The top cards of "
+                                               (if (= reorder-side :corp) "R&D" "the stack")
+                                               " are " (enumerate-cards chosen))
+                               {:log-side side})
                    (when (and (= :corp reorder-side)
                               (:run @state)
                               (:access @state))
@@ -122,9 +129,9 @@
     :duration duration
     :req (if (:req args)
            (:req args)
-           (req (= server target)))
+           (effect (= server (:server context))))
     :msg msg
-    :effect (effect (access-bonus :runner server bonus))}))
+    :effect (effect (access-bonus state :runner server bonus))}))
 
 (defn do-net-damage
   "Do specified amount of net-damage."
@@ -132,7 +139,7 @@
   {:label (str "Do " dmg " net damage")
    :async true
    :msg (str "do " dmg " net damage")
-   :effect (effect (damage eid :net dmg {:card card}))})
+   :effect (effect (damage state side eid :net dmg {:card card}))})
 
 (defn do-meat-damage
   "Do specified amount of meat damage."
@@ -140,7 +147,7 @@
   {:label (str "Do " dmg " meat damage")
    :async true
    :msg (str "do " dmg " meat damage")
-   :effect (effect (damage eid :meat dmg {:card card}))})
+   :effect (effect (damage state side eid :meat dmg {:card card}))})
 
 (defn do-brain-damage
   "Do specified amount of core damage."
@@ -148,28 +155,28 @@
   {:label (str "Do " dmg " core damage")
    :async true
    :msg (str "do " dmg " core damage")
-   :effect (effect (damage eid :brain dmg {:card card}))})
+   :effect (effect (damage state side eid :brain dmg {:card card}))})
 
 (defn rfg-on-empty
   "Used in :event maps for effects like Malandragem"
   [counter-type]
   {:event :counter-added
-   :req (req (and (same-card? card (:card context))
+   :req (req (same-card? card (:card context))
                   (not (get-in card [:special :skipped-loading]))
-                  (not (pos? (get-counters card counter-type)))))
-   :effect (effect (system-msg (str "removes " (:title card) " from the game"))
-                   (move card :rfg))})
+                  (not (pos? (get-counters card counter-type))))
+   :effect (effect (system-msg state side (str "removes " (:title card) " from the game"))
+                   (move state side card :rfg))})
 
 (defn trash-on-empty
   "Used in :event maps for effects like Daily Casts"
   [counter-type]
   {:event :counter-added
-   :req (req (and (same-card? card (:card context))
+   :req (req (same-card? card (:card context))
                   (not (get-in card [:special :skipped-loading]))
-                  (not (pos? (get-counters card counter-type)))))
+                  (not (pos? (get-counters card counter-type))))
    :async true
-   :effect (effect (system-msg (str "trashes " (:title card)))
-                   (trash eid card {:unpreventable true :source-card card}))})
+   :effect (effect (system-msg state side (str "trashes " (:title card)))
+                   (trash state side eid card {:unpreventable true :source-card card}))})
 
 (defn pick-tiered-sfx
   [base upper-limit n]
@@ -192,7 +199,7 @@
    (merge {:msg (msg "draw " (quantify x "card"))
            :label (str "Draw " (quantify x "card"))
            :async true
-           :effect (req (when (:action ab-base) (play-tiered-sfx state side "click-card" 3 x))
+           :effect (effect (when (:action ab-base) (play-tiered-sfx state side "click-card" 3 x))
                         (draw state side eid x draw-args))}
           ab-base)))
 
@@ -207,9 +214,9 @@
   [n]
   {:label (str "Give the Runner " (quantify n "tag"))
    :msg (str "give the Runner " (quantify n "tag"))
-   :interactive (req true)
+   :interactive (effect true)
    :async true
-   :effect (effect (gain-tags :corp eid n))})
+   :effect (effect (gain-tags state :corp eid n))})
 
 (defn run-server-ability
   "Runs a target server, if possible. "
@@ -220,7 +227,7 @@
            :label (str "run " (zone->name server))
            :msg (str "make a run on " (zone->name server))
            :makes-run true
-           :effect (req (when (seq events)
+           :effect (effect (when (seq events)
                           (register-events state side card events))
                         (when (:action ab-base)
                           (play-sfx state side "click-run"))
@@ -232,11 +239,12 @@
   ([{:keys [events] :as ab-base}]
    (merge {:async true
            :prompt "Choose a server"
-           :choices (req runnable-servers)
+           :choices (effect runnable-servers)
+           :req (req (seq runnable-servers))
            :label "Run a server"
            :makes-run true
            :msg (msg "make a run on " target)
-           :effect (req (when (seq events)
+           :effect (effect (when (seq events)
                           (register-events state side card events))
                         (when (:action ab-base)
                           (play-sfx state side "click-run"))
@@ -247,28 +255,35 @@
   {:async true
    :prompt "Choose a remote server"
    :change-in-game-state {:req (req (seq (filter #(can-run-server? state %) remotes)))}
-   :choices (req (filter #(can-run-server? state %) remotes))
+   :choices (effect (filter #(can-run-server? state %) remotes))
    :label "Run a remote server"
    :msg (msg "make a run on " target)
-   :effect (effect (make-run eid target card))})
+   :effect (effect (make-run state side eid target card))})
 
 (def run-central-server-ability
   {:prompt "Choose a central server"
-   :choices (req (filter #{"HQ" "R&D" "Archives"} runnable-servers))
+   :choices (effect (filter #{"HQ" "R&D" "Archives"} runnable-servers))
    :change-in-game-state {:req (req (seq (filter #{"HQ" "R&D" "Archives"} runnable-servers)))}
    :async true
    :label "Run a central server"
    :msg (msg "make a run on " target)
-   :effect (effect (make-run eid target card))})
+   :effect (effect (make-run state side eid target card))})
 
 (defn run-server-from-choices-ability
-  [choices]
-  {:prompt "Choose a server"
-   :choices (req (filter #(can-run-server? state %) choices))
-   :change-in-game-state {:req (req (seq (filter (set choices) runnable-servers)))}
-   :async true
-   :msg (msg "make a run on " target)
-   :effect (effect (make-run eid target card))})
+  ([choices] (run-server-from-choices-ability choices nil))
+  ([choices {:keys [events] :as ab-base}]
+   (merge
+     {:prompt "Choose a server"
+      :choices (effect (filter #(can-run-server? state %) choices))
+      :change-in-game-state {:req (req (seq (filter (set choices) runnable-servers)))}
+      :async true
+      :msg (msg "make a run on " target)
+      :effect (effect (when (seq events)
+                     (register-events state side card events))
+                   (when (:action ab-base)
+                     (play-sfx state side "click-run"))
+                   (make-run state side eid target card))}
+     (dissoc ab-base :events))))
 
 (defn take-credits
   "Take n counters from a card and place them in your credit pool as if they were credits (if possible)"
@@ -290,10 +305,10 @@
   ([n t ab-base]
    (merge
      {:label (str "Take " n " [Credits] from this " t)
-      :change-in-game-state {:req (req (pos? (get-counters card :credit))) :silent (req (not (:action ab-base)))}
+      :change-in-game-state {:req (req (pos? (get-counters card :credit))) :silent (effect (not (:action ab-base)))}
       :msg (msg "gain " (min n (get-counters card :credit)) " [Credits]")
       :async true
-      :effect (req (when (:action ab-base) (play-tiered-sfx state side "click-credit" 3 n))
+      :effect (effect (when (:action ab-base) (play-tiered-sfx state side "click-credit" 3 n))
                    (take-credits state side eid card :credit n))}
      ab-base)))
 
@@ -303,7 +318,8 @@
     {:label "Take all hosted credits"
      :change-in-game-state {:req (req (pos? (get-counters card :credit)))}
      :async true
-     :effect (req (when (:action ab-base) (play-tiered-sfx state side "click-credit" 3 (get-counters card :credit)))
+     :msg (msg "gain " (get-counters card :credit) " [Credits]")
+     :effect (effect (when (:action ab-base) (play-tiered-sfx state side "click-credit" 3 (get-counters card :credit)))
                   (take-credits state side eid card :credit :all))}
     ab-base))
 
@@ -344,9 +360,40 @@
           {:msg "take 1 [Recurring Credits]"
            :req (req (pos? (get-counters card :recurring)))
            :async true
-           :effect (req (spend-credits state side eid card :recurring 1))}]
+           :effect (effect (spend-credits state side eid card :recurring 1))}]
       (update ability :abilities #(conj (into [] %) recurring-ability)))
     ability))
+
+(defn move-to-top
+  [target-card acting-side]
+  {:msg {:public (msg "add " (card-str state target-card) " from "
+                      (name-zone (:side target-card) (:zone target-card))
+                      " to the top of " (if (runner? target-card) "the Stack" "R&D"))
+         acting-side (msg "add " (card-str state target-card {:maybe-visible true}) " from "
+                          (name-zone (:side target-card) (:zone target-card))
+                          " to the top of " (if (runner? target-card) "the Stack" "R&D"))}
+   :effect (effect (move state side target-card :deck {:front true}))})
+
+(defn move-to-bottom
+  [target-card acting-side]
+  {:msg {:public (msg "add " (card-str state target-card) " from "
+                      (name-zone (:side target-card) (:zone target-card))
+                      " to the bottom of " (if (runner? target-card) "the Stack" "R&D"))
+         acting-side (msg "add " (card-str state target-card {:maybe-visible true}) " from "
+                          (name-zone (:side target-card) (:zone target-card))
+                          " to the bottom of " (if (runner? target-card) "the Stack" "R&D"))}
+   :effect (effect (move state side target-card :deck))})
+
+(defn move-card-to-top-or-bottom
+  "Ability to move a card to the top or bottom of the deck"
+  [target-card acting-side]
+  (let [zone (if (runner? target-card) "the Stack" "R&D")]
+    (choose-one-helper
+      {:prompt (str "Move " (:title target-card) " where?")}
+      [{:option (str "Top of " zone)
+        :ability (move-to-top target-card acting-side)}
+       {:option (str "Bottom of " zone)
+        :ability (move-to-bottom target-card acting-side)}])))
 
 (defn trash-or-rfg
   [state _ eid card]
@@ -372,9 +419,9 @@
      :prompt "Jack out?"
      :waiting-prompt true
      :yes-ability {:async true
-                   :effect (effect (system-msg :runner (str "uses " (:title card) " to jack out"))
-                                   (jack-out eid))}
-     :no-ability {:effect (effect (system-msg :runner (str "uses " (:title card) " to continue the run")))}}}))
+                   :effect (effect (system-msg state :runner (str "uses " (:title card) " to jack out"))
+                                   (jack-out state side eid))}
+     :no-ability {:effect (effect (system-msg state :runner (str "uses " (:title card) " to continue the run")))}}}))
 
 (defn get-x-fn []
   (fn get-x-fn-inner
@@ -419,7 +466,7 @@
    {:prompt (str "install a card from HQ" (when (> n 1) (str " (" n " remaining)")))
     :choices {:card (every-pred corp? in-hand? (complement operation?))}
     :async true
-    :effect (req (wait-for
+    :effect (effect (wait-for
                    (corp-install state side target nil (merge {:msg-keys {:install-source card}} args))
                    (if (> n 1)
                      (continue-ability state side (corp-install-up-to-n-cards (dec n)) card nil)
@@ -429,7 +476,7 @@
   {:msg (str "gain " x " [Credits]")
    :label (str "gain " x " [Credits]")
    :async true
-   :effect (req (gain-credits state side eid x))})
+   :effect (effect (gain-credits state side eid x))})
 
 (defn drain-credits
   ([draining-side victim-side qty] (drain-credits draining-side victim-side qty 1))
@@ -449,7 +496,7 @@
                          ", and take ")
                        (quantify tags-to-gain "tag"))))
       :async true
-      :effect (req (let [c-drain (to-drain state)
+      :effect (effect (let [c-drain (to-drain state)
                          c-gain (to-gain state)]
                      (if (zero? tags-to-gain)
                        (wait-for (lose-credits state victim-side c-drain {:suppress-checkpoint true})
@@ -463,14 +510,15 @@
   ([pred]
    {:label "add card from Archives to HQ"
     :prompt "Choose a card to add to HQ"
-    :does-something (req (seq (:discard corp)))
+    :does-something (effect (seq (:discard corp)))
     :waiting-prompt true
     :show-discard true
     :choices {:card #(and (corp? %)
                        (in-discard? %)
                        (pred %))}
-    :msg (msg "add " (card-str state target {:visible (faceup? target)}) " to HQ")
-    :effect (effect (move :corp target :hand))}))
+    :msg {:public (msg "add " (card-str state target {:visible (faceup? target)}) " to HQ")
+          :corp (msg "add " (card-str state target {:maybe-visible true}) " to HQ")}
+    :effect (effect (move state :corp target :hand))}))
 
 (defn tutor-abi
   "Tutor a card. Optionally, pass a restriction, which is a 1-fn the cards must pass"
@@ -478,10 +526,10 @@
   ([reveal? restriction]
    {:change-in-game-state {:req (req (seq (get-in @state [side :deck])))}
     :prompt "Choose a card"
-    :label (req (if (= side :corp)
+    :label (effect (if (= side :corp)
                   "Search R&D and add 1 card to HQ"
                   "Search the Stack and add 1 card to the Grip"))
-    :choices (req (cancellable
+    :choices (effect (cancellable
                     (filter #(or (not restriction) (restriction %))
                             (get-in @state [side :deck]))
                     :sorted))
@@ -491,13 +539,9 @@
               (if reveal? (:title target) "a card")
               " and add it to "
               (if (= side :corp) "HQ" "[their] Grip"))
-    :cancel-effect (req (when (= side :runner)
-                          (trigger-event state side :searched-stack))
-                        (system-msg state side "shuffles their deck!")
-                        (shuffle! state side :deck)
-                        (effect-completed state side eid))
+    :cancel fail-to-find!
     :async true
-    :effect (req (when (= side :runner)
+    :effect (effect (when (= side :runner)
                    (trigger-event state side :searched-stack))
                  (if reveal?
                    (wait-for (reveal state side target)
@@ -514,8 +558,27 @@
   {:event :purge
    :async true
    :msg "trash itself"
-   :effect (req (trash state :runner eid card {:cause :purge
+   :effect (effect (trash state :runner eid card {:cause :purge
                                                :cause-card card}))})
+
+(defn scry
+  "Looks at the top QUANT cards of target-side's deck. Completes an eid."
+  [state side eid card target-side quant]
+  (let [target-cards (take quant (get-in @state [target-side :deck]))
+        zone-name (if (= :corp target-side) "R&D" "the stack")
+        scry-side side
+        scry-fn (if (= 1 (count target-cards))
+                  (msg "the top card of " zone-name " is " (:title (first target-cards)))
+                  (msg "the top " (quantify quant "card") " of " zone-name " are (top->bottom): " (enumerate-cards target-cards)))]
+    (resolve-ability
+      state side eid
+      {:player side
+       :waiting-prompt true
+       :req (req (seq target-cards))
+       :choices ["OK"]
+       :msg {scry-side scry-fn}
+       :prompt scry-fn}
+      card nil)))
 
 (defn with-revealed-hand
   "Resolves an ability while a player has their hand revealed (so you can click cards in their hand)
@@ -534,8 +597,8 @@
                                                            :req (req (let [sidefn (if (= :corp target-side) corp? runner?)]
                                                                        (and (sidefn (:moved-card context))
                                                                             (in-hand? (:moved-card context)))))
-                                                           :silent (req true)
-                                                           :effect (req (conceal-hand state target-side))}])))]
+                                                           :silent true
+                                                           :effect (effect (conceal-hand state target-side))}])))]
                  (fn [] (unregister-event-by-uuid state side uuid)))
                (fn [] nil)))
            (maybe-reveal
@@ -544,7 +607,7 @@
                (effect-completed state side eid)
                (reveal-loud state (or event-side side) eid card args (get-in @state [target-side :hand]))))]
      {:async true
-      :effect (req (wait-for
+      :effect (effect (wait-for
                      (maybe-reveal state side card target-side args)
                      (let [was-open? (get-in @state [target-side :openhand])
                            unregister-ev-callback (maybe-register-ev state side card was-open?)]
@@ -553,6 +616,45 @@
                                  (when-not was-open? (conceal-hand state target-side))
                                  (unregister-ev-callback)
                                  (effect-completed state side eid)))))})))
+
+
+(defn place-advancement-counter
+  ([advanceable-only] (place-advancement-counter advanceable-only 1))
+  ([advanceable-only qty] (place-advancement-counter advanceable-only qty "a card" nil))
+  ([advanceable-only qty card-line pred]
+   (let [label (str "Place " (quantify qty "advancement counter") " on " card-line (if advanceable-only " that can be advanced"))]
+     {:label label
+      :prompt label
+      :choices {:req (req (corp? target)
+                               (installed? target)
+                               (or (not pred)
+                                   (pred target))
+                               (or (not advanceable-only) (can-be-advanced? state target)))}
+      :msg {:public (msg "place " (quantify qty "advancement counter") " on " (card-str state target))
+            :corp (msg "place " (quantify qty "advancement counter") " on " (card-str state target {:maybe-visible true}))}
+      :async true
+      :effect (effect (add-prop state side eid target :advance-counter qty {:placed true}))})))
+
+(defn look-at-the-top
+  [looking-side deck-side qty]
+  (let [zone (if (= looking-side :corp) "R&D" "the stack")
+        seen (fn [state] (min qty (count (get-in @state [deck-side :deck]))))]
+    {:msg {:public (msg "look at the top " (quantify (seen state) "card") " of " zone)
+           looking-side (msg "look at the top " (quantify (seen state) "card") " of " zone " (top->bottom): " (enumerate-cards (take qty (get-in @state [deck-side :deck]))))}
+     :async true
+     :waiting-prompt true
+     :change-in-game-state {:silent true
+                            :req (req (seq (get-in @state [deck-side :deck])))}
+     :effect (effect (resolve-ability
+                    state side eid
+                    {:prompt (msg "The top cards of " zone " are (top->bottom): "
+                                 (enumerate-cards (take qty (get-in @state [deck-side :deck]))))
+                     :choices ["OK"]}
+                    card nil))}))
+
+(defn make-icon
+  [text card]
+  [text (:cid card) (faction-label card)])
 
 (defmacro defcard
   "Define a card to be returned from card-def. The definition consists of the

@@ -10,7 +10,7 @@
     [game.core.say :refer [system-msg n-last-logs]]
     [game.core.winning :refer [flatline]]
     [game.macros :refer [wait-for]]
-    [game.utils :refer [dissoc-in enumerate-str side-str]]
+    [game.utils :refer [dissoc-in enumerate-cards enumerate-str side-str]]
     [jinteki.utils :refer [str->int]]
     [taoensso.timbre :as timbre]))
 
@@ -62,7 +62,7 @@
   [state side eid dmg-type n {:keys [card cause suppress-checkpoint]}]
   (swap! state dissoc-in [:damage :chosen-damage])
   (damage-choice-priority state)
-  (wait-for (trigger-event-simult state side :pre-resolve-damage nil dmg-type side n)
+  (wait-for (trigger-event-simult state side :pre-resolve-damage nil {:damage-type dmg-type :amount n})
             (if (not (pos? n))
               (do ;; shouldn't be possible, should be handled before getting here
                 (timbre/error (str "attempted to resolve 0 damage: \n" (n-last-logs state 5) "\n"))
@@ -76,8 +76,8 @@
                                        (concat chosen-cards))]
                 (when (= dmg-type :brain)
                   (swap! state update-in [:runner :brain-damage] #(+ % n)))
-                (when-let [trashed-msg (enumerate-str (map get-title cards-trashed))]
-                  (system-msg state :runner (str "trashes " trashed-msg " due to " (damage-name dmg-type) " damage"))
+                (when-let [trashed-msg (enumerate-cards cards-trashed :sorted)]
+                  (system-msg state side (str "trashes " trashed-msg " due to " (damage-name dmg-type) " damage"))
                   (swap! state update-in [:stats :corp :damage :all] (fnil + 0) n)
                   (swap! state update-in [:stats :corp :damage dmg-type] (fnil + 0) n)
                   (if (< (count hand) n)

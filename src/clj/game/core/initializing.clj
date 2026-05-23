@@ -14,8 +14,8 @@
     [game.core.payment :refer [add-cost-label-to-ability]]
     [game.core.props :refer [add-counter]]
     [game.core.update :refer [update!]]
-    [game.macros :refer [req]]
-    [game.utils :refer [make-cid server-card to-keyword]]
+    [game.macros :refer [effect req]]
+    [game.utils :refer [make-cid make-timestamp server-card to-keyword]]
     [jinteki.utils :refer [make-label]]))
 
 (defn subroutines-init
@@ -120,8 +120,8 @@
          c (get-card state c)]
      ;; TODO - handle recurring credits as part of the start of turn phase (as in the CR), rather than applying events to each card
      (when recurring
-       (let [recurring-fn (req (if (number? recurring) recurring (recurring state side eid card targets)))
-             r (req (let [card (update! state side (assoc-in card [:counter :recurring] 0))
+       (let [recurring-fn (effect (if (number? recurring) recurring (recurring state side eid card targets)))
+             r (effect (let [card (update! state side (assoc-in card [:counter :recurring] 0))
                           n (recurring-fn state side eid card targets)]
                       (add-counter state side eid card
                                    :recurring n
@@ -199,10 +199,12 @@
                 :subroutines (subroutines-init (assoc card :cid cid) cdef)
                 :abilities (ability-init cdef)
                 :x-fn (:x-fn cdef)
+                :timestamp (make-timestamp)
                 :poison (:poison cdef)
                 :highlight-in-discard (:highlight-in-discard cdef)
                 :printed-title (:title card))
          (dissoc :setname :text :_id :influence :number :influencelimit
+                 :images :previous-versions :rotated
                  :image_url :factioncost :format :quantity)
          (map->Card)))))
 

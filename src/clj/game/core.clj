@@ -82,7 +82,6 @@
    access-card
    access-cost
    access-cost-bonus
-   access-end
    access-helper-archives
    access-helper-hq
    access-helper-rd
@@ -570,7 +569,6 @@
    remove-from-currently-drawing
    swap-agendas
    swap-cards
-   swap-cards-async
    swap-ice
    swap-installed
    trash
@@ -586,6 +584,7 @@
 
 (expose-vars
   [game.core.payment
+   ->c
    add-cost-label-to-ability
    build-cost-label
    build-cost-string
@@ -624,9 +623,7 @@
 (expose-vars
   [game.core.props
    add-counter
-   add-icon
    add-prop
-   remove-icon
    set-prop])
 
 (expose-vars
@@ -832,9 +829,8 @@
 (expose-vars
   [game.macros
    continue-ability
-   effect
    msg
-   req
+   effect
    wait-for
    when-let*])
 

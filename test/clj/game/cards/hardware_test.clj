@@ -1044,6 +1044,18 @@
      (click-prompt state :runner "End the run")
      (is (:broken (first (:subroutines (refresh iw)))) "Ice Wall has been broken"))))
 
+(deftest borrowed-goods-test
+  (do-game
+    (new-game {:runner {:hand [(qty "Borrowed Goods" 4)]}})
+    (take-credits state :corp)
+    (is (changed? [(count-tags state) 1]
+          (play-from-hand state :runner "Borrowed Goods"))
+        "Took a tag")
+    (dotimes [_ 3]
+      (is (changed? [(count-tags state) 0]
+            (play-from-hand state :runner "Borrowed Goods"))
+          "Did not take a tag"))))
+
 (deftest box-e
   ;; Box-E - +2 MU, +2 max hand size
   (do-game
@@ -1314,6 +1326,7 @@
       (click-card state :corp "Hostile Takeover")
       (run-continue state)
       (card-ability state :runner (get-program state 0) 2)
+      (select-bad-pub state nil)
       (card-ability state :runner (get-program state 0) 2)
       (card-ability state :runner (get-program state 0) 0)
       (click-prompt state :runner "Gain 2 [Credits]")
@@ -1440,7 +1453,9 @@
       (is (= 4 (count (:hand (get-runner)))) "4 cards in hand before using Capstone")
       (dotimes [n 4]
         (click-card state :runner (nth (:hand (get-runner)) n))))
-    (is (= 3 (count (:hand (get-runner)))) "3 cards in hand after using Capstone")))
+    (is (= 3 (count (:hand (get-runner)))) "3 cards in hand after using Capstone")
+    (is (last-log-contains? state "Runner uses Capstone to trash Cache, Corroder, Corroder, and Patchwork"))
+    (is (last-log-contains? state "draw 3 cards"))))
 
 (deftest capybara-no-ice
     ;; No ice
@@ -1567,7 +1582,7 @@
           "Draws 1 card")
       (take-credits state :runner)
       (take-credits state :corp)
-      (is (true? (:runner-phase-12 @state)))
+      (is (:runner-phase-12 @state))
       (card-ability state :runner chop-bot 0)
       (click-card state :runner (find-card "Spy Camera" (get-hardware state)))
       (is (zero? (count (:deck (get-runner)))))
@@ -1932,7 +1947,7 @@
       (is (:run @state) "New run started")
       (run-continue state)
       (is (= [:rd] (:server (:run @state))) "Running on R&D")
-      (is (= 1 (:run-credit (get-runner))) "Runner has 1 BP credit")))
+      (is (= 1 (:bad-publicity-available (:run @state))) "Runner has 1 BP credit")))
 
 (deftest doppelganger-makers-eye-interaction
     ;; Makers eye interaction
@@ -2213,7 +2228,7 @@
       (let [flip (get-hardware state 0)]
         (run-on state "HQ")
         (card-ability state :runner (get-hardware state 0) 0)
-        (is (= "Runner jacks out." (-> @state :log last :text)))
+        (is (= "Runner jacks out." (-> @state :log last :public :text)))
         (is (nil? (refresh flip)) "Flip Switch has been trashed")
         (is (find-card "Flip Switch" (:discard (get-runner)))))))
 
@@ -2564,7 +2579,7 @@
       (click-card state :runner hbdown)
       (click-prompt state :runner "Pass priority")
       (is (= 4 (count (:discard (get-runner)))) "Prevented 1 of 3 net damage; used facedown card")
-      (is (last-n-log-contains? state 1 "Runner trashes 1 installed card \\(a facedown card\\) to use Heartbeat to prevent 1 net damage\\.")))))
+      (is (true? (last-n-log-contains? state 1 "Runner trashes 1 installed card \\(a facedown card\\) to use Heartbeat to prevent 1 net damage\\."))))))
 
 (deftest hermes
     (do-game
@@ -3435,14 +3450,10 @@
                                  "Street Peddler"]
                           :credits 100}})
       (take-credits state :corp)
-      (play-from-hand state :runner "Masterwork (v37)")
-      (play-from-hand state :runner "Street Peddler")
-      (play-from-hand state :runner "DJ Fenris")
-      (click-prompt state :runner "Hayley Kaplan: Universal Scholar")
-      (play-from-hand state :runner "The Class Act")
+      (play-cards state :runner "Masterwork (v37)" "Street Peddler" ["DJ Fenris" "Hayley Kaplan: Universal Scholar"] "The Class Act")
       (take-credits state :runner)
       (is (= 5 (count (:hand (get-runner)))) "Starts with 5 cards in hand")
-      (card-ability state :runner (get-resource state 0) 0)
+      (card-ability state :runner "Street Peddler" 0)
       (is (= 5 (count (:set-aside (get-runner)))) "Geist's draw triggers The Class Act, and street peddler has three set-aside cards")
       (is (= "The Class Act" (:title (:card (prompt-map :runner)))))
       ;; click the drawn card, which is last in the set-aside zone
@@ -3701,6 +3712,22 @@
       (click-prompt state :runner "No action")
       (is (no-prompt? state :runner) "No more prompts for runner")
       (is (not (:run @state)) "Run is ended")))
+
+(deftest methuselah-test
+  (do-game
+    (new-game {:corp {:deck [(qty "PAD Campaign" 20)] :hand ["IPO"]}
+               :runner {:hand ["Mantle" "Methuselah" "DZMZ Optimizer"]
+                        :credits 10}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Mantle")
+    (play-from-hand state :runner "Methuselah")
+    (run-on state :rd)
+    (click-card state :runner "DZMZ Optimizer")
+    (run-continue-until state :success)
+    (click-prompts state :runner "Pay 4 [Credits] to trash")
+    (dotimes [_ 2]
+      (click-card state :runner "Methuselah"))
+    (is (no-prompt? state :runner) "Paid 2 with methuselah")))
 
 (deftest mind-s-eye-interaction-with-rdi-aeneas
     ;; Interaction with RDI + Aeneas
@@ -4342,7 +4369,7 @@
       (play-from-hand state :runner "Prognostic Q-Loop")
       (run-on state :hq)
       (click-prompt state :runner "Yes")
-      (is (= "The top 2 cards of the stack are Au Revoir and Bankroll" (:msg (prompt-map :runner))))
+      (is (= "The top cards of the stack are (top->bottom): Au Revoir and Bankroll" (:msg (prompt-map :runner))))
       (click-prompt state :runner "OK")
       (card-ability state :runner (get-hardware state 0) 1)
       (click-prompt state :runner "Yes")
@@ -4443,7 +4470,7 @@
       (is (= "Choose a trigger to resolve" (:msg (prompt-map :runner))))
       (click-prompt state :runner "Prognostic Q-Loop")
       (click-prompt state :runner "Yes")
-      (is (= "The top 2 cards of the stack are Au Revoir and Bankroll" (:msg (prompt-map :runner))))))
+      (is (= "The top cards of the stack are (top->bottom): Au Revoir and Bankroll" (:msg (prompt-map :runner))))))
 
 (deftest prognostic-q-loop-are-the-correct-cards-shown-if-another-start-of-run-trigger-draws-a-card-issue-4973
     ;; Are the correct cards shown if another start of run trigger draws a card. Issue #4973
@@ -4468,7 +4495,7 @@
       (is (= "Look at top 2 cards of the stack?" (:msg (prompt-map :runner))))
       (click-prompt state :runner "Yes")
       ; Au Revoir drawn by Masterwork off it's own install, Q Loop prompt shows accurate info
-      (is (= "The top 2 cards of the stack are Bankroll and Clone Chip" (:msg (prompt-map :runner))))))
+      (is (= "The top cards of the stack are (top->bottom): Bankroll and Clone Chip" (:msg (prompt-map :runner))))))
 
 (deftest prognostic-q-loop-works-with-paladin-poemu-5304
     ;; Works with Paladin Poemu #5304
@@ -4856,6 +4883,20 @@
     (click-prompt state :corp "Done")
     (is (= 0 (count (:hand (get-runner)))))
     (is (= ["Easy Mark" "Ika"] (map :title (:discard (get-runner)))))))
+
+(deftest rotary-test
+  (do-game
+    (new-game {:runner {:hand ["Rotary"]}
+               :corp {:hand [(qty "IPO" 4)]
+                      :deck ["IPO" "IPO" "IPO"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Rotary")
+    (run-empty-server state :rd)
+    (is (changed? [(count-tags state) 1]
+          (click-prompt state :runner "Yes"))
+        "Tag on")
+    (click-prompt state :runner "No action")
+    (click-prompt state :runner "No action")))
 
 (deftest rubicon-switch
   ;; Rubicon Switch
@@ -5592,6 +5633,41 @@
               (click-card state :runner tt))
             "Used 2 credits from The Toolbox"))))
 
+(deftest the-tungsten-tailor-test
+  (do-game
+    (new-game {:runner {:hand ["The Tungsten Tailor" "Corroder"]
+                        :credits 10}
+               :corp {:hand ["Ice Wall"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (rez state :corp (get-ice state :hq 0))
+    (play-from-hand state :runner "The Tungsten Tailor")
+    (play-from-hand state :runner "Corroder")
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (is (= 0 (get-strength (get-ice state :hq 0))) "-1 str")
+    (is (changed? [(:credit (get-runner)) 0]
+          (card-ability state :runner (get-program state 0) 0)
+          (click-prompt state :runner "End the run")))))
+
+(deftest the-tungsten-tailor-done-no-break-issue-8591
+  (do-game
+    (new-game {:runner {:hand ["The Tungsten Tailor" "Corroder"]
+                        :credits 10}
+               :corp {:hand ["Ice Wall"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (rez state :corp (get-ice state :hq 0))
+    (play-from-hand state :runner "The Tungsten Tailor")
+    (play-from-hand state :runner "Corroder")
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (is (= 0 (get-strength (get-ice state :hq 0))) "-1 str")
+    (is (changed? [(:credit (get-runner)) 0]
+          (card-ability state :runner (get-program state 0) 0)
+          (click-prompt state :runner "Done"))
+        "Does not trigger when no subs were broken")))
+
 (deftest the-wizards-chest
   (do-game
     (new-game {:corp {:hand [] :deck []}
@@ -5813,6 +5889,20 @@
       (click-prompt state :runner "Steal")
       (is (= 3 (:agenda-point (get-runner))) "Runner got 3 points")
       (is (= 2 (count (:scored (get-runner)))) "Runner got 2 cards in score area")))
+
+(deftest touchstone-test
+  (do-game
+    (new-game {:runner {:hand ["Touchstone" "Clean Getaway"]}
+               :corp {:hand ["PAD Campaign"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Touchstone")
+    (play-from-hand state :runner "Clean Getaway")
+    (click-prompt state :runner "HQ")
+    (run-continue-until state :success)
+    (is (changed? [(:credit (get-runner)) -3]
+          (do-trash-prompt state 4)
+          (click-card state :runner "Touchstone"))
+        "3 + 1 for touchstone")))
 
 (deftest turntable
   ;; Turntable - Swap a stolen agenda for a scored agenda

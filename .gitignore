@@ -19,9 +19,9 @@ pom.xml
 .eastwood
 .cache
 *.archive
+*.swp
 
-data/
-!data/promos.edn
+data/**
 !data/quotes-corp.edn
 !data/quotes-runner.edn
 
@@ -34,14 +34,6 @@ data/
 /resources/public/css/
 /resources/public/img/cards/
 /resources/public/sound/
-/data/andb-*.json
-/data/cards*.edn
-/data/cycles.edn
-/data/formats.edn
-/data/mwls.edn
-/data/sets.edn
-/data/img
-/data/card-backs.edn
 /.lein-failures
 
 config.edn
@@ -65,7 +57,8 @@ tags
 tags.temp
 tags.temp.tmp
 
-.lsp/
+.clj-kondo/.cache
+.lsp/.cache
 .shadow-cljs/
 tests-user.edn
 data/cards-ca.edn
@@ -96,3 +89,4 @@ forum
 dev/forum
 logs/
 dev/replays/
+.playwright-cli/

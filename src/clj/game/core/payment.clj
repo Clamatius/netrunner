@@ -112,8 +112,9 @@
   If title is specified a toast will be generated if the player is unable to pay
   explaining which cost they were unable to pay."
   ([state side title args] (can-pay? state side (make-eid state) nil title args))
-  ([state side eid card title & args]
-   (let [remove-zero-credit-cost (and (= (:source-type eid) :corp-install)
+  ([state side eid card arg & args]
+   (let [[title args] (if (string? arg) [arg args] [nil (cons arg args)])
+         remove-zero-credit-cost (and (= (:source-type eid) :corp-install)
                                       (not (ice? card)))
          costs (merge-costs (filter some? args) remove-zero-credit-cost)]
      (if (every? #(and (not (any-effect-stops-pay? state side %))
@@ -159,8 +160,8 @@
   ([ability] (add-cost-label-to-ability ability (:cost ability)))
   ([ability cost]
    (assoc ability :cost-label
-          (build-cost-label (if (:trash-icon ability)
-                              (conj cost [(->c :trash-can)])
+          (build-cost-label (if-let [fake-cost (:fake-cost ability)]
+                              (merge-costs cost fake-cost)
                               cost)))))
 
 (comment

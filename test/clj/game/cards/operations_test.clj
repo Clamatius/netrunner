@@ -5,6 +5,7 @@
    [game.core.card :refer :all]
    [game.core.eid :refer [make-eid]]
    [game.test-framework :refer :all]
+   [game.core.winning :refer [agenda-points-required-to-win]]
    [game.utils :as utils]))
 
 (deftest twenty-four-seven-news-cycle-breaking-news-interaction
@@ -760,6 +761,20 @@
           (click-prompt state :runner "Steal")
           (is (= 2 (count-tags state)) "Runner took 2 tags from accessing agenda with Casting Call hosted on it"))))))
 
+(deftest caveat-emptor-test
+  (doseq [[opt gain cs] [["Gain 6 [Credits]. Runner has -1 [Click] next turn" 6 3]
+                         ["Gain 10 [Credits]. Runner has +1 [Click] next turn" 10 5]]]
+    (do-game
+      (new-game {:corp {:hand ["Caveat Emptor"] :credits 6}})
+      (play-from-hand state :corp "Caveat Emptor")
+      (is (changed? [(:credit (get-corp)) gain]
+            (click-prompt state :corp opt))
+          "Gained creds")
+      (take-credits state :corp)
+      (is (changed? [(:credit (get-runner)) cs]
+            (take-credits state :runner))
+          "Take-credits modified cred gain because the number of clicks was different"))))
+
 (deftest celebrity-gift
   ;; Ice Wall
   (do-game
@@ -1022,6 +1037,39 @@
     (is (= 2 (count (:deck (get-corp)))) "Corp should have 3 cards in deck after draw")
     (is (= 5 (count (:hand (get-corp)))) "Corp should draw up to 5 cards")
     (is (= 1 (count (:discard (get-corp)))) "Corp should have 1 card in discard from playing")))
+
+(deftest cultivate-full-test
+  (testing "R&D is empty"
+    (do-game
+      (new-game {:corp {:hand ["Cultivate"]}})
+      (play-from-hand state :corp "Cultivate")
+      (is (no-prompt? state :corp) "No lingering prompts")))
+  (testing "R&D has only one card. It gets trashed."
+    (do-game
+      (new-game {:corp {:hand ["Cultivate"]
+                        :deck ["IPO"]}})
+      (play-cards state :corp ["Cultivate"])
+      (is (no-prompt? state :corp) "No lingering prompts.")
+      (is-discard? state :corp ["Cultivate" "IPO"])))
+  (testing "R&D has two cards in it. One gets trashed, one gets added to HQ"
+    (do-game
+      (new-game {:corp {:hand ["Cultivate"]
+                        :deck ["IPO" "Vanilla"]}})
+      (play-cards state :corp ["Cultivate" "OK" "IPO" "Vanilla" "OK"])
+      (is (no-prompt? state :corp) "No lingering prompts.")
+      (is-discard? state :corp ["Cultivate" "IPO"])
+      (is-hand? state :corp ["Vanilla"])))
+  (testing "R&D has 3-5 cards in it. One to trash, one to hand, rest stacked"
+    (doseq [to-deck [["Beanstalk Royalties"]
+                     ["Beanstalk Royalties" "Ice Wall"]
+                     ["Beanstalk Royalties" "Ice Wall" "Stavka"]]]
+      (do-game
+        (new-game {:corp {:hand ["Cultivate"]
+                          :deck (concat ["IPO" "Vanilla"] to-deck)}})
+        (play-cards state :corp (concat ["Cultivate" "OK" "IPO" "Vanilla"] (reverse to-deck) ["OK"]))
+        (is-deck-stacked? state :corp to-deck)
+        (is (no-prompt? state :corp))
+        (is (no-prompt? state :runner))))))
 
 (deftest cyberdex-trial
   ;; Cyberdex Trial
@@ -1858,6 +1906,45 @@
         (is (not (refresh kati)) "Kati Jones should be trashed")
         (is (= credits (:credit (get-runner))) "Runner should lose no credits"))))
 
+(deftest flood-the-market-test
+  (do-game
+    (new-game {:corp {:hand [(qty "Ice Wall" 3)
+                             (qty "Project Atlas" 3)
+                             "Flood the Market"]}})
+    (core/gain state :corp :click 10)
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Project Atlas" "Server 1")
+    (play-from-hand state :corp "Project Atlas" "Server 2")
+    (play-from-hand state :corp "Project Atlas" "New remote")
+    (play-from-hand state :corp "Flood the Market")
+    (click-card state :corp (get-content state :remote1 0))
+    (is (= 2 (get-counters (get-content state :remote1 0) :advancement)))))
+
+(deftest flood-the-market-vs-issuaq-test
+  (do-game
+    (new-game {:corp {:id "Issuaq Adaptics: Sustaining Diversity"
+                      :hand [(qty "Ice Wall" 3)
+                             (qty "Project Atlas" 3)
+                             "Flood the Market"]}})
+    (core/gain state :corp :click 10)
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Ice Wall" "New remote")
+    (play-from-hand state :corp "Project Atlas" "Server 1")
+    (play-from-hand state :corp "Project Atlas" "Server 2")
+    (play-from-hand state :corp "Project Atlas" "New remote")
+    (click-advance state :corp (get-content state :remote1 0))
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (play-from-hand state :corp "Flood the Market")
+    (click-card state :corp (get-content state :remote1 0))
+    (is (= 3 (get-counters (get-content state :remote1 0) :advancement)))
+    (score state :corp (get-content state :remote1 0))
+    (is (= 6 (agenda-points-required-to-win state :corp)) "Corp Agenda point requirement reduced by 1")
+    (is (= 1 (get-counters (get-in @state [:corp :identity]) :power)) "Issuaq Adaptics has 1 power counter")))
+
 (deftest focus-group-regular-scenario-can-afford
     ;; Regular scenario - can afford
     (do-game
@@ -2156,7 +2243,6 @@
       (new-game {:corp {:hand ["Hansei Review" "IPO"]}})
       (is (= 5 (:credit (get-corp))) "Starting with 5 credits")
       (play-from-hand state :corp "Hansei Review")
-      (is (zero? (:credit (get-corp))) "Now at 0 credits")
       (click-card state :corp "IPO")
       (is (= 10 (:credit (get-corp))) "Now at 10 credits")
       (is (= 2 (count (:discard (get-corp)))))))
@@ -2473,24 +2559,22 @@
   ;; Invasion of Privacy - Full test
   (do-game
     (new-game {:corp {:deck [(qty "Invasion of Privacy" 3)]}
-               :runner {:deck [(qty "Sure Gamble" 2) "Fall Guy" (qty "Cache" 2)]}})
+               :runner {:deck ["Sure Gamble" "Easy Mark" "Fall Guy" (qty "Cache" 2)]}})
     (core/gain state :corp :click 3 :credit 6)
     ;; trash 2 cards
     (play-from-hand state :corp "Invasion of Privacy")
     (click-prompt state :corp "0") ; default trace
     (click-prompt state :runner "0") ; Runner won't match
     (is (= 5 (count (:hand (get-runner)))))
-    (is (= ["Fall Guy" "Sure Gamble" "Cancel"] (prompt-titles :corp)))
-    (click-prompt state :corp (find-card "Sure Gamble" (:hand (get-runner))))
-    (click-prompt state :corp (find-card "Sure Gamble" (:hand (get-runner))))
+    (click-card state :corp "Sure Gamble")
+    (click-card state :corp "Easy Mark")
     (is (= 3 (count (:hand (get-runner)))))
     ;; able to trash 2 cards but only 1 available target in Runner's hand
     (play-from-hand state :corp "Invasion of Privacy")
     (click-prompt state :corp "0") ; default trace
     (click-prompt state :runner "0") ; Runner won't match
     (is (= 3 (count (:hand (get-runner)))))
-    (is (= ["Fall Guy" "Cancel"] (prompt-titles :corp)))
-    (click-prompt state :corp (find-card "Fall Guy" (:hand (get-runner))))
+    (click-card state :corp "Fall Guy")
     (is (no-prompt? state :corp) "No prompt for second card")
     (is (= 2 (count (:hand (get-runner)))))
     ;; failed trace - take the bad publicity
@@ -3107,6 +3191,34 @@
    (is (= 2 (count-tags state)) "Runner should have two tags from MAD")
    (is (= 3 (count (:discard (get-corp)))) "MAD + 2 cards in discard")))
 
+(deftest myoshu
+  (do-game
+    (new-game {:corp {:credits 50
+                      :hand ["Greenmail" "Myōshu"]}})
+    (play-from-hand state :corp "Greenmail" "New remote")
+    (dotimes [_ 2]
+      (click-advance state :corp (get-content state :remote1 0)))
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (score state :corp (get-content state :remote1 0))
+    (is (changed? [(:credit (get-corp)) -10
+                   (:agenda-point (get-corp)) 2]
+          (play-from-hand state :corp "Myōshu"))
+        "Traded 10c for 2 agenda points")))
+
+(deftest myoshu-doesnt-work-if-installed-this-turn
+  (do-game
+    (new-game {:corp {:credits 50
+                      :hand ["Greenmail" "Myōshu"]}})
+    (core/gain state :corp :click 4)
+    (play-from-hand state :corp "Greenmail" "New remote")
+    (dotimes [_ 2]
+      (click-advance state :corp (get-content state :remote1 0)))
+    (score state :corp (get-content state :remote1 0))
+    (is (changed? [(:credit (get-corp)) 0]
+          (play-from-hand state :corp "Myōshu"))
+        "Could not play, installed the greenmail this turn")))
+
 (deftest nanomanagement
   ;; Biotic Labor - Gain 2 clicks
   (do-game
@@ -3129,7 +3241,21 @@
         (run-empty-server state :remote1)
         (is (changed? [(:credit (get-runner)) -8]
               (click-prompt state :runner "Pay to steal"))
-            "Paid 8c to steal 1adv Atlas"))))
+            "Paid 8c to steal 2adv Atlas"))))
+
+(deftest napd-cordon-vs-award-bait
+  ;; NAPD Cordon
+  (do-game
+      (new-game {:corp {:deck ["NAPD Cordon" "Award Bait"]}
+                 :runner {:credits 8}})
+      (play-cards state :corp ["Award Bait" "New remote"] "NAPD Cordon")
+      (take-credits state :corp)
+      (run-empty-server state :remote1)
+      (click-prompts state :corp "2" "Award Bait")
+      (is (= 2 (get-counters (get-content state :remote1 0) :advancement)) "Placed on AB")
+      (is (changed? [(:credit (get-runner)) -8]
+            (click-prompt state :runner "Pay to steal"))
+          "Paid 8c to steal 2adv Award Bait")))
 
 (deftest net-watchlist
   (doseq [[ice cost] [["Fire Wall" -12] ["Spiderweb" -9] ["Ice Wall" -3]]]
@@ -3273,7 +3399,7 @@
                :runner {:hand ["Sure Gamble"]}})
     (play-from-hand state :corp "O₂ Shortage")
     (is (changed? [(count (:hand (get-runner))) -1]
-          (click-prompt state :runner "Trash 1 random card from the grip"))
+          (click-prompt state :runner "Trash 1 card randomly from your hand"))
         "Runner discarded a single card")
     (play-from-hand state :corp "O₂ Shortage")
     (is (= ["The Corp gains [Click][Click]"] (prompt-buttons :runner)) "Runner has no longer the option to trash from the grip")
@@ -3825,6 +3951,55 @@
     (click-prompt state :runner "0")
     (is (empty? (:hand (get-runner))) "Runner took 3 meat damage")))
 
+(deftest realloc-test
+  (do-game
+    (new-game {:corp {:hand ["realloc()" "Ice Wall" "Enigma"] :credits 10}})
+    (play-cards state :corp ["Ice Wall" "HQ" :rezzed] ["Enigma" "R&D" :rezzed])
+    (core/gain state :corp :click 1)
+    (play-from-hand state :corp "realloc()")
+    (is (changed? [(:credit (get-corp)) 4]
+          (click-prompts state :corp "Ice Wall" "Enigma"))
+        "Gained 4 (1 + 3) from derezzing ice wall and enigma")))
+
+(deftest animation-protocol-do-nothing
+  (doseq [opt [:nothing :rez-illicit :rez-other :no-rez]]
+    (do-game
+      (new-game {:corp {:discard ["Bulwark" "Chiyashi" "Archer"]
+                        :hand ["Reanimation Protocol"]
+                        :credits 7}})
+      (play-from-hand state :corp "Reanimation Protocol")
+      (case opt
+        :nothing     (is (changed? [(count-bad-pub state) 0]
+                           (click-prompt state :corp "Done"))
+                         "Took no bp")
+        :rez-illicit (is (changed? [(:credit (get-corp)) (- 10 10)
+                                    (count-bad-pub state) 1]
+                           (click-prompts state :corp "Bulwark" "HQ")
+                           (is (= "Bulwark" (:title (get-ice state :hq 0))) "Rezzed it"))
+                         "Installed and rezzed bulwark, only took 1 bad pub")
+        :no-rez      (is (changed? [(:credit (get-corp)) 0
+                                    (count-bad-pub state) 0]
+                           (click-prompts state :corp "Archer" "HQ")
+                           (is (not (rezzed? (get-ice state :hq 0))) "Unrezzed")
+                           (is (= "Archer" (:title (get-ice state :hq 0))) "Did not rez it"))
+                         "Installed Archer, took no bad pub")
+        :rez-other   (is (changed? [(:credit (get-corp)) (- 10 12)
+                                    (count-bad-pub state) 1]
+                           (click-prompts state :corp "Chiyashi" "HQ")
+                           (is (= "Chiyashi" (:title (get-ice state :hq 0))) "Installed chiyashi")
+                           (is (rezzed? (get-ice state :hq 0)) "rezzed it"))
+                         "Installed and rezzed Chiyashi, took 1 bad pub")))))
+
+(deftest reanimation-protocol-factors-install-cost
+  (do-game
+    (new-game {:corp {:discard ["Chiyashi"]
+                      :hand ["Vanilla" "Reanimation Protocol"]}})
+    (play-from-hand state :corp "Vanilla" "HQ")
+    (play-from-hand state :corp "Reanimation Protocol")
+    (is (changed? [(:credit (get-corp)) -3]
+          (click-prompts state :corp "Chiyashi" "HQ"))
+        "paid 13-10 to install and rez chiyashi")))
+
 (deftest red-level-clearance
   ;; Red Level Clearance
   (do-game
@@ -3941,6 +4116,14 @@
       (is (= "Marilyn Campaign" (:title (get-content state :remote1 0))) "Marilyn Campaign should be installed")
       (is (rezzed? (get-content state :remote1 0)) "Marilyn Campaign was rezzed")
       (is (= 2 (:credit (get-corp))) "Rezzed Marilyn Campaign 2 credit + 1 credit for Restore")))
+
+(deftest retirement-plan
+  (do-game
+    (new-game {:corp {:hand ["Retirement Plan"]
+                      :discard ["PAD Campaign"]}})
+    (play-from-hand state :corp "Retirement Plan")
+    (click-prompts state :corp "PAD Campaign" "New remote")
+    (is (= "PAD Campaign" (:title (get-content state :remote1 0))))))
 
 (deftest retribution
   ;; Retribution
@@ -4184,6 +4367,28 @@
     (play-from-hand state :corp "Salem's Hospitality")
     (click-prompt state :corp "Plascrete Carapace")
     (is (= 2 (count (:hand (get-runner)))))))
+
+(deftest scapegoat-remove-bad-pub
+  (do-game
+    (new-game {:corp {:hand ["Scapegoat"] :bad-pub 1}})
+    (is (changed? [(count-bad-pub state) -1]
+          (play-from-hand state :corp "Scapegoat")
+          (click-prompt state :runner "Corp removes 2 bad publicity"))
+        "Lost a bad pub")))
+
+(deftest scapegoat-shuffle-a-card
+  (do-game
+    (new-game {:corp {:hand ["Scapegoat"] :bad-pub 1}
+               :runner {:hand ["Rezeki" "Ika"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Rezeki")
+    (play-from-hand state :runner "Ika")
+    (take-credits state :runner)
+    (play-from-hand state :corp "Scapegoat")
+    (click-prompt state :runner "Corp shuffles 1 Runner card into the Stack")
+    (click-prompts state :corp "Rezeki")
+    (is (no-prompt? state :corp))
+    (is (= 1 (count (:deck (get-runner)))))))
 
 (deftest scapenet
   (doseq [[title func] [["Misdirection" get-program]
@@ -5566,6 +5771,17 @@
     (is (= 2 (count (:discard (get-runner)))) "Runner has 2 trashed cards")
     (is (= 1 (count-bad-pub state)) "Corp takes 1 bad pub")))
 
+(deftest unleash-test
+  (do-game
+    (new-game {:corp {:hand ["Unleash" "Neural Katana"]}
+               :runner {:hand [(qty "Ika" 5)] :tags 1}})
+    (play-from-hand state :corp "Neural Katana" "HQ")
+    (is (changed? [(count (:hand (get-runner))) -3
+                   (count-tags state) -1]
+          (play-from-hand state :corp "Unleash")
+          (click-prompts state :corp "Neural Katana" "Do 3 net damage"))
+        "Neural katana was unleashed")))
+
 (deftest violet-level-clearance
   ;; Violet Level Clearance
   (do-game
@@ -5593,6 +5809,13 @@
     (click-prompt state :runner "0 [Credits]")
     (click-card state :corp "Kati Jones")
     (is (not (get-resource state 0)) "Kati Jones is trashed")))
+
+(deftest vulture-fund-test
+  (do-game
+    (new-game {:corp {:hand ["Vulture Fund"] :credits 7}})
+    (is (changed? [(:credit (get-corp)) 7
+                   (count-bad-pub state) 1]
+          (play-from-hand state :corp "Vulture Fund")))))
 
 (deftest wake-up-call-should-fire-after-using-en-passant-to-trash-ice
     ;; should fire after using En Passant to trash ice

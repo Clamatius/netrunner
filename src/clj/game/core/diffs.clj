@@ -7,7 +7,7 @@
    [game.core.card-defs :refer [card-def]]
    [game.core.cost-fns :refer [card-ability-cost]]
    [game.core.engine :refer [can-trigger?]]
-   [game.core.effects :refer [any-effects is-disabled-reg?]]
+   [game.core.effects :refer [any-effects is-disabled-reg? get-effects]]
    [game.core.installing :refer [corp-can-pay-and-install?
                                  runner-can-pay-and-install?]]
    [game.core.payment :refer [can-pay? ->c]]
@@ -111,6 +111,11 @@
            (map-indexed (fn [ab-idx ab] (ability-summary state side card ab-idx ab)))
            (into [])))
 
+(defn icon-summary [card state]
+  (if-let [icons (seq (get-effects state nil :icon card))]
+    (assoc card :icon (vec icons))
+    card))
+
 (def subroutine-keys
   [:broken
    :fired
@@ -206,11 +211,13 @@
         (flashback-playable? state side)
         (playable-as-if-in-hand? state side)
         (card-abilities-summary state side)
+        (icon-summary state)
         (select-non-nil-keys card-keys))
     (-> (cond-> card
           (:host card) (-> (dissoc-in [:host :hosted])
                            (update :host card-summary state side))
           (:hosted card) (update :hosted cards-summary state side))
+        (icon-summary state)
         (private-card))))
 
 (defn cards-summary [cards state side]
@@ -223,8 +230,11 @@
    :card
    :prompt-type
    :show-discard
+   :show-opponent-discard
    :selectable
    :eid
+   ;; bad pub
+   :offer-bad-pub?
    ;; traces
    :player
    :base
@@ -237,18 +247,18 @@
    :runner-credits])
 
 (defn prompt-summary
-  [prompt same-side?]
+  [prompt state side same-side?]
   (when same-side?
     (-> prompt
         (update :eid #(when (:eid %) (select-keys % [:eid])))
-        (update :card #(not-empty (select-non-nil-keys % card-keys)))
+        (update :card #(not-empty (select-keys % [:cid :title :printed-title :code :side])))
         (update :choices (fn [choices]
                            (if (sequential? choices)
                              (->> choices
                                   (mapv
                                    (fn [choice]
                                      (if (-> choice :value :cid)
-                                       (update choice :value select-non-nil-keys card-keys)
+                                       (update choice :value #(not-empty (select-keys % [:cid :title :printed-title])))
                                        choice)))
                                   (not-empty))
                              choices)))
@@ -281,7 +291,7 @@
    :hand-size
    :keep
    :quote
-   :trash-like-cards
+   :properties
    :prompt-state
    :agenda-point
    :agenda-point-req])
@@ -296,7 +306,7 @@
       (update :rfg cards-summary state side)
       (update :scored cards-summary state side)
       (update :set-aside cards-summary state side)
-      (update :prompt-state prompt-summary same-side?)
+      (update :prompt-state prompt-summary state side same-side?)
       (update :toast toast-summary same-side?)
       (select-non-nil-keys (into player-keys additional-keys))))
 
@@ -341,7 +351,8 @@
 (defn corp-summary
   [corp state side]
   (let [corp-player? (= side :corp)
-        install-list (:install-list corp)]
+        install-list (:install-list corp)
+        melies-target (get-in corp [:identity :melies-target])]
     (-> (player-summary corp state side corp-player? corp-keys)
         (assoc :agenda-point-req (agenda-points-required-to-win state :corp))
         (update :deck deck-summary corp-player? corp)
@@ -351,11 +362,14 @@
           :deck-count (count (:deck corp))
           :hand-count (count (:hand corp))
           :servers (servers-summary state side))
-        (cond-> (and corp-player? install-list) (assoc :install-list install-list)))))
+        (cond-> (and corp-player? install-list) (assoc :install-list install-list))
+        (cond-> (and corp-player? melies-target)
+                (assoc-in [:identity :melies-target] melies-target)))))
 
 (def runner-keys
   [:rig
    :run-credit
+   :bad-pub-credit
    :link
    :tag
    :memory
@@ -378,6 +392,7 @@
         (update :deck deck-summary runner-player? runner)
         (update :hand hand-summary state runner-player? :runner runner)
         (update :discard prune-cards)
+        (assoc :bad-pub-credit (get-in @state [:run :bad-publicity-available] 0))
         (assoc
           :deck-count (count (:deck runner))
           :hand-count (count (:hand runner))
@@ -391,6 +406,7 @@
    :corp-card-sleeve
    :runner-card-sleeve
    :language
+   :card-language
    :pronouns
    :show-alt-art])
 
@@ -456,6 +472,7 @@
    ;; :angel-arena-info
    :corp
    :corp-phase-12
+   :corp-post-discard
    :decklists
    :encounters
    :end-turn
@@ -471,6 +488,7 @@
    :run
    :runner
    :runner-phase-12
+   :runner-post-discard
    :sfx
    :sfx-current-id
    :start-date
@@ -518,6 +536,10 @@
   [stripped-state corp-state runner-state]
   (assoc stripped-state :corp (:corp runner-state) :runner (:runner runner-state)))
 
+(defn- pick-side-log
+  [log side]
+  (into [] (keep #(or (side %) (:public %)) log)))
+
 (defn public-states
   "Generates privatized states for the Corp, Runner, any spectators, and the history from the base state.
   If `:spectatorhands` is on, all information is passed on to spectators as well.
@@ -526,9 +548,9 @@
   ([state] (public-states state true true true))
   ([state spectators? corp-spectators? runner-spectators?]
    (let [stripped-state (strip-state state)
-         corp-state (state-summary stripped-state state :corp)
-         runner-state (state-summary stripped-state state :runner)
-         replay-state (strip-for-replay stripped-state corp-state runner-state)]
+         corp-state (-> (state-summary stripped-state state :corp) (update :log #(pick-side-log % :corp)))
+         runner-state (-> (state-summary stripped-state state :runner) (update :log #(pick-side-log % :runner)))
+         replay-state (-> (strip-for-replay stripped-state corp-state runner-state) (update :log #(pick-side-log % :public)))]
      ;; corp, runner, spectator, history
      {:corp-state corp-state
       :runner-state runner-state
@@ -536,6 +558,25 @@
       :corp-spect-state (when corp-spectators? (strip-for-corp-spect replay-state corp-state runner-state))
       :runner-spect-state (when runner-spectators? (strip-for-runner-spect replay-state corp-state runner-state))
       :hist-state replay-state})))
+
+(defn- fake-log-diff [old new]
+  (let [old (:log old)
+        new (:log new)
+        changes (take-last (- (count new) (count old)) new)]
+    (if (seq changes)
+      [{:log (mapcat (fn [change] [:+ change]) changes)} {}]
+      [{} {}])))
+
+(defn- get-message-diff [old-state new-state side]
+  (let [old-messages {:log (into [] (keep #(or (side %) (:public %)) (:log old-state)))}
+        new-messages {:log (into [] (keep #(or (side %) (:public %)) (:log @new-state)))}]
+    (fake-log-diff old-messages new-messages)))
+
+(defn- diff-and-patch-log [old-state new-state message-diff]
+  (let [base-diff (differ/diff (dissoc old-state :log) (dissoc new-state :log))]
+    (if-let [log-diff (:log (first message-diff))]
+      (assoc-in base-diff [0 :log] log-diff)
+      base-diff)))
 
 (defn public-diffs [old-state new-state spectators? corp-spectators? runner-spectators?]
   (let [{old-corp :corp-state old-runner :runner-state
@@ -545,21 +586,26 @@
         {new-corp :corp-state new-runner :runner-state
          new-spect :spect-state new-hist :hist-state
          new-corp-spect :corp-spect-state
-         new-runner-spect :runner-spect-state} (public-states new-state spectators? corp-spectators? runner-spectators?)]
-    {:runner-diff (differ/diff old-runner new-runner)
-     :corp-diff (differ/diff old-corp new-corp)
-     :spect-diff (when spectators? (differ/diff old-spect new-spect))
-     :runner-spect-diff (when runner-spectators? (differ/diff old-runner-spect new-runner-spect))
-     :corp-spect-diff (when corp-spectators? (differ/diff old-corp-spect new-corp-spect))
-     :hist-diff (differ/diff old-hist new-hist)}))
+         new-runner-spect :runner-spect-state} (public-states new-state spectators? corp-spectators? runner-spectators?)
+        runner-message-diff (get-message-diff old-state new-state :runner)
+        corp-message-diff (get-message-diff old-state new-state :corp)
+        public-message-diff (get-message-diff old-state new-state :public)]
+    {:runner-diff (diff-and-patch-log old-runner new-runner runner-message-diff)
+     :corp-diff (diff-and-patch-log old-corp new-corp corp-message-diff)
+     :spect-diff (when spectators? (diff-and-patch-log old-spect new-spect public-message-diff))
+     :runner-spect-diff (when runner-spectators?
+                          (diff-and-patch-log old-runner-spect new-runner-spect runner-message-diff))
+     :corp-spect-diff (when corp-spectators?
+                        (diff-and-patch-log old-corp-spect new-corp-spect corp-message-diff))
+     :hist-diff (diff-and-patch-log old-hist new-hist public-message-diff)}))
 
 (defn message-diffs [old-state new-state]
-  (let [old-messages (select-keys old-state [:log])
-        new-messages (select-keys @new-state [:log])
-        message-diff (differ/diff old-messages new-messages)]
-    {:runner-diff message-diff
-     :corp-diff message-diff
-     :spect-diff message-diff
-     :runner-spect-diff message-diff
-     :corp-spect-diff message-diff
-     :hist-diff message-diff}))
+  (let [runner-diff (get-message-diff old-state new-state :runner)
+        corp-diff (get-message-diff old-state new-state :corp)
+        public-diff (get-message-diff old-state new-state :public)]
+    {:runner-diff runner-diff
+     :corp-diff corp-diff
+     :spect-diff public-diff
+     :runner-spect-diff runner-diff
+     :corp-spect-diff corp-diff
+     :hist-diff public-diff}))

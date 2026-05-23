@@ -20,15 +20,16 @@
    (defn load-dictionary!
      [dir]
      ;; List of supported language files (based on resources/public/i18n directory)
-     (let [languages ["en" "fr" "ja" "ko" "la-pig" "pl" "pt" "ru" "zh-simp"]
+     (let [languages ["en" "es" "ca" "fr" "it" "ja" "ko" "la-pig" "pl" "pt" "ru" "zh-simp" "zh-trad"]
            ;; Try loading each language directly as a resource (works in both jar and filesystem)
            langs (->> languages
                       (keep (fn [lang]
                               (let [res-path (str dir "/" lang ".ftl")
                                     ;; Try to load from classpath (including jar)
                                     res (io/resource res-path)]
-                                (when res
-                                  [lang (slurp res)])))))
+                                ;; Skip empty placeholder files
+                                (when-let [content (some-> res slurp not-empty)]
+                                  [lang content])))))
            errors (volatile! [])]
        (doseq [[lang content] langs]
          (try (insert-lang! lang content)
@@ -40,7 +41,7 @@
 
 #?(:clj
    (comment
-     (load-dictionary! "resources/public/i18n")))
+     (load-dictionary! "public/i18n")))
 
 (defn get-content
   [lang]
@@ -64,7 +65,9 @@
          resource (if (vector? resource) resource [resource])
          [raw-id fallback] resource
          id (name raw-id)
-         bundle (get-bundle lang)]
-     (or (get-translation bundle id params)
-         fallback
-         (get-translation (get-bundle "en") id params)))))
+         bundle (get-bundle lang)
+         target-translation (get-translation bundle id params)]
+     (cond
+       target-translation {:translation target-translation :target-language true}
+       fallback {:translation fallback :target-language nil}
+       :else {:translation (get-translation (get-bundle "en") id params) :target-language nil}))))

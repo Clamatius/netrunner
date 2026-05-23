@@ -14,9 +14,10 @@
    [nr.translations :refer [clean-input tr tr-data tr-faction tr-format tr-set
                             tr-side tr-type]]
    [nr.utils :refer [banned-span deck-points-card-span faction-icon
-                     format->slug get-image-path image-or-face influence-dots
-                     non-game-toast render-icons restricted-span rotated-span
-                     set-scroll-top slug->format store-scroll-top]]
+                     buildable-format->slug get-image-path image-or-face influence-dots
+                     non-game-toast render-safe-html restricted-span rotated-span
+                     set-scroll-top slug->buildable-format store-scroll-top
+                     tr-non-game-toast]]
    [reagent.core :as r]))
 
 (defonce cards-channel (chan))
@@ -35,7 +36,7 @@
                   {} (:cards format))))
 
 (go (let [server-version (get-in (<! (GET "/data/cards/version")) [:json :version])
-          lang (get-in @app-state [:options :language] "en")
+          lang (get-in @app-state [:options :card-language] "en")
           local-cards (ls/load "cards" {})
           need-update? (or (not local-cards)
                            (not= server-version (:version local-cards))
@@ -100,21 +101,23 @@
        (map #(if (= (:title %) "The Catalyst: Convention Breaker") (insert-starter-info %) %))
        (map #(if (= (:title %) "The Syndicate: Profit over Principle") (insert-starter-info %) %))))
 
-(defn- expand-face [card acc f]
-  (let [flip (f (:flips card))
+(defn- expand-face [card names acc f]
+  (let [flip (f (:faces card))
         updated (-> card
                     (assoc :title (:title flip)
                            :text (:text flip)
+                           :title (get names f (:title flip))
                            :images (:images (f (:faces card))))
-                    (dissoc :faces :flips))]
+                    (dissoc :faces :flips :named-faces))]
     (conj acc updated)))
 
 (defn- expand-one-flip [acc card]
-  (let [faces (keys (:flips card))]
-    (reduce (partial expand-face card) acc faces)))
+  (let [faces (keys (:faces card))
+        named-faces (:named-faces card {})]
+    (reduce (partial expand-face card named-faces) acc faces)))
 
 (defn- generate-flip-cards [cards]
-  (let [flips (filter :flips cards)
+  (let [flips (filter :faces cards)
         modified (reduce expand-one-flip [] flips)]
     (into {} (map (juxt :title identity) (sort-by :code modified)))))
 
@@ -185,22 +188,28 @@
 (defn image-url
   ([card] (image-url card false))
   ([card allow-all-users]
-   (let [lang (get-in @app-state [:options :language] "en")
+   (let [lang (get-in @app-state [:options :card-language] "en")
          res (get-in @app-state [:options :card-resolution] "default")
-         art (if (show-alt-art? allow-all-users)
-               (get-in @app-state [:options :alt-arts (keyword (:code card))] "stock")
-               "stock")
+         alt-art (if (show-alt-art? allow-all-users)
+                   (get-in @app-state [:options :alt-arts (keyword (:code card))] "stock")
+                   "stock")
+         art (if (sequential? alt-art) (first alt-art) alt-art)
+         art-index (if (sequential? alt-art) (second alt-art) 0)
          images (image-or-face card)]
-     (get-image-path images (keyword lang) (keyword res) (keyword art)))))
+     (let [art-urls (get-image-path images (keyword lang) (keyword res) (keyword art))
+           safe-index (min art-index (dec (count art-urls)))]
+       (nth art-urls safe-index)))))
 
 (defn- base-image-url
   "The default card image. Displays an alternate image if the card is specified as one."
   [card]
-   (let [lang (get-in @app-state [:options :language] "en")
+   (let [lang (get-in @app-state [:options :card-language] "en")
          res (get-in @app-state [:options :card-resolution] "default")
          art (if (keyword? (:art card)) (:art card) :stock)
-         art-index (get card :art-index 0)]
-     [(nth (get-image-path (:images card) (keyword lang) (keyword res) art) art-index)]))
+         art-index (get card :art-index 0)
+         art-urls (get-image-path (:images card) (keyword lang) (keyword res) art)
+         safe-index (min art-index (dec (count art-urls)))]
+     [(nth art-urls safe-index)]))
 
 (defn- alt-version-from-string
   "Given a string name, get the keyword version or nil"
@@ -210,7 +219,7 @@
 
 (defn- card-arts-for-key
   [card key]
-  (let [lang (get-in @app-state [:options :language] "en")
+  (let [lang (get-in @app-state [:options :card-language] "en")
         res (get-in @app-state [:options :card-resolution] "default")]
     (if-let [arts (or (get-in card [:images (keyword lang) (keyword res) key])
                       (get-in card [:images (keyword lang) :default key])
@@ -221,7 +230,7 @@
 
 (defn- expand-alts
   [only-version acc card]
-   (let [lang (get-in @app-state [:options :language] "en")
+   (let [lang (get-in @app-state [:options :card-language] "en")
          res (get-in @app-state [:options :card-resolution] "default")
          alt-versions (remove #{:prev} (map keyword (map :version (:alt-info @app-state))))
          images (select-keys (merge (get-in (:images card) [(keyword lang) :default])
@@ -249,10 +258,13 @@
 (defn- expand-flips
   [acc card]
   (if-let [faces (:faces card)]
-    (->> (keys faces)
-         (map #(assoc card :images (get-in card [:faces % :images])))
-         (map #(dissoc % :faces))
-         (concat acc))
+    (let [named-faces (get card :named-faces {})]
+      (->> (keys faces)
+           (map #(assoc card
+                        :images (get-in card [:faces % :images])
+                        :title (get named-faces % (:title card))))
+           (map #(dissoc % :faces :named-faces))
+           (concat acc)))
     (conj acc card)))
 
 (defn- insert-flip-arts
@@ -264,8 +276,8 @@
   (if (= 200 (:status response))
     (let [new-alts (get-in response [:json :altarts] {})]
       (swap! app-state assoc-in [:user :options :alt-arts] new-alts)
-      (non-game-toast (tr [:card-browser_update-success "Updated Art"]) "success" nil))
-    (non-game-toast (tr [:card-browser_update-failure "Failed to Update Art"]) "error" nil)))
+      (tr-non-game-toast [:card-browser_update-success "Updated Art"] "success" nil))
+    (tr-non-game-toast [:card-browser_update-failure "Failed to Update Art"] "error" nil)))
 
 (defn- future-selected-alt-art [card]
   (let [future-code (keyword (:future-version card))
@@ -278,18 +290,32 @@
         selected-art (get selected-alts (keyword (:code card)))]
     (nil? selected-art)))
 
+(defn- card-image-properties [card]
+  (let [base-card-art (:art card)
+        card-art (if (= "" base-card-art) :stock base-card-art)
+        art-index (:art-index card)]
+    [card-art art-index]))
+
+(defn- desired-card-image-properties [code]
+  (let [selected-alts (:alt-arts (:options @app-state))
+        selected-alt (get selected-alts code [:stock 0])]
+    (if (sequential? selected-alt)
+      [(keyword (first selected-alt)) (second selected-alt)]
+      [(keyword selected-alt) 0])))
+
+;; Alts can be defined in a few different ways
+;; Either as a string for legacy cards
+;; Or as [alt-set index] for more recent alts
 (defn- selected-alt-art [card]
   (cond (contains? card :future-version) (future-selected-alt-art card)
         (contains? card :previous-versions) (previous-selected-alt-art card)
         :else
-        (let [code (keyword (:code card))
-              selected-alts (:alt-arts (:options @app-state))
-              selected-art (keyword (get selected-alts code))
-              card-art (:art card)]
-          (or (and card-art (nil? selected-art) (= "" card-art))
-              (and selected-art (= card-art selected-art))))))
+        (let [curr-card-properties (card-image-properties card)
+              code (keyword (:code card))
+              desired-card-properties (desired-card-image-properties code)]
+          (= curr-card-properties desired-card-properties))))
 
-;; Alts can only be set on th most recent version of a card
+;; Alts can only be set on the most recent version of a card
 ;; So if the card has a :future-version key, we apply the alt to
 ;; that card, setting the alt to the code of the old card.
 (defn- select-alt-art [card]
@@ -357,12 +383,12 @@
      [:div.text.card-body
       [:p [:span.type (tr-type (:type card))]
        (if-not subtypes "" (str ": " subtypes))]
-      [:pre (render-icons (tr-data :text (get @all-cards (:title card))))]
+      [:pre (render-safe-html (tr-data :text (get @all-cards (:title card))))]
 
       (when show-extra-info
         [:<>
          [:div.formats
-          (doall (for [[k name] (-> slug->format butlast)]
+          (doall (for [[k name] (-> slug->buildable-format butlast)]
                    (let [status (get-in card [:format (keyword k)] "unknown")
                          c (text-class-for-status status)]
                      ^{:key k}
@@ -405,7 +431,7 @@
       (concat runner-factions corp-factions))))
 
 (defn- filter-alt-art-cards [cards]
-  (let [lang (get-in @app-state [:options :language] "en")
+  (let [lang (get-in @app-state [:options :card-language] "en")
         res (get-in @app-state [:options :card-resolution] "default")]
     (filter #(or (not-empty (dissoc (get-in (:images %) [(keyword lang) (keyword res)]) :stock))
                  (contains? % :future-version)
@@ -416,7 +442,7 @@
   (when-let [alt-key (alt-version-from-string setname)]
     (if (= alt-key :prev)
       (filter #(or (contains? % :future-version) (contains? % :previous-versions)) cards)
-      (let [lang (get-in @app-state [:options :language] "en")
+      (let [lang (get-in @app-state [:options :card-language] "en")
             res (get-in @app-state [:options :card-resolution] "default")]
         (filter #(get-in (:images %) [(keyword lang) (keyword res) alt-key]) cards)))))
 
@@ -428,7 +454,7 @@
 (defn filter-format [fmt cards]
   (if (= "All" fmt)
     cards
-    (let [fmt (keyword (get format->slug fmt))]
+    (let [fmt (keyword (get buildable-format->slug fmt))]
       (filter #(get-in % [:format fmt :legal]) cards))))
 
 (defn filter-title [query cards]
@@ -581,7 +607,7 @@
         sets-to-display (if (show-alt-art? true)
                           (concat set-names @alt-art-sets)
                           set-names)
-        formats (-> format->slug keys butlast)]
+        formats (-> buildable-format->slug keys butlast)]
     [:div
      [simple-filter-builder (tr [:card-browser-form_format "Format"])
       state :format-filter formats tr-format]

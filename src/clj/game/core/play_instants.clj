@@ -14,7 +14,7 @@
     [game.core.revealing :refer [reveal]]
     [game.core.say :refer [play-sfx system-msg implementation-msg]]
     [game.core.update :refer [update!]]
-    [game.macros :refer [continue-ability msg req wait-for]]
+    [game.macros :refer [continue-ability effect msg req wait-for]]
     [game.utils :refer [same-card? to-keyword]]))
 
 (defn async-rfg
@@ -82,32 +82,45 @@
                                   (queue-event state resolved-event {:card card :event resolved-event})
                                   (checkpoint state nil eid {:duration resolved-event})))))))))
 
+(defn- remove-negative-costs
+  [cost-vec]
+  (vec (keep #(cond
+                (= (:cost/type %) :credit) (update % :cost/amount (fn [v] (max v 0)))
+                (pos? (:cost/amount %)) %
+                (#{:x-credits :x-tags :x-power} (:cost/type %)) %)
+             cost-vec)))
+
+(defn- play-instant-additional-costs
+  [state side card {:keys [ignore-cost base-cost no-additional-cost cached-costs cost-bonus] :as args}]
+  (cond
+    ignore-cost nil
+    no-additional-cost nil
+    :else (remove-negative-costs
+            (merge-costs [(play-additional-cost-bonus state side card)
+                          (when (has-subtype? card "Triple")
+                            (->c :click 2))
+                          (when
+                              (and (has-subtype? card "Double")
+                                   (not (get-in @state [side :register :double-ignore-additional])))
+                            (->c :click 1))]))))
+
 (defn play-instant-costs
-  [state side card {:keys [ignore-cost base-cost no-additional-cost cached-costs cost-bonus]}]
+  [state side card {:keys [ignore-cost base-cost no-additional-cost cached-costs cost-bonus] :as args}]
   (or cached-costs
       (let [cost (base-play-cost state side card {:cost-bonus cost-bonus})
-            additional-costs (play-additional-cost-bonus state side card)
+            additional-costs (play-instant-additional-costs state side card args)
             costs (merge-costs
                     [(when-not ignore-cost
                        [base-cost cost])
-                     (when (and (has-subtype? card "Triple")
-                                (not no-additional-cost))
-                       (->c :click 2))
-                     (when (and (has-subtype? card "Double")
-                                (not no-additional-cost)
-                                (not (get-in @state [side :register :double-ignore-additional])))
-                       (->c :click 1))
                      (when-not (or no-additional-cost ignore-cost)
                        [additional-costs])])]
-        costs)))
+        (remove-negative-costs costs))))
 
 (defn- can-decline-instant?
-  ([state side eid card {:keys [ignore-cost no-additional-cost]}]
+  ([state side eid card {:keys [ignore-cost no-additional-cost] :as args}]
    (and (not no-additional-cost)
         (not ignore-cost)
-        (or (has-subtype? card "Double")
-            (has-subtype? card "Triple")
-            (seq (play-additional-cost-bonus state side card))))))
+        (seq (play-instant-additional-costs state side card args)))))
 
 (defn can-play-instant?
   ([state side eid card] (can-play-instant? state side eid card nil))
@@ -155,7 +168,7 @@
                       {:msg (msg "reveal that they are unable to play " (:title card))
                        :cost (when (:base-cost args) [(:base-cost args)])
                        :async true
-                       :effect (req (update! state side (-> returned-card
+                       :effect (effect (update! state side (-> returned-card
                                                             (dissoc :seen)
                                                             (assoc
                                                               :cid (:cid card)
@@ -180,10 +193,10 @@
             {:prompt (str "Pay the additional costs to play " (:title card) "?")
              :yes-ability {:async true
                            :req (req (can-pay? state side eid (get-card state card) nil costs))
-                           :effect (req (continue-play-instant state side (assoc eid :source card :source-type :play) c costs args))}
+                           :effect (effect (continue-play-instant state side (assoc eid :source card :source-type :play) c costs args))}
              :no-ability {:cost (when (:base-cost args) [(:base-cost args)])
                           :async true
-                          :effect (req (reveal state side eid card)) ;;TODO - use reveal-explicit later?
+                          :effect (effect (reveal state side eid card)) ;;TODO - use reveal-explicit later?
                           :msg (msg "reveal " (:title card) ", and refuse to pay the additional cost to play " (:title card))}}}
            card nil)
          (continue-play-instant state side eid card costs args))
@@ -193,5 +206,5 @@
           :cost (when (:base-cost args) [(:base-cost args)])
           :async true
           ;;TODO - use reveal-explicit later?
-          :effect (req (reveal state side eid card))}
+          :effect (effect (reveal state side eid card))}
          card nil)))))

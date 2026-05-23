@@ -1,7 +1,8 @@
 (ns game.core.gaining
   (:require
-    [game.core.eid :refer [effect-completed]]
-    [game.core.engine :refer [trigger-event trigger-event-sync queue-event checkpoint]]))
+   [game.core.eid :refer [effect-completed]]
+   [game.core.effects :refer [any-effects]]
+   [game.core.engine :refer [trigger-event trigger-event-sync queue-event checkpoint]]))
 
 (defn safe-inc-n
   "Helper function to safely update a value by n. Returns a function to use with `update` / `update-in`"
@@ -103,12 +104,13 @@
    (if (and amount
             (or (= :all amount)
                 (pos? amount))
-            (pos? (:credit (side @state))))
+            (pos? (:credit (side @state)))
+            (not (any-effects state side :cannot-lose-credits)))
      (do (lose state side :credit amount)
          (when (and (= side :runner)
                     (= :all amount))
            (lose state :runner :run-credit :all))
-         (trigger-event-sync state side eid (if (= :corp side) :corp-credit-loss :runner-credit-loss) amount args))
+         (trigger-event-sync state side eid (if (= :corp side) :corp-credit-loss :runner-credit-loss) nil))
      (effect-completed state side eid))))
 
 (defn gain-clicks

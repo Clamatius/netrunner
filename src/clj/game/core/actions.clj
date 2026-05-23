@@ -4,6 +4,7 @@
     [clojure.stacktrace :refer [print-stack-trace]]
     [clojure.string :as string]
     [game.core.agendas :refer [update-advancement-requirement update-all-advancement-requirements update-all-agenda-points]]
+    [game.core.bad-publicity :refer [bad-publicity-available]]
     [game.core.board :refer [installable-servers]]
     [game.core.card :refer [get-advancement-requirement get-agenda-points get-card get-counters]]
     [game.core.card-defs :refer [card-def]]
@@ -27,17 +28,34 @@
     [game.core.to-string :refer [card-str]]
     [game.core.toasts :refer [toast]]
     [game.core.update :refer [update!]]
-    [game.macros :refer [continue-ability req wait-for]]
+    [game.macros :refer [continue-ability effect wait-for]]
     [game.utils :refer [dissoc-in quantify remove-once same-card? same-side? server-cards to-keyword]]
     [taoensso.timbre :as timbre]))
+
+(defn- without-history
+  "Returns the given atom without history keys"
+  [state]
+  (dissoc state :log :history :click-states :turn-state :paid-ability-state))
 
 (defn- update-click-state
   "Update :click-states to hold latest 4 moments before performing actions."
   [state ability]
   (when (:action ability)
-    (let [state' (dissoc @state :log :history :click-states :turn-state)
+    (let [state' (without-history @state)
           click-states (vec (take-last 4 (conj (:click-states @state) state')))]
       (swap! state assoc :click-states click-states))))
+
+(defn- update-paid-ability-state
+  "Holds a single state for undo-paid-ability command. Gets cleared on taking an action"
+  [state ability]
+  (if (:action ability)
+    (swap! state dissoc :paid-ability-state)
+    (swap! state assoc :paid-ability-state (without-history @state))))
+
+(defn- update-history!
+  [state ability]
+  (update-paid-ability-state state ability)
+  (update-click-state state ability))
 
 (defn- no-blocking-prompt?
   [state side]
@@ -64,7 +82,7 @@
         ability (assoc ability :cost cost)]
     (when (or (nil? cost)
               (can-pay? state side eid card (:title card) cost))
-      (update-click-state state ability)
+      (update-history! state ability)
       (if (:action ability)
         (let [stripped-card (select-keys card [:cid :type :title])]
           (wait-for
@@ -80,9 +98,10 @@
   ([state side eid {:keys [card] ability-idx :ability :as args}]
    (let [card (get-card state card)
          args (assoc args :card card)
-         ability (nth (:abilities card) ability-idx)
+         ability (nth (:abilities card) ability-idx nil)
          blocking-prompt? (not (no-blocking-prompt? state side))
-         cannot-play (or (:disabled card)
+         cannot-play (or (nil? ability)
+                         (:disabled card)
                          ;; cannot play actions during runs
                          (and (:action ability) (:run @state))
                          ;; while resolving another ability or promppt
@@ -124,7 +143,7 @@
         {:card card
          :ability {:action true
                    :async true
-                   :effect (req (play-instant state side eid (assoc card :rfg-instead-of-trashing true) {:base-cost flashback-cost :as-flashback true}))}
+                   :effect (effect (play-instant state side eid (assoc card :rfg-instead-of-trashing true) {:base-cost flashback-cost :as-flashback true}))}
          :ability-idx 0
          :targets []}))))
 
@@ -200,6 +219,11 @@
           ;; default
           nil)))))
 
+(defn trash-button
+  [state side eid card]
+  (system-msg state side (str "trashes " (card-str state card)))
+  (trash state side eid card {:unpreventable true}))
+
 (defn- finish-prompt [state side prompt card]
   (when-let [end-effect (:end-effect prompt)]
     (end-effect state side (make-eid state) card nil))
@@ -216,6 +240,22 @@
   (if (= choices :credit)
     (pay state side eid card (->c :credit (min choice (get-in @state [side :credit]))))
     (effect-completed state side eid)))
+
+(defn resolve-bad-pub-choice
+  [state side {:keys [eid shift-key-held] :as args}]
+  (if (pos? (bad-publicity-available state side))
+    (let [prompt (or (first-prompt-by-eid state side eid)
+                     (first (get-in @state [side :prompt])))
+          card (:card prompt)
+          prompt-eid eid
+          effect (:effect prompt)]
+      (swap! state assoc-in [side :shift-key-select] shift-key-held)
+      (if (:offer-bad-pub? prompt)
+        (do (remove-from-prompt-queue state side prompt)
+            (when effect (effect :bad-publicity))
+            (finish-prompt state side prompt card))
+        (toast state side (str "You cannot choose Bad Publicity for this effect.") "warning")))
+    (toast state side (str "You cannot choose Bad Publicity for this effect.") "warning")))
 
 ;; TODO - resolve-prompt does some evil things with eids, maybe we can fix it later - nbk, 2025
 (defn resolve-prompt
@@ -270,9 +310,9 @@
         (when match
           (remove-from-prompt-queue state side prompt)
           (if (= (:value match) "Cancel")
-            (do (if-let [cancel-effect (:cancel-effect prompt)]
+            (do (if-let [cancel (:cancel prompt)]
                   ;; trigger the cancel effect
-                  (cancel-effect choice)
+                  (cancel choice)
                   (effect-completed state side (:eid prompt)))
                 (finish-prompt state side prompt card))
             (do (effect match)
@@ -281,8 +321,9 @@
       :else
       (prompt-error "in an unknown prompt type" prompt args))))
 
-(defn- update-first [selection target eid c]
+(defn- update-first
   "This ensures that updating the selected set of cards doesn't mix up prompts (usually when the user does something silly, or the front-end/back-end are out of sync"
+  [selection target eid c]
   (mapv (fn [s]
           (if (= (-> s :ability :eid :eid) (:eid eid))
             (update s :cards
@@ -319,7 +360,7 @@
                        (first-prompt-by-eid state side eid :select)
                        (first (filter #(= :select (:prompt-type %)) (get-in @state [side :prompt]))))]
           (when (= (count (:cards selected)) (or (:max selected) 1))
-            (resolve-select state side eid card (select-keys prompt [:cancel-effect]) update! resolve-ability)))))))
+            (resolve-select state side eid card (select-keys prompt [:cancel]) update! resolve-ability)))))))
 
 (defn play-auto-pump
   "Use the 'match strength with ice' function of icebreakers."
@@ -364,7 +405,7 @@
 (defn- play-heap-breaker-auto-pump-and-break-impl
   [state side sub-groups-to-break current-ice]
   {:async true
-   :effect (req
+   :effect (effect
              (let [subs-to-break (first sub-groups-to-break)
                    sub-groups-to-break (rest sub-groups-to-break)]
                (doseq [sub subs-to-break]
@@ -388,7 +429,7 @@
         can-pump (fn [ability]
                    (when (and (:heap-breaker-pump ability)
                               (not (any-effects state side :prevent-paid-ability true? card [ability])))
-                     ((:req ability (req true)) state side eid card nil)))
+                     ((:req ability (effect true)) state side eid card nil)))
         breaker-ability (some #(when (can-pump %) %) (:abilities (card-def card)))
         pump-strength-at-once (when breaker-ability
                                 (:heap-breaker-pump breaker-ability))
@@ -443,7 +484,7 @@
 (defn- play-auto-pump-and-break-impl
   [state side payment-eid sub-groups-to-break current-ice break-ability]
   {:async true
-   :effect (req
+   :effect (effect
              (let [subs-to-break (first sub-groups-to-break)
                    sub-groups-to-break (rest sub-groups-to-break)]
                (doseq [sub subs-to-break]
@@ -711,19 +752,26 @@
         _ (update-all-agenda-points state)
         c (get-card state c)
         points (get-agenda-points c)]
-    (system-msg state :corp (str "scores " (:title c)
-                                 " and gains " (quantify points "agenda point")))
-    (implementation-msg state card)
-    (set-prop state :corp (get-card state c) :advance-counter 0)
-    (swap! state update-in [:corp :register :scored-agenda] #(+ (or % 0) points))
-    (play-sfx state side "agenda-score")
-    (when-let [on-score (:on-score (card-def c))]
-      (register-pending-event state :agenda-scored c on-score))
-    (queue-event state :agenda-scored {:card c
-                                       :advancement-requirement advancement-requirement
-                                       :advancement-tokens advancement-tokens
-                                       :points points})
-    (checkpoint state nil eid {:duration :agenda-scored})))
+    (wait-for (trigger-event-simult state side :pre-agenda-scored nil
+                                    {:card c
+                                     :scored-card card
+                                     :advancement-requirement advancement-requirement
+                                     :advancement-tokens advancement-tokens
+                                     :points points})
+              (system-msg state :corp (str "scores " (:title c)
+                                           " and gains " (quantify points "agenda point")))
+              (implementation-msg state card)
+              (set-prop state :corp (get-card state c) :advance-counter 0)
+              (swap! state update-in [:corp :register :scored-agenda] #(+ (or % 0) points))
+              (play-sfx state side "agenda-score")
+              (when-let [on-score (:on-score (card-def c))]
+                (register-pending-event state :agenda-scored c on-score))
+              (queue-event state :agenda-scored {:card c
+                                                 :scored-card card
+                                                 :advancement-requirement advancement-requirement
+                                                 :advancement-tokens advancement-tokens
+                                                 :points points})
+              (checkpoint state nil eid {:duration :agenda-scored}))))
 
 (defn score
   "Score an agenda."

@@ -39,26 +39,53 @@
     ;; New Angeles City Hall interaction
     (do-game
       (new-game {:runner {:deck ["Account Siphon"
-                                 "New Angeles City Hall"]}})
-      (core/gain state :corp :bad-publicity 1)
-      (is (= 1 (count-bad-pub state)) "Corp has 1 bad publicity")
-      (core/lose state :runner :credit 1)
-      (is (= 4 (:credit (get-runner))) "Runner has 4 credits")
-      (take-credits state :corp) ; pass to runner's turn by taking credits
-      (is (= 8 (:credit (get-corp))) "Corp has 8 credits")
+                                 "New Angeles City Hall"]
+                          :credits 4}
+                 :corp {:bad-pub 1}})
+      (take-credits state :corp)
       (play-from-hand state :runner "New Angeles City Hall")
       (is (= 3 (:credit (get-runner))) "Runner has 3 credits")
-      (let [nach (get-resource state 0)]
-        (play-run-event state "Account Siphon" :hq)
-        (click-prompt state :runner "Account Siphon")
-        (is (= 4 (:credit (get-runner))) "Runner still has 4 credits due to BP")
-        (click-prompt state :runner "New Angeles City Hall")
-        (click-prompt state :runner "Yes")
-        (is (= 2 (:credit (get-runner))) "Runner has 2 credits left")
-        (click-prompt state :runner "Yes"))
+      (play-run-event state "Account Siphon" :hq)
+      (click-prompt state :runner "Account Siphon")
+      (is (changed? [(:credit (get-runner)) -1]
+            (click-prompt state :runner "New Angeles City Hall")
+            (click-prompt state :runner "Yes")
+            (select-bad-pub state nil))
+          "Spent 1 + 1 from bad pub")
+      (is (= 2 (:credit (get-runner))) "Runner has 2 credits left")
+      (click-prompt state :runner "Yes")
       (is (zero? (count-tags state)) "Runner did not take any tags")
       (is (= 10 (:credit (get-runner))) "Runner gained 10 credits")
       (is (= 3 (:credit (get-corp))) "Corp lost 5 credits")))
+
+(deftest aircheck-basic-test
+  (do-game
+    (new-game {:runner {:hand ["Aircheck"]}
+               :corp {:hand ["Adonis Campaign"]
+                      :deck ["Adonis Campaign"]}})
+    (play-from-hand state :corp "Adonis Campaign" "New remote")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Aircheck")
+    (click-prompt state :runner "R&D")
+    (run-continue-until state :success)
+    (do-trash-prompt state 3)
+    (click-prompts state :runner "Aircheck" "Aircheck" "Aircheck" "Server 1")
+    (run-continue-until state :success)
+    (is (= ["No action"] (prompt-titles :runner))
+        "Cannot pay to trash because paying from the credit pool is forbidden")))
+
+(deftest aircheck-cannot-lose-credits
+  (do-game
+    (new-game {:runner {:hand ["Aircheck"]}
+               :corp {:hand ["Whitespace"]}})
+    (play-cards state :corp ["Whitespace" "HQ" :rezzed])
+    (take-credits state :corp)
+    (play-cards state :runner ["Aircheck" "HQ"])
+    (run-continue-until state :encounter-ice)
+    (is (changed? [(:credit (get-runner)) 0]
+          (fire-subs state (get-ice state :hq 0))
+          (is (not (:run @state)) "Run ended"))
+        "Run ended, but no credits were lost because they cannot be")))
 
 (deftest always-have-a-backup-plan-jacking-out-correctly-triggers-ahbp
     ;; Jacking out correctly triggers AHBP
@@ -506,6 +533,30 @@
         (click-prompt state :runner "Because I Can")
         (is (= (inc n) (count (get-in @state [:corp :deck]))) "1 card was shuffled into R&D")
         (is (zero? (count (get-in @state [:corp :servers :remote2 :content]))) "No cards left in server 3"))))
+
+(deftest beta-build
+  (do-game
+    (new-game {:runner {:hand ["Beta Build"] :deck ["Orca"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Beta Build")
+    (click-prompt state :runner "Orca")
+    (is (= "Orca" (:title (get-program state 0))))
+    (click-prompt state :runner "HQ")
+    (run-continue-until state :success)
+    (click-prompt state :runner "No action")
+    (is-deck? state :runner ["Orca"])))
+
+#_(deftest ^:kaocha/pending beta-build-cannot-run
+    ;; note that peace in our time needs to be updated currently, it forbids
+    ;; run events when it should not
+    (do-game
+      (new-game {:runner {:hand ["Beta Build" "Peace in Our Time"]
+                          :deck ["Orca"]}})
+      (take-credits state :corp)
+      (play-from-hand state :runner "Peace in Our Time")
+      (play-from-hand state :runner "Beta Build")
+      (click-prompt state :runner "Orca")
+      (is (no-prompt? state :runner))))
 
 (deftest black-hat
   ;; Black Hat
@@ -1084,7 +1135,7 @@
       (click-card state :runner v1)
       (is (not (no-prompt? state :runner)) "Can't target card in central server")
       (click-card state :runner v2)
-      (is (:icon (refresh v2)) "Vanilla has an icon")
+      (is (has-icon? state (refresh v2) "CP") "Vanilla has an icon")
       (rez state :corp v2 {:expect-rez false})
       (is (not (rezzed? (refresh v2))) "Prevented remote ice from rezzing")
       (take-credits state :runner)
@@ -1095,7 +1146,7 @@
       (play-from-hand state :runner "Careful Planning")
       (click-card state :runner pad)
       (rez state :corp pad {:expect-rez false})
-      (is (:icon (refresh pad)) "PAD Campaign has an icon")
+      (is (has-icon? state (refresh pad) "CP") "PAD Campaign has an icon")
       (is (not (rezzed? (refresh pad))) "Prevented remote server contents from rezzing")
       (take-credits state :runner)
       (is (nil? (:icon (refresh pad))))
@@ -1158,6 +1209,29 @@
     (is (= "Quandary" (:title (second (rest (:deck (get-corp)))))))
     (is (= "Jackson Howard" (:title (second (rest (rest (:deck (get-corp))))))))
     (is (= "Global Food Initiative" (:title (second (rest (rest (rest (:deck (get-corp)))))))))))
+
+(deftest chain-reaction-test
+  (do-game
+    (new-game {:corp {:hand ["Vanilla" "Enigma" "PAD Campaign"]}
+               :runner {:hand ["Chain Reaction" "Chain Reaction" "Ika"]}})
+    (play-from-hand state :corp "PAD Campaign" "New remote")
+    (play-from-hand state :corp "Vanilla" "Server 1")
+    (play-from-hand state :corp "Enigma" "Server 1")
+    (take-credits state :corp)
+    (core/gain state :runner :click 2)
+    (run-empty-server state :hq)
+    (run-empty-server state :rd)
+    (run-empty-server state :archives)
+    (play-from-hand state :runner "Chain Reaction")
+    (click-prompts state :runner "Vanilla" "Enigma")
+    (is (= 2 (count (:discard (get-corp)))) "Trashed 2")
+    (is (no-prompt? state :corp) "No prompt to trash nothing")
+    (play-from-hand state :runner "Ika")
+    (play-from-hand state :runner "Chain Reaction")
+    (click-card state :runner "PAD Campaign")
+    (is (= 3 (count (:discard (get-corp)))) "Trashed 1")
+    (click-card state :corp "Ika")
+    (is (= 3 (count (:discard (get-runner)))) "Trashed 1, runner prompt did not block")))
 
 (deftest charm-offensive
   (do-game
@@ -1441,6 +1515,29 @@
           (is (= (inc deck) (count (:deck (get-runner)))) "Gordian Blade should be back in stack")
           (is (nil? (get-program state 0)))))))
 
+(deftest compile-test-vs-hosting
+    ;; vs ending the run via corp action. #3639
+    (do-game
+      (new-game {:corp {:deck [(qty "Hedge Fund" 5)]
+                        :hand ["Ice Wall"]}
+                 :runner {:deck ["Gordian Blade"]
+                          :hand ["NetChip" "Compile"]}})
+      (play-from-hand state :corp "Ice Wall" "Archives")
+      (let [iw (get-ice state :archives 0)]
+        (take-credits state :corp)
+        (play-from-hand state :runner "NetChip")
+        (play-from-hand state :runner "Compile")
+        (click-prompt state :runner "Archives")
+        (run-continue state)
+        (rez state :corp iw)
+        (run-continue state)
+        (click-prompts state :runner "Yes" "Stack" "Gordian Blade" "NetChip")
+        (is (:installed (first (:hosted (get-hardware state 0)))) "Gordian Blade should be installed")
+        (let [deck (count (:deck (get-runner)))]
+          (fire-subs state iw)
+          (is (= (inc deck) (count (:deck (get-runner)))) "Gordian Blade should be back in stack")
+          (is (nil? (first (:hosted (get-hardware state 0)))) "Gordian Blade should be gone")))))
+
 (deftest compile-test-only-asks-once-per-run-issue-4749
     ;; Only asks once per run. Issue #4749
     (do-game
@@ -1658,7 +1755,7 @@
     (play-from-hand state :runner "Investigative Journalism")
     (is (= "Investigative Journalism" (:title (get-resource state 1))) "IJ able to be installed")
     (run-on state "HQ")
-    (is (= 1 (:run-credit (get-runner))) "1 run credit from bad publicity")
+    (is (= 1 (:bad-publicity-available (:run @state))) "1 run credit from bad publicity")
     (run-jack-out state)
     (play-from-hand state :runner "Activist Support")
     (take-credits state :runner)
@@ -1734,7 +1831,7 @@
     (testing "Femme Fatale can still target ice when installed with Credit Kiting, issue #3715"
       (let [iw (get-ice state :rd 0)]
         (click-card state :runner iw)
-        (is (:icon (refresh iw)) "Ice Wall has an icon")))
+        (is (has-icon? state (refresh iw) "FF") "Ice Wall has an icon")))
     (is (= 1 (count-tags state)) "Runner gained a tag")))
 
 (deftest cyber-threat-corp-rezzes-a-piece-of-ice
@@ -2025,9 +2122,7 @@
     (click-prompt state :runner "Steal")
     (is (not (:run @state)))
     ;; resolve bacterial
-    (click-prompt state :corp "Yes")
-    (click-prompt state :corp "Done")
-    (click-prompt state :corp "Done")
+    (click-prompts state :corp "Yes" "OK" "Done" "Done")
     (click-prompt state :corp "Hedge Fund")
     (click-prompt state :corp "Hedge Fund")
     (click-prompt state :corp "Hedge Fund")
@@ -2035,7 +2130,7 @@
     (click-prompt state :corp "Hedge Fund")
     (click-prompt state :corp "Hedge Fund")
     (click-prompt state :corp "Hedge Fund")
-    (click-prompt state :corp "Done")
+    (click-prompt state :corp "OK")
     (is (not (:run @state)))
     ;; should be able to continue to stealing jumon
     (click-prompt state :runner "Yes")
@@ -3928,6 +4023,21 @@
       (run-continue state)
       (is (= :movement (:phase (get-run))) "Run has bypassed Ice Wall")))
 
+(deftest inside-job-vs-doppelganger
+  (do-game
+    (new-game {:corp {:hand ["Ice Wall"]}
+               :runner {:hand ["Inside Job" "Doppelgänger"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (rez state :corp (get-ice state :hq 0))
+    (play-cards state :runner "Doppelgänger" ["Inside Job" "HQ"])
+    (run-continue-until state :encounter-ice)
+    (is (= :movement (:phase (:run @state))) "Bypassed")
+    (run-continue-until state :success)
+    (click-prompts state :runner "Yes" "HQ")
+    (run-continue-until state :encounter-ice)
+    (is (= :encounter-ice (:phase (:run @state))) "Did not bypass on doppel run")))
+
 (deftest inside-job-only-bypasses-one-ice
     ;; Only bypasses one ice
     (do-game
@@ -4392,6 +4502,44 @@
       (click-prompt state :runner "End the run")
       (run-continue state)
       (is (get-ice state :hq 0) "Second Ice Wall is not trashed")))
+
+(deftest kompromat-test
+  (testing "Kompromat"
+    (do-game
+      (new-game {:corp {:hand ["Ice Wall"]}
+                 :runner {:hand ["Kompromat"]}})
+      (play-from-hand state :corp "Ice Wall" "HQ")
+      (take-credits state :corp)
+      (play-from-hand state :runner "Kompromat")
+      (click-prompt state :runner "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (run-continue-until state :encounter-ice)
+      (fire-subs state (get-ice state :hq 0))
+      (is (no-prompt? state :corp))))
+  (testing "Kompromat successful"
+    (do-game
+      (new-game {:corp {:hand ["Ice Wall"]}
+                 :runner {:hand ["Kompromat"]}})
+      (play-from-hand state :corp "Ice Wall" "HQ")
+      (take-credits state :corp)
+      (play-from-hand state :runner "Kompromat")
+      (click-prompt state :runner "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (run-continue-until state :success)
+      (click-card state :corp "Ice Wall"))))
+
+(deftest kompromat-test-take-bp
+  (do-game
+    (new-game {:corp {:hand ["Ice Wall"]}
+               :runner {:hand ["Kompromat"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Kompromat")
+    (click-prompt state :runner "HQ")
+    (rez state :corp (get-ice state :hq 0))
+    (run-continue-until state :success)
+    (click-prompt state :corp "Done")
+    (is (= 1 (count-bad-pub state)))))
 
 (deftest kraken
   ;; Kraken
@@ -6462,13 +6610,14 @@
 (deftest rumor-mill-full-test
     ;; Full test
     (do-game
-      (new-game {:corp {:deck [(qty "Project Atlas" 2)
+      (new-game {:corp {:hand [(qty "Project Atlas" 2)
                                "Caprice Nisei" "Chairman Hiro" "Cybernetics Court"
                                "Elizabeth Mills" "Ibrahim Salem"
-                               "Housekeeping" "Director Haas" "Oberth Protocol"]}
+                               "Housekeeping" "Director Haas" "Oberth Protocol"]
+                        :credits 100
+                        :bad-pub 1}
                  :runner {:deck ["Rumor Mill"]}})
-      (core/gain state :corp :credit 100 :click 100 :bad-publicity 1)
-      (draw state :corp 100)
+      (core/gain state :corp :click 100)
       (play-from-hand state :corp "Caprice Nisei" "New remote")
       (play-from-hand state :corp "Chairman Hiro" "New remote")
       (play-from-hand state :corp "Cybernetics Court" "New remote")
@@ -6504,9 +6653,11 @@
       ;; Trashable execs
       (run-empty-server state :remote2)
       (click-prompt state :runner "Pay 6 [Credits] to trash")
+      (select-bad-pub state nil)
       (is (empty? (:scored (get-runner))) "Chairman Hiro not added to runner's score area")
       (run-empty-server state "R&D")
       (click-prompt state :runner "Pay 5 [Credits] to trash")
+      (select-bad-pub state nil)
       (is (empty? (:scored (get-runner))) "Director Haas not added to runner's score area")
       (take-credits state :runner)
       ;; Trash RM, make sure everything works again
@@ -6793,7 +6944,7 @@
       (is (no-prompt? state :runner) "No longer accessing cards"))))
 
 (deftest shred-test
-  (doseq [opt [(str "Trash 3 cards randomly from your hand") "The run does not end"]]
+  (doseq [opt ["Trash 3 cards randomly from your hand" "The run does not end"]]
     (do-game
       (new-game {:runner {:hand ["Shred"]}
                  :corp {:hand ["Prisec" "Ice Wall" "Ganked!" "PAD Campaign" "Hedge Fund" "IPO"
@@ -7099,6 +7250,17 @@
           (play-from-hand state :runner "Strike Fund"))
         "Gained 3 credits from playing Strike Fund")))
 
+(deftest sell-out-test
+  (do-game
+    (new-game {:runner {:hand ["Sell Out" "The Supplier"] :deck [(qty "Ika" 10)]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "The Supplier")
+    (play-from-hand state :runner "Sell Out")
+    (is (changed? [(:credit (get-runner)) 4
+                   (count (:hand (get-runner))) 2]
+          (click-card state :runner "The Supplier"))
+        "Gained 4 and drew 2")))
+
 (deftest sure-gamble
   ;; Sure Gamble
   (do-game
@@ -7268,6 +7430,64 @@
       (run-continue state)
       (is (= 2 (core/breaker-strength state :runner (refresh c1))) "Corroder 1 has 2 strength")
       (is (= 2 (core/breaker-strength state :runner (refresh c2))) "Corroder 2 has 2 strength"))))
+
+(deftest tailgate-test
+  (dotimes [ices 4]
+    (do-game
+      (new-game {:corp {:hand (vec (take (+ 4 ices) ["Hedge Fund" "Hedge Fund" "Hedge Fund"
+                                                     "Hedge Fund"
+                                                     "Vanilla" "Vanilla" "Vanilla"]))}
+                 :runner {:hand ["Tailgate"]}})
+      (dotimes [_ ices]
+        (play-from-hand state :corp "Vanilla" "HQ"))
+      (take-credits state :corp)
+      (is (changed? [(:credit (get-runner)) (min 0 (- ices 3))]
+            (play-from-hand state :runner "Tailgate"))
+          "discounted")
+      (run-continue-until state :success)
+      (dotimes [_ 3]
+        (click-prompt state :runner "No action"))
+      (is (no-prompt? state :runner)))))
+
+(deftest take-a-dive-test
+  (doseq [fire? [true nil]]
+    (do-game
+      (new-game {:corp {:hand ["Rime"]}
+                 :runner {:hand ["Take a Dive"]}})
+      (play-from-hand state :corp "Rime" "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :corp)
+      (play-from-hand state :runner "Take a Dive")
+      (click-prompt state :runner "HQ")
+      (run-continue-until state :encounter-ice)
+      (when fire?
+        (card-subroutine state :corp (get-ice state :hq 0) 0))
+      (run-continue-until state :success)
+      (is (no-prompt? state :corp))
+      (is (= (if fire? 1 0) (count-bad-pub state)) "BP when fired")
+      (is (= "Take a Dive" (get-in @state [:runner :rfg 0 :title]))))))
+
+(deftest take-a-dive-vs-redirect
+  ;; CR says that the precondition for the run (HQ/Archives) needs to be there
+  ;; when the run becomes successful.
+  (doseq [fire? [true nil]]
+    (do-game
+      (new-game {:corp {:hand ["Rime" "Proprionegation"]}
+                 :runner {:hand ["Take a Dive"]}})
+      (play-and-score state "Proprionegation")
+      (play-from-hand state :corp "Rime" "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :corp)
+      (play-from-hand state :runner "Take a Dive")
+      (click-prompt state :runner "HQ")
+      (run-continue-until state :encounter-ice)
+      (when fire?
+        (card-subroutine state :corp (get-ice state :hq 0) 0))
+      (card-ability state :corp (get-scored state :corp 0) 0)
+      (run-continue-until state :success)
+      (is (no-prompt? state :corp))
+      (is (= 0 (count-bad-pub state)) "BP when fired")
+      (is (= "Take a Dive" (get-in @state [:runner :rfg 0 :title]))))))
 
 (deftest test-run-programs-hosted-after-install-get-returned-to-stack-issue-1081
     ;; Programs hosted after install get returned to Stack. Issue #1081
@@ -7481,7 +7701,7 @@
     (play-from-hand state :runner "Tinkering")
     (let [iwall (get-ice state :hq 0)]
       (click-card state :runner iwall)
-      (is (:icon (refresh iwall)) "Ice Wall has an icon")
+      (is (has-icon? state (refresh iwall) "T") "Ice Wall has an icon")
       (is (has-subtype? (refresh iwall) "Barrier") "Ice Wall has Barrier")
       (is (has-subtype? (refresh iwall) "Code Gate") "Ice Wall has Code Gate")
       (is (has-subtype? (refresh iwall) "Sentry") "Ice Wall has Sentry")
@@ -7490,7 +7710,7 @@
       (is (has-subtype? (refresh iwall) "Code Gate") "Ice Wall has Code Gate")
       (is (has-subtype? (refresh iwall) "Sentry") "Ice Wall has Sentry")
       (take-credits state :runner)
-      (is (nil? (:icon (refresh iwall))))
+      (is (no-icons? state (refresh iwall)))
       (is (has-subtype? (refresh iwall) "Barrier") "Ice Wall has Barrier")
       (is (not (has-subtype? (refresh iwall) "Code Gate")) "Ice Wall does not have Code Gate")
       (is (not (has-subtype? (refresh iwall) "Sentry")) "Ice Wall does not have Sentry"))))

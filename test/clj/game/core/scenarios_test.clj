@@ -5,6 +5,32 @@
    [game.core.card :refer :all]
    [game.test-framework :refer :all]))
 
+(deftest mantle-cupellation-interaction-zero-credits
+  (do-game
+    (new-game {:corp {:hand ["IPO"]}
+               :runner {:hand ["Mantle" "Cupellation"]
+                        :credits 2}})
+    (take-credits state :corp)
+    (play-cards state :runner "Mantle" "Cupellation")
+    (run-empty-server state :hq)
+    (click-prompt state :runner "[Cupellation] 1 [Credits]: Host card")
+    (click-card state :runner "Mantle")
+    (is (no-prompt? state :runner) "Done")))
+
+(deftest bad-publicity-works-with-shift-key
+  (do-game
+    (new-game {:corp {:hand ["Scatter Field"] :bad-pub 3}
+               :runner {:hand ["Unity"] :credits 10}})
+    (play-cards state :corp ["Scatter Field" "HQ" :rezzed])
+    (take-credits state :corp)
+    (play-from-hand state :runner "Unity")
+    (run-on state :hq)
+    (run-continue-until state :encounter-ice)
+    (auto-pump-and-break state (get-program state 0))
+    (is (changed? [(:credit (get-runner)) -2]
+          (select-bad-pub state true))
+        "3 pub + 2cr")))
+
 (deftest tread-lightly-vovo-combine-well
   (do-game
     (new-game {:corp {:hand ["Tithe" "Vovô Ozetti"]}

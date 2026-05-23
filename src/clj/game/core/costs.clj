@@ -1,6 +1,6 @@
 (ns game.core.costs
   (:require
-   [game.core.bad-publicity :refer [gain-bad-publicity]]
+   [game.core.bad-publicity :refer [gain-bad-publicity bad-publicity-available lose-bad-publicity]]
    [game.core.board :refer [all-active all-active-installed all-installed all-installed-runner-type]]
    [game.core.card :refer [active? agenda? corp? facedown? get-card get-counters get-zone hardware? has-subtype? ice? in-hand? installed? program? resource? rezzed? runner?]]
    [game.core.card-defs :refer [card-def]]
@@ -21,8 +21,10 @@
    [game.core.to-string :refer [card-str]]
    [game.core.update :refer [update!]]
    [game.core.virus :refer [number-of-virus-counters]]
-   [game.macros :refer [continue-ability req wait-for]]
-   [game.utils :refer [enumerate-str quantify same-card?]]))
+   [game.macros :refer [continue-ability effect req wait-for]]
+   [game.utils :refer [enumerate-cards enumerate-str quantify same-card?]]))
+
+(defn- can-forfeit? [card] (not (get-in card [:flags :cannot-forfeit])))
 
 ;; Click
 (defmethod value :click [cost] (:cost/amount cost))
@@ -138,7 +140,10 @@
 (defn total-available-credits
   [state side eid card]
   (if-not (any-effects state side :cannot-pay-credit)
-    (+ (get-in @state [side :credit])
+    (+ (if-not (any-effects state side :cannot-pay-credits-from-pool)
+         (get-in @state [side :credit])
+         0)
+       (bad-publicity-available state side)
        (->> (concat (eligible-pay-credit-cards state side eid card)
                     (eligible-reduce-credit-cards state side eid card))
             (map #(+ (get-counters % :recurring)
@@ -175,7 +180,7 @@
   [cost state side eid card]
   (and (<= 0 (- (total-available-stealth-credits state side eid card) (stealth-value cost)))
        (<= 0 (- (value cost) (stealth-value cost)))
-       (or (<= 0 (- (get-in @state [side :credit]) (value cost)))
+       (or (when-not (any-effects state side :cannot-pay-credits-from-pool) (<= 0 (- (get-in @state [side :credit]) (value cost))))
            (<= 0 (- (total-available-credits state side eid card) (value cost))))))
 (defmethod handler :credit
   [cost state side eid card]
@@ -186,8 +191,9 @@
       (let [updated-cost (max 0 (- (value cost) (or (:reduction async-result) 0)))]
         (cond
           (and (pos? updated-cost)
-               (pos? (count (provider-func))))
-          (wait-for (resolve-ability state side (pick-credit-providing-cards provider-func eid updated-cost (stealth-value cost)) card nil)
+               (or (pos? (count (provider-func)))
+                   (pos? (bad-publicity-available state side))))
+          (wait-for (resolve-ability state side (pick-credit-providing-cards provider-func eid updated-cost (stealth-value cost) (hash-map) nil {} (bad-publicity-available state side)) card nil)
                    (let [pay-async-result async-result]
                      (queue-event state (if (= side :corp) :corp-spent-credits :runner-spent-credits) {:value updated-cost})
                      (swap! state update-in [:stats side :spent :credit] (fnil + 0) updated-cost)
@@ -227,7 +233,7 @@
        :choices {:minimum (if (pos? offset) offset 0)
                  ;; note: maximum is the max X value, rather than the max credit spend
                  ;; so max + offset is the max credit spend
-                 :number (req
+                 :number (effect
                            (if-let [maximum (->> cost :cost/maximum)]
                              (min (total-available-credits state side eid card)
                                   (+ offset (if (fn? maximum)
@@ -235,7 +241,7 @@
                                               maximum)))
                              (total-available-credits state side eid card)))}
        :effect
-       (req
+       (effect
          (let [stealth-value (if (= -1 (stealth-value cost)) cost (stealth-value cost))
                cost target
                provider-func #(eligible-pay-credit-cards state side eid card)]
@@ -301,12 +307,29 @@
                                                   :paid/value 1
                                                   :paid/targets [card]})))
 
+;; like trash can, but does not fire trash can abilities
+(defmethod value :trash-self [cost] (:cost/amount cost))
+(defmethod label :trash-self [cost] "trash itself")
+(defmethod payable? :trash-self
+  [cost state side eid card]
+  (and (installed? (get-card state card))
+       (= 1 (value cost))))
+(defmethod handler :trash-self
+  [cost state side eid card]
+  (wait-for (trash state side card {:cause :ability-cost
+                                    :unpreventable true
+                                    :suppress-checkpoint true})
+            (complete-with-result state side eid {:paid/msg (str "trashes " (:printed-title card))
+                                                  :paid/type :trash-self
+                                                  :paid/value 1
+                                                  :paid/targets [card]})))
+
 ;; Forfeit
 (defmethod value :forfeit [cost] (:cost/amount cost))
 (defmethod label :forfeit [cost] (str "forfeit " (quantify (value cost) "Agenda")))
 (defmethod payable? :forfeit
   [cost state side _eid _card]
-  (<= 0 (- (count (get-in @state [side :scored])) (value cost))))
+  (<= 0 (- (count (filter can-forfeit? (get-in @state [side :scored]))) (value cost))))
 (defmethod handler :forfeit
   [cost state side eid card]
   (continue-ability
@@ -315,8 +338,9 @@
      :async true
      :choices {:max (value cost)
                :all true
-               :card #(is-scored? state side %)}
-     :effect (req (doseq [agenda targets]
+               :req (req (is-scored? state side target)
+                              (can-forfeit? target))}
+     :effect (effect (doseq [agenda targets]
                     ;; We don't have to await this because we're suppressing the
                     ;; checkpoint and forfeit makes all of the trashing unpreventable,
                     ;; meaning that there will be no potential for input. Once
@@ -326,7 +350,7 @@
                   (complete-with-result
                     state side eid
                     {:paid/msg (str "forfeits " (quantify (value cost) "agenda")
-                                    " (" (enumerate-str (map :title targets)) ")")
+                                    " (" (enumerate-cards targets :sorted) ")")
                      :paid/type :forfeit
                      :paid/value (value cost)
                      :paid/targets targets}))}
@@ -355,7 +379,7 @@
 (defmethod payable? :forfeit-or-trash-x-from-hand
   [cost state side eid card]
   (or (<= 0 (- (count (get-in @state [side :hand])) (value cost)))
-      (pos? (count (get-in @state [side :scored])))))
+      (pos? (count (filter can-forfeit? (get-in @state [side :scored]))))))
 (defmethod handler :forfeit-or-trash-x-from-hand
   [cost state side eid card]
   (let [hand (if (= :corp side) "HQ" "the grip")
@@ -365,7 +389,7 @@
                                  :max (value cost)
                                  :card select-fn}
                        :async true
-                       :effect (req (wait-for
+                       :effect (effect (wait-for
                                       (reveal state side targets)
                                       (wait-for
                                         (trash-cards state side (map #(assoc % :seen true) targets)
@@ -373,7 +397,7 @@
                                         (complete-with-result
                                           state side eid
                                           {:paid/msg (str "reveals and trashes " (quantify (count async-result) "card")
-                                                          " (" (enumerate-str (map :title targets)) ")"
+                                                          " (" (enumerate-cards targets :sorted) ")"
                                                           " from " hand)
                                            :paid/type :trash-from-hand
                                            :paid/value (count async-result)
@@ -382,13 +406,14 @@
                                    :async true
                                    :choices {:max 1
                                              :all true
-                                             :card #(is-scored? state side %)}
-                                   :effect (req (doseq [agenda targets]
+                                             :req (req (is-scored? state side target)
+                                                            (can-forfeit? target))}
+                                   :effect (effect (doseq [agenda targets]
                                                   (forfeit state side (make-eid state eid) agenda {:msg false
                                                                                                    :suppress-checkpoint true}))
                                                 (complete-with-result
                                                   state side eid
-                                                  {:paid/msg (str "forfeits an agenda (" (enumerate-str (map :title targets)) ")")
+                                                  {:paid/msg (str "forfeits an agenda (" (enumerate-cards targets :sorted) ")")
                                                    :paid/type :forfeit
                                                    :paid/value 1
                                                    :paid/targets targets}))}]
@@ -401,7 +426,7 @@
                :prompt "Choose one"
                :choices ["Forfeit an Agenda"
                          (str "Reveal and trash " (value cost) " cards from " hand)]
-               :effect (req (continue-ability
+               :effect (effect (continue-ability
                               state side
                               (if (= target "Forfeit an Agenda")
                                 forfeit-an-agenda trash-x-cards)
@@ -455,8 +480,8 @@
       state side
       {:async true
        :prompt "How many tags do you want to remove?"
-       :choices {:number (req (get-in @state [:runner :tag :base] 0))}
-       :effect (req (let [cost target]
+       :choices {:number (effect (get-in @state [:runner :tag :base] 0))}
+       :effect (effect (let [cost target]
                       (if (zero? target)
                         (complete-with-result
                           state side eid
@@ -490,7 +515,7 @@
        :choices [(str "Remove " (quantify (value cost) "tag"))
                  (str "Gain " (value cost) " bad publicity")]
        :async true
-       :effect (req (if (= target (str "Gain " (value cost) " bad publicity"))
+       :effect (effect (if (= target (str "Gain " (value cost) " bad publicity"))
                       (wait-for (gain-bad-publicity state side (make-eid state eid) (value cost) {:suppress-checkpoint true})
                                 (complete-with-result state side eid {:paid/msg (str "gains " (value cost) " bad publicity")
                                                                       :paid/type :tag-or-bad-pub
@@ -552,7 +577,7 @@
                :max (value cost)
                :card (every-pred installed? program? (complement facedown?))}
      :async true
-     :effect (req (doseq [t targets]
+     :effect (effect (doseq [t targets]
                     (move state side (assoc-in t [:persistent :from-cid] (:cid card)) :rfg))
                   (complete-with-result
                     state side eid
@@ -584,7 +609,7 @@
                              (runner? %)
                              (corp? %)))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -615,7 +640,7 @@
                              (runner? %)
                              (corp? %)))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -643,7 +668,7 @@
                :max (value cost)
                :card (every-pred installed? hardware? (complement facedown?))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -678,7 +703,7 @@
                            (has-subtype? % "Harmonic"))}
      :async true
      ;; TODO - once derez is async, fix this
-     :effect (req (wait-for
+     :effect (effect (wait-for
                     (derez state side targets {:suppress-checkpoint true :no-msg true})
                     (complete-with-result
                       state side eid
@@ -705,7 +730,7 @@
                :max (value cost)
                :card (every-pred installed? program? (complement facedown?))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -733,7 +758,7 @@
                :max (value cost)
                :card (every-pred installed? resource? (complement facedown?))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -764,7 +789,7 @@
                                  #(has-subtype? % "Connection")
                                  (complement facedown?))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -792,7 +817,7 @@
                :max (value cost)
                :card (every-pred installed? rezzed? ice?)}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :suppress-checkpoint true
                                                              :unpreventable true})
                             (complete-with-result
@@ -821,12 +846,12 @@
     {:prompt (str "Choose " (quantify (value cost) " rezzed Bioroid" "") " to trash")
      :choices {:all true
                :max (value cost)
-               :req (req (and (installed? target)
+               :req (req (installed? target)
                               (rezzed? target)
                               (has-subtype? target "Bioroid")
-                              (= (second (get-zone target)) (first (:server (:run @state))))))}
+                              (= (second (get-zone target)) (first (:server (:run @state)))))}
      :async true
-     :effect (req (wait-for (trash-cards state side targets {:cause :ability-cost
+     :effect (effect (wait-for (trash-cards state side targets {:cause :ability-cost
                                                              :unpreventable true})
                             (complete-with-result
                               state side eid
@@ -875,7 +900,7 @@
                  :max (value cost)
                  :card select-fn}
        :async true
-       :effect (req (wait-for (trash-cards state side targets {:unpreventable true :seen false :cause :ability-cost :suppress-checkpoint true})
+       :effect (effect (wait-for (trash-cards state side targets {:unpreventable true :seen false :cause :ability-cost :suppress-checkpoint true})
                               (complete-with-result
                                 state side eid
                                 {:paid/msg (str "trashes " (quantify (count async-result) "card")
@@ -902,7 +927,7 @@
               state side eid
               {:paid/msg (str "trashes " (quantify (count async-result) "card")
                               (when (= side :runner)
-                                (str " (" (enumerate-str (map :title async-result)) ")"))
+                                (str " (" (enumerate-cards async-result :sorted) ")"))
                              " randomly from "
                              (if (= :corp side) "HQ" "the grip"))
                :paid/type :randomly-trash-from-hand
@@ -926,7 +951,7 @@
                         (complete-with-result
                           state side eid
                           {:paid/msg (str "reveals and trashes " (quantify (count async-result) "card")
-                                          " (" (enumerate-str (map :title to-trash)) ")"
+                                          " (" (enumerate-cards to-trash :sorted) ")"
                                           " from " hand)
                            :paid/type :reveal-and-randomly-trash-from-hand
                            :paid/value (count async-result)
@@ -947,7 +972,7 @@
                                (if (= :runner side) "[their] grip" "HQ")
                                (when (and (= :runner side)
                                           (pos? (count async-result)))
-                                 (str " (" (enumerate-str (map :title async-result)) ")")))
+                                 (str " (" (enumerate-cards async-result :sorted) ")")))
                  :paid/type :trash-entire-hand
                  :paid/value (count async-result)
                  :paid/targets async-result}))))
@@ -968,12 +993,12 @@
      :choices {:all true
                :max (value cost)
                :card (every-pred hardware? in-hand?)}
-     :effect (req (wait-for (trash-cards state side targets {:unpreventable true :suppress-checkpoint true :cause :ability-cost})
+     :effect (effect (wait-for (trash-cards state side targets {:unpreventable true :suppress-checkpoint true :cause :ability-cost})
                             (complete-with-result
                               state side eid
                               {:paid/msg (str "trashes " (quantify (count async-result) "piece")
                                              " of hardware"
-                                             " (" (enumerate-str (map :title targets)) ")"
+                                             " (" (enumerate-cards targets :sorted) ")"
                                              " from [their] grip")
                                :paid/type :trash-hardware-from-hand
                                :paid/value (count async-result)
@@ -996,11 +1021,11 @@
      :choices {:all true
                :max (value cost)
                :card (every-pred program? in-hand?)}
-     :effect (req (wait-for (trash-cards state side targets {:unpreventable true :cause :ability-cost :suppress-checkpoint true})
+     :effect (effect (wait-for (trash-cards state side targets {:unpreventable true :cause :ability-cost :suppress-checkpoint true})
                             (complete-with-result
                               state side eid
                               {:paid/msg (str "trashes " (quantify (count async-result) "program")
-                                             " (" (enumerate-str (map :title targets)) ")"
+                                             " (" (enumerate-cards targets :sorted) ")"
                                              " from the grip")
                                :paid/type :trash-program-from-hand
                                :paid/value (count async-result)
@@ -1023,11 +1048,11 @@
      :choices {:all true
                :max (value cost)
                :card (every-pred resource? in-hand?)}
-     :effect (req (wait-for (trash-cards state side targets {:unpreventable true :cause :ability-cost :suppress-checkpoint true})
+     :effect (effect (wait-for (trash-cards state side targets {:unpreventable true :cause :ability-cost :suppress-checkpoint true})
                             (complete-with-result
                               state side eid
                               {:paid/msg (str "trashes " (quantify (count async-result) "resource")
-                                             " (" (enumerate-str (map :title targets)) ")"
+                                             " (" (enumerate-cards targets :sorted) ")"
                                              " from the grip")
                                :paid/type :trash-resource-from-hand
                                :paid/value (count async-result)
@@ -1099,12 +1124,12 @@
                :all true
                :card (every-pred installed? (if (= :corp side) corp? runner?))}
      :async true
-     :effect (req (let [cards (keep #(move state side % :deck {:shuffled true}) targets)]
+     :effect (effect (let [cards (keep #(move state side % :deck {:shuffled true}) targets)]
                     (shuffle! state side :deck)
                     (complete-with-result
                       state side eid
                       {:paid/msg (str "shuffles " (quantify (count cards) "card")
-                                     " (" (enumerate-str (map :title cards)) ")"
+                                     " (" (enumerate-cards cards :sorted) ")"
                                      " into " (if (= :corp side) "R&D" "the stack"))
                        :paid/type :shuffle-installed-to-stack
                        :paid/value (count cards)
@@ -1129,7 +1154,7 @@
                  :all true
                  :card (every-pred installed? (if (= :corp side) corp? runner?))}
        :async true
-       :effect (req (let [cards (keep #(move state side % :deck) targets)]
+       :effect (effect (let [cards (keep #(move state side % :deck) targets)]
                       (complete-with-result
                         state side eid
                         {:paid/msg (str "adds " (quantify (count cards) "installed card")
@@ -1200,14 +1225,14 @@
                   " to add to HQ")
      :choices {:max (value cost)
                :all true
-               :req (req (and (corp? target)
-                              (same-card? (:host target) card)))}
+               :req (req (corp? target)
+                              (same-card? (:host target) card))}
      :async true
-     :effect (req (let [cards (keep #(move state :corp % :hand) targets)]
+     :effect (effect (let [cards (keep #(move state :corp % :hand) targets)]
                     (complete-with-result
                       state side eid
                       {:paid/msg (str "adds " (quantify (count cards) "hosted card")
-                                      " to HQ (" (enumerate-str (map :title cards)) ")")
+                                      " to HQ (" (enumerate-cards cards :sorted) ")")
                        :paid/type :hosted-to-hq
                        :paid/value (count cards)
                        :paid/targets cards})))}
@@ -1228,7 +1253,7 @@
                            (is-scored? state side %)
                            (pos? (get-counters % :agenda)))}
      :async true
-     :effect (req (wait-for (add-counter state side target :agenda (- (value cost)) {:suppress-checkpoint true})
+     :effect (effect (wait-for (add-counter state side target :agenda (- (value cost)) {:suppress-checkpoint true})
                             (queue-event state :agenda-counter-spent {:value (value cost)})
                             (complete-with-result
                               state side eid
@@ -1330,9 +1355,9 @@
     state side
     {:async true
      :prompt "How many hosted power counters do you want to spend?"
-     :choices {:number (req (get-counters card :power))}
+     :choices {:number (effect (get-counters card :power))}
      :effect
-     (req (let [cost target]
+     (effect (let [cost target]
             (wait-for (add-counter state side card :power (- cost) {:suppress-checkpoint true})
                       (complete-with-result
                         state side eid
@@ -1379,3 +1404,20 @@
                                   " from on " title)
                    :paid/type :virus
                    :paid/value (value cost)})))))
+
+(defmethod value :host-bad-pub [cost] (:cost/amount cost))
+(defmethod label :host-bad-pub [cost] (str "host " (value cost) " bad publicity"))
+(defmethod payable? :host-bad-pub
+  [cost state side eid card]
+  (<= 0 (- (get-in @state [:corp :bad-publicity :base] 0) (value cost))))
+(defmethod handler :host-bad-pub
+  [cost state side eid card]
+  (wait-for
+    (lose-bad-publicity state side (value cost) nil)
+    (wait-for
+      (add-counter state side card :bad-publicity (value cost) {:suppress-checkpoint true})
+      (complete-with-result
+        state side eid
+        {:paid/msg (str "hosts " (value cost) " bad publicity on " (:title card))
+         :paid/type :host-bad-pub
+         :paid/value (value cost)}))))

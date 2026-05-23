@@ -14,10 +14,10 @@
     [game.core.payment :refer [build-spend-msg can-pay? handler]]
     [game.core.prompt-state :refer [add-to-prompt-queue]]
     [game.core.prompts :refer [clear-wait-prompt show-prompt show-select show-wait-prompt]]
-    [game.core.say :refer [system-msg system-say n-last-logs]]
+    [game.core.say :refer [system-msg multi-msg system-say n-last-logs]]
     [game.core.update :refer [update!]]
     [game.core.winning :refer [check-win-by-agenda]]
-    [game.macros :refer [continue-ability req wait-for]]
+    [game.macros :refer [continue-ability effect wait-for]]
     [game.utils :refer [dissoc-in distinct-by enumerate-str in-coll? remove-once same-card? server-cards side-str to-keyword]]
     [jinteki.utils :refer [other-side]]
     [game.core.memory :refer [update-mu]]
@@ -123,9 +123,9 @@
 ; :not-distinct -- boolean
 ;   By default, duplicate entries of the same string will be combined into a single button.
 ;   If set to true, duplicate entries of the same string will be shown as multiple buttons.
-; :cancel-effect -- 5-fn
+; :cancel -- ability-map
 ;   If a prompt with the choice "Cancel" is clicked, the prompt exits without doing anything else
-;   and this function will be called.
+;   and this ability map will get resolved
 
 ; SIMULTANEOUS EFFECT RESOLUTION KEYS
 ; :interactive -- 5-fn. when simultaneous effect resolution has been enabled for a specific event, the user receives
@@ -148,6 +148,7 @@
 ;              some ability once between all of them, then the card should specify a manual :once-key that can
 ;              be any value, preferrably a unique keyword.
 ; :install-req -- a function which returns a list of servers a card may be installed into
+; :legal-zones -- like install-req, but also disallows movement into the given zones
 ; :makes-run -- boolean. indicates if the ability makes a run.
 
 ; COMPLEX ABILITY WRAPPERS
@@ -266,26 +267,27 @@
 
 (defn- resolve-ability-eid
   [state side {:keys [eid choices] :as ability} card targets]
-  (cond
-    ;; Only has the eid, in effect a nil ability
-    (and eid (= 1 (count ability)))
-    (effect-completed state side eid)
-    ;; This was called directly without an eid present
-    (and ability (not eid))
-    (resolve-ability state side ability card targets)
-    ;; Both ability and eid are present, so we're good to go
-    (and ability eid)
-    (let [ability (assoc-in ability [:eid :source] card)
-          ab (select-ability-kw ability)
-          ability-fn (get @ability-types ab)]
-      (cond
-        ab (ability-fn state side ability card targets)
-        choices (check-choices state side ability card targets)
-        :else (check-ability state side ability card targets)))
-    ;; Something has gone terribly wrong, error out
-    :else
-    (timbre/error (Exception. (str "Ability is nil????" ability card targets))
-                  (n-last-logs state 5))))
+  (let [card (or card (:source eid))]
+    (cond
+      ;; Only has the eid, in effect a nil ability
+      (and eid (= 1 (count ability)))
+      (effect-completed state side eid)
+      ;; This was called directly without an eid present
+      (and ability (not eid))
+      (resolve-ability state side ability card targets)
+      ;; Both ability and eid are present, so we're good to go
+      (and ability eid)
+      (let [ability (assoc-in ability [:eid :source] card)
+            ab (select-ability-kw ability)
+            ability-fn (get @ability-types ab)]
+        (cond
+          ab (ability-fn state side ability card targets)
+          choices (check-choices state side ability card targets)
+          :else (check-ability state side ability card targets)))
+      ;; Something has gone terribly wrong, error out
+      :else
+      (timbre/error (Exception. (str "Ability is nil????" ability card targets))
+                    (n-last-logs state 5)))))
 
 ;;; Checking functions for resolve-ability
 (defn- check-choices
@@ -300,20 +302,26 @@
     (do-ability state side ability card targets)
     (effect-completed state side eid)))
 
-(defn print-msg
-  "Prints the ability message"
+(defn- get-side-message
   [state side {:keys [eid] :as ability} card targets payment-str]
   (when-let [message (:msg ability)]
     (let [desc (if (or (= :cost message) (string? message))
                  message
                  (message state side eid card targets))
-          cost-spend-msg (build-spend-msg payment-str "use")
-          disp-side (or (:display-side ability) (to-keyword (:side card)))]
+          cost-spend-msg (build-spend-msg payment-str "use")]
       (cond
-        (= :cost desc)
-        (system-msg state disp-side (str payment-str " to satisfy " (get-title card)))
-        desc
-        (system-msg state disp-side (str cost-spend-msg (get-title card) (str " to " desc)))))))
+        (= :cost desc) (str payment-str " to satisfy " (get-title card))
+        desc (str cost-spend-msg (get-title card) " to " desc)))))
+
+(defn print-msg
+  "Prints the ability message"
+  [state side {:keys [eid] :as ability} card targets payment-str]
+  (let [display-side (or (:display-side ability) (to-keyword (:side card)) side)]
+    (if (map? (:msg ability))
+      (let [msg-map (update-vals (:msg ability) #(get-side-message state side (assoc ability :msg %) card targets payment-str))]
+        (multi-msg state display-side msg-map))
+      (when-let [message (get-side-message state side ability card targets payment-str)]
+        (system-msg state display-side message)))))
 
 (defn register-once
   "Register ability as having happened if :once specified"
@@ -363,21 +371,20 @@
   ([cost-paid1 cost-paid2 & costs-paid]
    (reduce merge-costs-paid (merge-costs-paid cost-paid1 cost-paid2) costs-paid)))
 
-(defn- do-paid-ability [state side {:keys [eid] :as ability} card targets async-result]
-  (let [payment-str (:msg async-result)
-        cost-paid (merge-costs-paid (:cost-paid eid) (:cost-paid async-result))
+(defn- do-paid-ability [state side {:keys [eid] :as ability} card targets {:keys [msg cost-paid]}]
+  (let [cost-paid (merge-costs-paid (:cost-paid eid) cost-paid)
         ability (assoc-in ability [:eid :cost-paid] cost-paid)
         ;; this lets nested abilities access payment strs from outside the nesting
         ;; which is admittedly a little cursed
         last-payment-str (get-in ability [:eid :latest-payment-str])
-        ability (assoc-in ability [:eid :latest-payment-str] (if-not (string/blank? payment-str) payment-str last-payment-str))
+        ability (assoc-in ability [:eid :latest-payment-str] (if-not (string/blank? msg) msg last-payment-str))
         ;; After paying costs, counters will be removed, so fetch the latest version.
         ;; We still want the card if the card is trashed, so default to given
         ;; when the latest is gone.
         card (or (get-card state card) card)]
     ;; Trigger the effect
     (register-once state side ability card)
-    (do-effect state side ability card payment-str targets)
+    (do-effect state side ability card msg targets)
     ;; If the ability isn't async, complete it
     (when-not (:async ability)
       (effect-completed state side eid))))
@@ -400,11 +407,11 @@
                    waiting-prompt))}))
   (if (seq cost)
     ;; Ensure that any costs can be paid
-    (wait-for (pay state side (make-eid state (assoc eid :action (:cid card))) card cost)
-              (if (:cost-paid async-result)
-                ;; If the cost can be and is paid, perform the ablity
-                (do-paid-ability state side ability card targets async-result)
-                (effect-completed state side eid)))
+    (wait-for [payment (pay state side (make-eid state (assoc eid :action (:cid card))) card cost)]
+      (if (:cost-paid payment)
+        ;; If the cost can be and is paid, perform the ablity
+        (do-paid-ability state side ability card targets payment)
+        (effect-completed state side eid)))
     (do-paid-ability state side ability card targets {:msg ""})))
 
 (defn- do-choices
@@ -413,7 +420,7 @@
   (let [s (or player side)
         ab (dissoc ability :choices :waiting-prompt)
         args (-> ability
-                 (select-keys [:cancel-effect :prompt-type :show-discard :end-effect :waiting-prompt])
+                 (select-keys [:async :cancel :prompt-type :show-discard :end-effect :waiting-prompt])
                  (assoc :targets targets))]
     (if-not (change-in-game-state? state side ability card targets)
       (if (get-in ability [:change-in-game-state :pay-cost] nil)
@@ -462,8 +469,8 @@
   ([state side card message choices ability args]
    (let [f #(resolve-ability state side ability card [%])]
      (show-prompt state side (:eid ability) card message choices f
-                  (if-let [cancel-f (:cancel-effect args)]
-                    (assoc args :cancel-effect #(cancel-f state side (:eid ability) card [%]))
+                  (if-let [cancel (:cancel args)]
+                    (assoc args :cancel #(resolve-ability state side (:eid ability) cancel card [%]))
                     args)))))
 
 ;; EVENTS
@@ -790,10 +797,11 @@
                                (filter #(and (card-for-ability state %)
                                              (not (:disabled (card-for-ability state %))))
                                        handlers))
-                    non-silent (filter #(let [silent-fn (:silent (:ability %))
+                    non-silent (filter #(let [silent? (:silent (:ability %))
                                               card (card-for-ability state %)]
-                                          (not (and silent-fn
-                                                    (silent-fn state side (make-eid state) card event-targets))))
+                                          (not (and silent?
+                                                    (or (= silent? true)
+                                                        (silent? state side (make-eid state) card event-targets)))))
                                        handlers)
                     titles (map (fn [{:keys [card ability]}]
                                   ;; Showing ability name in prompt if card has multiple listeners to the same event, e.g. Privileged Access
@@ -820,7 +828,7 @@
                                              (rest handlers))]
                     (if-let [the-card (card-for-ability state to-resolve)]
                       {:async true
-                       :effect (req
+                       :effect (effect
                                  (when (:unregister-once-resolved to-resolve)
                                    (unregister-event-by-uuid state side (:uuid to-resolve)))
                                  (let [new-eid (make-eid state (assoc eid :source the-card :source-type :ability))]
@@ -834,13 +842,13 @@
                                                                  nil event-targets)
                                                (effect-completed state side eid)))))}
                       {:async true
-                       :effect (req (if (should-continue state handlers)
+                       :effect (effect (if (should-continue state handlers)
                                       (continue-ability state side (choose-handler (rest handlers) done?) nil event-targets)
                                       (effect-completed state side eid)))}))
                   {:prompt "Choose a trigger to resolve"
                    :choices titles
                    :async true
-                   :effect (req
+                   :effect (effect
                              (if (= target "Done")
                                (do
                                  (doseq [{:keys [handler]} (filter handler-skippable? handlers)]
@@ -850,7 +858,7 @@
                                  (let [auto-handlers (->> (filter (complement handler-skippable?) handlers)
                                                           (sort-by #(or (->> % :card :printed-title) ""))
                                                           (sort-by #(get automatic-priority (->> % :ability :automatic) 10)))
-                                       auto-handlers (map #(update-in % [:ability] merge {:silent (req true) :interactive nil}) auto-handlers)]
+                                       auto-handlers (map #(update-in % [:ability] merge {:silent true :interactive nil}) auto-handlers)]
                                    (if (seq auto-handlers)
                                      (continue-ability
                                        state side
@@ -991,12 +999,13 @@
                                      (not (apply trigger-suppress state (to-keyword (:side card))
                                                  (:event (:handler %)) card (:context %)))))
                              handlers))
-          non-silent (filter #(let [silent-fn (:silent (:ability (:handler %)))]
-                                (not (and silent-fn
-                                          (silent-fn state side
-                                                     (make-eid state eid)
-                                                     (card-for-ability state (:handler %))
-                                                     (:context %)))))
+          non-silent (filter #(let [silent? (:silent (:ability (:handler %)))]
+                                (not (and silent?
+                                          (or (= silent? true)
+                                              (silent? state side
+                                                       (make-eid state eid)
+                                                       (card-for-ability state (:handler %))
+                                                       (:context %))))))
                              handlers)
           cards-with-titles (filter #(card-for-ability state (:handler %)) non-silent)
           choices-map (map #(vector (or (:ability-name (:ability (:handler %)))
@@ -1040,7 +1049,7 @@
             {:async true
              :prompt "Choose a trigger to resolve"
              :choices choices-titles
-             :effect (req (if (= target "Done")
+             :effect (effect (if (= target "Done")
                             (do (doseq [{:keys [handler]} (filter handler-skippable? handlers)]
                                   (when (:unregister-once-resolved handler)
                                     (unregister-event-by-uuid state side (:uuid handler)))
@@ -1048,7 +1057,7 @@
                                 (let [auto-handlers (->> (filter (complement handler-skippable?) handlers)
                                                          (sort-by #(or (->> % :handler :card :printed-title) ""))
                                                          (sort-by #(get automatic-priority (->> % :handler :ability :automatic) 10)))
-                                      auto-handlers (map #(update-in % [:handler :ability] merge {:silent (req true) :interactive nil}) auto-handlers)]
+                                      auto-handlers (map #(update-in % [:handler :ability] merge {:silent true :interactive nil}) auto-handlers)]
                                   (if (seq auto-handlers)
                                     (trigger-queued-event-player state side eid auto-handlers args)
                                     (effect-completed state side eid))))
@@ -1160,7 +1169,7 @@
            (reduce-kv
              (fn [acc _title cards]
                (if (< 1 (count cards))
-                 (conj! acc (butlast cards))
+                 (conj! acc (butlast (sort-by :timestamp cards)))
                  acc))
              (transient []))
            persistent!
@@ -1233,7 +1242,7 @@
                      :card #(and (installed? %)
                                  (program? %))}
            :async true
-           :effect (req (wait-for (move* state side (make-eid state eid) :trash-cards targets {:game-trash true
+           :effect (effect (wait-for (move* state side (make-eid state eid) :trash-cards targets {:game-trash true
                                                                                                :unpreventable true})
                                   (update-mu state)
                                   (effect-completed state side eid)))})
@@ -1299,6 +1308,8 @@
       (complete-with-result state side eid nil)
       (wait-for (pay-next state side (make-eid state eid) costs card [])
                 (let [payment-result async-result]
+                  (queue-event state :costs-paid {:side side
+                                                  :payment async-result})
                   (wait-for (checkpoint state nil (make-eid state eid) nil)
                             (complete-with-result
                               state side eid

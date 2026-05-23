@@ -6,10 +6,10 @@
    [game.core.engine :refer [trigger-event]]
    [game.core.flags :refer [zone-locked?]]
    [game.core.moving :refer [move move-zone]]
-   [game.core.say :refer [system-msg]]
+   [game.core.say :refer [system-msg play-sfx]]
    [game.core.servers :refer [name-zone]]
-   [game.macros :refer [continue-ability msg req]]
-   [game.utils :refer [enumerate-str quantify]])
+   [game.macros :refer [continue-ability msg effect]]
+   [game.utils :refer [enumerate-str enumerate-cards quantify]])
   (:import [java.security SecureRandom]))
 
 
@@ -24,7 +24,7 @@
     (.setSeed rand seed-bytes)
     rand))
 
-(defn- shuffle-coll
+(defn shuffle-coll
   ;; Ref: https://github.com/clojure/clojure/blob/ce55092f2b2f5481d25cff6205470c1335760ef6/src/clj/clojure/core.clj#L7342
   ;; we're just substituting in a good rng source (1024 bits of entropy) rather than the default used by java (40 bits of entropy)
   ;; this should theoretically be invisible, since any random slice of the possible sets of deck orderings is also random,
@@ -36,21 +36,24 @@
 
 (defn shuffle!
   "Shuffles the vector in @state [side kw]."
-  [state side kw]
-  (when (contains? #{:deck :hand :discard} kw)
-    (trigger-event state side (when (= :deck kw) (if (= :corp side) :corp-shuffle-deck :runner-shuffle-deck)))
-    (when (and (:breach @state)
-               (= :corp side)
-               (= :deck kw))
-      ;; we no longer know the cards in R&D, even if they were candidates before
-      (swap! state assoc-in [:breach :known-cids :deck] []))
-    (when (and (:access @state)
-               (:run @state)
-               (= :corp side)
-               (= :deck kw))
-      (swap! state assoc-in [:run :shuffled-during-access :rd] true))
-    (swap! state update-in [:stats side :shuffle-count] (fnil + 0) 1)
-    (swap! state update-in [side kw] shuffle-coll)))
+  ([state side kw] (shuffle! state side kw nil))
+  ([state side kw {:keys [no-sfx] :as args}]
+   (when (contains? #{:deck :hand :discard} kw)
+     (trigger-event state side (when (= :deck kw) (if (= :corp side) :corp-shuffle-deck :runner-shuffle-deck)))
+     (when (and (:breach @state)
+                (= :corp side)
+                (= :deck kw))
+       ;; we no longer know the cards in R&D, even if they were candidates before
+       (swap! state assoc-in [:breach :known-cids :deck] []))
+     (when (and (:access @state)
+                (:run @state)
+                (= :corp side)
+                (= :deck kw))
+       (swap! state assoc-in [:run :shuffled-during-access :rd] true))
+     (when-not no-sfx
+       (play-sfx state side "shuffle"))
+     (swap! state update-in [:stats side :shuffle-count] (fnil + 0) 1)
+     (swap! state update-in [side kw] shuffle-coll))))
 
 (defn shuffle-cards-into-deck!
   "Shuffles a given set of cards into the deck. Will print out what's happened. Will always shuffle."
@@ -65,7 +68,7 @@
          rhs (if (= shuffle-side :corp) "Archives" "the Stack")]
      (if (seq targets)
        (let [cards-by-zone (group-by #(select-keys % [:side :zone]) (flatten targets))
-             strs (enumerate-str (map #(str (enumerate-str (map :title (get cards-by-zone %)))
+             strs (enumerate-str (map #(str (enumerate-cards (get cards-by-zone %) :sorted)
                                             " from " (name-zone (:side %) (:zone %)))
                                       (keys cards-by-zone)))]
          (doseq [t targets]
@@ -83,6 +86,17 @@
     (move-zone state side zone :deck))
   (shuffle! state side :deck))
 
+(def shuffle-my-deck!
+  {:msg (msg "shuffle " (if (= side :runner) "the stack" "R&D"))
+   :effect (effect (shuffle! state side :deck))})
+
+(def fail-to-find!
+  "Fail to find a card when searching the stack (runner), triggers the stack searched event if runner"
+  {:msg (msg "shuffle " (if (= side :runner) "the stack" "R&D"))
+   :effect (effect (when (= side :runner)
+                  (trigger-event state side :searched-stack))
+                (shuffle! state side :deck))})
+
 (defn shuffle-into-rd-effect
   ([state side eid card n] (shuffle-into-rd-effect state side eid card n false))
   ([state side eid card n all?]
@@ -93,28 +107,36 @@
                 :card #(and (corp? %)
                             (in-discard? %))
                 :all all?}
-      :msg (msg "shuffle "
-                (let [seen (filter :seen targets)
-                      m (count (filter #(not (:seen %)) targets))]
-                  (str (enumerate-str (map :title seen))
-                       (when (pos? m)
-                         (str (when-not (empty? seen) " and ")
-                              (quantify m "unseen card")))))
-                " into R&D")
+      :msg {:public (msg "shuffle "
+                         (let [seen (filter :seen targets)
+                               m (count (filter #(not (:seen %)) targets))]
+                           (str (enumerate-cards seen :sorted)
+                                (when (pos? m)
+                                  (str (when-not (empty? seen) " and ")
+                                       (quantify m "unseen card")))))
+                         " into R&D")
+            :corp (msg "shuffle "
+                       (let [seen (filter :seen targets)
+                             unseen (filter #(not (:seen %)) targets)
+                             m (count unseen)]
+                         (str (enumerate-cards seen :sorted)
+                              (when (pos? m)
+                                (str (when-not (empty? seen) " and ")
+                                     (quantify m "unseen card")
+                                     " (" (enumerate-cards unseen :sorted) ")"))))
+                       " into R&D")}
       :waiting-prompt true
-      :effect (req (doseq [c targets]
+      :effect (effect (doseq [c targets]
                      (move state side c :deck))
                    (shuffle! state side :deck))
-      :cancel-effect (req
-                      (system-msg state side (str " uses " (:title card) " to shuffle R&D"))
-                      (shuffle! state side :deck)
-                      (effect-completed state side eid))}
+      :cancel shuffle-my-deck!}
      card nil)))
 
 (defn shuffle-deck
   "Shuffle R&D/Stack."
   [state side {:keys [close]}]
   (swap! state update-in [side :deck] shuffle)
+  (play-sfx state side "shuffle")
   (if close
     (do
       (swap! state update-in [side] dissoc :view-deck)

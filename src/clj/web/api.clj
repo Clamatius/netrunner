@@ -28,7 +28,7 @@
 
 (add-encoder org.bson.types.ObjectId encode-str)
 
-(def paths ["" "chat" "cards" "deckbuilder" "play" "help" "account" "stats" "about" "tournament" "admin" "users" "prizes" "features"])
+(def paths ["" "chat" "cards" "deckbuilder" "play" "help" "account" "stats" "about" "tournament" "admin" "users" "prizes"])
 
 (defn base-routes []
   (ring/router
@@ -74,6 +74,7 @@
             :post #'decks/decks-create-handler
             :put #'decks/decks-save-handler}]
        ["/:id" {:delete #'decks/decks-delete-handler}]]
+      ["/decks-bulk-delete" {:post #'decks/decks-bulk-delete-handler}]
       ["/api-keys" {:middleware [::auth]}
        ["" {:get #'api-keys/api-keys-handler
             :post #'api-keys/api-keys-create-handler}]
@@ -115,6 +116,7 @@
         ["/publish/:gameid" {:get #'stats/publish-annotations}]
         ["/delete/:gameid" {:delete #'stats/delete-annotations}]]
        ["/share/:gameid" {:get #'stats/share-replay}]
+       ["/unshare/:gameid" {:get #'stats/unshare-replay}]
        ["/full/:gameid" {:get #'stats/fetch-replay}]]]
      ["/tournament-auth/:username" {:middleware [::auth ::tournament-auth ::forgery]
                                     :get #'tournament/auth}]
@@ -127,9 +129,7 @@
       ["/version" {:get #'admin/version-handler
                    :put #'admin/version-update-handler}]
       ["/banned" {:get #'admin/banned-message-handler
-                   :put #'admin/banned-message-update-handler}]
-      ["/features" {:get #'admin/features-handler
-                    :put #'admin/features-update-handler}]]]
+                   :put #'admin/banned-message-update-handler}]]]
     {:reitit.middleware/registry
      {::auth auth/wrap-authentication-required
       ::tournament-auth auth/wrap-tournament-auth-required

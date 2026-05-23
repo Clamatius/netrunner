@@ -1,6 +1,6 @@
 (ns game.core.choose-one
   (:require
-   [game.macros :refer [continue-ability req wait-for]]
+   [game.macros :refer [continue-ability effect wait-for]]
    [game.core.engine :refer [resolve-ability]]
    [game.core.payment :refer [build-cost-string can-pay?]]
    [game.core.eid :refer [effect-completed make-eid]]
@@ -16,7 +16,7 @@
    ;;the 'prompt' key cant compute 5-fns, so this needs to be disambiguated
    (if (fn? (:count args))
      {:async true
-      :effect (req (let [new-count ((:count args) state side eid card targets)]
+      :effect (effect (let [new-count ((:count args) state side eid card targets)]
                      (continue-ability
                        state side
                        (choose-one-helper (assoc args :count new-count) xs)
@@ -26,7 +26,7 @@
            apply-optional (and optional (not next-optional))
            xs (if-not apply-optional xs (conj xs {:option "Done"}))
            base-map (select-keys args [:action :player :once :unregister-once-resolved :event
-                                       :label :change-in-game-state :location :additional-cost])
+                                       :label :change-in-game-state :location :additional-cost :duration])
            ;; is a choice payable
            payable? (fn [x state side eid card targets]
                       (when (or (not (:cost x))
@@ -50,7 +50,7 @@
                               (costed-str x)))))
            ;; this lets us selectively skip the prompt if 'done' is the only choice
            meaningful-req? (when require-meaningful-choice
-                             (req (let [cs (keep #(choices-fn % state side eid card targets) xs)]
+                             (effect (let [cs (keep #(choices-fn % state side eid card targets) xs)]
                                     (and (not= cs ["Done"])
                                          (or (nil? (:req args))
                                              ((:req args) state side eid card targets))))))]
@@ -60,23 +60,26 @@
                  (if-not (seq xs)
                    (effect-completed state side eid )
                    (if (= target (costed-str (first xs)))
-                     ;; allow for resolving multiple options, like deuces wild
-                     (wait-for
-                       (resolve-ability
-                         state side (make-eid state eid)
-                         (assoc (:ability (first xs)) :cost (:cost (first xs)))
-                         card nil) ;; below is maybe superflous
-                       (if (and count (> count 1) (not= target "Done"))
-                         ;; the 'Done' is already there, so can dissoc optional
-                         (let [args (assoc args :count (dec count) :optional next-optional)
-                               xs (if no-prune full
-                                      (vec (remove #(= target (costed-str %)) full)))]
-                           (continue-ability state side (choose-one-helper args xs) card nil))
-                         (effect-completed state side eid)))
+                     (let [ab (assoc (:ability (first xs))
+                                     :cost (:cost (first xs)))
+                           ab-side (or (:player (first xs)) side)]
+                       ;; allow for resolving multiple options, like deuces wild
+                       (wait-for
+                         (resolve-ability
+                           state ab-side (make-eid state eid)
+                           ab
+                           card nil) ;; below is maybe superflous
+                         (if (and count (> count 1) (not= target "Done"))
+                           ;; the 'Done' is already there, so can dissoc optional
+                           (let [args (assoc args :count (dec count) :optional next-optional)
+                                 xs (if no-prune full
+                                        (vec (remove #(= target (costed-str %)) full)))]
+                             (continue-ability state side (choose-one-helper args xs) card nil))
+                           (effect-completed state side eid))))
                      (resolve-choices (rest xs) full state side eid card target))))]
          (merge
            base-map
-           {:choices (req (into [] (map #(choices-fn % state side eid card targets) xs)))
+           {:choices (effect (into [] (map #(choices-fn % state side eid card targets) xs)))
             :waiting-prompt (or (:waiting-prompt args) (not no-wait-msg))
             :prompt (str (or (:prompt args) "Choose one")
                          ;; if we are resolving multiple
@@ -86,8 +89,8 @@
             :async true
             ;; interactive expects a 5-fn or nil
             ;; but I want to just be able to say True or False
-            :interactive (when interactive (if-not (fn? interactive) (req interactive) interactive))
-            :effect (req (resolve-choices xs xs state side eid card target))}))))))
+            :interactive (when interactive (if-not (fn? interactive) (effect interactive) interactive))
+            :effect (effect (resolve-choices xs xs state side eid card target))}))))))
 
 (defn cost-option
   [cost side]

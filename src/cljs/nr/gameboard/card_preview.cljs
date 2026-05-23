@@ -4,14 +4,20 @@
 
 (defonce zoom-channel (chan))
 
+(defn- safe-get-attribute [target attribute]
+  (when (.-getAttribute target)
+    (.getAttribute target attribute)))
+
 (defn- get-card-data-title [e]
   (let [target (.. e -target)
-        title (.getAttribute target "data-card-title")]
+        title (or (safe-get-attribute target "data-card-title")
+                  (when (= "BUTTON" (.-tagName target))
+                    (some-> target .-firstChild (safe-get-attribute "data-card-title"))))]
     (not-empty title)))
 
 (defn put-game-card-in-channel
   [card channel]
-  (if-let [server-card (get-in @app-state [:all-cards-and-flips (:title card)])]
+  (if-let [server-card (get-in @app-state [:all-cards-and-flips (or (:title card) (:printed-title card))])]
     (put! channel (merge server-card card))
     (put! channel card))
   nil)

@@ -757,6 +757,7 @@
       (run-empty-server state :remote1)
       (click-prompt state :runner "Steal")
       (click-prompt state :corp "Yes")
+      (click-prompt state :corp "OK")
       (click-prompt state :corp "Chairman Hiro")
       (click-prompt state :corp "Done")
       (click-prompt state :corp "Done")
@@ -766,7 +767,7 @@
       (click-prompt state :corp "Excalibur")
       (click-prompt state :corp "Fire Wall")
       (click-prompt state :corp "Gemini")
-      (click-prompt state :corp "Done")
+      (click-prompt state :corp "OK")
       (is (= ["Bacterial Programming"] (mapv :title (get-scored state :runner))) "Runner shouldn't score Chairman Hiro")
       (is (= ["Chairman Hiro"] (mapv :title (:discard (get-corp)))) "Chairman Hiro should be in Archives")))
 
@@ -1904,6 +1905,18 @@
       (is (= 3 (core/trash-cost state :runner (refresh ep2)))
           "Trash cost increased to 3 by one active Encryption Protocol"))))
 
+(deftest esca
+  (doseq [[tags damage] [[0 0] [1 1] [15 1]]]
+    (do-game
+      (new-game {:corp {:discard ["Esca"]}
+                 :runner {:hand ["Ika" "Ika"]
+                          :tags tags}})
+      (take-credits state :corp)
+      (is (changed? [(:credit (get-runner)) -1
+                     (count (:hand (get-runner))) (- damage)]
+            (run-empty-server state :archives))
+          "Tanked it"))))
+
 (deftest estelle-moon
   ;; Estelle Moon
   (letfn [(estelle-test [number]
@@ -1969,16 +1982,13 @@
         (rez state :corp ebc)
         (take-credits state :runner)
         (is (:corp-phase-12 @state) "Corp in Step 1.2")
-        (card-ability state :corp ebc 0)
-        (click-card state :corp eve)
-        (is (= 2 (:credit (get-corp))) "EBC saved 1 credit on the rez of Eve")
-        (is (= 16 (get-counters (refresh eve) :credit)))
-        (end-phase-12 state :corp)
-        (is (= 2 (:credit (get-corp))) "Corp did not gain credits from Eve")
+        (click-card state :corp "Eve Campaign")
+        (is (= 2 (:credit (get-corp))) "EBC saved 1 credit on the rez of Eve, Corp did not gain credits from Eve")
         (is (= 16 (get-counters (refresh eve) :credit)) "Did not take counters from Eve")
         (take-credits state :corp)
         (take-credits state :runner)
-        (is (not (:corp-phase-12 @state)) "With nothing to rez, EBC does not trigger Step 1.2")
+        (click-prompt state :corp "Executive Boot Camp")
+        (is (not (:corp-phase-12 @state)) "NCIGS fizzles With nothing to facedown, EBC does not trigger Step 1.2")
         (is (= 14 (get-counters (refresh eve) :credit)) "Took counters from Eve"))))
 
 (deftest executive-boot-camp-works-with-ice-that-has-alternate-rez-costs
@@ -1997,8 +2007,6 @@
         (is (= 9 (:credit (get-corp))) "Corp ends turn with 9 credits")
         (take-credits state :runner)
         (is (not (rezzed? (refresh tith))) "Tithonium not rezzed")
-        (is (:corp-phase-12 @state) "Corp in Step 1.2")
-        (card-ability state :corp ebc 0)
         (click-card state :corp tith)
         (click-prompt state :corp "No")
         (is (and (:installed (refresh tith)) (rezzed? (refresh tith))) "Rezzed Tithonium")
@@ -2019,19 +2027,15 @@
         (rez state :corp ebc)
         (rez state :corp mum)
         (take-credits state :runner)
-        (is (:corp-phase-12 @state) "Corp in Step 1.2")
-        (card-ability state :corp ebc 0)
-        (click-card state :corp eve)
+        (click-card state :corp "Eve Campaign")
         (dotimes [_ 2]
           (click-card state :corp mum))
         (is (= 2 (:credit (get-corp))) "EBC + Mumba saved 3 credit on the rez of Eve")
-        (is (= 16 (get-counters (refresh eve) :credit)))
-        (end-phase-12 state :corp)
-        (is (= 2 (:credit (get-corp))) "Corp did not gain credits from Eve")
         (is (= 16 (get-counters (refresh eve) :credit)) "Did not take counters from Eve")
         (take-credits state :corp)
         (take-credits state :runner)
-        (is (not (:corp-phase-12 @state)) "With nothing to rez, EBC does not trigger Step 1.2")
+        (click-prompt state :corp "Executive Boot Camp")
+        (is (not (:corp-phase-12 @state)) "NCIGS fizzles With nothing to facedown, EBC does not trigger Step 1.2")
         (is (= 14 (get-counters (refresh eve) :credit)) "Took counters from Eve"))))
 
 (deftest executive-search-firm
@@ -3261,7 +3265,7 @@
         (is (= 3 (:agenda-point (get-corp))) "Gained 3 agenda points")
         (take-credits state :corp)
         (run-empty-server state "HQ")
-        (is (= "Choose a card that can be advanced to place 1 advancement token on" (:msg (prompt-map :corp))) "Puppet Master event fired"))))
+        (is (= "Choose a card that can be advanced to place 1 advancement counter on" (:msg (prompt-map :corp))) "Puppet Master event fired"))))
 
 (deftest lakshmi-smartfabrics
   ;; Lakshmi Smartfabrics - Gain power counter when rezzing a card; use counters to protect agenda in HQ
@@ -3401,6 +3405,46 @@
     (is (no-prompt? state :runner) "No prompt")
     (is (not (:run @state)) "Access ended after 1 card seen - todachine did his work")))
 
+(deftest luana-test
+  (do-game
+    (new-game {:corp {:hand ["Luana Campos" "Extract"]
+                      :deck [(qty "IPO" 10)]
+                      :bad-pub 1}})
+    (play-cards state :corp ["Luana Campos" "New remote" :rezzed])
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (is (changed? [(:credit (get-corp)) 3
+                   (count-bad-pub state) -1
+                   (count (:hand (get-corp))) 2]
+          (click-prompt state :corp "Yes"))
+        "Took a BP to get value")
+    (is (changed? [(count-bad-pub state) 1]
+          (play-cards state :corp ["Extract" "Luana Campos"]))
+        "Took BP back")))
+
+(deftest magistrate-revontuler
+  (do-game
+    (new-game {:corp {:hand ["Magistrate Revontulet" "Greenmail" "Project Beale" "Project Atlas"]}
+	       :runner {:credits 20}})
+    (play-from-hand state :corp "Magistrate Revontulet" "New remote")
+    (play-from-hand state :corp "Project Atlas" "New remote")
+    (rez state :corp (get-content state :remote1 0))
+    (is (rezzed? (get-content state :remote1 0)))
+    (play-and-score state "Greenmail")
+    (is (changed? [(:credit (get-runner)) -3]
+          (click-prompt state :corp "Greenmail"))
+        "Taxed on score")
+    (take-credits state :corp)
+    (run-empty-server state :hq)
+    (is (changed? [(:credit (get-runner)) -3]
+          (click-prompt state :runner "Pay to steal"))
+	"paid 3 to steal")
+    (is (no-prompt? state :runner))
+    (run-empty-server state :remote2)
+    (is (changed? [(:credit (get-runner)) -3]
+          (click-prompt state :runner "Pay to steal"))
+        "paid 3 to steal")))
+
 (deftest malia-icon-goes-away-with-cupellation
   (do-game
     (new-game {:corp {:hand ["Malia Z0L0K4"]}
@@ -3410,11 +3454,11 @@
     (play-from-hand state :runner "Daily Casts")
     (rez state :corp (get-content state :remote1 0))
     (click-card state :corp "Daily Casts")
-    (is (:icon (refresh (get-resource state 0))) "Daily Cast has an icon")
+    (is (= (card-icons state (get-resource state 0)) ["MZ"]) "Daily Cast has an icon")
     (play-from-hand state :runner "Cupellation")
     (run-empty-server state :remote1)
     (click-prompt state :runner "[Cupellation] 1 [Credits]: Host card")
-    (is (not (:icon (refresh (get-resource state 0)))) "Daily Cast does not have an icon anymore")))
+    (is (not (card-icons state (get-resource state 0))) "Daily Cast does not have an icon anymore")))
 
 (deftest malia-z0l0k4
   ;; Malia Z0L0K4 - blank an installed non-virtual runner resource
@@ -3432,12 +3476,12 @@
       (let [N (:credit (get-runner))]
         (rez state :corp malia1)
         (click-card state :corp (get-resource state 0))
-        (is (:icon (refresh (get-resource state 0))) "Daily Cast has an icon")
+        (is (has-icon? state (refresh (get-resource state 0)) "MZ") "Daily Cast has an icon")
         (take-credits state :corp)
         (is (= N (:credit (get-runner))) "Daily casts did not trigger when blanked"))
       (take-credits state :runner)
       (derez state :corp (refresh malia1))
-      (is (nil? (:icon (refresh (get-resource state 0)))))
+      (is (no-icons? state (get-resource state 0)))
       (let [N (:credit (get-runner))]
         (take-credits state :corp)
         (is (= (+ N 2) (:credit (get-runner))) "Daily casts triggers again when unblanked"))
@@ -3692,6 +3736,7 @@
     (card-ability state :corp (get-content state :remote1 0) 0)
     (click-card state :corp "PAD Campaign")
     (click-card state :corp "Project Atlas")
+    (is (last-log-contains? state "Moon Pool") "Moon pool mentioned - source carried through")
     (is (= 2 (count (:discard (get-corp)))) "Two cards trashed")
     (click-card state :corp "PAD Campaign")
     (click-prompt state :corp "Done")
@@ -4108,6 +4153,24 @@
         (is (changed? [(count (:hand (get-corp))) 2]
               (take-credits state :runner))
             "Drew 2 cards -> mandatory + nico trash effect"))))
+
+(deftest nihilo-agent
+  (do-game
+    (new-game {:corp {:hand ["Nihilo Agent"]}})
+    (play-from-hand state :corp "Nihilo Agent" "New remote")
+    (rez state :corp (get-content state :remote1 0))
+    (dotimes [n 3]
+      (is (not (jinteki.utils/is-tagged? state)) "Not tagged")
+      (take-credits state :corp)
+      (start-turn state :runner)
+      (is (= 1 (count-bad-pub state)) "Took 1 bad pub")
+      (is (jinteki.utils/is-tagged? state) "tagged")
+      (take-credits state :runner)
+      (when-not (= n 2)
+        (is (= 0 (count-bad-pub state)) "lost 1 bad pub")
+	(is (not (jinteki.utils/is-tagged? state)) "untagged again")))
+    (is (= 1 (count-bad-pub state)) "Took 1 bad pub")
+    (is (jinteki.utils/is-tagged? state) "tagged")))
 
 (deftest open-forum
   ;; Open Forum
@@ -5229,7 +5292,7 @@
       (take-credits state :corp)
       (run-empty-server state :remote1)
       (click-prompt state :corp "Yes")
-      (is (no-prompt? state :corp) "Corp shouldn't get Shattered Remains ability prompt when no counters")
+      (is (no-prompt? state :corp) "NCIGS because no counters, but you paid a credit to do that")
       (click-prompt state :runner "No action")
       (run-empty-server state :remote2)
       (let [credits (:credit (get-corp))]
@@ -5700,6 +5763,37 @@
     (run-jack-out state)
     (is (= nil (:reason @state)) "no win happened yet")
     (is (not (= :corp (:winner @state))) "Corp doesn't win")))
+
+(deftest synchrocyclotron-test-humanoid-resources-test
+  (do-game
+    (new-game {:corp {:hand ["Humanoid Resources" "Synchrocyclotron" "Consulting Visit"]
+                      :deck [(qty "Beanstalk Royalties" 4)]
+                      :credits 20}})
+    (play-from-hand state :corp "Synchrocyclotron" "New remote")
+    (rez state :corp (get-content state :remote1 0))
+    (core/gain state :corp :click 2)
+    (play-from-hand state :corp "Humanoid Resources" "New remote")
+    (rez state :corp (get-content state :remote2 0))
+    (card-ability state :corp (get-content state :remote2 0) 0)
+    (click-prompt state :corp "Done")
+    (click-prompt state :corp "Consulting Visit")
+    (click-prompt state :corp "Beanstalk Royalties")))
+
+(deftest synchrocyclotron-workds-only-once-test
+  (do-game
+    (new-game {:corp {:hand ["Synchrocyclotron" "Consulting Visit"]
+                      :deck ["Consulting Visit" "Beanstalk Royalties"]
+                      :credits 18}})
+    (play-from-hand state :corp "Synchrocyclotron" "New remote")
+    (rez state :corp (get-content state :remote1 0))
+    (is (changed? [(:click (get-corp)) -1]
+          (play-from-hand state :corp "Consulting Visit"))
+        "Not asked to pay an empty cost")
+    (is (changed? [(:click (get-corp)) -1]
+          (click-prompt state :corp "Consulting Visit")
+          (click-prompt state :corp "Yes"))
+        "Choose to pay the additional click cost")
+    (is (= ["Beanstalk Royalties" "Cancel"] (prompt-titles :corp)) "Only beanstalk playable")))
 
 (deftest synth-dna-modification
   ;; Synth DNA Modification
@@ -6230,7 +6324,7 @@
     (rez state :corp (get-ice state :remote1 0))
     (rez state :corp (get-content state :remote1 0))
     (click-card state :corp "Eli 1.0")
-    (is (:icon (refresh (get-ice state :remote1 0))) "Eli 1.0 has an icon")
+    (is (has-icon? state (get-ice state :remote1 0) "TMB") "Eli 1.0 has an icon")
     (take-credits state :corp)
     (play-from-hand state :runner "Corroder")
     (run-on state :remote1)
@@ -6257,7 +6351,7 @@
       (click-prompt state :runner "End the run")
       (is (empty? (remove :broken (:subroutines (refresh ice)))) "No subs broken")
       (derez state :corp (get-content state :remote1 0))
-      (is (nil? (:icon (refresh ice)))))))
+      (is (no-icons? state (get-ice state :remote1 0)) "Icon gone"))))
 
 (deftest trieste-model-bioroids-odd-breakers
   ;; savant/etc utae, and any other cards where issues pop up
@@ -6599,7 +6693,7 @@
     (card-ability state :corp (get-content state :remote1 0) 0)
     (click-prompt state :corp "Always")
     (play-and-score state "15 Minutes")
-    (is (last-log-contains? state "Sure Gamble, Hippo, and Endurance") "Revealed Runner grip")
+    (is (last-log-contains? state "Endurance, Hippo, and Sure Gamble") "Revealed Runner grip")
     (is (changed? [(count (:hand (get-runner))) -1]
           (click-card state :corp "Hippo"))
         "Hippo was discarded")

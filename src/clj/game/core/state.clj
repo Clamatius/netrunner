@@ -7,6 +7,7 @@
    click-state
    corp
    corp-phase-12
+   corp-post-discard
    effects
    effect-completed
    eid
@@ -34,6 +35,7 @@
    run
    runner
    runner-phase-12
+   runner-post-discard
    sfx
    sfx-current-id
    stack
@@ -60,7 +62,7 @@
   [gameid room fmt now options corp runner]
   (map->State
     {:gameid gameid
-     :log []
+     :log {:public [] :corp [] :runner []}
      :active-player :runner
      :end-turn true
      :format (keyword fmt)

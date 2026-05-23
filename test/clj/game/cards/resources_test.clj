@@ -1523,7 +1523,7 @@
       (take-credits state :corp)
       (play-from-hand state :runner "Dadiana Chacon")
       (play-from-hand state :runner "Corroder")
-      (is (last-n-log-contains? state 3 "Runner spends [Click] and pays 0 [Credits] to install Dadiana Chacon."))
+      (is (true? (last-n-log-contains? state 3 "Runner spends [Click] and pays 0 [Credits] to install Dadiana Chacon.")))
       (is (last-n-log-contains? state 2 "Runner uses Dadiana Chacon to suffer 3 meat damage."))
       (is (second-last-log-contains? state "Runner trashes Corroder, Corroder, and Corroder due to meat damage."))
       (is (last-log-contains? state "Runner spends [Click] and pays 2 [Credits] to install Corroder."))))
@@ -2150,11 +2150,11 @@
             vbg (get-resource state 1)]
         (click-prompt state :runner "Dr. Lovegood")
         (click-card state :runner blackfile)
-        (is (:icon (refresh blackfile)) "The Black File has an icon")
+        (is (has-icon? state (refresh blackfile) "DL") "The Black File has an icon")
         (is (= 0 (get-counters (refresh blackfile) :power)) "Black File has still 0 power counters")
         (is (= 1 (get-counters (refresh vbg) :virus)) "Virus Breeding Ground has 1 virus counter")
         (take-credits state :runner)
-        (is (nil? (:icon (refresh blackfile)))))))
+        (is (no-icons? state (refresh blackfile))))))
 
 (deftest dr-nuka-vrolyck
   (do-game
@@ -2243,7 +2243,7 @@
       (play-from-hand state :runner "Dummy Box")
       (play-from-hand state :runner "Cache")
       (take-credits state :runner)
-      (trash state :corp (get-program state 0))
+      (core/trash state :corp (core/make-eid state) (get-program state 0))
       (is (not (no-prompt? state :runner)) "Dummy Box prompting to prevent program trash")
       (click-prompt state :runner "Dummy Box (Program)")
       (click-card state :runner (find-card "Clot" (:hand (get-runner))))
@@ -3111,6 +3111,49 @@
       (click-prompt state :runner "Suffer 2 meat damage")
       (click-prompt state :runner "Trash Guru Davinder")
       (is (no-prompt? state :runner) "Dummy Box not prompting to prevent trash")))
+
+(deftest hackerspace-test
+  (do-game
+    (new-game {:runner {:hand ["Hackerspace" "Kati Jones" "Underworld Contact" "Paladin Poemu"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Hackerspace")
+    (play-from-hand state :runner "Kati Jones")
+    (click-prompt state :runner "Hackerspace")
+    (is (= 5 (core/hand-size state :runner)) "Runner should start with 5 max hand size")
+    (play-from-hand state :runner "Paladin Poemu")
+    (click-prompt state :runner "Hackerspace")
+    (is (= 7 (core/hand-size state :runner)) "Runner should start with 5 max hand size")))
+
+(deftest hackerspace-with-cost-discount-requirement
+  (do-game
+    (new-game {:runner {:hand ["Career Fair" "Hackerspace" "The Class Act"]
+                        :credits 2}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Hackerspace")
+    (play-from-hand state :runner "Career Fair")
+    (click-card state :runner "The Class Act")
+    (click-prompt state :runner "Hackerspace")
+    (is (no-prompt? state :runner) "It worked")
+    (is (= "The Class Act" (-> (get-resource state 0) :hosted first :title)) "Installed for 0")))
+
+(deftest hackerspace-class-act-repl
+  (do-game
+    (new-game {:runner {:hand ["Hackerspace" "The Class Act" "The Class Act"]
+                        :deck ["Sure Gamble" "Easy Mark" "The Class Act" "Euler" "Ika" "Dirty Laundry" "Corroder" "Carpe Diem"]
+                        :credits 15}
+               :corp {:hand ["IPO"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Hackerspace")
+    (play-from-hand state :runner "The Class Act")
+    (click-prompt state :runner "Hackerspace")
+    (take-credits state :runner)
+    (click-card state :runner (last (:set-aside (get-runner))))
+    (is (no-prompt? state :runner) "No prompt")
+    (take-credits state :corp)
+    (play-from-hand state :runner "The Class Act")
+    (click-prompt state :runner "Hackerspace")
+    (take-credits state :runner)
+    (is (not (no-prompt? state :runner)) "TCA Prompt")))
 
 (deftest hannah-wheels-pilintra-basic-test
   (do-game
@@ -4319,6 +4362,45 @@
       (is (= 2 (count (:hand (get-runner)))) "Darwin never got played, Chameleon returned to hand")
       (is (= 2 (count (:discard (get-runner)))) "Femme Fatale and Study Guide trashed"))))
 
+(deftest man-in-the-middle-negative-points-mode
+  (do-game
+    (new-game {:corp {:hand ["Hostile Takeover" (qty "Archer" 2)]
+                      :credits 30}
+               :runner {:hand ["Word on the Street"]}})
+    (play-from-hand state :corp "Archer" "Archives")
+    (play-from-hand state :corp "Archer" "Archives")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Word on the Street")
+    (take-credits state :runner)
+    (is (changed? [(count (:scored (get-corp))) 2
+                   (:credit (get-runner)) 0]
+          (play-and-score state "Hostile Takeover"))
+        "2 agendas sitting there")
+    (is (= 0 (:agenda-point (get-corp))) "Scored Bellona for 3 points")
+    (rez state :corp (get-ice state :archives 0) {:expect-rez false})
+    (is (= "Word on the Street" (:printed-title (get-scored state :corp 1))))
+    (click-card state :corp (get-scored state :corp 1))
+    (is (not (no-prompt? state :corp)) "Cannot do man in the middle")
+    (click-card state :corp (get-scored state :corp 0))
+    (is (rezzed? (get-ice state :archives 0)) "Archer now rezzed")
+    (rez state :corp (get-ice state :archives 1) {:expect-rez false})
+    (is (no-prompt? state :corp) "No prompt to rez")))
+
+(deftest man-in-the-middle-regular-points-mode
+  (do-game
+    (new-game {:corp {:hand ["Hostile Takeover"]}
+               :runner {:hand ["Word on the Street"]}})
+    (play-from-hand state :corp "Hostile Takeover" "New remote")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Word on the Street")
+    (take-credits state :runner)
+    (is (changed? [(count (:scored (get-corp))) 1
+                   (count (:discard (get-runner))) 1
+                   (:credit (get-runner)) 4]
+          (score-agenda state :corp (get-content state :remote1 0)))
+        "Other thing happened")
+    (is (no-prompt? state :corp))))
+
 (deftest manuel-lattes-de-moura
   (do-game
     (new-game {:corp {:hand [(qty "Hedge Fund" 5)]
@@ -4875,6 +4957,31 @@
         (do (click-prompt state :runner "Pass priority")
             (is (<= 3 (count (:discard (get-runner)))) "Took 3 damage"))))))
 
+(deftest nurse-hanh-test
+  (do-game
+    (new-game {:runner {:hand ["Nurse Hạnh"]
+                        :deck [(qty "Nurse Hạnh" 15)]}
+               :corp {:discard [(qty "IPO" 6)]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Nurse Hạnh")
+    (is (changed? [(count (:hand (get-runner))) 2]
+          (run-empty-server state :archives)))
+    (is (changed? [(count (:hand (get-runner))) 0]
+          (run-empty-server state :archives)))))
+
+(deftest nurse-hanh-vs-archives-flip-cards-test
+  (doseq [c ["Heliamphora" "Archives Interface"]]
+    (testing (str c " vs nurse hanh")
+      (do-game
+        (new-game {:runner {:hand ["Nurse Hạnh" c]
+                            :credits 10
+                            :deck [(qty "Nurse Hạnh" 15)]}
+                   :corp {:discard [(qty "IPO" 6)]}})
+        (take-credits state :corp)
+        (play-cards state :runner "Nurse Hạnh" c)
+        (is (changed? [(count (:hand (get-runner))) 2]
+              (run-empty-server state :archives)))))))
+
 (deftest off-campus-apartment-ability-shows-a-simultaneous-resolution-prompt-when-appropriate
     ;; ability shows a simultaneous resolution prompt when appropriate
     (do-game
@@ -4907,7 +5014,7 @@
         (click-prompt state :runner "Street Peddler")
         (let [ped1 (first (:hosted (refresh oca)))]
           (card-ability state :runner ped1 0)
-          (click-prompt state :runner (last (prompt-buttons :runner))) ; choose Street Peddler
+          (click-prompt state :runner (first (prompt-buttons :runner))) ; choose Street Peddler
           (click-prompt state :runner (:title oca))
           (click-prompt state :runner (:title oca))
           (let [ped2 (first (:hosted (refresh oca)))]
@@ -5769,13 +5876,13 @@
     (play-from-hand state :runner "Motivation")
     (play-from-hand state :runner "Astrolabe")
     (take-credits state :runner)
-    (trash state :runner (get-resource state 2))
+    (core/trash state :runner (core/make-eid state) (get-resource state 2))
     (is (no-prompt? state :runner) "Sac Con not prompting to prevent resource trash")
-    (trash state :runner (get-program state 0))
+    (core/trash state :runner (core/make-eid state) (get-program state 0))
     (click-prompt state :runner "Sacrificial Construct")
     (is (= 2 (count (:discard (get-runner)))) "Sac Con trashed")
     (is (= 1 (count (get-program state))) "Cache still installed")
-    (trash state :runner (get-hardware state 0))
+    (core/trash state :runner (core/make-eid state) (get-hardware state 0))
     (click-prompt state :runner "Sacrificial Construct")
     (is (= 3 (count (:discard (get-runner)))) "Sac Con trashed")
     (is (= 1 (count (get-hardware state))) "Astrolabe still installed")))
@@ -6183,6 +6290,25 @@
             (score-agenda state :corp (get-content state :remote1 0))
             (is (no-prompt? state :runner) "Runner has no Friday Chip prompt"))
           "Friday Chip shouldn't gain counters from Spoilers")))
+
+(deftest stick-and-poke
+  (do-game
+    (new-game {:corp {:hand ["Vanilla"]}
+               :runner {:hand ["Stick and Poke" "Stick and Poke"] :deck ["Ika"]}})
+    (play-from-hand state :corp "Vanilla" "HQ")
+    (rez state :corp (get-ice state :hq 0))
+    (take-credits state :corp)
+    (is (changed? [(count (:subroutines (get-ice state :hq 0))) 0]
+          (play-from-hand state :runner "Stick and Poke")
+          (core/fake-checkpoint state))
+        "Gained no sub")
+    (run-on state :hq)
+    (is (changed? [(count (:subroutines (get-ice state :hq 0))) 1]
+          (run-continue-until state :encounter-ice))
+        "gained sub")
+    (card-subroutine state :corp (get-ice state :hq 0) 0)
+    (is-discard? state :runner ["Stick and Poke"])
+    (is-hand? state :runner ["Ika"])))
 
 (deftest stim-dealer
   ;; Stim Dealer - Take 1 brain damage when it accumulates 2 power counters
@@ -7676,6 +7802,25 @@
     (is (= 0 (count (:discard (get-runner)))) "took 0 net damage")
     (is (not (:run @state)) "Run ended")))
 
+(deftest underdome-irregulars
+  (doseq [opt [:draw :tag]]
+    (do-game
+      (new-game {:corp {:hand ["Vanilla"]}
+                 :runner {:tags 3 :hand ["Underdome Irregulars"] :deck ["Ika" "Ika"]}})
+      (play-from-hand state :corp "Vanilla" "HQ")
+      (take-credits state :corp)
+      (play-from-hand state :runner "Underdome Irregulars")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :runner)
+      (case opt
+        :tag  (is (changed? [(count-tags state) -1]
+                    (click-prompt state :runner "Remove 1 tag")))
+        :draw (is (changed? [(count (:hand (get-runner))) 2]
+                    (click-prompt state :runner "Draw 2 cards"))))
+      (take-credits state :corp)
+      (take-credits state :runner)
+      (is (no-prompt? state :runner)))))
+
 (deftest urban-art-vernissage
   (do-game
       (new-game {:runner {:hand ["Urban Art Vernissage" "Botulus" "Monkeywrench"]
@@ -7915,6 +8060,22 @@
     (card-ability state :runner (get-resource state 1) 0)
     (is (= 4 (count (:discard (get-runner)))) "Fall Guy trashed")
     (is (= 8 (:credit (get-runner))) "Gained 2c from Fall Guy but no credits from Wasteland")))
+
+(deftest wasteland-vs-cond-counter
+  ;; Wasteland - Gain 1c the first time you trash an installed card of yours each turn
+  (do-game
+    (new-game {:corp {:hand ["IPO"]}
+               :runner {:hand ["Wasteland" "Jarogniew Mercs" "On the Lam" "Isolation"]
+                        :credits 7}})
+    (take-credits state :corp)
+    (play-cards state :runner "Wasteland" ["On the Lam" "Wasteland"] "Jarogniew Mercs")
+    (is (changed? [(:credit (get-runner)) 0
+                   (count-tags state) 0]
+          (click-prompts state :runner "On the Lam" "Yes" "1"))
+        "Did not gain a credit from wasteland")
+    (is (changed? [(:credit (get-runner)) (+ 5 1)]
+          (play-cards state :runner ["Isolation" "Jarogniew Mercs"]))
+        "Gained from isolation")))
 
 (deftest whistleblower-agenda-interactions
   (doseq [agenda-name ["The Future Perfect" "NAPD Contract" "Degree Mill" "Ikawah Project" "Obokata Protocol"]]
