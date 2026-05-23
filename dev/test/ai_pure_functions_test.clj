@@ -355,6 +355,77 @@
     (is (not (ping-message? {:text nil})))))
 
 ;; ============================================================================
+;; relevance-reason tests (ai-core)
+;; ============================================================================
+
+(def relevance-reason #'core/relevance-reason)
+
+(defn- state-with
+  "Build a minimal client-state shape for relevance testing."
+  [{:keys [run? prompt? side active-player my-clicks end-turn turn]
+    :or   {side "runner" active-player "runner" my-clicks 0 turn 1}}]
+  (let [my-key (keyword side)]
+    {:game-state (cond-> {:active-player active-player
+                          :turn          turn
+                          my-key         {:click my-clicks}}
+                   end-turn (assoc :end-turn true)
+                   run?     (assoc :run {:server [:hq] :position 0})
+                   prompt?  (assoc-in [my-key :prompt-state]
+                              {:prompt-type "select"
+                               :choices [{:value "A"} {:value "B"}]}))}))
+
+(deftest test-relevance-run-started
+  (testing "transition from no-run to run-active wakes with :run-started"
+    (let [state (state-with {:run? true :side "corp"})]
+      (is (= :run-started (relevance-reason state "corp" false))))))
+
+(deftest test-relevance-run-ended
+  (testing "transition from run-active to no-run wakes with :run-ended"
+    (let [state (state-with {:run? false :side "corp"})]
+      (is (= :run-ended (relevance-reason state "corp" true))))))
+
+(deftest test-relevance-has-prompt-during-run
+  (testing "an actionable prompt during a run wakes with :has-prompt"
+    (let [state (state-with {:run? true :prompt? true :side "corp"})]
+      ;; initial-run-active? true (run was already in progress) and we have
+      ;; a prompt to act on — should wake with :has-prompt, not :run-active.
+      (is (= :has-prompt (relevance-reason state "corp" true))))))
+
+(deftest test-relevance-has-prompt-no-run
+  (testing "an actionable prompt outside a run wakes with :has-prompt"
+    (let [state (state-with {:prompt? true :side "runner"})]
+      (is (= :has-prompt (relevance-reason state "runner" false))))))
+
+(deftest test-relevance-my-turn
+  (testing "my turn with clicks remaining wakes with :my-turn"
+    (let [state (state-with {:side "runner" :active-player "runner" :my-clicks 3})]
+      (is (= :my-turn (relevance-reason state "runner" false))))))
+
+(deftest test-relevance-opponent-ended-turn
+  (testing "opponent has called end-turn; I'm up — :my-turn"
+    (let [state (state-with {:side "runner" :active-player "corp"
+                             :my-clicks 0 :end-turn true})]
+      (is (= :my-turn (relevance-reason state "runner" false))))))
+
+(deftest test-relevance-no-reason-when-nothing-changed
+  (testing "no run transition, no prompt, not my turn → nil (don't wake)"
+    (let [state (state-with {:side "corp" :active-player "runner"
+                             :my-clicks 0 :turn 3})]
+      (is (nil? (relevance-reason state "corp" false))))))
+
+(deftest test-relevance-active-run-without-prompt-does-not-wake
+  ;; REGRESSION: prior to fix, an active run with NO prompt for us still woke
+  ;; with :run-active on every poll, making wait-for-relevant-diff useless
+  ;; during opponent runs. Both Opus agents in run #2 had to fall back to raw
+  ;; `sleep` because of this. Now the wait should sit silently until something
+  ;; actionable happens (prompt, run-ended, my-turn).
+  (testing "run already in progress, no prompt for us → nil (don't wake)"
+    (let [state (state-with {:run? true :side "corp"
+                             :active-player "runner" :my-clicks 0})]
+      (is (nil? (relevance-reason state "corp" true))
+          "active run without actionable prompt should not wake"))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

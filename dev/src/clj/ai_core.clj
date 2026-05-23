@@ -1263,7 +1263,21 @@
 
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
-   Returns keyword indicating wake reason."
+   Returns keyword indicating wake reason.
+
+   Wake reasons (in priority order):
+     :run-started — a run started this poll cycle
+     :has-prompt  — we have an actionable prompt (encounter, rez window,
+                    paid-ability window, access decision, etc.)
+     :run-ended   — a run that was in progress has ended
+     :my-turn     — it's our turn to act
+
+   NB: there is intentionally no generic ':run-active' wake. A run merely
+   being in progress is not a wake-worthy event for us — we wake when the
+   run produces a prompt for our side (:has-prompt) or transitions on/off
+   (:run-started / :run-ended). Otherwise we sit silently. The earlier
+   :run-active behaviour caused wait-for-relevant-diff to return after one
+   polling tick during every opponent run, defeating the wait."
   [state side initial-run-active?]
   (let [current-run-active? (run-active? state)
         has-actionable-prompt? (has-prompt? state side)]
@@ -1271,10 +1285,6 @@
       ;; Run started - high priority, wake up!
       (and current-run-active? (not initial-run-active?))
       :run-started
-
-      ;; Run is active and state changed - stay alert
-      current-run-active?
-      :run-active
 
       ;; We have a prompt to respond to
       has-actionable-prompt?
@@ -1292,23 +1302,37 @@
       :else nil)))
 
 (defn wait-for-relevant-diff
-  "Wait for game state changes that are relevant to our side.
-   Unlike wait-for-diff, this filters for events we care about:
-   - Any change while a run is active
-   - When we have a prompt to respond to
-   - When a run starts or ends
+  "Block until something we care about happens, then return.
 
-   Sleeps through opponent economy/draw actions that don't affect us.
+   Wake conditions (see `relevance-reason` for the authoritative list):
+     - a run starts (:run-started)
+     - we get an actionable prompt — encounter, rez window, paid-ability
+       window, access decision, choice prompt, etc. (:has-prompt)
+     - a run that was in progress ends (:run-ended)
+     - it becomes our turn to act (:my-turn)
+     - the opponent sends a 'ping' chat message (:ping wake — escape hatch
+       for when an external observer wants to nudge us)
+     - the timeout expires (:timeout)
 
-   The :since option enables race-condition-free waiting:
-   - Pass the cursor from a previous action's response
-   - If state has already advanced past that cursor, returns immediately
-   - This prevents the 'waiting for opponent who already acted' problem
+   Opponent economy/draws/installs that don't produce a prompt for us are
+   ignored — they update internal state but do NOT wake the wait.
 
-   Usage: (wait-for-relevant-diff)           ;; default 300s timeout
-          (wait-for-relevant-diff 60)        ;; custom timeout
-          (wait-for-relevant-diff {:timeout 120 :verbose true})
-          (wait-for-relevant-diff {:since 847})  ;; cursor-based wait"
+   The :since option enables race-condition-free waiting: pass the cursor
+   you captured BEFORE your last action. If the game has already advanced
+   past that cursor, the wait returns immediately. Use this for every
+   wait that follows one of your own actions, to avoid the 'waiting for
+   the opponent who already acted' problem.
+
+   Usage:
+     (wait-for-relevant-diff)                  ;; default 300s timeout
+     (wait-for-relevant-diff 60)               ;; custom timeout (seconds)
+     (wait-for-relevant-diff {:timeout 120 :verbose true})
+     (wait-for-relevant-diff {:since 847})     ;; cursor-based wait
+
+   Returns a map with :status (:relevant-change | :ping | :already-advanced
+   | :timeout), :reason (keyword), :cursor (long), :run-active? (bool),
+   :has-prompt? (bool), and :new-log-entries (vector of log entries since
+   the wait began)."
   ([]
    (wait-for-relevant-diff 300))
   ([timeout-or-opts]
@@ -1342,7 +1366,7 @@
            (println (format "💤 Waiting for relevant events (timeout: %ds, cursor: %d)..."
                            timeout-seconds current-cursor))
            (when initial-run-active?
-             (println "   ⚡ Run already active - watching closely")))
+             (println "   ⚡ Run is in progress — will wake on prompt, run-end, or my-turn")))
 
          (loop [last-log-count initial-log-count]
            (Thread/sleep polling-delay)

@@ -22,7 +22,7 @@ CLIENT_PORT="7889"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-log-past|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait-for-diff|wait-for-relevant-diff|wait-for-log-past|wait-my-turn|wait-run|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -261,9 +261,23 @@ ${GREEN}Prompts:${NC}
   multi-choose <cards...> - Select MULTIPLE cards
 
 ${GREEN}Waiting / Synchronization:${NC}
-  wait-for-diff [seconds] - Wait for game state change
-  wait-for-relevant-diff [seconds] [--since N] - Wait for relevant game events
-  get-cursor              - Get current state cursor (for --since parameter)
+  wait-for-relevant-diff [seconds] [--since N] - PREFERRED. Block until
+                            something we care about happens. Wakes on:
+                              run started, prompt for us, run ended,
+                              our turn to act, opponent 'ping' chat,
+                              or timeout (default 300s).
+                            Ignores opponent economy/draws/installs.
+                            Use --since with a cursor captured BEFORE
+                            your last action to avoid the 'opponent
+                            already acted' race.
+  get-cursor              - Current state cursor (for --since)
+  wait-my-turn            - Wait until it's our turn (thin wrapper)
+  wait-run                - Corp: wait until Runner starts a run
+  wait-for-diff [seconds] - Wait for ANY state change (low-level, noisy;
+                            prefer wait-for-relevant-diff)
+  wait-for-log-past <marker> [timeout]
+                          - Wait until log advances past a marker string
+  ping                    - Send 'ping' chat to wake opponent's wait
 
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon] [gateway-type]  - Create new game
