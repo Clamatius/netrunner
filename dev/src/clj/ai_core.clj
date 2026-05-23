@@ -1231,9 +1231,22 @@
          (or (seq (:choices prompt))
              (seq (:selectable prompt))))))
 
-(defn- my-turn-to-act?
+(defn my-turn-to-act?
   "Check if it's our turn to act (need to start-turn or have clicks).
-   Handles Netrunner priority system where active-player doesn't flip until start-turn."
+   Handles Netrunner priority system where active-player doesn't flip until start-turn.
+
+   Wake conditions (any one is sufficient):
+     - I am the active player AND I have clicks remaining
+     - opponent set the :end-turn flag and active-player is still them
+       (engine in transition; my turn is up next)
+     - turn 0, Corp side, 0 clicks (post-mulligan: Corp goes first)
+
+   Crucially NOT a wake condition: 'both players at 0 clicks'. That
+   scenario fires every time the Runner spends their last click on a run
+   (Runner=0, Corp=0, but Runner is still resolving the run). An earlier
+   duplicate predicate in `wait-for-my-turn` had that bug and woke
+   spuriously on every opponent run-transition; this predicate is the
+   authoritative source of truth — `wait-for-my-turn` delegates here."
   [state side]
   (let [my-side (keyword side)
         active-player (get-in state [:game-state :active-player])

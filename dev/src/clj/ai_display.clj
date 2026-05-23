@@ -566,41 +566,30 @@
 ;; ============================================================================
 
 (defn wait-for-my-turn
-  "Wait until it's my turn to act. Polls every 2s and returns when active.
+  "Wait until it's my turn to act. Delegates to `ai-core/my-turn-to-act?`
+   for the wake decision so the predicate is shared with
+   `wait-for-relevant-diff` (no drift between the two).
 
-   Returns: {:status :ready :turn N :side \"Corp\"}
+   Returns:
+     {:status :ready          :turn N :side \"Corp\" :clicks N}  ; my turn + clicks
+     {:status :ready-to-start :turn N :side \"Corp\"}            ; engine ready for start-turn
 
    Usage: (wait-for-my-turn)"
   []
   (let [my-side (:side @state/client-state)]
     (println (str "💤 Waiting for my turn (" my-side ")..."))
     (loop [checks 0]
-      (let [state (state/get-game-state)
-            active-player (state/active-player)
-            end-turn (get-in state [:end-turn])
-            clicks (get-in state [(keyword my-side) :click])]
-        (cond
-          ;; My turn and I have clicks
-          (and (= my-side active-player) (> clicks 0))
-          (do
-            (println (str "✅ Your turn! (" my-side " - " clicks " clicks remaining)"))
-            {:status :ready :turn (state/turn-number) :side my-side :clicks clicks})
-
-          ;; End turn called, waiting for me to start
-          (and end-turn (not= my-side active-player))
-          (do
-            (println (str "✅ Ready to start turn! (use 'start-turn')"))
-            {:status :ready-to-start :turn (state/turn-number) :side my-side})
-
-          ;; Both at 0 clicks
-          (and (= 0 (get-in state [:runner :click]))
-               (= 0 (get-in state [:corp :click])))
-          (do
-            (println (str "✅ Ready to start turn! (use 'start-turn')"))
-            {:status :ready-to-start :turn (state/turn-number) :side my-side})
-
-          ;; Still waiting
-          :else
+      (let [client-state @state/client-state
+            active-player (state/active-player)]
+        (if (core/my-turn-to-act? client-state my-side)
+          (let [clicks (get-in client-state [:game-state (keyword my-side) :click] 0)]
+            (if (and (= my-side active-player) (> clicks 0))
+              (do
+                (println (str "✅ Your turn! (" my-side " - " clicks " clicks remaining)"))
+                {:status :ready :turn (state/turn-number) :side my-side :clicks clicks})
+              (do
+                (println (str "✅ Ready to start turn! (use 'start-turn')"))
+                {:status :ready-to-start :turn (state/turn-number) :side my-side})))
           (do
             (when (= 0 (mod checks 5))
               (println (str "  ...waiting (opponent's turn: " active-player ")")))

@@ -426,6 +426,60 @@
           "active run without actionable prompt should not wake"))))
 
 ;; ============================================================================
+;; my-turn-to-act? tests (ai-core)
+;;
+;; This predicate is the authoritative "is it my turn yet" check shared by
+;; relevance-reason (wait-for-relevant-diff) and ai-display/wait-for-my-turn.
+;; Prior to 2026-05-23, wait-for-my-turn had its own duplicate logic that
+;; fired spuriously when BOTH players were at 0 clicks (which happens every
+;; time the Runner spends their last click on a run — Runner is still
+;; resolving the run, but the duplicate predicate said "ready to start
+;; turn"). Both Opus agents in run #2 reported this on every transition.
+;; ============================================================================
+
+(deftest test-my-turn-to-act-my-turn-with-clicks
+  (testing "I am active player and have clicks → true"
+    (let [state (state-with {:side "corp" :active-player "corp" :my-clicks 2})]
+      (is (boolean (core/my-turn-to-act? state "corp"))))))
+
+(deftest test-my-turn-to-act-end-turn-flag-set
+  (testing "opponent set :end-turn flag, active-player still them → true (my turn next)"
+    (let [state (state-with {:side "runner" :active-player "corp"
+                             :my-clicks 0 :end-turn true})]
+      (is (boolean (core/my-turn-to-act? state "runner"))))))
+
+(deftest test-my-turn-to-act-corp-post-mulligan
+  (testing "turn 0, Corp side, 0 clicks → true (Corp goes first)"
+    (let [state (state-with {:side "corp" :active-player "corp"
+                             :my-clicks 0 :turn 0})]
+      (is (boolean (core/my-turn-to-act? state "corp"))))))
+
+(deftest test-my-turn-to-act-opponents-turn
+  (testing "opponent is active, has clicks, no end-turn → false"
+    (let [state (state-with {:side "corp" :active-player "runner"
+                             :my-clicks 0 :turn 3})]
+      (is (false? (boolean (core/my-turn-to-act? state "corp")))))))
+
+(deftest test-my-turn-to-act-opponent-mid-run-zero-clicks
+  ;; REGRESSION: prior to fix, wait-for-my-turn's duplicate predicate fired
+  ;; "Ready to start turn!" here because both players were at 0 clicks.
+  ;; my-turn-to-act? (the correct predicate) returns false because no
+  ;; :end-turn flag is set — Runner is still mid-run.
+  (testing "opponent mid-run with 0 clicks, no end-turn → false (run still resolving)"
+    (let [state (state-with {:run? true :side "corp"
+                             :active-player "runner" :my-clicks 0})]
+      (is (false? (boolean (core/my-turn-to-act? state "corp")))
+          "must not wake while opponent run is mid-resolution"))))
+
+(deftest test-my-turn-to-act-my-turn-but-zero-clicks
+  (testing "I am active but spent all clicks, no end-turn yet → false"
+    ;; This is a brief window before auto-end-turn fires. We shouldn't say
+    ;; "ready" here — the engine hasn't transitioned yet.
+    (let [state (state-with {:side "corp" :active-player "corp"
+                             :my-clicks 0 :turn 3})]
+      (is (false? (boolean (core/my-turn-to-act? state "corp")))))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 
