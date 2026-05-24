@@ -366,11 +366,17 @@
           (do
             ;; Now safe to request full state resync
             (resync-game! target-gameid)
-            (Thread/sleep 1000)
-            ;; Clear staleness flags
-            (state/clear-stale-flag!)
-            (println "✅ Resynced successfully")
-            true)
+            ;; Wait for game-state to actually arrive — not a fixed sleep, since
+            ;; large resyncs can exceed any timer we pick and callers will then
+            ;; see empty :corp/:runner maps (clicks nil, hand []).
+            (if (wait-for-condition has-game-state? 8000 "state resync")
+              (do
+                (state/clear-stale-flag!)
+                (println "✅ Resynced successfully")
+                true)
+              (do
+                (println "❌ Resync sent but state did not arrive in time")
+                false)))
           (do
             (println "❌ Join succeeded but not confirmed in lobby - resync skipped")
             false)))

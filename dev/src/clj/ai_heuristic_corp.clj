@@ -116,19 +116,24 @@
           (assets-in-hand)))
 
 
+(def econ-operation-titles
+  "Known Corp economy operations (gain credits). The text-based fallback we
+   used to rely on never fires because :text isn't in card-keys on the wire,
+   so we maintain this list explicitly."
+  #{"Hedge Fund"
+    "IPO"
+    "Beanstalk Royalties"
+    "Government Subsidy"
+    "Predictive Planogram"
+    "Subliminal Messaging"})
+
 (defn economy-operations
   "Find playable economy operations (gain credits)"
   []
-  (let [ops (operations-in-hand)]
-    ;; Economy ops typically have "Gain" in their text
-    (filter (fn [card]
-              (and (:playable card)
-                   (or (str/includes? (str (:title card)) "Hedge Fund")
-                       (str/includes? (str (:title card)) "IPO")
-                       (str/includes? (str (:title card)) "Beanstalk")
-                       ;; Generic check: card text mentions gaining credits
-                       (str/includes? (str (:text card)) "Gain"))))
-            ops)))
+  (filter (fn [card]
+            (and (:playable card)
+                 (econ-operation-titles (:title card))))
+          (operations-in-hand)))
 
 ;; ============================================================================
 ;; Threat Detection
