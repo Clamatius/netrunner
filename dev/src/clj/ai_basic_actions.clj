@@ -254,6 +254,13 @@
                                  (or (nil? my-username)
                                      (not (str/includes? text my-username)))))
                         recent-log)
+        ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
+        ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
+        ;; has not run, so starting our turn would desync. Narrower than the removed prompt
+        ;; guard (keyed on a specific state flag, not any prompt) so autoresolve-fisk-ftt is
+        ;; unaffected.
+        post-discard-active? (or (get-in client-state [:game-state :corp-post-discard :active])
+                                 (get-in client-state [:game-state :runner-post-discard :active]))
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
         is-first-turn? (and (= turn-number 0)
@@ -262,6 +269,15 @@
                            (not opp-ended?))]
 
     (cond
+      ;; ERROR: Post-discard consent phase still active — opponent (or we) haven't acknowledged
+      ;; the end-of-turn pause yet, so end-turn-continue hasn't run.
+      post-discard-active?
+      (do
+        (println "❌ ERROR: Previous turn still resolving post-discard phase")
+        (println "   A card requires both players to pass priority before the turn truly ends")
+        (println "   Use 'wait' until the post-discard pause clears")
+        (core/with-cursor {:status :error :reason :post-discard-pending}))
+
       ;; ERROR: Bug #11 fix - Runner trying to start first turn (Corp always goes first)
       (and is-first-turn?
            (= my-side :runner))
