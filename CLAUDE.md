@@ -123,6 +123,21 @@ Fresh context wakes up, reads the handover, continues without 150k tokens of pre
 
 **Why:** Claude has no introspective access to context fullness. This is human-in-the-loop fatigue sensing.
 
+## Millstoning (Polish Cycle)
+
+A "millstone" cycle is dev focused on subtracting and clarifying rather than adding features. The loop:
+
+```
+def millstone(game) {
+  do { val issues = surface(prev_results); handle(issues.map(address)) }
+  while (!done)
+}
+```
+
+**Issue classes:** code bug / infra / instruction bug / UX / QoL (extend as needed).
+
+Named after the M:tG card — slow but inexorable, lower-variance than it feels (people make the known-vs-unknown variance mistake about it). During a millstone cycle: prefer fixes over features, deletions over additions, and ask "is this still needed?" before "what should this do better?" Claude drives; Michael reviews surfaced findings and adjudicates judgment calls.
+
 ## Git Workflow
 
 **Main dev branch:** `feat/ai_player_experiment`
