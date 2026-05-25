@@ -176,7 +176,7 @@ Monitor({command: "./dev/watch_game.sh corp", description: "corp game events", p
 Monitor({command: "./dev/watch_game.sh runner", description: "runner game events", persistent: true})
 ```
 
-The watcher blocks on `wait-for-relevant-diff` (REPL-side), so no shell busy-polling. Irrelevant opponent actions (economy, draw) are filtered out. Each event batch includes a separator with side, cursor, and timestamp.
+The watcher blocks on `wait` (REPL-side), so no shell busy-polling. Irrelevant opponent actions (economy, draw) are filtered out. Each event batch includes a separator with side, cursor, and timestamp.
 
 ## References
 

@@ -90,3 +90,5 @@ dev/forum
 logs/
 dev/replays/
 .playwright-cli/
+dev/HANDOVER.md
+dev/repl-errors.md

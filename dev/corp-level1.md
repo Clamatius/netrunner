@@ -33,7 +33,7 @@ If you don't respond, the game hangs.
 ./dev/send_command corp status      # Shows whose turn, clicks remaining
 
 # Wait for something to happen (efficient polling)
-./dev/send_command corp wait-for-relevant-diff 30   # Waits up to 30s, wakes on run/prompt
+./dev/send_command corp wait 30   # Waits up to 30s, wakes on run/prompt
 
 # Respond to prompts
 ./dev/send_command corp continue    # Pass priority / continue run
@@ -54,7 +54,7 @@ LOOP:
      - If no: continue to step 3
 
   3. Wait for game state change
-     - Use `wait-for-relevant-diff 30`
+     - Use `wait 30`
      - When it returns, go back to step 1
 
   4. Before acting on any event, RE-CHECK `prompt`
@@ -81,7 +81,7 @@ If it's your turn:
 
 ### Phase 3: Wait for Runner
 ```bash
-./dev/send_command corp wait-for-relevant-diff 60
+./dev/send_command corp wait 60
 ```
 This should wake when:
 - Runner starts a run (you may need to rez)
@@ -113,7 +113,7 @@ Level 1 PASS if:
 1. You detected turn transitions correctly
 2. You responded to at least one priority window during Runner's run
 3. No deadlocks occurred (game didn't hang)
-4. `wait-for-relevant-diff` woke on events (not just timeout)
+4. `wait` woke on events (not just timeout)
 
 ## Race Condition Warning
 
@@ -123,12 +123,12 @@ The Runner might have queued multiple actions. You might wake up to "run started
 
 ```bash
 # WRONG:
-wait-for-relevant-diff 30
+wait 30
 # Woke up! Must be a run!
 rez "Tithe"  # ERROR: No run in progress
 
 # RIGHT:
-wait-for-relevant-diff 30
+wait 30
 prompt       # Check what's actually happening
 # If prompt shows rez window, THEN rez
 ```
@@ -147,7 +147,7 @@ $FORUM_CLI post netrunner-level-1-coordination "## Corp Level 1 Results
 <observations about responding during Runner's run>
 
 ### Wait Efficiency - [PASS/FAIL]
-Did wait-for-relevant-diff wake early on events? Or exhaust timeout?
+Did wait wake early on events? Or exhaust timeout?
 
 ### Handoff - [PASS/FAIL]
 <turn transition observations>

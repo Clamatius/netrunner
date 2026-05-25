@@ -35,7 +35,7 @@ If you don't respond to break/access prompts, the game hangs.
 ./dev/send_command runner status      # Shows whose turn, clicks remaining
 
 # Wait for something to happen
-./dev/send_command runner wait-for-relevant-diff 30   # Waits up to 30s
+./dev/send_command runner wait 30   # Waits up to 30s
 
 # Run commands
 ./dev/send_command runner run "HQ"       # Start run on HQ
@@ -60,7 +60,7 @@ LOOP:
      - If no: continue to step 3
 
   3. Wait for game state change
-     - Use `wait-for-relevant-diff 30`
+     - Use `wait 30`
      - When it returns, go back to step 1
 ```
 
@@ -70,7 +70,7 @@ LOOP:
 Corp goes first. Wait for them:
 ```bash
 ./dev/send_command runner status          # Check if your turn
-./dev/send_command runner wait-for-relevant-diff 60   # Wait if not
+./dev/send_command runner wait 60   # Wait if not
 ```
 
 ### Phase 2: Start Your Turn

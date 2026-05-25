@@ -13,16 +13,16 @@
 #   ./dev/test_wait.sh <side> <wait-cmd> [args...]
 #
 # Examples:
-#   ./dev/test_wait.sh corp wait-my-turn
-#   ./dev/test_wait.sh runner wait-for-relevant-diff 30
-#   ./dev/test_wait.sh corp wait-run
+#   ./dev/test_wait.sh corp wait
+#   ./dev/test_wait.sh runner wait 30
+#   ./dev/test_wait.sh corp wait --since 42
 #
 # Backgrounded:
-#   ./dev/test_wait.sh corp wait-my-turn &
+#   ./dev/test_wait.sh corp wait &
 #   # (now drive state changes from the foreground and watch the log)
 #
 # Log format:
-#   === test_wait start: side=corp cmd='wait-my-turn' at=2026-05-23T12:00:00.123Z ===
+#   === test_wait start: side=corp cmd='wait' at=2026-05-23T12:00:00.123Z ===
 #   ... raw stdout/stderr from the wait command ...
 #   === test_wait end:   side=corp exit=0 elapsed=12.345s at=2026-05-23T12:00:12.469Z ===
 
@@ -33,7 +33,7 @@ SEND_CMD="$SCRIPT_DIR/send_command"
 
 if [[ $# -lt 2 ]]; then
     echo "Usage: $0 <corp|runner> <wait-cmd> [args...]" >&2
-    echo "Example: $0 corp wait-my-turn" >&2
+    echo "Example: $0 corp wait" >&2
     exit 2
 fi
 
