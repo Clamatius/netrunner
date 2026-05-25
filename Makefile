@@ -34,7 +34,7 @@ check-full:
 # Run unit tests
 test:
 	@echo "Running unit tests..."
-	lein test ai-actions-test ai-runs-test ai-websocket-diff-test ai-state-test ai-pure-functions-test ai-turn-validation-test
+	lein test ai-actions-test ai-basic-actions-test ai-heuristic-corp-test ai-runs-test ai-websocket-diff-test ai-state-test ai-pure-functions-test ai-turn-validation-test
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:
