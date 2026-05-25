@@ -520,6 +520,66 @@
       (is (false? (boolean (core/my-turn-to-act? state "corp")))))))
 
 ;; ============================================================================
+;; find-card-by-cid (ai_core.clj)
+;; ============================================================================
+;; REGRESSION: prior enumeration-based version (commits before this) walked
+;; specific zones — Corp servers ICE/content, Runner rig, hands, play-areas,
+;; discard piles — and missed hosted cards, identity slots, scored agendas,
+;; currents, RFG, set-aside, and source-card refs on :run. The Runner discard
+;; prompt fell back to printing "CID: <uuid>" for any selectable the lookup
+;; missed. New version walks the full state tree so all zones are reachable.
+
+(deftest test-find-card-by-cid-finds-hosted-card
+  (testing "hosted card on an ICE is reachable"
+    (let [host-ice {:cid "ice-1" :title "Ice Wall" :type "ICE"
+                    :hosted [{:cid "parasite-1" :title "Parasite" :type "Program"}]}
+          gs {:corp {:servers {:hq {:ices [host-ice]}}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (= "Parasite" (:title (core/find-card-by-cid "parasite-1"))))))))
+
+(deftest test-find-card-by-cid-finds-identity
+  (testing "identity slot is reachable"
+    (let [gs {:runner {:identity {:cid "id-1" :title "Az McCaffrey" :type "Identity"}}
+              :corp {:servers {}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (= "Az McCaffrey" (:title (core/find-card-by-cid "id-1"))))))))
+
+(deftest test-find-card-by-cid-finds-scored-agenda
+  (testing "scored agenda zone is reachable"
+    (let [gs {:corp {:scored [{:cid "agenda-1" :title "Project Atlas" :type "Agenda"}]
+                     :servers {}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (= "Project Atlas" (:title (core/find-card-by-cid "agenda-1"))))))))
+
+(deftest test-find-card-by-cid-backcompat-hand
+  (testing "cards in hand still resolve (backwards compat with prior impl)"
+    (let [gs {:corp {:hand [{:cid "hand-1" :title "Hedge Fund" :type "Operation"}]
+                     :servers {}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (= "Hedge Fund" (:title (core/find-card-by-cid "hand-1"))))))))
+
+(deftest test-find-card-by-cid-backcompat-discard
+  (testing "cards in discard still resolve"
+    (let [gs {:runner {:discard [{:cid "trash-1" :title "Diesel" :type "Event"}]}
+              :corp {:servers {}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (= "Diesel" (:title (core/find-card-by-cid "trash-1"))))))))
+
+(deftest test-find-card-by-cid-returns-nil-for-unknown
+  (testing "unknown CID returns nil"
+    (let [gs {:corp {:hand [{:cid "hand-1" :title "Hedge Fund"}] :servers {}}}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (nil? (core/find-card-by-cid "nonexistent")))))))
+
+(deftest test-find-card-by-cid-skips-titleless-cid-maps
+  (testing "non-card maps with matching :cid but no :title are skipped (effects, log refs, etc)"
+    (let [gs {:corp {:hand [] :servers {}}
+              :effects [{:cid "fake-effect" :type :rez-cost :value 3}]}]
+      (with-mock-state (mock-client-state :game-state gs)
+        (is (nil? (core/find-card-by-cid "fake-effect"))
+            "non-card map with :cid but no :title must not be returned as a card")))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

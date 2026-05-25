@@ -800,31 +800,19 @@
 
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.
-   Searches Corp servers (ICE, content), Runner rig, hands, play areas, and discard piles.
-   Returns the card map or nil if not found."
+   Walks the entire game state tree, so cards in less common zones
+   (hosted on other cards, identity slots, scored, current, set-aside,
+   RFG, decks, source-card refs) are all reachable. Returns the first
+   map with matching :cid that also has a :title (to skip non-card maps
+   that happen to carry :cid — effects registry entries, log refs, etc).
+   Returns nil if no match."
   [cid]
-  (let [gs (state/get-game-state)
-        ;; Corp servers - ICE and content
-        servers (get-in gs [:corp :servers])
-        all-ice (mapcat :ices (vals servers))
-        all-content (mapcat :content (vals servers))
-        ;; Runner rig
-        rig (get-in gs [:runner :rig])
-        runner-cards (concat (:program rig) (:hardware rig) (:resource rig))
-        ;; Hands
-        corp-hand (get-in gs [:corp :hand])
-        runner-hand (get-in gs [:runner :hand])
-        ;; Play areas (for events like Overclock with active effects during runs)
-        corp-play-area (get-in gs [:corp :play-area])
-        runner-play-area (get-in gs [:runner :play-area])
-        ;; Discard piles (Archives/Heap)
-        corp-discard (get-in gs [:corp :discard])
-        runner-discard (get-in gs [:runner :discard])
-        ;; All searchable cards
-        all-cards (concat all-ice all-content runner-cards corp-hand runner-hand
-                          corp-play-area runner-play-area
-                          corp-discard runner-discard)]
-    (first (filter #(= cid (:cid %)) all-cards))))
+  (let [gs (state/get-game-state)]
+    (->> (tree-seq coll? seq gs)
+         (filter #(and (map? %)
+                       (= cid (:cid %))
+                       (:title %)))
+         first)))
 
 ;; ============================================================================
 ;; Server Name Normalization
