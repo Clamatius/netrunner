@@ -20,8 +20,8 @@
        :side "runner"
        :prompt nil  ; Runner has NO prompt - just waiting
        :game-state
-       {:run {:phase :approach-ice
-              :position 0
+       {:run {:phase "approach-ice"
+              :position 1  ; approaching outermost ICE (1 = first ICE, 0 = at server)
               :server [:hq]}
         :runner {:prompt-state nil}  ; No runner prompt
         :corp {:prompt-state {:msg "Rez Tithe?"
@@ -33,9 +33,9 @@
       ;; This is the BUG: current code will auto-continue through this
       ;; Expected: detect corp has rez opportunity and PAUSE
       (let [result (ai/continue-run!)]
-        (is (= :waiting-for-opponent (:status result))
+        (is (= :waiting-for-corp-rez (:status result))
             "Should pause when waiting for corp rez decision")
-        (is (= "Corp must decide: rez Tithe or continue" (:message result))
+        (is (= "Waiting for corp to decide: rez Tithe or continue" (:message result))
             "Should show what we're waiting for")))))
 
 (deftest test-corp-has-rez-opportunity-at-approach
@@ -43,8 +43,8 @@
     (let [state (mock-client-state
                  :side "corp"
                  :game-state
-                 {:run {:phase :approach-ice
-                        :position 0
+                 {:run {:phase "approach-ice"
+                        :position 1  ; approaching outermost ICE
                         :server [:hq]}
                   :corp {:prompt-state {:msg "Rez Tithe?"
                                        :prompt-type "run"
@@ -52,7 +52,6 @@
                                        :selectable [{:cid 123 :title "Tithe" :rezzed false}]}
                          :servers {:hq {:ices [{:cid 123 :title "Tithe" :rezzed false}]}}}})]
 
-      ;; Helper function we need to implement
       (is (ai/corp-has-rez-opportunity? state)
           "Should detect corp has rez opportunity at approach-ice"))))
 
@@ -61,7 +60,7 @@
     (let [state (mock-client-state
                  :side "corp"
                  :game-state
-                 {:run {:phase :approach-ice
+                 {:run {:phase "approach-ice"
                         :position 0
                         :server [:hq]}
                   :corp {:prompt-state {:msg "Paid ability window"
@@ -77,7 +76,7 @@
     (let [state (mock-client-state
                  :side "corp"
                  :game-state
-                 {:run {:phase :encounter-ice  ; Wrong phase
+                 {:run {:phase "encounter-ice"  ; Wrong phase
                         :position 0
                         :server [:hq]}
                   :corp {:prompt-state {:msg "Rez Tithe?"
@@ -99,8 +98,8 @@
                  :side "corp"
                  :credits 0  ; Can't afford to rez
                  :game-state
-                 {:run {:phase :approach-ice
-                        :position 0
+                 {:run {:phase "approach-ice"
+                        :position 1  ; approaching outermost ICE
                         :server [:rd]}
                   :corp {:credit 0  ; Broke
                          :prompt-state {:msg "Rez Archer?"
@@ -149,7 +148,7 @@
       (mock-client-state
        :side "runner"
        :game-state
-       {:run {:phase :approach-ice
+       {:run {:phase "approach-ice"
               :position 0
               :server [:hq]}
         :runner {:prompt-state nil}  ; Runner waiting
@@ -183,7 +182,7 @@
       (mock-client-state
        :side "runner"
        :game-state
-       {:run {:phase :movement  ; Corp continued, now in movement phase
+       {:run {:phase "movement"  ; Corp continued, now in movement phase
               :position 0
               :server [:hq]}
         :runner {:prompt-state {:msg "Paid ability window" :prompt-type "run" :choices []}}
