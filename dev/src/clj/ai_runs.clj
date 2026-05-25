@@ -276,7 +276,11 @@
    (run! \"hq\" \"--no-continue\")       ; Stop after initiation (rare)
    (run! \"remote1\" \"--rez\" \"Ice Wall\") ; Corp only rezzes Ice Wall"
   [& args]
-  (if (basic/ensure-turn-started!)
+  (if (not (core/side= "Runner" (:side @state/client-state)))
+    (do
+      (println "❌ Only Runner can run on servers")
+      {:status :error :reason :wrong-side})
+    (if (basic/ensure-turn-started!)
     (let [{:keys [server flags]} (parse-run-flags args)
           _ (when (nil? server)
               (throw (ex-info "No server specified" {:args args})))
@@ -349,7 +353,7 @@
                 {:status :error
                  :reason "Run command sent but no log confirmation"}))))))
     {:status :error
-     :reason "Failed to start turn"}))
+     :reason "Failed to start turn"})))
 
 ;; ============================================================================
 ;; Continue-Run Helper Functions (Bug #12 Fix)

@@ -16,6 +16,10 @@
    Usage: (play-card! \"Sure Gamble\")
           (play-card! 0)"
   [name-or-index]
+  (if (nil? name-or-index)
+    (do
+      (println "❌ Cannot play card: invalid input (nil)")
+      {:status :error :reason :invalid-input})
   ;; Check for pre-existing blocking prompt before attempting action
   (let [existing-prompt (state/get-prompt)]
     (if (and existing-prompt
@@ -110,7 +114,7 @@
         (do
           (flush)
           {:status :error
-           :reason "Failed to start turn"}))))) ; close defn
+           :reason "Failed to start turn"})))))) ; close defn
 
 ;; ============================================================================
 ;; Install Card Helpers (extracted to reduce nesting)
