@@ -430,15 +430,23 @@
                 run-phase (when run
                             (or (:phase run)
                                 (some-> run :run-phase name)))
-                ;; ICE can only be rezzed during approach-ice
+                ;; Bug #1 (Run #4): ICE may only be rezzed during approach-ice.
+                ;; Rezzing ICE outside a run strictly wastes credits and leaks
+                ;; information for nothing. The prior `(nil? run)` allow-clause
+                ;; was annotated "shouldn't happen but allow" — Run #4 proved
+                ;; it does happen and needs blocking.
                 is-ice? (= card-type "ICE")
                 valid-ice-rez? (or (not is-ice?)
-                                   (nil? run)  ; No run = shouldn't happen but allow
                                    (= run-phase "approach-ice"))]
             (if (not valid-ice-rez?)
               (do
-                (println (format "❌ Cannot rez ICE during %s phase" (or run-phase "this")))
-                (println "   → ICE can only be rezzed during approach-ice phase")
+                (if (nil? run)
+                  (do
+                    (println "❌ Cannot rez ICE: no active run")
+                    (println "   → ICE may only be rezzed during approach-ice phase"))
+                  (do
+                    (println (format "❌ Cannot rez ICE during %s phase" run-phase))
+                    (println "   → ICE can only be rezzed during approach-ice phase")))
                 nil)
               (let [;; Capture log size BEFORE sending to avoid race conditions
                     initial-log-size (core/get-log-size)]

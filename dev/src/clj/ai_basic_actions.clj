@@ -443,6 +443,21 @@
       (Thread/sleep core/quick-delay)))
   clicks)
 
+(defn- already-ended-this-turn?
+  "True if our recent log contains 'is ending' from us — guard against
+   sending a second end-turn message (which corrupts engine state)."
+  [client-state]
+  (let [log (get-in client-state [:game-state :log])
+        recent-log (take-last 3 log)
+        my-username (get-my-username)]
+    (boolean
+      (some #(let [text (:text %)]
+               (and text
+                    (str/includes? text "is ending")
+                    my-username
+                    (str/includes? text my-username)))
+            recent-log))))
+
 (defn end-turn!
   "End turn (validates all clicks used unless forced).
    The game engine handles oversized hand by prompting for discard during end-turn.
@@ -462,6 +477,15 @@
         max-hand-size (get-in client-state [:game-state side-kw :hand-size :total] 5)
         gameid (:gameid client-state)]
     (cond
+      ;; Bug #2 guard: refuse to double-end the turn. The engine treats a
+      ;; second end-turn message as state corruption and deadlocks the next
+      ;; turn cycle (Run #4 1:11:32). Detected via our own recent log line.
+      (already-ended-this-turn? client-state)
+      (do
+        (println "⚠️  Turn already ended — refusing duplicate end-turn")
+        (println "   (recent log shows we've already ended this turn)")
+        (core/with-cursor {:status :error :reason :already-ended}))
+
       ;; ERROR: clicks remaining and not forced
       (and (> clicks 0) (not force))
       (do
@@ -531,6 +555,13 @@
                                      (str/includes? text "is ending")
                                      (and my-username (str/includes? text my-username))))
                             recent-log)
+        ;; Active-run guard: never end turn while a run is in progress, even
+        ;; with clicks=0 (paid abilities, breaker pumps, etc. can occur).
+        active-run? (some? (get-in client-state [:game-state :run]))
+        ;; Turn-started guard: prompt resolvers (mulligan keep-hand, etc.)
+        ;; can fire this hook before our turn actually starts; firing end-turn
+        ;; then is meaningless at best and confuses the engine at worst.
+        turn-started? (turn-started-since-last-opp-end?)
         ;; Check for scorable agendas (Corp only)
         scorable-agendas (core/find-scorable-agendas)]
 
@@ -538,6 +569,16 @@
       ;; Not our turn — never auto-end (issue #16: a forced prompt during the
       ;; opponent's turn must not trigger our end-turn).
       (not my-turn?)
+      nil
+
+      ;; Active run — never auto-end mid-run (defensive: callers should also
+      ;; gate on this, but the check makes it impossible to leak).
+      active-run?
+      nil
+
+      ;; Turn hasn't actually started — silent skip (don't even print).
+      ;; This is the mulligan/pre-turn case from Run #5 take 3.
+      (not turn-started?)
       nil
 
       ;; Have scorable agendas - DON'T auto-end!

@@ -8,6 +8,17 @@
 ;; Prompts & Choices
 ;; ============================================================================
 
+(defn- maybe-auto-end-turn-after-prompt!
+  "After a prompt resolves, the run may have completed implicitly (e.g.,
+   Conduit virus-counter prompt that fires as the run's last event). If the
+   resolver doesn't trigger check-auto-end-turn! here, the runner client
+   never sends end-turn and the engine deadlocks on the next turn cycle.
+   See Bug #3 (Run #5). Deferred require avoids the ai_basic_actions ↔
+   ai_prompts circular dependency."
+  []
+  (require '[ai-basic-actions :as basic])
+  ((resolve 'ai-basic-actions/check-auto-end-turn!)))
+
 (defn wait-for-prompt-change!
   "Wait for prompt state to change after making a choice.
    Returns true if prompt changed (different eid, disappeared, or message
@@ -60,6 +71,7 @@
         (ws/choose! choice)
         ;; Wait for prompt to change instead of fixed sleep
         (wait-for-prompt-change! old-eid)
+        (maybe-auto-end-turn-after-prompt!)
         (core/with-cursor {:status :success}))
       (do
         (println "⚠️  No active prompt")
@@ -110,6 +122,7 @@
                            :command "choice"
                            :args {:choice {:uuid choice-uuid}}})
         (wait-for-prompt-change! old-eid)
+        (maybe-auto-end-turn-after-prompt!)
         (core/with-cursor {:status :success :choice choice}))
 
       :else
@@ -195,6 +208,7 @@
             (ws/select-card! card eid)
             ;; Wait for prompt to change instead of fixed sleep
             (wait-for-prompt-change! eid)
+            (maybe-auto-end-turn-after-prompt!)
             (core/with-cursor {:status :success :card card}))
           (do
             (println (format "❌ Could not resolve card at index %d" index))

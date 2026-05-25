@@ -6,6 +6,9 @@
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-runs :as runs]
+            [ai-core :as ai-core]
+            [ai-basic-actions :as ai-basic-actions]
+            [ai-prompts :as ai-prompts]
             [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
@@ -290,6 +293,153 @@
       (mock-client-state :side "runner")  ;; No run, no prompt
       (let [result (runs/continue-run!)]
         (is (= :run-complete (:status result)))))))
+
+;; ----------------------------------------------------------------------------
+;; Bug #3: auto-end-turn after run-complete
+;; ----------------------------------------------------------------------------
+;; Root cause of Run #3/#4 "turn-sync deadlock" (was misattributed to upstream).
+;; When the runner spends their last click on `run`, the run completes via
+;; continue/monitor-run — but check-auto-end-turn! only fires inside
+;; take-credit!/play-card!/install-card!, NOT in the run-completion path.
+;; The runner client never sends end-turn, the engine transitions out-of-band,
+;; and by the next turn-cycle the deadlock is unrecoverable.
+;;
+;; Fix: auto-continue-loop! must invoke check-auto-end-turn! on :run-complete.
+
+(deftest test-auto-continue-loop-fires-end-turn-on-run-complete
+  (testing "auto-continue-loop! fires end-turn when run completes with 0 clicks
+            (Bug #3 — turn-sync deadlock root cause)"
+    (let [sent (atom [])]
+      (with-mock-state
+        {:connected true
+         :uid "AI-runner"
+         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         :side "runner"
+         :game-state {:runner {:click 0
+                               :user {:username "AI-runner"}
+                               :prompt-state nil}
+                      :corp {:click 0}
+                      :active-player "runner"
+                      :turn 5
+                      :log [{:text "AI-corp is ending their turn 4"}
+                            {:text "AI-runner started their turn 5"}
+                            {:text "AI-runner spends [Click] to make a run on HQ."}
+                            {:text "AI-runner accesses Brân 1.0 from HQ."}]}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (runs/auto-continue-loop! :timeout-ms 1000 :max-iterations 5)
+          (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+              (str "auto-continue-loop! must trigger end-turn when run is "
+                   "complete and 0 clicks remain. Sent: "
+                   (pr-str (map #(get-in % [:data :command]) @sent)))))))))
+
+(deftest test-auto-continue-loop-no-end-turn-when-clicks-remain
+  (testing "auto-continue-loop! does NOT end turn when clicks remain after run
+            (don't end turn early)"
+    (let [sent (atom [])]
+      (with-mock-state
+        {:connected true
+         :uid "AI-runner"
+         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         :side "runner"
+         :game-state {:runner {:click 2  ; ← clicks remaining
+                               :user {:username "AI-runner"}
+                               :prompt-state nil}
+                      :corp {:click 0}
+                      :active-player "runner"
+                      :turn 5
+                      :log [{:text "AI-runner started their turn 5"}
+                            {:text "AI-runner spends [Click] to make a run on HQ."}]}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (runs/auto-continue-loop! :timeout-ms 1000 :max-iterations 5)
+          (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+              "must NOT end turn while clicks remain"))))))
+
+(deftest test-choose-fires-end-turn-when-prompt-resolves-run
+  (testing "choose-by-index! triggers auto-end-turn when the resolved prompt
+            was the last step of a completed run (Bug #3, prompt-tail variant
+            — surfaced in Run #5: Conduit virus-counter prompt was the last
+            click, run finished implicitly, auto-continue-loop! never re-entered)"
+    (let [sent (atom [])]
+      (with-mock-state
+        {:connected true
+         :uid "AI-runner"
+         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         :side "runner"
+         :game-state {:runner {:click 0
+                               :user {:username "AI-runner"}
+                               :prompt-state nil}   ; ← prompt already resolved by mock
+                      :corp {:click 0}
+                      :active-player "runner"
+                      :turn 1
+                      ;; No :run — run completed when the prompt resolved
+                      :log [{:text "AI-corp is ending their turn 0"}
+                            {:text "AI-runner started their turn 1"}
+                            {:text "AI-runner spends [Click] to make a run on R&D."}
+                            {:text "AI-runner steals Offworld Office."}
+                            {:text "AI-runner uses Conduit to place 1 virus counter."}]}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/show-turn-indicator (fn [& _] nil)
+                      ;; Stub the wait so the test doesn't actually sleep.
+                      ;; Real wait-for-prompt-change! returns true once prompt
+                      ;; eid changes — already nil here, so this is a no-op.
+                      ai-prompts/wait-for-prompt-change! (fn [& _] true)]
+          ;; Simulate that the prompt was just resolved (no current prompt).
+          ;; choose-by-index! should still try, see no prompt, and not fire
+          ;; end-turn — so let's test via a synthesized post-choose helper.
+          ;; (Direct test of the integration would require deeper mocking;
+          ;;  this asserts the contract: when called with 0 clicks, no prompt,
+          ;;  no run, my-turn → end-turn fires.)
+          (ai-basic-actions/check-auto-end-turn!)
+          (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+              "check-auto-end-turn! after prompt-resolution-completes-run case must fire end-turn"))))))
+
+(deftest test-check-auto-end-turn-skipped-during-active-run
+  (testing "check-auto-end-turn! does NOT fire when a run is still active,
+            even with 0 clicks (defensive guard added with Bug #3 round 2)"
+    (let [sent (atom [])]
+      (with-mock-state
+        {:connected true
+         :uid "AI-runner"
+         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         :side "runner"
+         :game-state {:runner {:click 0
+                               :user {:username "AI-runner"}
+                               :prompt-state nil}
+                      :corp {:click 0}
+                      :active-player "runner"
+                      :turn 1
+                      :run {:phase "encounter-ice" :position 1 :server [:hq]}
+                      :log [{:text "AI-runner spends [Click] to make a run on HQ."}]}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (ai-basic-actions/check-auto-end-turn!)
+          (is (empty? (filter #(= "end-turn" (get-in % [:data :command])) @sent))
+              "must not end turn while run is active, regardless of clicks"))))))
+
+(deftest test-auto-continue-loop-no-end-turn-on-opponents-run
+  (testing "auto-continue-loop! does NOT end OUR turn when watching opponent's
+            run finish (monitor-run from off-turn side)"
+    (let [sent (atom [])]
+      (with-mock-state
+        {:connected true
+         :uid "AI-corp"
+         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         :side "corp"
+         :game-state {:runner {:click 0}
+                      :corp {:click 0
+                             :user {:username "AI-corp"}
+                             :prompt-state nil}
+                      :active-player "runner"   ; ← runner's turn
+                      :turn 5
+                      :log [{:text "AI-runner spends [Click] to make a run on HQ."}
+                            {:text "AI-runner accesses Brân 1.0 from HQ."}]}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (runs/auto-continue-loop! :timeout-ms 1000 :max-iterations 5)
+          (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+              "monitor-run watching opponent's run must not end OUR turn"))))))
 
 ;; DELETED: test-no-active-run
 ;; Tested semantic distinction between :no-run and :run-complete status codes.

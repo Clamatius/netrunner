@@ -14,7 +14,9 @@
    test-play-card-nil-input has something correct to assert."
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
-            [ai-actions]))
+            [ai-actions]
+            [ai-core]
+            [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
 ;; Card Operations - Not Found Errors
@@ -74,6 +76,48 @@
       (assert-error-message
         #(ai-actions/run! "HQ")
         "Only Runner"))))
+
+(deftest test-rez-ice-refused-outside-run
+  (testing "Corp rezzing ICE with no active run is refused (Bug #1 from Run #4)
+            — engine accepts it but it's a strict waste of credits and reveals
+            information for nothing; the prior 'allow' clause was an oversight"
+    (with-mock-state
+      (mock-client-state
+        :side "corp"
+        :game-state
+        {:corp {:credit 10
+                :servers {:hq {:ices [{:cid 1 :title "Brân 1.0"
+                                       :type "ICE" :cost 6
+                                       :rezzed false :side "Corp"
+                                       :zone [:servers :hq :ices 0]}]}}}
+         :runner {}
+         :active-player "corp"})
+      (assert-error-message
+        #(ai-actions/rez-card! "Brân 1.0")
+        "no active run"))))
+
+(deftest test-rez-ice-allowed-during-approach
+  (testing "Corp rezzing ICE during approach-ice phase is allowed (golden path)"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-client-state
+          :side "corp"
+          :game-state
+          {:corp {:credit 10
+                  :servers {:hq {:ices [{:cid 1 :title "Brân 1.0"
+                                         :type "ICE" :cost 6
+                                         :rezzed false :side "Corp"
+                                         :zone [:servers :hq :ices 0]}]}}}
+           :runner {}
+           :run {:phase "approach-ice" :position 1 :server [:hq]}
+           :active-player "runner"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ;; Stub verify-action-in-log so we don't poll for a
+                      ;; log entry the test isn't producing.
+                      ai-core/verify-action-in-log (fn [& _] true)]
+          (ai-actions/rez-card! "Brân 1.0")
+          (is (some #(= "rez" (get-in % [:data :command])) @sent)
+              "rez command should be sent during approach-ice phase"))))))
 
 ;; ============================================================================
 ;; Prompt / Input Validation

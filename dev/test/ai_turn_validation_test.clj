@@ -390,6 +390,49 @@
             "must dispatch end-turn when conditions are met and it's our turn")))))
 
 ;; ============================================================================
+;; Bug #2: end-turn! must refuse if turn is already ended
+;; ============================================================================
+;; Surfaced in Run #4. After auto-end-turn! fired ("ai-corp is ending their
+;; turn 6"), I called explicit `end-turn` to "unstick" what looked like a
+;; deadlock. The second `is ending their turn 6` log line corrupted engine
+;; state. check-auto-end-turn! has an already-ended? guard; end-turn! must too.
+
+(deftest test-end-turn-refuses-if-already-ended
+  (testing "end-turn! refuses to send a duplicate end-turn message when log
+            shows we already ended this turn (Bug #2)"
+    (with-mock-state
+      (make-game-state-with-log
+       :my-side :corp
+       :my-clicks 0
+       :opp-clicks 0
+       :turn 6
+       :active-player "corp"
+       :log [(make-log-entry "AI-corp pays 6 [Credits] to rez Brân 1.0.")
+             (make-log-entry "AI-corp spends [Click] to gain 1 [Credits].")
+             (make-end-turn-entry "AI-corp" 6)]   ; ← already ended
+       :my-username "AI-corp")
+      (let [[_ sent] (captured-ws-sends #(actions/end-turn!))]
+        (is (empty? (filter #(= "end-turn" (get-in % [:data :command])) sent))
+            "must not dispatch a second end-turn when turn already ended")))))
+
+(deftest test-end-turn-fires-when-not-already-ended
+  (testing "end-turn! DOES send end-turn when log shows no prior end this turn"
+    (with-mock-state
+      (make-game-state-with-log
+       :my-side :corp
+       :my-clicks 0
+       :opp-clicks 0
+       :turn 6
+       :active-player "corp"
+       :log [(make-start-turn-entry "AI-corp" 6)
+             (make-log-entry "AI-corp pays 6 [Credits] to rez Brân 1.0.")
+             (make-log-entry "AI-corp spends [Click] to gain 1 [Credits].")]
+       :my-username "AI-corp")
+      (let [[_ sent] (captured-ws-sends #(actions/end-turn!))]
+        (is (seq (filter #(= "end-turn" (get-in % [:data :command])) sent))
+            "must dispatch end-turn when not already ended")))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

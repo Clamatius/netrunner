@@ -1101,11 +1101,20 @@
               current-state-key (get-run-state-key)
               new-history (cons current-state-key (take (dec stuck-threshold) state-history))]
           (cond
-            ;; Terminal status - stop loop
+            ;; Terminal status - stop loop.
+            ;; Bug #3 fix: if the run completed and we burned the last click on
+            ;; it, fire check-auto-end-turn! — otherwise the runner never sends
+            ;; end-turn and the engine deadlocks on the next turn cycle.
+            ;; check-auto-end-turn! has its own (my-turn? / clicks=0 / no prompt
+            ;; / not already-ended) guards, so it's safe to call unconditionally
+            ;; here, including from monitor-run! on the off-turn side.
             (terminal-status? status)
-            (assoc result
-                   :iterations (inc iteration)
-                   :elapsed-ms (- (System/currentTimeMillis) start-time))
+            (do
+              (when (or (= status :run-complete) (= status :no-run))
+                (basic/check-auto-end-turn!))
+              (assoc result
+                     :iterations (inc iteration)
+                     :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
             ;; Waiting for Runner signal - poll and retry (Corp auto-waiting)
             (= status :waiting-for-runner-signal)
