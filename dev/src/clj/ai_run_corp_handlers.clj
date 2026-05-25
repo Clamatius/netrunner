@@ -136,7 +136,11 @@
               already-printed? (= @last-waiting-status status-key)]
           (when-not already-printed?
             (reset! last-waiting-status status-key)
-            (println (format "Rez decision: %s (cost %d)" ice-title (get current-ice :cost 0)))
+            (let [base-cost (get current-ice :cost 0)
+                  run-source (get-in state [:game-state :run :source-card :title])]
+              (println (format "Rez decision: %s (base cost %d)" ice-title base-cost))
+              (when run-source
+                (println (format "   Run started by: %s" run-source))))
             (println "   Use continue with '--rez <name>' to rez, or '--no-rez' to decline"))
           {:status :decision-required
            :wake-reason :rez-decision
