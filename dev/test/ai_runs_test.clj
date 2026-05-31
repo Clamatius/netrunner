@@ -33,15 +33,16 @@
    Usage:
      (make-ice :cid 1 :title \"Ice Wall\" :rezzed true)
      (make-ice :cid 2 :title \"Enigma\" :rezzed false)"
-  [& {:keys [cid title rezzed zone side type]
+  [& {:keys [cid title rezzed zone side type subroutines]
       :or {cid 1 title "Test ICE" rezzed false zone [:servers :hq :ices 0]
-           side "Corp" type "ICE"}}]
-  {:cid cid
-   :title title
-   :rezzed rezzed
-   :zone zone
-   :side side
-   :type type})
+           side "Corp" type "ICE" subroutines nil}}]
+  (cond-> {:cid cid
+           :title title
+           :rezzed rezzed
+           :zone zone
+           :side side
+           :type type}
+    subroutines (assoc :subroutines subroutines)))
 
 (defn make-ice-list
   "Create a list of ICE cards (outermost first)
@@ -55,7 +56,8 @@
      (make-ice
       :cid (inc idx)
       :title (:title spec "ICE")
-      :rezzed (:rezzed spec false)))
+      :rezzed (:rezzed spec false)
+      :subroutines (:subroutines spec)))
    ice-specs))
 
 (defn mock-state-with-run
@@ -215,6 +217,31 @@
       (let [result (runs/continue-run!)]
         (is (= :decision-required (:status result)))
         (is (some? (:prompt result)))))))
+
+(deftest test-encounter-ability-prompt-not-treated-as-fire-decision
+  (testing "On-encounter ability prompt (e.g. Funhouse 'Take 1 tag / End the run')
+            surfaces as a real decision, NOT a tank/jack-out fire decision.
+            Regression: handle-runner-encounter-ice used to steamroll the engine
+            prompt because it fired before handle-real-decision and lacked the
+            has-real-decision? guard that handle-runner-full-break already has."
+    (with-mock-state
+      (mock-state-with-run
+       :side "runner"
+       :run-phase "encounter-ice"
+       :position 1
+       :ice [{:title "Funhouse" :rezzed true
+              :subroutines [{:broken false :fired false}]}]
+       :prompt (make-prompt
+                :msg "Choose one"
+                :prompt-type "other"
+                :choices [{:value "Take 1 tag" :idx 0}
+                          {:value "End the run" :idx 1}]))
+      (runs/reset-strategy!)
+      (let [result (runs/continue-run!)]
+        (is (= :decision-required (:status result))
+            "Encounter-ability choice must pause for the runner to choose")
+        (is (not= :fire-decision-required (:status result))
+            "Must not be misclassified as a tank/jack-out subroutine decision")))))
 
 (deftest test-single-trivial-choice-auto-continues
   (testing "Single 'Done' choice does not pause (not a real decision)"

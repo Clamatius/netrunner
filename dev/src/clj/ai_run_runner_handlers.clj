@@ -325,11 +325,16 @@
 
 (defn handle-runner-encounter-ice
   "Priority 2.5: Runner at encounter-ice with rezzed ICE - wait for Corp's fire decision.
-   SAFETY: Only signals if Runner explicitly authorized via --tank or --tank-all."
-  [{:keys [side run-phase state gameid strategy]}]
+   SAFETY: Only signals if Runner explicitly authorized via --tank or --tank-all.
+   Defers to on-encounter prompts (like Funhouse's 'Take 1 tag or end run') so they
+   are surfaced as real decisions instead of being steamrolled into tank/jack-out."
+  [{:keys [side run-phase state gameid strategy my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
-             (not (:full-break strategy)))
+             (not (:full-break strategy))
+             ;; An active on-encounter decision must be resolved before we treat
+             ;; this as a subroutine fire decision (handle-real-decision handles it).
+             (not (has-real-decision? my-prompt)))
     (let [run (get-in state [:game-state :run])
           position (:position run)
           current-ice (core/current-run-ice state)
