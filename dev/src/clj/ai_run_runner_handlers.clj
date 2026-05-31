@@ -418,7 +418,11 @@
               (when-not (= @last-waiting-status status-key)
                 (reset! last-waiting-status status-key)
                 (println (format "⏸️  Passed %s, waiting for Corp to pass priority" ice-title)))
-              {:status :waiting-for-corp
+              ;; Return :waiting-for-opponent (a status auto-continue-loop! already
+              ;; knows) so the loop stops cleanly with the "Corp should run
+              ;; monitor-run" tip, rather than falling into its "unknown status,
+              ;; stopping" branch.
+              {:status :waiting-for-opponent
                :wake-reason :waiting-for-opponent
                :message (format "Waiting for Corp to pass priority after %s" ice-title)
                :ice ice-title

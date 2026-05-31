@@ -1116,7 +1116,14 @@
             (terminal-status? status)
             (do
               (when (or (= status :run-complete) (= status :no-run))
-                (basic/check-auto-end-turn!))
+                (basic/check-auto-end-turn!)
+                ;; Clear per-run runner handler atoms (passed-ice-position,
+                ;; signaled-fire-position, etc.) now that the run is over.
+                ;; run!/monitor-run! only reset at their START, so a later
+                ;; run-event run (Jailbreak/Conduit) that enters via continue-run!
+                ;; would otherwise inherit stale [position ice] keys and skip a
+                ;; needed pass-continue.
+                (runner-handlers/reset-state!))
               (assoc result
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))

@@ -593,13 +593,44 @@
           (let [r1 (runs/continue-run!)]
             (is (= :action-taken (:status r1)))
             (is (= :sent-continue (:action r1)))))
-        ;; Second call on the unchanged state must NOT re-send; it waits.
+        ;; Second call on the unchanged state must NOT re-send; it waits with a
+        ;; status auto-continue-loop! recognizes (:waiting-for-opponent), not a
+        ;; bespoke one that would hit the loop's "unknown status" branch.
         (with-mock-state (mk)
           (let [before (count @sent)
                 r2 (runs/continue-run!)]
-            (is (= :waiting-for-corp (:status r2)))
+            (is (= :waiting-for-opponent (:status r2)))
             (is (= before (count @sent))
                 "Must not re-send continue while waiting for the Corp")))))))
+
+(deftest test-pass-fired-ice-resets-across-runs
+  (testing "passed-ice-position does not leak across runs: after reset-state!
+            (which auto-continue-loop! now calls on run-complete), the same
+            fired ICE gets a fresh pass-continue instead of being treated as
+            already-passed. Guards against run-event runs (Jailbreak/Conduit)
+            that enter via continue-run! and skip the run-start reset."
+    (let [sent (atom [])
+          mk (fn [] (mock-state-with-run
+                     :side "runner"
+                     :run-phase "encounter-ice"
+                     :position 1
+                     :ice [{:title "Diviner" :rezzed true
+                            :subroutines [{:broken false :fired true}]}]))]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        ;; Run A: first pass sends continue.
+        (with-mock-state (mk) (runs/continue-run!))
+        ;; Run A ends -> per-run state cleared (as the loop now does on run-complete).
+        (runner-handlers/reset-state!)
+        ;; Run B encounters the SAME [position ice]: must pass again, not stall.
+        (with-mock-state (mk)
+          (let [before (count @sent)
+                r (runs/continue-run!)]
+            (is (= :action-taken (:status r)))
+            (is (= :sent-continue (:action r)))
+            (is (= (inc before) (count @sent))
+                "Fresh run must send its own pass-continue, not inherit stale state")))))))
 
 (deftest test-corp-access-trigger-prompt-not-masked-as-waiting
   (testing "A Corp access-trigger decision (e.g. Urtica Cipher 'Use ability?')
