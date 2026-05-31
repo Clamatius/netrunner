@@ -777,9 +777,14 @@
         ;; If we have a "waiting" type prompt, we're explicitly waiting for opponent
         ;; This handles cases where we can't see opponent's prompt (client isolation)
         has-waiting-prompt? (is-waiting-prompt? my-prompt)]
-    (when (or (waiting-for-opponent? state side)
-              corp-waiting-for-access?
-              has-waiting-prompt?)
+    ;; A real decision of our own (e.g. an access-trigger ambush like Urtica
+    ;; Cipher's "Use ability?") must be surfaced by handle-real-decision, never
+    ;; masked as "waiting for opponent" - otherwise self-play deadlocks with both
+    ;; sides waiting on each other.
+    (when (and (not (has-real-decision? my-prompt))
+               (or (waiting-for-opponent? state side)
+                   corp-waiting-for-access?
+                   has-waiting-prompt?))
       (let [reason (cond
                      corp-waiting-for-access? "Runner resolving access"
                      has-waiting-prompt? (or (:msg my-prompt) "Waiting for opponent decision")

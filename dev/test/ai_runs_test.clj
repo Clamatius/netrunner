@@ -601,6 +601,29 @@
             (is (= before (count @sent))
                 "Must not re-send continue while waiting for the Corp")))))))
 
+(deftest test-corp-access-trigger-prompt-not-masked-as-waiting
+  (testing "A Corp access-trigger decision (e.g. Urtica Cipher 'Use ability?')
+            during the success phase is surfaced as a real decision, not masked
+            as 'waiting for opponent'. Regression: handle-waiting-for-opponent ran
+            before handle-real-decision and fired on the unguarded
+            waiting-for-opponent? branch, deadlocking self-play (both sides
+            waiting on each other)."
+    (with-mock-state
+      (mock-state-with-run
+       :side "corp"
+       :run-phase "success"   ; past all ICE, at server; no :no-action set
+       :prompt (make-prompt
+                :msg "Use Urtica Cipher ability?"
+                :prompt-type "other"
+                :choices [{:value "Yes" :idx 0}
+                          {:value "No" :idx 1}]))
+      (runs/reset-strategy!)
+      (let [result (runs/continue-run!)]
+        (is (= :decision-required (:status result))
+            "Corp's own access-trigger choice must pause for a decision")
+        (is (not= :waiting-for-opponent (:status result))
+            "Must not be masked as waiting for the opponent")))))
+
 ;; ============================================================================
 ;; Corp rez strategy edge cases
 ;; ============================================================================
