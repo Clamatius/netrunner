@@ -9,6 +9,7 @@
             [ai-core :as ai-core]
             [ai-basic-actions :as ai-basic-actions]
             [ai-prompts :as ai-prompts]
+            [ai-run-runner-handlers :as runner-handlers]
             [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
@@ -570,6 +571,35 @@
             ;; full-break should fall through when no ICE
             (is (not= :ability-used (:status result))))
           (runs/reset-strategy!))))))
+
+(deftest test-pass-fired-ice-sends-continue-once-then-waits
+  (testing "After subs fire, runner sends ONE pass-continue then waits for the
+            Corp's priority pass, instead of re-sending continue every loop
+            iteration. Regression: the old handler re-sent continue against the
+            unchanged encounter-ice phase (mislabelled fired subs as 'broken')
+            and tripped the stuck-state guard after 5 spins."
+    (let [sent (atom [])
+          mk (fn [] (mock-state-with-run
+                     :side "runner"
+                     :run-phase "encounter-ice"
+                     :position 1
+                     :ice [{:title "Diviner" :rezzed true
+                            :subroutines [{:broken false :fired true}]}]))]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        ;; First call passes our priority with a single continue.
+        (with-mock-state (mk)
+          (let [r1 (runs/continue-run!)]
+            (is (= :action-taken (:status r1)))
+            (is (= :sent-continue (:action r1)))))
+        ;; Second call on the unchanged state must NOT re-send; it waits.
+        (with-mock-state (mk)
+          (let [before (count @sent)
+                r2 (runs/continue-run!)]
+            (is (= :waiting-for-corp (:status r2)))
+            (is (= before (count @sent))
+                "Must not re-send continue while waiting for the Corp")))))))
 
 ;; ============================================================================
 ;; Corp rez strategy edge cases

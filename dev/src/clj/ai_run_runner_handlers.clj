@@ -71,13 +71,20 @@
 ;; Map of position -> count, cleared when position changes or run ends
 (defonce failed-ability-attempts (atom {}))
 
+;; Track [position ice-title] where Runner has already sent its pass-continue
+;; after all subs resolved (broken or fired). Lets us send continue ONCE and then
+;; wait for the Corp's priority pass, instead of re-sending every loop iteration
+;; (which mislabelled fired subs as "broken" and tripped the stuck-state guard).
+(defonce passed-ice-position (atom nil))
+
 (defn reset-state!
   "Reset all Runner handler state atoms (called when run ends)."
   []
   (reset! last-waiting-status nil)
   (reset! last-full-break-warning nil)
   (reset! signaled-fire-position nil)
-  (reset! failed-ability-attempts {}))
+  (reset! failed-ability-attempts {})
+  (reset! passed-ice-position nil))
 
 ;; ============================================================================
 ;; Auto-Select Single Card Prompts
@@ -390,7 +397,10 @@
 ;; ============================================================================
 
 (defn handle-runner-pass-broken-ice
-  "Priority 2.6: Runner at encounter-ice when all subs are broken."
+  "Priority 2.6: Runner at encounter-ice when all subs are resolved (broken or fired).
+   Sends a single continue to pass our priority, then waits for the Corp to pass
+   its priority. Re-sending continue every loop iteration (the old behavior) spun
+   against the unchanged encounter-ice phase and tripped the stuck-state guard."
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice"))
@@ -398,9 +408,27 @@
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
       (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
-        (let [ice-title (:title current-ice "ICE")]
-          (println (format "   → All subs broken on %s, Runner passing ICE" ice-title))
-          (send-continue! gameid))))))
+        (let [ice-title (:title current-ice "ICE")
+              position (get-in state [:game-state :run :position])
+              all-fired? (every? :fired subroutines)
+              pass-key [position ice-title]]
+          (if (= @passed-ice-position pass-key)
+            ;; Already passed our priority here - wait for Corp, don't re-send.
+            (let [status-key [:passed-ice pass-key]]
+              (when-not (= @last-waiting-status status-key)
+                (reset! last-waiting-status status-key)
+                (println (format "⏸️  Passed %s, waiting for Corp to pass priority" ice-title)))
+              {:status :waiting-for-corp
+               :wake-reason :waiting-for-opponent
+               :message (format "Waiting for Corp to pass priority after %s" ice-title)
+               :ice ice-title
+               :position position})
+            ;; First time at this ICE/position - send one continue to pass.
+            (do
+              (reset! passed-ice-position pass-key)
+              (println (format "   → All subs %s on %s, Runner passing ICE"
+                               (if all-fired? "resolved" "broken") ice-title))
+              (send-continue! gameid))))))))
 
 (defn handle-runner-pass-fired-ice
   "Priority 2.7: Runner at encounter-ice after subs have fired."
