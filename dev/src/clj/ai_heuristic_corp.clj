@@ -34,6 +34,8 @@
             [ai-basic-actions :as actions]
             [ai-prompts :as prompts]
             [ai-runs :as runs]
+            [ai-connection :as conn]
+            [ai-stall :as stall]
             [clojure.string :as str]))
 
 (declare keep-or-mull)
@@ -1255,7 +1257,10 @@
                                "no-rez (decline all)"
                                (str "rez " (str/join ", " rez-strategy))))
 
-        ;; Build flags for monitor-run!
+        ;; Build flags for monitor-run!. --return-on-signal so a
+        ;; :waiting-for-runner-signal wait is surfaced back to the autonomous
+        ;; loop's per-tick stall tracker instead of being swallowed by
+        ;; monitor-run!'s internal polling (which would defeat the nudge/bail).
         (let [args (cond
                      (= :no-rez rez-strategy)
                      ["--no-rez" "--fire-unbroken"]
@@ -1265,7 +1270,8 @@
                              ["--fire-unbroken"])
 
                      :else
-                     ["--fire-unbroken"])]
+                     ["--fire-unbroken"])
+              args (concat args ["--return-on-signal"])]
           (println "Flags:" (str/join " " args))
           (apply runs/monitor-run! args))))))
 
@@ -1290,12 +1296,29 @@
     (Thread/sleep 300)  ; Poll interval when no run
     (recur)))
 
+(defn- player-names
+  "[my-name opp-name] from the game-state user maps (for stall nudges)."
+  []
+  (let [gs (:game-state @state/client-state)]
+    [(get-in gs [:corp :user :username])
+     (get-in gs [:runner :user :username])]))
+
+(defn- send-stall-nudge!
+  "On-stall nudge: a readable 'your move?' chat for humans/LLMs watching, plus a
+   bare 'ping' to wake a wait-for-relevant-diff-blocked opponent."
+  [stall-key]
+  (let [[me opp] (player-names)]
+    (log-message (str "⏳ STALL: " (stall/nudge-text me opp stall-key)))
+    (conn/send-chat! (stall/nudge-text me opp stall-key))
+    (conn/send-ping!)))
+
 (defn start-autonomous!
   "Main autonomous loop for Match Orchestration.
    Handles both playing turns and responding to runs."
   []
   (log-message "HEURISTIC CORP - Starting autonomous loop")
-  (loop [iter 0]
+  (loop [iter 0
+         stall {:key nil :count 0}]
     (when (zero? (mod iter 10))
       (let [gs (:game-state @state/client-state)]
         (log-message (str "💓 Corp Loop | Turn: " (:turn gs)
@@ -1303,48 +1326,67 @@
                       " | Clicks: " (my-clicks)
                       " | Credits: " (my-credits)))))
 
-    (let [continue? (try
-                      (let [game-state @state/client-state
-                            winner (get-in game-state [:game-state :winner])]
+    (let [{:keys [continue? run-status]}
+          (try
+            (let [game-state @state/client-state
+                  winner (get-in game-state [:game-state :winner])]
 
-                        (if winner
-                          (do
-                            (log-message "HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
-                            false)
-                          (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
+              (if winner
+                (do
+                  (log-message "HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
+                  {:continue? false})
+                (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
 
-                            ;; 1. Handle Prompts (Priority)
-                            (when (handle-prompt-if-needed)
-                              (Thread/sleep 500))
+                  ;; 1. Handle Prompts (Priority)
+                  (when (handle-prompt-if-needed)
+                    (Thread/sleep 500))
 
-                            ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
-                            (let [start-check (actions/can-start-turn?)]
-                              (when (:can-start start-check)
-                                (log-message "HEURISTIC CORP - Auto-starting turn")
-                                (actions/start-turn!)
-                                (Thread/sleep 500)))
+                  ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
+                  (let [start-check (actions/can-start-turn?)]
+                    (when (:can-start start-check)
+                      (log-message "HEURISTIC CORP - Auto-starting turn")
+                      (actions/start-turn!)
+                      (Thread/sleep 500)))
 
-                            ;; 2. If my turn, play
-                            (when (and my-turn? (not (state/get-prompt)))
-                              (if (pos? (my-clicks))
-                                (play-turn)
-                                (do
-                                  ;; Only log this occasionally to reduce spam
-                                  (when (zero? (mod iter 20))
-                                    (log-message "HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn"))
-                                  (actions/smart-end-turn!))))
+                  ;; 2. If my turn, play
+                  (when (and my-turn? (not (state/get-prompt)))
+                    (if (pos? (my-clicks))
+                      (play-turn)
+                      (do
+                        ;; Only log this occasionally to reduce spam
+                        (when (zero? (mod iter 20))
+                          (log-message "HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn"))
+                        (actions/smart-end-turn!))))
 
-                            ;; 3. If opponent turn, watch for runs
-                            (when (and (not my-turn?) (has-active-run?))
-                              (respond-to-run!)
-                              (Thread/sleep 500))
+                  ;; 3. If opponent turn, watch for runs. Capture the run status so
+                  ;; the stall tracker can tell if we're wedged waiting on the Runner.
+                  (let [run-status (when (and (not my-turn?) (has-active-run?))
+                                     (let [r (respond-to-run!)]
+                                       (Thread/sleep 500)
+                                       (:status r)))]
+                    {:continue? true :run-status run-status}))))
+            (catch Exception e
+              (log-message "❌ HEURISTIC CORP ERROR:" (.getMessage e))
+              (.printStackTrace e)
+              (Thread/sleep 5000)
+              {:continue? true :run-status nil}))
 
-                            true))) ;; Continue loop
-                      (catch Exception e
-                        (log-message "❌ HEURISTIC CORP ERROR:" (.getMessage e))
-                        (.printStackTrace e)
-                        (Thread/sleep 5000)
-                        true))] ;; Continue loop on error
-      (when continue?
+          ;; Stall backstop: same as the Runner loop. Corp waits on the Runner via
+          ;; :waiting-for-runner-signal / :waiting-for-opponent, and monitor-run!'s
+          ;; own :stuck/:max-iterations give-up statuses also count (we re-enter it
+          ;; every tick, so a returned :stuck means genuinely wedged).
+          stall-k (stall/stall-key run-status (get-in @state/client-state [:game-state :run]))
+          next-stall (stall/update-tracker stall stall-k)
+          action (stall/stall-action (:count next-stall) stall/default-thresholds)
+          bail? (= action :bail)]
+
+      (when (= action :nudge)
+        (send-stall-nudge! stall-k))
+      (when bail?
+        (let [log (get-in @state/client-state [:game-state :log])]
+          (println (stall/diagnostic (first (player-names)) stall-k (:count next-stall) log))
+          (log-message "🛑 Corp loop stopping (stall backstop). Inspect state / restart with bot-loop.")))
+
+      (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur (inc iter))))))
+        (recur (inc iter) next-stall)))))

@@ -145,6 +145,11 @@
           (= arg "--fire-if-asked")
           (recur rest-args server (assoc flags :fire-if-asked true))
 
+          ;; --return-on-signal: autonomous Corp loop opt-in - surface
+          ;; :waiting-for-runner-signal instead of polling it internally.
+          (= arg "--return-on-signal")
+          (recur rest-args server (assoc flags :return-on-signal true))
+
           (= arg "--no-continue")
           (recur rest-args server (assoc flags :no-continue true))
 
@@ -1071,12 +1076,19 @@
    Returns the final result from continue-run! plus:
    :iterations - how many times continue-run! was called
    :elapsed-ms - how long the loop ran"
-  [& {:keys [max-iterations timeout-ms wait-delay-ms stuck-threshold pause-on-events]
+  [& {:keys [max-iterations timeout-ms wait-delay-ms stuck-threshold pause-on-events
+             return-on-runner-signal]
       :or {max-iterations 500    ; Raised from 50 - stuck detection handles loops
            timeout-ms 300000     ; Was 30000 — too short for LLM-paced games
            wait-delay-ms 200
            stuck-threshold 5
-           pause-on-events true}}]
+           pause-on-events true
+           ;; When false (hand-driven monitor-run), :waiting-for-runner-signal
+           ;; polls internally so a human doesn't have to re-issue the command.
+           ;; The autonomous Corp loop sets this true so the wait is surfaced to
+           ;; its own per-tick stall tracker (which nudges/bails) instead of being
+           ;; swallowed by up to ~100s of internal polling.
+           return-on-runner-signal false}}]
   (let [start-time (System/currentTimeMillis)
         deadline (+ start-time timeout-ms)]
     (loop [iteration 0
@@ -1128,11 +1140,17 @@
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
-            ;; Waiting for Runner signal - poll and retry (Corp auto-waiting)
+            ;; Waiting for Runner signal - poll and retry (Corp auto-waiting),
+            ;; unless the caller (the autonomous Corp loop) asked to surface it so
+            ;; its own stall tracker governs the wait.
             (= status :waiting-for-runner-signal)
-            (do
-              (Thread/sleep wait-delay-ms)
-              (recur (inc iteration) []))  ; Reset history on wait
+            (if return-on-runner-signal
+              (assoc result
+                     :iterations (inc iteration)
+                     :elapsed-ms (- (System/currentTimeMillis) start-time))
+              (do
+                (Thread/sleep wait-delay-ms)
+                (recur (inc iteration) [])))  ; Reset history on wait
 
             ;; Waiting for opponent - terminal status, stop loop
             ;; The other client needs to run their own loop (e.g., Corp runs monitor-run!)
@@ -1253,7 +1271,7 @@
                                                           (name k)))
                                                       strategy-flags))))))
         (println "👁️  Monitoring run... (auto-passing boring windows)")
-        (let [result (auto-continue-loop!)]
+        (let [result (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags)))]
           ;; Include cursor in result for caller to track
           (assoc result :cursor (state/get-cursor)))))))
 

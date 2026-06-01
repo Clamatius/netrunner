@@ -384,6 +384,32 @@
           (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
               "must NOT end turn while clicks remain"))))))
 
+(deftest test-auto-continue-loop-return-on-runner-signal
+  (testing ":return-on-runner-signal surfaces a :waiting-for-runner-signal wait on
+            the first poll (so the autonomous Corp loop's per-tick stall tracker
+            governs it); the default keeps polling internally. Regression for the
+            Codex Q3 finding: monitor-run!'s internal poll would swallow the wait
+            for ~100s, defeating the nudge/bail backstop."
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:run {:phase "encounter-ice" :position 1}
+                    :corp {:click 0} :runner {:click 0}
+                    :active-player "runner" :turn 5 :log []}}
+      (with-redefs [runs/continue-run! (fn [& _] {:status :waiting-for-runner-signal})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        ;; Opt-in: return immediately so the outer stall tracker sees the wait.
+        (let [r (runs/auto-continue-loop! :return-on-runner-signal true
+                                          :max-iterations 50 :timeout-ms 2000)]
+          (is (= :waiting-for-runner-signal (:status r)))
+          (is (= 1 (:iterations r)) "must return on the first poll, not loop"))
+        ;; Default (hand-driven monitor-run): keeps polling internally.
+        (let [r (runs/auto-continue-loop! :max-iterations 3 :timeout-ms 2000 :wait-delay-ms 1)]
+          (is (= :max-iterations (:status r))
+              "without the opt-in it keeps polling the runner-signal wait"))))))
+
 (deftest test-choose-fires-end-turn-when-prompt-resolves-run
   (testing "choose-by-index! triggers auto-end-turn when the resolved prompt
             was the last step of a completed run (Bug #3, prompt-tail variant
