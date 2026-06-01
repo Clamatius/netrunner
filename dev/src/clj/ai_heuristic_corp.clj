@@ -599,8 +599,18 @@
     :condition-fn (fn [_] (winning-agenda-for-remote))
     :action-fn (fn [_]
                  (let [agenda (winning-agenda-for-remote)
-                       server (remote-server-name (the-remote))]
-                   {:action :install :args {:card-name (:title agenda) :server server}}))
+                       remote (the-remote)
+                       server (remote-server-name remote)
+                       ;; Single-remote strategy reuses the-remote. If it already
+                       ;; holds an econ asset (e.g. Urtica Cipher), a plain install
+                       ;; is :blocked — no click spent, no prompt — and the loop
+                       ;; re-decides this same install forever. Overwrite to trash
+                       ;; the asset: we're installing the winning agenda anyway.
+                       asset-occupied? (some #(= "Asset" (:type %))
+                                             (server-content remote))]
+                   {:action :install
+                    :args (cond-> {:card-name (:title agenda) :server server}
+                            asset-occupied? (assoc :overwrite true))}))
     :reason-fn (fn [ctx]
                  (let [agenda (winning-agenda-for-remote)]
                    (if agenda
