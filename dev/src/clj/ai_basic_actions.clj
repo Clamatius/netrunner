@@ -698,13 +698,17 @@
         (println "   Resolve the prompt first, then end-turn manually")
         (core/with-cursor {:status :has-prompt :prompt prompt}))
 
-      ;; Pause: over hand size (should have discard prompt, but just in case)
+      ;; Over hand size with no active discard prompt: end the turn anyway.
+      ;; end-turn! triggers the engine's discard-to-hand-size prompt (see its
+      ;; docstring), which the caller's prompt handler then resolves. Refusing
+      ;; here deadlocks the autonomous loop, since the discard prompt only
+      ;; appears AFTER end-turn is sent (the has-prompt? branch above already
+      ;; pauses once that prompt exists).
       over-hand-size?
       (do
-        (println "⚠️  Cannot auto-end: over hand size")
-        (println (format "   Hand: %d cards (max %d)" hand-size max-hand-size))
-        (println "   Discard cards first")
-        (core/with-cursor {:status :over-hand-size :hand-size hand-size :max max-hand-size}))
+        (println (format "ℹ️  Over hand size (%d > %d) - ending turn to trigger discard prompt"
+                         hand-size max-hand-size))
+        (end-turn!))
 
       ;; Warn: possible EOT trigger
       has-eot-trigger?
