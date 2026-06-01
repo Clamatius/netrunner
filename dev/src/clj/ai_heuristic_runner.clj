@@ -292,14 +292,19 @@
   "Pure decision: given a continue-run! result map, decide what the autonomous
    Runner should do next. Returns one of :handle-prompt, :tank, :continue.
 
-   The autonomous loop has no human to resolve a :paused-cannot-break pause
-   (the full-break handler's 'I can't break, you decide' state), so it must
-   convert that into a concrete action. Mid-encounter the Runner can't jack
-   out, so the only way to make progress is to let the subs fire (tank)."
+   The autonomous loop has no human to resolve a 'can't break, you decide'
+   pause, so it must convert that into a concrete action. Mid-encounter the
+   Runner can't jack out, so the only way to make progress is to let the subs
+   fire (tank). Two handler statuses mean the same 'no human to decide' thing:
+     - :paused-cannot-break   - full-break path, unbreakable/unaffordable ICE
+     - :fire-decision-required - NOT-full-break path (handle-runner-encounter-ice),
+                                 rezzed ICE with unbroken subs and no tank auth
+   Both must map to :tank, or the loop falls to :continue and spins forever."
   [result]
   (case (:status result)
-    :decision-required   :handle-prompt
-    :paused-cannot-break :tank
+    :decision-required      :handle-prompt
+    :paused-cannot-break    :tank
+    :fire-decision-required :tank
     :continue))
 
 (defn loop! []

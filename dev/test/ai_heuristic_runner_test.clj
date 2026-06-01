@@ -20,6 +20,17 @@
     (is (= :tank (h/run-result->next-action
                    {:status :paused-cannot-break :ice "Tithe" :reason :no-breaker})))))
 
+(deftest test-fire-decision-required-maps-to-tank
+  (testing ":fire-decision-required -> :tank (non-full-break encounter, no human)"
+    ;; handle-runner-encounter-ice (the NOT-full-break path) returns
+    ;; :fire-decision-required when a rezzed ICE has unbroken subs and no tank
+    ;; authorization - 'a human would type tank or jack-out here'. The autonomous
+    ;; loop has no human, so it must convert this to :tank exactly like the
+    ;; full-break path's :paused-cannot-break. Without this branch it falls to
+    ;; :continue and the loop spins forever on the encounter.
+    (is (= :tank (h/run-result->next-action
+                   {:status :fire-decision-required :ice "Karunā" :unbroken-count 2})))))
+
 (deftest test-other-statuses-map-to-continue
   (testing "progress / terminal statuses fall through to :continue"
     (is (= :continue (h/run-result->next-action {:status :ability-used})))
