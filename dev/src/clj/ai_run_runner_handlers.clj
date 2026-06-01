@@ -203,6 +203,11 @@
                     (str (:text %)))
           recent-log)))
 
+;; Forward declaration: ice-authorized-for-fire? is defined with the encounter
+;; handlers below, but handle-runner-full-break needs it to honor `tank` in
+;; full-break mode.
+(declare ice-authorized-for-fire?)
+
 (defn handle-runner-full-break
   "Priority 2.4: Auto-break with --full-break strategy.
    Finds the cheapest available break ability and uses it.
@@ -279,46 +284,59 @@
             ;; No playable dynamic ability OR too many failures - try manual pump+break fallback
             (if-let [fallback-result (tactics/try-manual-pump-and-break! state current-ice all-programs)]
               fallback-result
-              ;; Fallback also failed - PAUSE and let player decide (don't auto-tank)
-              ;; --full-break means "I want to break" - if we can't, player must choose:
-              ;;   tank <ice-name>   - authorize letting subs fire
-              ;;   jack-out          - abandon the run
-              ;;   (wait)            - maybe Corp won't rez, or situation changes
-              (let [warning-key [position ice-title]
-                    runner-credits (get-in state [:game-state :runner :credit] 0)
-                    all-break-abilities
-                    (for [program all-programs
-                          [idx ability] (map-indexed vector (:abilities program))
-                          :when (and (:dynamic ability)
-                                     (when-let [dyn (:dynamic ability)]
-                                       (clojure.string/includes? (str dyn) "break")))]
-                      {:card-name (:title program)
-                       :label (:label ability)
-                       :playable (:playable ability)
-                       :cost-label (:cost-label ability)})]
-                (when (not= @last-full-break-warning warning-key)
-                  (reset! last-full-break-warning warning-key)
-                  (println "")
-                  (println (format "⛔ --full-break PAUSED: Can't break %s" ice-title))
-                  (if (seq all-break-abilities)
-                    (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
-                      (println (format "   %s has: %s (cost: %s)" card-name label (or cost-label "?")))
-                      (println (format "   Runner credits: %d¢" runner-credits)))
-                    (println "   No icebreaker can break this ICE"))
-                  (println "")
-                  (println "   Options:")
-                  (println (format "     tank \"%s\"   - let subs fire" ice-title))
-                  (println "     jack-out        - abandon run")
-                  (println "     (or wait for situation to change)"))
-                ;; Return paused status - don't send let-subs-fire signal
-                {:status :paused-cannot-break
-                 :wake-reason :player-decision-required
-                 :message (format "Can't afford to break %s - waiting for player decision" ice-title)
-                 :ice ice-title
-                 :unbroken-count (count unbroken-subs)
-                 :position position
-                 :credits runner-credits
-                 :reason (if (seq all-break-abilities) :cant-afford :no-breaker)}))))))))
+              ;; Fallback also failed. If the Runner has authorized tank on this ICE
+              ;; (human `tank` or the autonomous heuristic loop), resolve the encounter
+              ;; by signaling let-subs-fire. Otherwise PAUSE and let the player decide.
+              ;; NOTE: full-break previously ignored the :tank set entirely, so `tank`
+              ;; was silently inert on full-break runs and the autonomous loop spun
+              ;; forever on an unbreakable encounter.
+              (if (ice-authorized-for-fire? strategy ice-title)
+                (do
+                  (when (not= @signaled-fire-position position)
+                    (reset! signaled-fire-position position)
+                    (println (format "📡 Signaling Corp: can't break %s, tank authorized - letting subs fire" ice-title))
+                    (let-subs-fire-signal! gameid ice-title))
+                  {:status :waiting-for-corp-fire
+                   :wake-reason :waiting-for-opponent
+                   :message (format "Can't break %s - tank authorized, waiting for Corp to fire subs" ice-title)
+                   :ice ice-title
+                   :unbroken-count (count unbroken-subs)
+                   :position position})
+                (let [warning-key [position ice-title]
+                      runner-credits (get-in state [:game-state :runner :credit] 0)
+                      all-break-abilities
+                      (for [program all-programs
+                            [idx ability] (map-indexed vector (:abilities program))
+                            :when (and (:dynamic ability)
+                                       (when-let [dyn (:dynamic ability)]
+                                         (clojure.string/includes? (str dyn) "break")))]
+                        {:card-name (:title program)
+                         :label (:label ability)
+                         :playable (:playable ability)
+                         :cost-label (:cost-label ability)})]
+                  (when (not= @last-full-break-warning warning-key)
+                    (reset! last-full-break-warning warning-key)
+                    (println "")
+                    (println (format "⛔ --full-break PAUSED: Can't break %s" ice-title))
+                    (if (seq all-break-abilities)
+                      (let [{:keys [card-name label cost-label]} (first all-break-abilities)]
+                        (println (format "   %s has: %s (cost: %s)" card-name label (or cost-label "?")))
+                        (println (format "   Runner credits: %d¢" runner-credits)))
+                      (println "   No icebreaker can break this ICE"))
+                    (println "")
+                    (println "   Options:")
+                    (println (format "     tank \"%s\"   - let subs fire" ice-title))
+                    (println "     jack-out        - abandon run")
+                    (println "     (or wait for situation to change)"))
+                  ;; Return paused status - don't send let-subs-fire signal
+                  {:status :paused-cannot-break
+                   :wake-reason :player-decision-required
+                   :message (format "Can't afford to break %s - waiting for player decision" ice-title)
+                   :ice ice-title
+                   :unbroken-count (count unbroken-subs)
+                   :position position
+                   :credits runner-credits
+                   :reason (if (seq all-break-abilities) :cant-afford :no-breaker)})))))))))
 
 ;; ============================================================================
 ;; Runner Encounter Handlers
@@ -401,9 +419,12 @@
    Sends a single continue to pass our priority, then waits for the Corp to pass
    its priority. Re-sending continue every loop iteration (the old behavior) spun
    against the unchanged encounter-ice phase and tripped the stuck-state guard."
-  [{:keys [side run-phase state gameid]}]
+  [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
-             (= run-phase "encounter-ice"))
+             (= run-phase "encounter-ice")
+             ;; Defer to handle-real-decision when a real prompt is pending (e.g. a
+             ;; mid-subroutine "Jack out?" window) - passing here would mask it.
+             (not (has-real-decision? my-prompt)))
     (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
@@ -436,9 +457,14 @@
 
 (defn handle-runner-pass-fired-ice
   "Priority 2.7: Runner at encounter-ice after subs have fired."
-  [{:keys [side run-phase state gameid]}]
+  [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
-             (= run-phase "encounter-ice"))
+             (= run-phase "encounter-ice")
+             ;; Defer to handle-real-decision when a real prompt is pending. The
+             ;; subs-resolved? log heuristic matches a single "uses <ICE>" line, so
+             ;; it fires on the FIRST sub of a multi-sub ICE (e.g. Karunā) while a
+             ;; mid-subroutine "Jack out?" decision is still open - masking it.
+             (not (has-real-decision? my-prompt)))
     (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           log (get-in state [:game-state :log])

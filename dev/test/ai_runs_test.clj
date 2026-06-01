@@ -692,6 +692,87 @@
         (is (= "Ice Wall" (:ice result)))))))
 
 ;; ============================================================================
+;; Priority 2.4: Full-break can't-break + tank authorization
+;; ============================================================================
+;; Regression for the self-play deadlock: a Runner running with --full-break
+;; that can't break the encountered ICE used to ALWAYS return :paused-cannot-break
+;; (waiting for a human), ignoring the :tank set entirely. The autonomous loop
+;; has no human, so it spun forever. Fix: honor tank authorization in full-break
+;; mode by signaling let-subs-fire.
+
+(def encounter-cant-break-state
+  {:side "runner"
+   :run-phase "encounter-ice"
+   :position 1
+   :server ["remote1"]
+   :ice [{:title "Palisade" :rezzed true
+          :subroutines [{:label "End the run" :broken false :fired false}]}]})
+
+(deftest test-full-break-cant-break-pauses-when-unauthorized
+  (testing "full-break + no breaker + no tank authorization -> paused-cannot-break"
+    (let [sent (atom [])]
+      (with-mock-state
+        (apply mock-state-with-run (mapcat identity encounter-cant-break-state))
+        (reset! runner-handlers/signaled-fire-position nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:full-break true})
+          (let [result (runs/continue-run!)]
+            (is (= :paused-cannot-break (:status result)))
+            (is (= "Palisade" (:ice result)))
+            ;; Must NOT signal let-subs-fire without authorization
+            (is (not-any? #(= "system-msg" (get-in % [:data :command])) @sent)))
+          (runs/reset-strategy!))))))
+
+(deftest test-full-break-cant-break-tanks-when-authorized
+  (testing "full-break + no breaker + tank authorization -> signals let-subs-fire"
+    (let [sent (atom [])]
+      (with-mock-state
+        (apply mock-state-with-run (mapcat identity encounter-cant-break-state))
+        (reset! runner-handlers/signaled-fire-position nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:full-break true :tank #{"Palisade"}})
+          (let [result (runs/continue-run!)]
+            (is (= :waiting-for-corp-fire (:status result)))
+            (is (= "Palisade" (:ice result)))
+            ;; Signaled the Corp to fire unbroken subs
+            (is (some #(= "system-msg" (get-in % [:data :command])) @sent)))
+          (runs/reset-strategy!))))))
+
+;; ============================================================================
+;; Priority 2.6/2.7: pass-ice handlers must defer to real decisions
+;; ============================================================================
+;; Regression for the Karunā self-play deadlock: a multi-sub ICE fires its first
+;; sub ("uses Karunā to do 2 net damage") and then offers a mid-subroutine
+;; "Jack out?" decision. handle-runner-pass-fired-ice's subs-resolved? log regex
+;; matched that single "uses <ICE>" line and sent continue, masking the jack-out
+;; prompt -> autonomous loop spun on "no further action". Fix: guard the pass
+;; handlers with has-real-decision?.
+
+(deftest test-pass-fired-ice-defers-to-jack-out-decision
+  (testing "pending Jack out? prompt is surfaced, not masked by a pass-continue"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "runner"
+         :run-phase "encounter-ice"
+         :position 1
+         :server ["remote1"]
+         :ice [{:title "Karunā" :rezzed true
+                :subroutines [{:label "Do 2 net damage" :broken false :fired true}
+                              {:label "Do 2 net damage" :broken false :fired false}]}]
+         :prompt (make-prompt :msg "Jack out?" :prompt-type "other"
+                              :choices [{:value "Yes"} {:value "No"}])
+         :log [{:text "ai-corp uses Karunā to do 2 net damage"}])
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:full-break true})
+          (let [result (runs/continue-run!)]
+            ;; Must surface the decision, NOT send a masking continue
+            (is (= :decision-required (:status result)))
+            (is (not= :sent-continue (:action result)))
+            (is (empty? @sent)))
+          (runs/reset-strategy!))))))
+
+;; ============================================================================
 ;; Test Suite Summary
 ;; ============================================================================
 

@@ -19,25 +19,32 @@ SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entr
 # Port mapping: runner=7889 (default), corp=7890
 CLIENT_NAME=""
 CLIENT_PORT="7889"
+# Heuristic-bot namespace default (overridden per-side below). Initialized here
+# so unqualified invocations (e.g. `send_command bot-loop`) don't hit an unbound
+# $BOT_NS under set -u.
+BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
-    # Map client name to port
+    # Map client name to port and heuristic-bot namespace
     case "$CLIENT_NAME" in
         runner)
             CLIENT_PORT="7889"
+            BOT_NS="ai-heuristic-runner"
             ;;
         corp)
             CLIENT_PORT="7890"
+            BOT_NS="ai-heuristic-corp"
             ;;
         *)
             # Custom client, try to find its port by checking what's running
             # Default to 7889 if not specified
             CLIENT_PORT="7889"
+            BOT_NS="ai-heuristic-corp"
             ;;
     esac
 fi
@@ -1324,27 +1331,78 @@ case "$COMMAND" in
 
     bot)
         ensure_connection
-        info "Heuristic Corp: Making one decision..."
-        execute '(do
-                   (require (quote [ai-heuristic-corp :as bot]))
-                   (bot/play-turn))'
+        info "Heuristic ${CLIENT_NAME}: Making one decision..."
+        execute "(do
+                   (require (quote [$BOT_NS :as bot]))
+                   (bot/play-turn))"
         show_last_log_if_enabled
         ;;
 
     bot-turn)
         ensure_connection
-        info "Heuristic Corp: Playing full turn..."
-        execute '(do
-                   (require (quote [ai-heuristic-corp :as bot]))
-                   (bot/play-full-turn))'
+        info "Heuristic ${CLIENT_NAME}: Playing full turn..."
+        execute "(do
+                   (require (quote [$BOT_NS :as bot]))
+                   (bot/play-full-turn))"
         show_last_log_if_enabled
         ;;
 
     bot-status)
         ensure_connection
-        execute '(do
-                   (require (quote [ai-heuristic-corp :as bot]))
-                   (bot/status))'
+        execute "(do
+                   (require (quote [$BOT_NS :as bot]))
+                   (bot/status))"
+        ;;
+
+    bot-loop)
+        ensure_connection
+        info "Heuristic ${CLIENT_NAME}: Launching autonomous loop (detached future)..."
+        # start-autonomous! (corp) / loop! (runner) block until a winner; run
+        # detached in the REPL so the eval returns immediately. Both sides poll
+        # shared server state, so launching one per REPL = hands-off self-play.
+        if [[ "$CLIENT_NAME" == "corp" ]]; then
+            LOOP_FN="start-autonomous!"
+        else
+            LOOP_FN="loop!"
+        fi
+        # Refuse to relaunch over a still-running loop, else the old future is
+        # orphaned (unreachable by bot-loop-status/stop). NOTE: we resolve the VAR
+        # and deref THE VAR (var-deref -> the Future object, non-blocking) before
+        # future-done?. Referencing the bare symbol would fail to COMPILE on a
+        # fresh REPL where the var isn't def'd yet; @<future> would block until the
+        # loop exits.
+        # requiring-resolve loads $BOT_NS and resolves the loop fn at RUNTIME. A
+        # bare bot/$LOOP_FN alias would be resolved at COMPILE time - before the
+        # require runs - inside this non-top-level let, giving "No such namespace".
+        execute "(let [v (resolve (quote ai-self-play-future))]
+                   (if (and v (bound? v) (not (future-done? (deref v))))
+                     (println \"⚠️  Autonomous loop already running for ${CLIENT_NAME} - use 'bot-loop-stop' first\")
+                     (do
+                       (def ai-self-play-future
+                         (future ((requiring-resolve (quote $BOT_NS/$LOOP_FN)))))
+                       (println \"🔁 Autonomous loop launched for ${CLIENT_NAME}\"))))"
+        ;;
+
+    bot-loop-status)
+        ensure_connection
+        execute "(let [v (resolve (quote ai-self-play-future))]
+                   (if (and v (bound? v))
+                     (let [fut (deref v)]
+                       (println (str \"Loop done? \" (future-done? fut)
+                                      (when (future-done? fut)
+                                        (if (future-cancelled? fut)
+                                          \" -> cancelled\"
+                                          (str \" -> \" (deref fut)))))))
+                     (println \"No autonomous loop launched in this REPL.\")))"
+        ;;
+
+    bot-loop-stop)
+        ensure_connection
+        execute "(let [v (resolve (quote ai-self-play-future))]
+                   (if (and v (bound? v))
+                     (do (future-cancel (deref v))
+                         (println \"🛑 Autonomous loop cancelled for ${CLIENT_NAME}\"))
+                     (println \"No autonomous loop to stop.\")))"
         ;;
 
     bot-respond)

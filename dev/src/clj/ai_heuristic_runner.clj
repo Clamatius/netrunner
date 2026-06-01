@@ -288,6 +288,20 @@
     (execute-decision decision)
     (actions/smart-end-turn!)))
 
+(defn run-result->next-action
+  "Pure decision: given a continue-run! result map, decide what the autonomous
+   Runner should do next. Returns one of :handle-prompt, :tank, :continue.
+
+   The autonomous loop has no human to resolve a :paused-cannot-break pause
+   (the full-break handler's 'I can't break, you decide' state), so it must
+   convert that into a concrete action. Mid-encounter the Runner can't jack
+   out, so the only way to make progress is to let the subs fire (tank)."
+  [result]
+  (case (:status result)
+    :decision-required   :handle-prompt
+    :paused-cannot-break :tank
+    :continue))
+
 (defn loop! []
   (println "🏃 HEURISTIC RUNNER - Starting autonomous loop")
   (loop []
@@ -305,10 +319,24 @@
                               (do
                                 (println "🏃 HEURISTIC RUNNER - In run, continuing...")
                                 (let [result (runs/continue-run!)]
-                                  ;; If continue-run! returns :decision-required, we MUST handle the prompt
-                                  (when (= (:status result) :decision-required)
-                                    (println "🏃 HEURISTIC RUNNER - Decision required during run, handling prompt...")
-                                    (handle-prompt-if-needed)))
+                                  (case (run-result->next-action result)
+                                    :handle-prompt
+                                    (do
+                                      (println "🏃 HEURISTIC RUNNER - Decision required during run, handling prompt...")
+                                      (handle-prompt-if-needed))
+
+                                    :tank
+                                    ;; Can't break and no human to decide. Authorize tank
+                                    ;; (let subs fire) on this ICE and continue; the handler
+                                    ;; signals the Corp to fire, resolving the encounter.
+                                    (let [ice (:ice result)]
+                                      (println (format "🏃 HEURISTIC RUNNER - Can't break %s, authorizing tank (let subs fire)" ice))
+                                      (runs/set-strategy!
+                                        (update (runs/get-strategy) :tank (fnil conj #{}) ice))
+                                      (runs/continue-run!))
+
+                                    ;; :continue - nothing special this tick
+                                    nil))
                                 (Thread/sleep 500))
 
                               ;; Priority 2: Handle non-run prompts
@@ -339,3 +367,57 @@
       (when continue?
         (Thread/sleep 500)
         (recur)))))
+
+;; ============================================================================
+;; Turn Driver + Status (send_command parity with ai-heuristic-corp)
+;; ============================================================================
+
+(defn play-full-turn
+  "Play a full Runner turn until no clicks remain.
+   Mirrors ai-heuristic-corp/play-full-turn: ensure turn started, loop actions,
+   handle EOT prompts (e.g. discard), then end turn.
+   Note: runs consume the click inside execute-decision, so the loop naturally
+   advances as clicks drop."
+  []
+  (println "\n" (str/join "" (repeat 60 "=")))
+  (println "🏃 HEURISTIC RUNNER - Starting Full Turn")
+  (println (str/join "" (repeat 60 "=")))
+
+  (actions/ensure-turn-started!)
+
+  (loop [actions-taken 0]
+    (let [clicks (my-clicks)]
+      (if (and clicks (pos? clicks) (not (state/get-prompt)))
+        (do
+          (println (str "🏃 Loop: Actions taken " actions-taken " | Clicks remaining: " clicks))
+          (play-turn)
+          (Thread/sleep 500)
+          (recur (inc actions-taken)))
+        (do
+          (println "\n" (str/join "" (repeat 60 "=")))
+          (println (str "🏃 Turn complete. Took " actions-taken " actions."))
+          (println (str/join "" (repeat 60 "=")))
+
+          ;; Handle any EOT prompts (like discard to hand size)
+          (loop [prompts-handled 0]
+            (if (handle-prompt-if-needed)
+              (do
+                (Thread/sleep 300)
+                (recur (inc prompts-handled)))
+              (when (pos? prompts-handled)
+                (println (str "🏃 Handled " prompts-handled " EOT prompt(s)")))))
+
+          (actions/smart-end-turn!)
+          {:actions-taken actions-taken})))))
+
+(defn status
+  "Show current decision-relevant Runner state."
+  []
+  (println "\n🏃 HEURISTIC RUNNER STATUS")
+  (println (str "Credits: " (my-credits) " | Clicks: " (my-clicks)
+                " | Hand: " (count (my-hand)) " cards"))
+  (println (str "Missing breakers: " (or (seq (missing-breakers)) "none")))
+  (let [run (state/current-run)]
+    (println (str "Active run: " (if run (or (:server run) run) "none"))))
+  (let [winner (get-in @state/client-state [:game-state :winner])]
+    (when winner (println (str "🏁 Winner: " winner)))))
