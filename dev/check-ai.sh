@@ -34,6 +34,7 @@ AI_NAMESPACES=(
     ai-hud-utils
     ai-debug
     ai-actions
+    ai-stall
     ai-goldfish-corp
     ai-goldfish-runner
     ai-heuristic-corp

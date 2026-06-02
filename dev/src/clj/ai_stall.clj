@@ -99,3 +99,59 @@
                  (name (or status :wait)) phase position)
          "   recent log:"]
         (map #(str "     " %) tail)))))
+
+;; ============================================================================
+;; Own-turn spin backstop (catch-all) — GitHub issue #19
+;;
+;; The tracker above only fires on opponent-waits DURING A RUN (`stall-key` is
+;; nil otherwise). A self-blocked decision on our OWN turn, outside a run — a
+;; heuristic rule re-emitting a :blocked action every tick (e.g. install-for-win
+;; into an occupied remote) — registers neither a run nor an opponent-wait, so
+;; it spins invisibly. Both 2026-06-01 install-for-win hangs were this shape and
+;; needed an external watcher to catch.
+;;
+;; This catch-all watches one thing: on our own turn with no run active, the
+;; heuristic loop spends a click every tick, so a frozen [turn clicks] means we
+;; are stuck. Bail-only — no nudge, since nudging the opponent is pointless when
+;; WE are the stuck side. Off-turn and in-run liveness stay with the run-side
+;; tracker (which nudges a slow opponent before bailing), so an LLM opponent
+;; thinking on its turn never trips this.
+;; ============================================================================
+
+(def own-turn-spin-bail-at
+  "Loop ticks of a frozen own-turn state before bailing. Ticks are ~500ms and
+   run FAST during a spin (a rejected action returns immediately). On our own
+   turn outside a run there is no legitimate reason to freeze — the heuristic
+   acts instantly — so this is tight; ~60 ticks ≈ 30s leaves margin for the
+   occasional non-click tick (turn start, EOT discard prompt, instant score)."
+  60)
+
+(defn own-turn-key
+  "Liveness signature for a self-blocked decision on OUR OWN turn, OUTSIDE a run.
+   Returns nil (resetting the tracker) when it is not our turn OR a run is
+   active — opponent turns and run handshakes belong to the run-side tracker,
+   not this catch-all. game-state is the inner :game-state map; my-side is
+   \"corp\"/\"runner\"."
+  [game-state my-side]
+  (when (and (= my-side (:active-player game-state))
+             (not (:run game-state)))
+    [(:turn game-state)
+     (get-in game-state [(keyword my-side) :click])]))
+
+(defn own-turn-spinning?
+  "True once the frozen-own-turn count crosses the bail threshold."
+  ([count] (own-turn-spinning? count own-turn-spin-bail-at))
+  ([count threshold] (>= count threshold)))
+
+(defn own-turn-diagnostic
+  "Diagnostic for an own-turn spin bail (vs the run-specific `diagnostic`).
+   key is [turn clicks]; log is the game log vector (newest-last)."
+  [my-name [turn clicks] count log]
+  (let [tail (->> log (take-last 12) (map :text) (remove nil?))]
+    (str/join "\n"
+      (concat
+        [(format "🛑 OWN-TURN SPIN BAIL (%s): no click spent for %d ticks" my-name count)
+         (format "   frozen on turn %s with %s clicks — loop re-emitting a rejected action?"
+                 turn clicks)
+         "   recent log:"]
+        (map #(str "     " %) tail)))))

@@ -65,6 +65,52 @@
       (is (re-find #"waiting-for-corp-fire" msg))
       (is (re-find #"encounter-ice" msg)))))
 
+;; ----------------------------------------------------------------------------
+;; Own-turn spin backstop (issue #19)
+;; ----------------------------------------------------------------------------
+
+(deftest test-own-turn-key
+  (testing "nil unless it is MY turn AND no run is active"
+    (let [gs {:turn 14 :active-player "corp" :corp {:click 3} :runner {:click 0}}]
+      (is (= [14 3] (stall/own-turn-key gs "corp")))
+      ;; not my turn -> nil (opponent's turn is the run-side tracker's domain)
+      (is (nil? (stall/own-turn-key gs "runner")))
+      ;; my turn but a run is active -> nil (run handshakes owned elsewhere)
+      (is (nil? (stall/own-turn-key
+                  (assoc gs :run {:phase "approach-ice" :position 1}) "corp")))))
+  (testing "key changes when clicks change, so progress resets the tracker"
+    (let [g1 {:turn 14 :active-player "corp" :corp {:click 3}}
+          g2 {:turn 14 :active-player "corp" :corp {:click 2}}]
+      (is (not= (stall/own-turn-key g1 "corp")
+                (stall/own-turn-key g2 "corp")))))
+  (testing "a frozen own-turn drives update-tracker to accumulate"
+    (let [gs {:turn 14 :active-player "corp" :corp {:click 3}}
+          k  (stall/own-turn-key gs "corp")
+          t1 (stall/update-tracker {:key nil :count 0} k)
+          t2 (stall/update-tracker t1 k)]
+      (is (= 2 (:count t2)) "same frozen key increments"))))
+
+(deftest test-own-turn-spinning?
+  (testing "true only once the frozen count crosses the bail threshold"
+    (is (not (stall/own-turn-spinning? 1 60)))
+    (is (not (stall/own-turn-spinning? 59 60)))
+    (is (stall/own-turn-spinning? 60 60))
+    (is (stall/own-turn-spinning? 999 60)))
+  (testing "default-threshold arity uses own-turn-spin-bail-at"
+    (is (not (stall/own-turn-spinning? 0)))
+    (is (stall/own-turn-spinning? stall/own-turn-spin-bail-at))))
+
+(deftest test-own-turn-diagnostic
+  (testing "renders a frozen-own-turn bail with side, count and log tail"
+    (let [msg (stall/own-turn-diagnostic
+                "ai-corp" [14 3] 60
+                [{:text "ai-corp started their turn 14"}
+                 {:text "blocked install: Server 1 already has Urtica Cipher"}])]
+      (is (re-find #"ai-corp" msg))
+      (is (re-find #"OWN-TURN SPIN" msg))
+      (is (re-find #"60" msg))
+      (is (re-find #"blocked install" msg)))))
+
 (defn -main []
   (let [results (run-tests 'ai-stall-test)]
     (when (or (pos? (:fail results)) (pos? (:error results)))

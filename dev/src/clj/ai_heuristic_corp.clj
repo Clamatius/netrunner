@@ -1335,7 +1335,8 @@
   []
   (log-message "HEURISTIC CORP - Starting autonomous loop")
   (loop [iter 0
-         stall {:key nil :count 0}]
+         stall {:key nil :count 0}
+         spin {:key nil :count 0}]
     (when (zero? (mod iter 10))
       (let [gs (:game-state @state/client-state)]
         (log-message (str "💓 Corp Loop | Turn: " (:turn gs)
@@ -1395,15 +1396,23 @@
           stall-k (stall/stall-key run-status (get-in @state/client-state [:game-state :run]))
           next-stall (stall/update-tracker stall stall-k)
           action (stall/stall-action (:count next-stall) stall/default-thresholds)
-          bail? (= action :bail)]
+          ;; Catch-all: own-turn self-blocked spin (issue #19). The run-side
+          ;; tracker only sees opponent-waits during a run; this catches a loop
+          ;; re-emitting a rejected own-turn action (no run, no nudge helps).
+          spin-k (stall/own-turn-key (:game-state @state/client-state) "corp")
+          next-spin (stall/update-tracker spin spin-k)
+          spin-bail? (stall/own-turn-spinning? (:count next-spin))
+          bail? (or (= action :bail) spin-bail?)]
 
       (when (= action :nudge)
         (send-stall-nudge! stall-k))
       (when bail?
         (let [log (get-in @state/client-state [:game-state :log])]
-          (println (stall/diagnostic (first (player-names)) stall-k (:count next-stall) log))
+          (println (if spin-bail?
+                     (stall/own-turn-diagnostic (first (player-names)) spin-k (:count next-spin) log)
+                     (stall/diagnostic (first (player-names)) stall-k (:count next-stall) log)))
           (log-message "🛑 Corp loop stopping (stall backstop). Inspect state / restart with bot-loop.")))
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur (inc iter) next-stall)))))
+        (recur (inc iter) next-stall next-spin)))))
