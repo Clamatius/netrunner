@@ -308,9 +308,16 @@
    Returns the agenda if we can afford to install and score it, nil otherwise."
   []
   (when-let [remote (the-remote)]
-    (first (filter #(and (can-win-with-agenda? %)
-                         (can-afford-agenda-install? % remote))
-                   (agendas-in-hand)))))
+    ;; Can't install a winning agenda into a remote that already holds an agenda
+    ;; — the install is :blocked (no click, no prompt) and install-for-win's
+    ;; asset-only overwrite won't fire, so the autonomous loop spins. When an
+    ;; agenda is already cooking there, return nil and let the :advance rule
+    ;; score THAT one. (An asset in the remote is fine — install-for-win
+    ;; overwrites it.)
+    (when-not (some #(= "Agenda" (:type %)) (server-content remote))
+      (first (filter #(and (can-win-with-agenda? %)
+                           (can-afford-agenda-install? % remote))
+                     (agendas-in-hand))))))
 
 (defn affordable-agenda-for-remote
   "Find an agenda in hand that we can afford to install and score.

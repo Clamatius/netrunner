@@ -86,3 +86,21 @@
         (is (= "Offworld Office" (:card-name args)))
         (is (not (:overwrite args))
             "Empty remote needs no overwrite — don't request a spurious trash")))))
+
+(deftest test-install-for-win-skips-agenda-occupied-remote
+  ;; Residual of the asset-only overwrite fix: a remote already holding an
+  ;; AGENDA (e.g. Send a Message mid-advance) can't take a second agenda. A
+  ;; plain install is :blocked and asset-only overwrite won't fire → the loop
+  ;; spins. Found live 2026-06-01 (batch game 3, T18). Fix: install-for-win must
+  ;; not fire into an agenda-occupied remote; advance the cooking agenda instead.
+  (let [cooking {:title "Send a Message" :type "Agenda"
+                 :advancementcost 5 :advance-counter 2 :agendapoints 3}]
+    (testing "winning-agenda-for-remote returns nil when the remote holds an agenda"
+      (with-mock-state (corp-win-state [cooking])
+        (is (nil? (h/winning-agenda-for-remote)))))
+    (testing "decide-action advances the cooking agenda, not a blocked install"
+      (with-mock-state (corp-win-state [cooking])
+        (let [{:keys [action args]} (h/decide-action)]
+          (is (= :advance action)
+              "Should advance the agenda already in the remote, not install a 2nd")
+          (is (= "Send a Message" (:card-name args))))))))
