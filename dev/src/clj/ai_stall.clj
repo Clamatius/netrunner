@@ -134,7 +134,16 @@
    \"corp\"/\"runner\"."
   [game-state my-side]
   (when (and (= my-side (:active-player game-state))
-             (not (:run game-state)))
+             (not (:run game-state))
+             ;; A :waiting prompt parked on our side means we're legitimately
+             ;; idle while the OPPONENT resolves something (a cross-turn ability,
+             ;; a simultaneous-trigger window) — NOT spinning. Don't accumulate,
+             ;; or a slow (LLM) opponent would false-bail. A genuine self-blocked
+             ;; spin (a rejected install/advance) raises NO prompt, so it still
+             ;; keys here and bails; an UNhandled real decision (non-:waiting)
+             ;; also still keys, which is correct — that's a genuine stuck.
+             (not= :waiting
+                   (get-in game-state [(keyword my-side) :prompt-state :prompt-type])))
     [(:turn game-state)
      (get-in game-state [(keyword my-side) :click])]))
 

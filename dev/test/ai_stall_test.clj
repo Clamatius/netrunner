@@ -83,6 +83,17 @@
           g2 {:turn 14 :active-player "corp" :corp {:click 2}}]
       (is (not= (stall/own-turn-key g1 "corp")
                 (stall/own-turn-key g2 "corp")))))
+  (testing "nil when a :waiting prompt is parked on our side (opponent resolving)"
+    ;; A slow/LLM opponent resolving a cross-turn ability posts a :waiting prompt
+    ;; to us while we're active with no run. That's a legitimate idle, not a
+    ;; spin — must not accumulate toward a bail.
+    (let [gs {:turn 14 :active-player "corp"
+              :corp {:click 3 :prompt-state {:prompt-type :waiting}}}]
+      (is (nil? (stall/own-turn-key gs "corp"))))
+    ;; A non-:waiting prompt we can't resolve IS a genuine stuck — still keys.
+    (let [gs {:turn 14 :active-player "corp"
+              :corp {:click 3 :prompt-state {:prompt-type :select}}}]
+      (is (= [14 3] (stall/own-turn-key gs "corp")))))
   (testing "a frozen own-turn drives update-tracker to accumulate"
     (let [gs {:turn 14 :active-player "corp" :corp {:click 3}}
           k  (stall/own-turn-key gs "corp")
