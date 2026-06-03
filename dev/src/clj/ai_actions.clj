@@ -68,6 +68,7 @@
 ;; ============================================================================
 
 (def status display/status)
+(def game-over-status display/game-over-status)
 (def show-board display/show-board)
 (def show-board-compact display/show-board-compact)
 (def show-log display/show-log)

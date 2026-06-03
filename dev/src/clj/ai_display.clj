@@ -290,6 +290,35 @@
   (show-status)
   @state/client-state)
 
+(defn game-over-status
+  "Print a single machine-readable line describing game-over state.
+   Intended for tooling (e.g. the self-play regression harness) so it does
+   not have to screen-scrape the human-facing status banner.
+
+   Output (one line):
+     NO-GAME                                  - no game state loaded
+     GAME-OVER winner=corp turn=18                     - decided (winner = corp|runner)
+     GAME-OVER winner=tie turn=12                      - tied game
+     IN-PROGRESS turn=12 whose-turn=runner clicks=3    - game still running
+
+   The clicks field is the active player's remaining clicks, so tooling can
+   distinguish a within-turn spin (same turn + same clicks, not progressing)
+   from normal play."
+  []
+  (let [gs (state/get-game-state)]
+    (if (nil? gs)
+      (println "NO-GAME")
+      (let [{:keys [game-over? winner turn-number whose-turn]} (state/get-turn-status)
+            clicks (when whose-turn (get-in gs [(keyword whose-turn) :click]))]
+        (if game-over?
+          (println (format "GAME-OVER winner=%s turn=%s"
+                           (if winner (str/lower-case (name winner)) "tie")
+                           (or turn-number "?")))
+          (println (format "IN-PROGRESS turn=%s whose-turn=%s clicks=%s"
+                           (or turn-number "?")
+                           (or whose-turn "?")
+                           (if (some? clicks) clicks "?"))))))))
+
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
   []
