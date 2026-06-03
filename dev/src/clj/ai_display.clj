@@ -55,7 +55,7 @@
               winning-user (:winning-user gs)
               reason (:reason gs)]
           (println "📊 GAME STATUS")
-          (println "\n🏁 GAME OVER")
+          (println (str "\n🏁 GAME OVER (Turn: " (or (:turn gs) "?") ")"))
           (if winner
             (println (str "\n🏆 " winner-str " wins"
                           (when winning-user (str " (" winning-user ")"))))
