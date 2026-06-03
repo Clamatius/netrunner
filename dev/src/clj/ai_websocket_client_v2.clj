@@ -15,7 +15,7 @@
            [org.eclipse.jetty.websocket.client WebSocketClient]
            [org.eclipse.jetty.util.ssl SslContextFactory]))
 
-(declare ensure-connected!)
+(declare ensure-connected! send-message!)
 
 ;; ============================================================================
 ;; Action Synchronization
@@ -167,7 +167,16 @@
     :game/error
     (do
       (println "❌ SERVER ERROR RECEIVED!")
-      (println "   Data:" (pr-str data)))
+      (println "   Data:" (pr-str data))
+      ;; The server caught an exception processing our last command and rolled
+      ;; its state back to before that command (see web/game.clj). Our optimistic
+      ;; local state may now diverge from the authoritative (rolled-back) state,
+      ;; which can strand the autonomous loop grinding on a stale view. Re-fetch
+      ;; authoritative state so the next decision is made against ground truth.
+      (when-let [gameid (:gameid @state/client-state)]
+        (println "   ↻ Requesting resync to recover authoritative state")
+        (state/clear-game-state!)
+        (send-message! :game/resync {:gameid gameid})))
 
     :lobby/list
     (do
