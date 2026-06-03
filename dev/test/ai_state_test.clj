@@ -193,3 +193,54 @@
   (testing "handles request for more than available"
     (with-mock-state {:game-state {:log [{:text "Only"}]}}
       (is (= 1 (count (state/recent-log 10)))))))
+
+;; ============================================================================
+;; Game-Over Detection Tests
+;; ============================================================================
+
+(deftest test-get-turn-status-game-over
+  (testing "detects winner and reports game-over"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 27
+                                   :winner :corp
+                                   :loser :runner
+                                   :winning-user "ai-corp"
+                                   :reason "Agenda"
+                                   :end-time "2026-01-01T00:00:00Z"
+                                   :corp {:click 0 :agenda-point 7}
+                                   :runner {:click 0 :agenda-point 0}})
+      (let [status (state/get-turn-status)]
+        (is (true? (:game-over? status)))
+        (is (= :corp (:winner status)))
+        (is (false? (:can-act? status)))
+        (is (= "🏁" (:status-emoji status)))
+        (is (= "Corp wins" (:status-text status))))))
+
+  (testing "detects tie (reason + end-time, no winner)"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner"
+                                   :turn 12
+                                   :reason "Mutual destruction"
+                                   :end-time "2026-01-01T00:00:00Z"
+                                   :corp {:click 0}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (true? (:game-over? status)))
+        (is (nil? (:winner status)))
+        (is (false? (:can-act? status)))
+        (is (= "Game over (tie)" (:status-text status))))))
+
+  (testing "no game-over during normal play"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 5
+                                   :corp {:click 3}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (false? (:game-over? status)))
+        (is (nil? (:winner status)))))))

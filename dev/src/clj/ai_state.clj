@@ -199,6 +199,8 @@
         active-side (active-player)
         turn-num (turn-number)
         end-turn (get-in gs [:end-turn])
+        winner (:winner gs)
+        game-over? (boolean (or winner (and (:reason gs) (:end-time gs))))
         prompt (get-prompt)
         prompt-type (:prompt-type prompt)
         run-state (get-in gs [:run])
@@ -226,6 +228,13 @@
 
         [emoji text can-act]
         (cond
+          ;; Game over - winner declared (or tie)
+          game-over?
+          ["🏁" (if winner
+                  (str (clojure.string/capitalize (name winner)) " wins")
+                  "Game over (tie)")
+           false]
+
           ;; Both at 0 clicks - it's the next player's turn to start
           both-zero-clicks
           (if i-am-next
@@ -248,6 +257,8 @@
      :my-turn? my-turn
      :turn-number turn-num
      :can-act? can-act
+     :game-over? game-over?
+     :winner winner
      :in-run? (boolean run-state)
      :run-server (:server run-state)
      :status-emoji emoji

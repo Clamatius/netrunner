@@ -48,6 +48,26 @@
         (println "   ./dev/send_command <side> join <game-id> <Side>"))
       ;; Check if we're in a lobby but game hasn't started yet
       (cond
+        ;; Game has ended - show winner / tie banner
+        (and gs (or (:winner gs) (and (:reason gs) (:end-time gs))))
+        (let [winner (:winner gs)
+              winner-str (when winner (str/capitalize (name winner)))
+              winning-user (:winning-user gs)
+              reason (:reason gs)]
+          (println "📊 GAME STATUS")
+          (println "\n🏁 GAME OVER")
+          (if winner
+            (println (str "\n🏆 " winner-str " wins"
+                          (when winning-user (str " (" winning-user ")"))))
+            (println "\n🤝 The game is a tie"))
+          (when reason
+            (println "Reason:" reason))
+          (let [runner-pts (get-in gs [:runner :agenda-point])
+                corp-pts (get-in gs [:corp :agenda-point])]
+            (when (or runner-pts corp-pts)
+              (println (format "Agenda points - Corp: %s, Runner: %s"
+                               (or corp-pts 0) (or runner-pts 0))))))
+
         ;; Lobby exists but game not started - show lobby status
         (and lobby (not (:started lobby)))
         (let [players (:players lobby)
