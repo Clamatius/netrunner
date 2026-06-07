@@ -144,6 +144,11 @@
 (defn credits-for-side [side] (get-in @client-state [:game-state side :credit]))
 (defn clicks-for-side [side] (get-in @client-state [:game-state side :click]))
 (defn hand-count-for-side [side] (get-in @client-state [:game-state side :hand-count]))
+;; A player's own deck contents are hidden (fog of war): [:side :deck] is an
+;; empty collection on the wire. The server sends the real size as :deck-count
+;; (public info - the opponent knows your deck size). Always use this to ask
+;; "how many cards are left to draw", NOT (count (runner-deck)).
+(defn deck-count-for-side [side] (or (get-in @client-state [:game-state side :deck-count]) 0))
 
 ;; Context-aware helpers (based on current client's side)
 (defn my-credits []
@@ -169,6 +174,7 @@
 (defn runner-credits [] (credits-for-side :runner))
 (defn runner-clicks [] (clicks-for-side :runner))
 (defn runner-hand-count [] (hand-count-for-side :runner))
+(defn runner-deck-count [] (deck-count-for-side :runner))
 
 (defn corp-credits [] (credits-for-side :corp))
 (defn corp-clicks [] (clicks-for-side :corp))

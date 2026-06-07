@@ -196,7 +196,7 @@
           (log-decision "ECONOMY: Playing" (:title econ-card))
           {:action :play :args {:card-name (:title econ-card)}})
         (do
-          (log-decision "ECONOMY: Clicking for credit")
+          (log-decision "ECONOMY: Clicking for credit (too poor for cards)")
           {:action :credit}))
 
       ;; 4. Install Breakers (if in hand)
@@ -247,7 +247,10 @@
        :threat              threat
        :can-break-threat?   (boolean (when threat (can-break-server? threat)))
        :can-break-rd?       (can-break-server? :rd)
-       :stack-empty?        (empty? (state/runner-deck))
+       ;; Use :deck-count, NOT (runner-deck): the runner's own deck contents are
+       ;; hidden, so (runner-deck) is always empty on the wire and would make
+       ;; stack-empty? wrongly true every turn (runner would never draw).
+       :stack-empty?        (zero? (state/runner-deck-count))
        :econ-card           (first (economy-cards-in-hand))
        :installable-breaker (some #(breaker-in-hand-for? %) missing)})))
 

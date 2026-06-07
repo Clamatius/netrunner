@@ -89,6 +89,52 @@
   (testing "no clicks -> no decision"
     (is (nil? (h/decide-action* (merge base-ctx {:clicks 0}))))))
 
+;; Faithful-port coverage for the rules untouched by the empty-stack fix
+;; (Codex review: lock that the pure core matches the old decide-action).
+
+(deftest test-threat-contested-when-breakable
+  (testing "rule 2: dangerous remote + breakable -> run that server"
+    (is (= {:action :run :args {:server "Server 2"}}
+           (h/decide-action*
+             (merge base-ctx {:threat :remote2 :can-break-threat? true}))))))
+
+(deftest test-threat-ignored-when-not-breakable
+  (testing "rule 2: dangerous remote we can't break -> fall through (default draw)"
+    (is (= {:action :draw}
+           (h/decide-action*
+             (merge base-ctx {:threat :remote2 :can-break-threat? false}))))))
+
+(deftest test-economy-plays-affordable-econ-card
+  (testing "rule 3: poor + affordable econ card -> play it"
+    (is (= {:action :play :args {:card-name "Daily Casts"}}
+           (h/decide-action*
+             (merge base-ctx {:credits 4 :econ-card {:title "Daily Casts" :cost 3}}))))))
+
+(deftest test-economy-clicks-when-econ-unaffordable
+  (testing "rule 3: poor + econ card too expensive -> click for credit"
+    (is (= {:action :credit}
+           (h/decide-action*
+             (merge base-ctx {:credits 1 :econ-card {:title "Daily Casts" :cost 3}}))))))
+
+(deftest test-economy-clicks-when-no-econ-card
+  (testing "rule 3: poor + no econ card -> click for credit"
+    (is (= {:action :credit}
+           (h/decide-action* (merge base-ctx {:credits 2 :econ-card nil}))))))
+
+(deftest test-install-breaker-when-affordable
+  (testing "rule 4: missing breaker in hand + affordable -> install"
+    (is (= {:action :install :args {:card-name "Cleaver"}}
+           (h/decide-action*
+             (merge base-ctx {:credits 6 :missing ["Barrier"]
+                              :installable-breaker {:title "Cleaver" :cost 3}}))))))
+
+(deftest test-install-breaker-credits-when-unaffordable
+  (testing "rule 4: missing breaker in hand but too expensive -> click for credit"
+    (is (= {:action :credit}
+           (h/decide-action*
+             (merge base-ctx {:credits 6 :missing ["Barrier"]
+                              :installable-breaker {:title "Cleaver" :cost 9}}))))))
+
 (defn -main []
   (let [results (run-tests 'ai-heuristic-runner-test)]
     (when (or (pos? (:fail results)) (pos? (:error results)))
