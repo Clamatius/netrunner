@@ -150,70 +150,106 @@
 ;; Decision Logic
 ;; ============================================================================
 
-(defn decide-action []
-  (let [clicks (my-clicks)
-        credits (my-credits)
-        hand-size (count (my-hand))
-        missing (missing-breakers)
-        threat (dangerous-remote?)]
-    
-    (when (pos? clicks)
-      (cond
-        ;; 1. Safety First: Draw if low on cards (vs damage)
-        (< hand-size (:safe-hand-size config))
+(defn decide-action*
+  "Pure decision core for the Runner heuristic. Takes a context map of
+   pre-computed facts (so it is testable without touching global state) and
+   returns a decision map, or nil to end the turn.
+
+   ctx keys:
+     :clicks :credits :hand-size  - counts
+     :missing                     - seq of missing breaker types
+     :threat                      - dangerous-remote server key, or nil
+     :can-break-threat?           - can we break into :threat
+     :can-break-rd?               - can we break R&D
+     :stack-empty?                - true when the deck has no cards to draw
+     :econ-card                   - first economy card in hand, or nil
+     :installable-breaker         - a breaker card in hand for a missing type
+
+   Draw decisions are guarded by (not stack-empty?): drawing from an empty
+   stack is impossible, so an unguarded :draw makes the autonomous loop
+   re-decide the same impossible action every tick - clicks never drop, the
+   issue #19 own-turn spin backstop fires, and the game stalls. (Live repro:
+   self-play T30, runner at 6/7 with a full rig and an empty stack chose
+   SAFETY-draw forever until the backstop bailed.)"
+  [{:keys [clicks credits hand-size missing threat
+           can-break-threat? can-break-rd? stack-empty?
+           econ-card installable-breaker]}]
+  (when (pos? clicks)
+    (cond
+      ;; 1. Safety First: Draw if low on cards (vs damage) - but only when the
+      ;;    stack actually has cards to draw.
+      (and (< hand-size (:safe-hand-size config)) (not stack-empty?))
+      (do
+        (log-decision "SAFETY: Drawing up to safe hand size")
+        {:action :draw})
+
+      ;; 2. Contest Dangerous Remote
+      (and threat can-break-threat?)
+      (let [server-name (str/replace (name threat) "remote" "Server ")]
+        (log-decision "THREAT: Contesting" server-name "with 3+ advancements")
+        {:action :run :args {:server server-name}})
+
+      ;; 3. Economy (if poor)
+      (< credits (:min-credits config))
+      (if (and econ-card (>= credits (:cost econ-card)))
         (do
-          (log-decision "SAFETY: Drawing up to safe hand size")
-          {:action :draw})
-
-        ;; 2. Contest Dangerous Remote
-        (and threat (can-break-server? threat))
-        (let [server-name (str/replace (name threat) "remote" "Server ")]
-          (log-decision "THREAT: Contesting" server-name "with 3+ advancements")
-          {:action :run :args {:server server-name}})
-
-        ;; 3. Economy (if poor)
-        (< credits (:min-credits config))
-        (if-let [econ (first (economy-cards-in-hand))]
-          (if (>= credits (:cost econ))
-            (do
-              (log-decision "ECONOMY: Playing" (:title econ))
-              {:action :play :args {:card-name (:title econ)}})
-            (do
-              (log-decision "ECONOMY: Clicking for credit (too poor for cards)")
-              {:action :credit}))
-          (do
-            (log-decision "ECONOMY: Clicking for credit")
-            {:action :credit}))
-
-        ;; 4. Install Breakers (if in hand)
-        (and (seq missing)
-             (some #(breaker-in-hand-for? %) missing))
-        (let [breaker (some #(breaker-in-hand-for? %) missing)]
-          (if (>= credits (:cost breaker))
-            (do
-              (log-decision "RIG: Installing" (:title breaker))
-              {:action :install :args {:card-name (:title breaker)}})
-            (do
-              (log-decision "RIG: Need credits for" (:title breaker))
-              {:action :credit})))
-
-        ;; 5. Pressure R&D (Default Win Con)
-        (can-break-server? :rd)
+          (log-decision "ECONOMY: Playing" (:title econ-card))
+          {:action :play :args {:card-name (:title econ-card)}})
         (do
-          (log-decision "PRESSURE: Running R&D")
-          {:action :run :args {:server "R&D"}})
+          (log-decision "ECONOMY: Clicking for credit")
+          {:action :credit}))
 
-        ;; 6. Dig for Breakers (if missing and nothing else to do)
-        (seq missing)
+      ;; 4. Install Breakers (if in hand)
+      (and (seq missing) installable-breaker)
+      (if (>= credits (:cost installable-breaker))
         (do
-          (log-decision "RIG: Digging for breakers")
-          {:action :draw})
+          (log-decision "RIG: Installing" (:title installable-breaker))
+          {:action :install :args {:card-name (:title installable-breaker)}})
+        (do
+          (log-decision "RIG: Need credits for" (:title installable-breaker))
+          {:action :credit}))
 
-        ;; 7. Default: Draw or Credit
-        :else
-        (do
-          (log-decision "DEFAULT: Drawing for options")
-          {:action :draw})))))
+      ;; 5. Pressure R&D (Default Win Con)
+      can-break-rd?
+      (do
+        (log-decision "PRESSURE: Running R&D")
+        {:action :run :args {:server "R&D"}})
+
+      ;; 6. Dig for Breakers (if missing and we can still draw)
+      (and (seq missing) (not stack-empty?))
+      (do
+        (log-decision "RIG: Digging for breakers")
+        {:action :draw})
+
+      ;; 7. Default: Draw for options if we can; otherwise nothing useful is
+      ;;    left this turn (empty stack, can't break R&D) - end the turn rather
+      ;;    than spin on an impossible draw.
+      (not stack-empty?)
+      (do
+        (log-decision "DEFAULT: Drawing for options")
+        {:action :draw})
+
+      :else
+      (do
+        (log-decision "DEFAULT: Nothing useful (empty stack) - ending turn")
+        nil))))
+
+(defn decide-action
+  "Gather live state and delegate to the pure decide-action* core."
+  []
+  (let [missing (missing-breakers)
+        threat  (dangerous-remote?)]
+    (decide-action*
+      {:clicks              (my-clicks)
+       :credits             (my-credits)
+       :hand-size           (count (my-hand))
+       :missing             missing
+       :threat              threat
+       :can-break-threat?   (boolean (when threat (can-break-server? threat)))
+       :can-break-rd?       (can-break-server? :rd)
+       :stack-empty?        (empty? (state/runner-deck))
+       :econ-card           (first (economy-cards-in-hand))
+       :installable-breaker (some #(breaker-in-hand-for? %) missing)})))
 
 ;; ============================================================================
 ;; Execution & Prompt Handling
