@@ -1369,6 +1369,22 @@ case "$COMMAND" in
         else
             LOOP_FN="loop!"
         fi
+        # --patient [minutes]: tolerate a SLOW (thinking-model) opponent. The
+        # run-wait backstop then bails on a generous wall-clock window instead of
+        # the tight self-play iteration count. Optional integer = minutes (default
+        # 10). Own-turn spin bail (our-bug catch) stays tight regardless.
+        LOOP_ARGS=""
+        loop_argv=("$@")
+        for ((li=0; li<${#loop_argv[@]}; li++)); do
+            if [[ "${loop_argv[li]}" == "--patient" ]]; then
+                LOOP_ARGS=":patient? true"
+                loop_next="${loop_argv[li+1]:-}"
+                if [[ "$loop_next" =~ ^[0-9]+$ ]]; then
+                    LOOP_ARGS="$LOOP_ARGS :patient-ms $((loop_next * 60000))"
+                fi
+                info "Patient mode ON (${loop_next:-default} min wall-clock bail)"
+            fi
+        done
         # Refuse to relaunch over a still-running loop, else the old future is
         # orphaned (unreachable by bot-loop-status/stop). NOTE: we resolve the VAR
         # and deref THE VAR (var-deref -> the Future object, non-blocking) before
@@ -1383,7 +1399,7 @@ case "$COMMAND" in
                      (println \"⚠️  Autonomous loop already running for ${CLIENT_NAME} - use 'bot-loop-stop' first\")
                      (do
                        (def ai-self-play-future
-                         (future ((requiring-resolve (quote $BOT_NS/$LOOP_FN)))))
+                         (future ((requiring-resolve (quote $BOT_NS/$LOOP_FN)) $LOOP_ARGS)))
                        (println \"🔁 Autonomous loop launched for ${CLIENT_NAME}\"))))"
         ;;
 

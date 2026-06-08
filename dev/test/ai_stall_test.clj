@@ -45,6 +45,58 @@
     (is (= {:key [:b 2 :y] :count 1} (stall/update-tracker {:key [:a 1 :x] :count 9} [:b 2 :y]))
         "changed key restarts at 1")))
 
+(deftest test-update-tracker-wallclock
+  (testing "3-arity records a first-seen wall-clock stamp for patient-mode bail"
+    ;; new key stamps :since = now
+    (is (= {:key [:a 1 :x] :count 1 :since 5000}
+           (stall/update-tracker {:key nil :count 0} [:a 1 :x] 5000)))
+    ;; same key increments count but PRESERVES the original :since (elapsed grows)
+    (is (= {:key [:a 1 :x] :count 2 :since 5000}
+           (stall/update-tracker {:key [:a 1 :x] :count 1 :since 5000} [:a 1 :x] 5500))
+        "since is the first-seen time, not refreshed each tick")
+    ;; changed key restarts count AND re-stamps :since to now
+    (is (= {:key [:b 2 :y] :count 1 :since 9000}
+           (stall/update-tracker {:key [:a 1 :x] :count 9 :since 5000} [:b 2 :y] 9000)))
+    ;; nil key clears both count and :since
+    (is (= {:key nil :count 0 :since nil}
+           (stall/update-tracker {:key [:a 1 :x] :count 9 :since 5000} nil 9000)))))
+
+(deftest test-slow-opponent-wait?
+  (testing "only true opponent-act waits get the patient window"
+    ;; opponent could still legitimately act -> patient-eligible
+    (is (stall/slow-opponent-wait? :waiting-for-opponent))
+    (is (stall/slow-opponent-wait? :waiting-for-corp-rez))
+    (is (stall/slow-opponent-wait? :waiting-for-corp-fire))
+    (is (stall/slow-opponent-wait? :waiting-for-opponent-paid-abilities))
+    (is (stall/slow-opponent-wait? :waiting-for-runner-signal))
+    ;; monitor-run's OWN 'genuinely wedged' give-up signals are NOT opponent
+    ;; slowness — they keep the tight iteration-count bail even in patient mode
+    (is (not (stall/slow-opponent-wait? :stuck)))
+    (is (not (stall/slow-opponent-wait? :max-iterations)))
+    ;; progress / nil -> not a slow-opponent wait
+    (is (not (stall/slow-opponent-wait? :action-taken)))
+    (is (not (stall/slow-opponent-wait? nil))))
+  (testing "every slow-opponent wait is also a general opponent-wait (subset)"
+    (doseq [s [:waiting-for-opponent :waiting-for-corp-rez :waiting-for-corp-fire
+               :waiting-for-opponent-paid-abilities :waiting-for-runner-signal]]
+      (is (stall/waiting-on-opponent? s)))))
+
+(deftest test-patient-bail?
+  (testing "wall-clock bail: true once the wait has persisted >= bail-after-ms"
+    (let [ms stall/default-patient-bail-ms]
+      ;; just started waiting -> no elapsed -> no bail
+      (is (not (stall/patient-bail? {:key [:a 1 :x] :count 1 :since 1000} 1000 ms)))
+      ;; one tick short of the window
+      (is (not (stall/patient-bail? {:key [:a 1 :x] :count 9 :since 1000} (+ 1000 ms -1) ms)))
+      ;; exactly at the window -> bail
+      (is (stall/patient-bail? {:key [:a 1 :x] :count 9 :since 1000} (+ 1000 ms) ms))
+      ;; well past -> still bailed
+      (is (stall/patient-bail? {:key [:a 1 :x] :count 9 :since 1000} (+ 1000 ms 999999) ms))
+      ;; not waiting (nil :since) -> never bails, however large now is
+      (is (not (stall/patient-bail? {:key nil :count 0 :since nil} 999999999 ms)))))
+  (testing "default patience is a generous multi-minute window, not seconds"
+    (is (>= stall/default-patient-bail-ms 300000) "at least 5 minutes")))
+
 (deftest test-stall-action
   (testing "none below nudge-at, nudge EXACTLY at nudge-at, none between, bail at/after bail-at"
     (let [t {:nudge-at 10 :bail-at 120}]

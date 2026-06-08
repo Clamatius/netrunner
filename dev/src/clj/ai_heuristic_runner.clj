@@ -365,8 +365,18 @@
     (conn/send-chat! (stall/nudge-text me opp stall-key))
     (conn/send-ping!)))
 
-(defn loop! []
-  (println "🏃 HEURISTIC RUNNER - Starting autonomous loop")
+(defn loop!
+  "Autonomous Runner loop. Options mirror ai-heuristic-corp/start-autonomous!:
+     :patient?   - run-wait bail uses a generous WALL-CLOCK window (:patient-ms)
+                   instead of the tight iteration count, so a SLOW (thinking-model)
+                   Corp opponent isn't killed mid-decision. Own-turn spin bail
+                   (catches OUR bugs) stays tight either way.
+     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)."
+  [& {:keys [patient? patient-ms]
+      :or {patient? false patient-ms stall/default-patient-bail-ms}}]
+  (println "🏃 HEURISTIC RUNNER - Starting autonomous loop"
+           (if patient? (str "(PATIENT: run-wait bail after "
+                             (long (/ patient-ms 1000)) "s wall-clock)") ""))
   (loop [stall {:key nil :count 0}
          spin {:key nil :count 0}]
     (let [{:keys [continue? run-status]}
@@ -440,16 +450,26 @@
 
           ;; Stall backstop: track 'same opponent-wait for N ticks' and nudge /
           ;; bail. Only in-run opponent-waits qualify (run-status nil resets it).
+          now (System/currentTimeMillis)
           stall-k (stall/stall-key run-status (state/current-run))
-          next-stall (stall/update-tracker stall stall-k)
+          next-stall (stall/update-tracker stall stall-k now)
           action (stall/stall-action (:count next-stall) stall/default-thresholds)
+          ;; Run-wait bail: patient mode (slow/model opponent) uses a generous
+          ;; wall-clock window; default uses the tight iteration-count bail for
+          ;; fast self-play. The nudge still fires on the iteration count. The
+          ;; patient window is scoped to genuine opponent-act waits — monitor-run!'s
+          ;; own :stuck/:max-iterations "wedged" verdicts keep the tight bail.
+          run-bail? (if (and patient? (stall/slow-opponent-wait? run-status))
+                      (stall/patient-bail? next-stall now patient-ms)
+                      (= action :bail))
           ;; Catch-all: own-turn self-blocked spin (issue #19). The run-side
           ;; tracker only sees opponent-waits during a run; this catches a loop
           ;; re-emitting a rejected own-turn action (no run, no nudge helps).
+          ;; Stays tight even in patient mode — it catches OUR bugs, not opponent speed.
           spin-k (stall/own-turn-key (:game-state @state/client-state) "runner")
           next-spin (stall/update-tracker spin spin-k)
           spin-bail? (stall/own-turn-spinning? (:count next-spin))
-          bail? (or (= action :bail) spin-bail?)]
+          bail? (or run-bail? spin-bail?)]
 
       (when (= action :nudge)
         (send-stall-nudge! stall-k))

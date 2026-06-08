@@ -1331,8 +1331,20 @@
 
 (defn start-autonomous!
   "Main autonomous loop for Match Orchestration.
-   Handles both playing turns and responding to runs."
-  []
+   Handles both playing turns and responding to runs.
+
+   Options:
+     :patient?   - when true, the run-wait backstop bails on a generous WALL-CLOCK
+                   window (:patient-ms) instead of the tight iteration count. Use
+                   when a SLOW (thinking-model) opponent is in the other seat so a
+                   multi-minute decision is not mistaken for a wedged game. The
+                   own-turn spin bail (which catches OUR bugs) stays tight either way.
+     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)."
+  [& {:keys [patient? patient-ms]
+      :or {patient? false patient-ms stall/default-patient-bail-ms}}]
+  (when patient?
+    (log-message "HEURISTIC CORP - PATIENT mode: run-wait bail after"
+                 (long (/ patient-ms 1000)) "s wall-clock (slow-opponent tolerant)"))
   (log-message "HEURISTIC CORP - Starting autonomous loop")
   (loop [iter 0
          stall {:key nil :count 0}
@@ -1393,16 +1405,28 @@
           ;; :waiting-for-runner-signal / :waiting-for-opponent, and monitor-run!'s
           ;; own :stuck/:max-iterations give-up statuses also count (we re-enter it
           ;; every tick, so a returned :stuck means genuinely wedged).
+          now (System/currentTimeMillis)
           stall-k (stall/stall-key run-status (get-in @state/client-state [:game-state :run]))
-          next-stall (stall/update-tracker stall stall-k)
+          next-stall (stall/update-tracker stall stall-k now)
           action (stall/stall-action (:count next-stall) stall/default-thresholds)
+          ;; Run-wait bail: patient mode (slow/model opponent) uses a generous
+          ;; wall-clock window so a deliberating model isn't killed mid-decision;
+          ;; default uses the tight iteration-count bail for fast self-play. The
+          ;; nudge still fires on the iteration count in both modes. The patient
+          ;; window is scoped to genuine opponent-act waits — monitor-run!'s own
+          ;; :stuck/:max-iterations "wedged" verdicts keep the tight bail (a
+          ;; handler bug shouldn't hold a defender for 10 min).
+          run-bail? (if (and patient? (stall/slow-opponent-wait? run-status))
+                      (stall/patient-bail? next-stall now patient-ms)
+                      (= action :bail))
           ;; Catch-all: own-turn self-blocked spin (issue #19). The run-side
           ;; tracker only sees opponent-waits during a run; this catches a loop
           ;; re-emitting a rejected own-turn action (no run, no nudge helps).
+          ;; Stays tight even in patient mode — it catches OUR bugs, not opponent speed.
           spin-k (stall/own-turn-key (:game-state @state/client-state) "corp")
           next-spin (stall/update-tracker spin spin-k)
           spin-bail? (stall/own-turn-spinning? (:count next-spin))
-          bail? (or (= action :bail) spin-bail?)]
+          bail? (or run-bail? spin-bail?)]
 
       (when (= action :nudge)
         (send-stall-nudge! stall-k))

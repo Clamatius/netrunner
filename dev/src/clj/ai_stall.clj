@@ -47,6 +47,26 @@
   [status]
   (contains? waiting-statuses status))
 
+(def slow-opponent-wait-statuses
+  "Subset of waiting-statuses where the OPPONENT could still legitimately act —
+   a slow (thinking-model) opponent deliberating its move. Patient mode extends
+   the bail window only for these. Deliberately EXCLUDES :stuck/:max-iterations,
+   which are monitor-run!'s OWN 'this run is genuinely wedged' conclusions (a
+   handler bug, not opponent slowness) — those keep the tight iteration-count
+   bail even in patient mode, mirroring the own-turn spin backstop."
+  #{:waiting-for-opponent
+    :waiting-for-corp-rez
+    :waiting-for-corp-fire
+    :waiting-for-opponent-paid-abilities
+    :waiting-for-runner-signal})
+
+(defn slow-opponent-wait?
+  "True when status means we're waiting on the opponent to ACT (so a slow model
+   gets the patient wall-clock window), vs monitor-run! concluding the run is
+   wedged (:stuck/:max-iterations — bail tight even in patient mode)."
+  [status]
+  (contains? slow-opponent-wait-statuses status))
+
 (defn stall-key
   "Key identifying the stall point for 'same state N ticks' detection.
    Returns nil when we are NOT in a nudgeable wait (making progress, holding our
@@ -58,14 +78,27 @@
     [(:phase run) (:position run) status]))
 
 (defn update-tracker
-  "Pure stall tracker. tracker is {:key <k-or-nil> :count <n>}.
+  "Pure stall tracker. tracker is {:key <k-or-nil> :count <n> [:since <ms>]}.
    Resets to count 0 when the key is nil (not stalled) or changes (new stall
-   point); increments when the same stall point persists."
-  [tracker current-key]
-  (cond
-    (nil? current-key) {:key nil :count 0}
-    (= current-key (:key tracker)) (update tracker :count (fnil inc 0))
-    :else {:key current-key :count 1}))
+   point); increments when the same stall point persists.
+
+   The 3-arity also records a wall-clock first-seen stamp (:since) for the
+   patient-mode bail (see `patient-bail?`): set to `now` when a stall point
+   first appears, PRESERVED across ticks while it persists (so elapsed grows),
+   cleared when the wait ends. `now` is supplied by the caller (System/
+   currentTimeMillis) so this core stays pure/testable."
+  ([tracker current-key]
+   (cond
+     (nil? current-key) {:key nil :count 0}
+     (= current-key (:key tracker)) (update tracker :count (fnil inc 0))
+     :else {:key current-key :count 1}))
+  ([tracker current-key now]
+   (cond
+     (nil? current-key) {:key nil :count 0 :since nil}
+     (= current-key (:key tracker)) (-> tracker
+                                         (update :count (fnil inc 0))
+                                         (assoc :since (or (:since tracker) now)))
+     :else {:key current-key :count 1 :since now})))
 
 (defn stall-action
   "Pure decision from a persistence count: :none | :nudge | :bail.
@@ -76,6 +109,26 @@
     (and bail-at (>= count bail-at)) :bail
     (and nudge-at (= count nudge-at)) :nudge
     :else :none))
+
+(def default-patient-bail-ms
+  "Wall-clock patience for a SLOW (thinking-model) opponent before the run-wait
+   backstop bails. The iteration-count `:bail-at` (~tens of seconds) is right for
+   fast heuristic self-play but kills a model mid-decision; patient mode swaps it
+   for this generous wall-clock window. 10 min: long enough for a model to
+   deliberate the hardest run decision, short enough that a genuinely dead /
+   unattended game still self-reports an attributable artifact instead of hanging
+   forever. The nudge still fires on the iteration count (a cheap 'your move?'),
+   only the BAIL waits this long."
+  600000)
+
+(defn patient-bail?
+  "Wall-clock bail for patient mode (slow/model opponent). True once the CURRENT
+   opponent-wait has persisted >= bail-after-ms of wall clock. Reads :since from
+   a 3-arity `update-tracker` result; a nil :since (not currently waiting) never
+   bails regardless of `now`. `now` is the caller's System/currentTimeMillis."
+  [tracker now bail-after-ms]
+  (boolean (when-let [since (:since tracker)]
+             (>= (- now since) bail-after-ms))))
 
 (defn nudge-text
   "Human/LLM-readable 'your move?' message. stall-key is [phase position status]."
