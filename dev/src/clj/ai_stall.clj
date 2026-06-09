@@ -188,6 +188,15 @@
   [game-state my-side]
   (when (and (= my-side (:active-player game-state))
              (not (:run game-state))
+             ;; :end-turn true means we have cleanly declared end-of-turn; the
+             ;; engine keeps :active-player on us until the OPPONENT takes their
+             ;; start-of-turn. With a slow (thinking-model) opponent that gap runs
+             ;; minutes — a legitimate opponent-wait, NOT a spin (patient mode
+             ;; relaxes the run-wait bail but this inter-turn wait is policed
+             ;; here). A genuine issue-#19 spin has clicks > 0 and :end-turn
+             ;; false; a genuinely-stuck end-turn keeps :end-turn false and still
+             ;; keys, so the backstop still catches that.
+             (not (:end-turn game-state))
              ;; A :waiting prompt parked on our side means we're legitimately
              ;; idle while the OPPONENT resolves something (a cross-turn ability,
              ;; a simultaneous-trigger window) — NOT spinning. Don't accumulate,

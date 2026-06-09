@@ -146,6 +146,18 @@
     (let [gs {:turn 14 :active-player "corp"
               :corp {:click 3 :prompt-state {:prompt-type :select}}}]
       (is (= [14 3] (stall/own-turn-key gs "corp")))))
+  (testing "nil after we have cleanly ended our turn (waiting for a slow opponent to start)"
+    ;; After smart-end-turn! the engine sets :end-turn true but keeps
+    ;; :active-player on us until the OPPONENT takes their start-of-turn. With a
+    ;; slow (thinking-model) opponent that inter-turn gap can run minutes — it is
+    ;; a legitimate opponent-wait, NOT a spin, so it must not accumulate toward a
+    ;; bail. A genuine issue-#19 spin has clicks > 0 and :end-turn false.
+    (let [gs {:turn 14 :active-player "corp" :end-turn true :corp {:click 0}}]
+      (is (nil? (stall/own-turn-key gs "corp"))))
+    ;; :end-turn false at 0 clicks IS still a genuine stuck (end-turn itself
+    ;; failing) — must keep keying so the backstop catches it.
+    (let [gs {:turn 14 :active-player "corp" :end-turn false :corp {:click 0}}]
+      (is (= [14 0] (stall/own-turn-key gs "corp")))))
   (testing "a frozen own-turn drives update-tracker to accumulate"
     (let [gs {:turn 14 :active-player "corp" :corp {:click 3}}
           k  (stall/own-turn-key gs "corp")
