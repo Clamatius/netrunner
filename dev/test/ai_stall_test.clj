@@ -142,6 +142,15 @@
     (let [gs {:turn 14 :active-player "corp"
               :corp {:click 3 :prompt-state {:prompt-type :waiting}}}]
       (is (nil? (stall/own-turn-key gs "corp"))))
+    ;; The WIRE value of :prompt-type is a STRING, not a keyword (same trap as
+    ;; :run :phase). The pre-game "Waiting for Runner to keep hand or mulligan"
+    ;; prompt arrives as "waiting" — corp is parked, can't act until the runner
+    ;; mulligans. Must be recognised as a wait too, else the own-turn spin bail
+    ;; kills the defender in the pre-game mulligan gap (one seat looping while the
+    ;; other hasn't seated yet — real in the separate-context match harness).
+    (let [gs {:turn 14 :active-player "corp"
+              :corp {:click 3 :prompt-state {:prompt-type "waiting"}}}]
+      (is (nil? (stall/own-turn-key gs "corp"))))
     ;; A non-:waiting prompt we can't resolve IS a genuine stuck — still keys.
     (let [gs {:turn 14 :active-player "corp"
               :corp {:click 3 :prompt-state {:prompt-type :select}}}]

@@ -199,13 +199,18 @@
              (not (:end-turn game-state))
              ;; A :waiting prompt parked on our side means we're legitimately
              ;; idle while the OPPONENT resolves something (a cross-turn ability,
-             ;; a simultaneous-trigger window) — NOT spinning. Don't accumulate,
-             ;; or a slow (LLM) opponent would false-bail. A genuine self-blocked
-             ;; spin (a rejected install/advance) raises NO prompt, so it still
-             ;; keys here and bails; an UNhandled real decision (non-:waiting)
-             ;; also still keys, which is correct — that's a genuine stuck.
-             (not= :waiting
-                   (get-in game-state [(keyword my-side) :prompt-state :prompt-type])))
+             ;; a simultaneous-trigger window, or the pre-game mulligan) — NOT
+             ;; spinning. Don't accumulate, or a slow (LLM) opponent would
+             ;; false-bail. A genuine self-blocked spin (a rejected
+             ;; install/advance) raises NO prompt, so it still keys here and
+             ;; bails; an UNhandled real decision (non-waiting) also still keys,
+             ;; which is correct — that's a genuine stuck.
+             ;; NB: the WIRE value of :prompt-type is a STRING ("waiting"), not a
+             ;; keyword — same trap as :run :phase. Match both so the guard fires
+             ;; on real round-tripped state, not just keyword fixtures (cf.
+             ;; ai-core's existing both-forms check).
+             (not (#{:waiting "waiting"}
+                   (get-in game-state [(keyword my-side) :prompt-state :prompt-type]))))
     [(:turn game-state)
      (get-in game-state [(keyword my-side) :click])]))
 
