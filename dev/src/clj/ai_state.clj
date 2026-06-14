@@ -180,6 +180,14 @@
 (defn corp-clicks [] (clicks-for-side :corp))
 (defn corp-hand-count [] (hand-count-for-side :corp))
 
+(defn waiting-prompt-type?
+  "True if a :prompt-type denotes a passive 'waiting for opponent' prompt.
+   The WIRE value is the STRING \"waiting\"; older/fixture code uses the
+   keyword :waiting. Match both so callers never silently miss the wire form
+   (see ai-stall comment + ai-core/check-blocking-prompt)."
+  [prompt-type]
+  (contains? #{:waiting "waiting"} prompt-type))
+
 (defn get-prompt
   "Get current prompt for our side, if any"
   []
@@ -253,7 +261,7 @@
           end-turn
           ["🟢" "Ready to start turn" true]
 
-          (= :waiting prompt-type)
+          (waiting-prompt-type? prompt-type)
           ["⏳" (or (:msg prompt) "Waiting...") false]
 
           :else

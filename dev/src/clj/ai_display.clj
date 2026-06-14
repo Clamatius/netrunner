@@ -170,7 +170,7 @@
               (println "Status: ⏳ Waiting for" active-side "to act")
 
               ;; Waiting prompt
-              (= :waiting prompt-type)
+              (state/waiting-prompt-type? prompt-type)
               (println "Status: ⏳" (:msg prompt))
 
               ;; My turn and active
@@ -270,7 +270,7 @@
               (when (and (= "corp" my-side) (pos? runner-tags))
                 (println (str "🏷️  Runner tagged! (" runner-tags " tag" (when (> runner-tags 1) "s") ")"))
                 (println "   💡 trash-resource ($2 + click to trash a resource)")))
-            (when (and prompt (not= :waiting prompt-type))
+            (when (and prompt (not (state/waiting-prompt-type? prompt-type)))
               (println "\n🔔 Active Prompt:" (:msg prompt)))
 
             ;; Show recent log entries (summarized)

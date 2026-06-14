@@ -23,7 +23,7 @@
   ;; Check for pre-existing blocking prompt before attempting action
   (let [existing-prompt (state/get-prompt)]
     (if (and existing-prompt
-             (not= :waiting (:prompt-type existing-prompt)))
+             (not (state/waiting-prompt-type? (:prompt-type existing-prompt))))
       (do
         (println (str "❌ Cannot play card: Active prompt must be answered first"))
         (println (str "   Prompt: " (:msg existing-prompt)))
@@ -75,7 +75,7 @@
                                    " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                     ;; Show prompt if card created one (e.g., Jailbreak asking for server)
-                    (when (and new-prompt (not= :waiting (:prompt-type new-prompt)))
+                    (when (and new-prompt (not (state/waiting-prompt-type? (:prompt-type new-prompt))))
                       (println (str "   📋 " (:msg new-prompt)))
                       (when-let [choices (:choices new-prompt)]
                         (println (str "      Choices: " (clojure.string/join ", "

@@ -244,3 +244,45 @@
       (let [status (state/get-turn-status)]
         (is (false? (:game-over? status)))
         (is (nil? (:winner status)))))))
+
+(deftest test-get-turn-status-waiting-prompt
+  ;; The WIRE value of :prompt-type is the STRING "waiting", not the keyword
+  ;; :waiting (see ai-stall comment + ai-core both-form match). A waiting
+  ;; prompt on our OWN turn (e.g. waiting for a corp rez decision mid-run)
+  ;; must report not-actable, not fall through to "your turn to act".
+  (testing "wire-string \"waiting\" prompt on own turn -> not actable"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 5
+                                   :corp {:click 2
+                                          :prompt-state {:prompt-type "waiting"
+                                                         :msg "Waiting for Runner to resolve"}}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (false? (:can-act? status)))
+        (is (= "⏳" (:status-emoji status))))))
+
+  (testing "keyword :waiting prompt on own turn -> not actable (legacy form)"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 5
+                                   :corp {:click 2
+                                          :prompt-state {:prompt-type :waiting
+                                                         :msg "Waiting"}}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (false? (:can-act? status)))
+        (is (= "⏳" (:status-emoji status)))))))
+
+(deftest test-waiting-prompt-type?-predicate
+  (testing "matches both wire-string and keyword forms"
+    (is (true? (boolean (state/waiting-prompt-type? "waiting"))))
+    (is (true? (boolean (state/waiting-prompt-type? :waiting)))))
+  (testing "does not match non-waiting prompt types"
+    (is (false? (boolean (state/waiting-prompt-type? "select"))))
+    (is (false? (boolean (state/waiting-prompt-type? :select))))
+    (is (false? (boolean (state/waiting-prompt-type? nil))))))

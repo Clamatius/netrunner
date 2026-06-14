@@ -987,7 +987,7 @@
           selectable (:selectable prompt)]
       (cond
         ;; Waiting prompts - nothing to do
-        (= :waiting prompt-type)
+        (state/waiting-prompt-type? prompt-type)
         false
 
         ;; Discard prompt - select cards to discard

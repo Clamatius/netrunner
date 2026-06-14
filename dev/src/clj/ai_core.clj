@@ -182,8 +182,7 @@
   [action-name]
   (let [existing-prompt (state/get-prompt)]
     (when (and existing-prompt
-               (not= :waiting (:prompt-type existing-prompt))
-               (not= "waiting" (:prompt-type existing-prompt)))
+               (not (state/waiting-prompt-type? (:prompt-type existing-prompt))))
       (println (str "❌ Cannot " action-name ": Active prompt must be answered first"))
       (println (str "   Prompt: " (:msg existing-prompt)))
       (flush)
@@ -1135,7 +1134,7 @@
   [state side]
   (let [prompt (get-in state [:game-state (keyword side) :prompt-state])]
     (and prompt
-         (not= (:prompt-type prompt) "waiting")
+         (not (state/waiting-prompt-type? (:prompt-type prompt)))
          (or (seq (:choices prompt))
              (seq (:selectable prompt))))))
 
