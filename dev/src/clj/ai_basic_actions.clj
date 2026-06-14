@@ -289,24 +289,30 @@
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?
-      (let [before-hand (count (get-in client-state [:game-state my-side :hand]))]
-        (ws/send-message! :game/action
-                          {:gameid gameid
-                           :command "start-turn"
-                           :args nil})
-        (Thread/sleep core/standard-delay)
-        (core/show-turn-indicator)
-        ;; For Corp, show what was drawn (mandatory draw) with card text
-        (when (= my-side :corp)
-          (let [after-state @state/client-state
-                hand (get-in after-state [:game-state :corp :hand])
-                after-hand (count hand)
-                new-card (last hand)
-                card-title (get new-card :title "Unknown")]
-            (when (> after-hand before-hand)
-              (println (str "🃏 Drew: " card-title))
-              (core/show-card-on-first-sight! card-title))))
-        (core/with-cursor {:status :success}))
+      (let [before-hand (count (get-in client-state [:game-state my-side :hand]))
+            sent? (ws/send-message! :game/action
+                                    {:gameid gameid
+                                     :command "start-turn"
+                                     :args nil})]
+        (if-not sent?
+          (do
+            (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
+            (println "   Check the game server is running, then retry")
+            (core/with-cursor {:status :error :reason :send-failed}))
+          (do
+            (Thread/sleep core/standard-delay)
+            (core/show-turn-indicator)
+            ;; For Corp, show what was drawn (mandatory draw) with card text
+            (when (= my-side :corp)
+              (let [after-state @state/client-state
+                    hand (get-in after-state [:game-state :corp :hand])
+                    after-hand (count hand)
+                    new-card (last hand)
+                    card-title (get new-card :title "Unknown")]
+                (when (> after-hand before-hand)
+                  (println (str "🃏 Drew: " card-title))
+                  (core/show-card-on-first-sight! card-title))))
+            (core/with-cursor {:status :success}))))
 
       ;; ERROR: Already have clicks (turn already started)
       (> my-clicks 0)
@@ -335,25 +341,32 @@
       ;; After opponent's end-turn, active-player is still opponent (Netrunner priority system).
       ;; The other checks (opp-clicks, opp-ended, my-clicks) are sufficient to prevent turn stealing.
       :else
-      (do
-        (let [before-hand (count (get-in client-state [:game-state my-side :hand]))]
-          (ws/send-message! :game/action
-                            {:gameid gameid
-                             :command "start-turn"
-                             :args nil})
-          (Thread/sleep core/standard-delay)
-          (core/show-turn-indicator)
-          ;; For Corp, show what was drawn (mandatory draw) with card text
-          (when (= my-side :corp)
-            (let [after-state @state/client-state
-                  hand (get-in after-state [:game-state :corp :hand])
-                  after-hand (count hand)
-                  new-card (last hand)
-                  card-title (get new-card :title "Unknown")]
-              (when (> after-hand before-hand)
-                (println (str "🃏 Drew: " card-title))
-                (core/show-card-on-first-sight! card-title))))
-          (core/with-cursor {:status :success}))))))
+      (let [before-hand (count (get-in client-state [:game-state my-side :hand]))
+            sent? (ws/send-message! :game/action
+                                    {:gameid gameid
+                                     :command "start-turn"
+                                     :args nil})]
+        (if-not sent?
+          ;; Send failed (e.g. server unreachable). Don't print the stale
+          ;; "Ready to start your turn" indicator — that falsely looks like success.
+          (do
+            (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
+            (println "   Check the game server is running, then retry")
+            (core/with-cursor {:status :error :reason :send-failed}))
+          (do
+            (Thread/sleep core/standard-delay)
+            (core/show-turn-indicator)
+            ;; For Corp, show what was drawn (mandatory draw) with card text
+            (when (= my-side :corp)
+              (let [after-state @state/client-state
+                    hand (get-in after-state [:game-state :corp :hand])
+                    after-hand (count hand)
+                    new-card (last hand)
+                    card-title (get new-card :title "Unknown")]
+                (when (> after-hand before-hand)
+                  (println (str "🃏 Drew: " card-title))
+                  (core/show-card-on-first-sight! card-title))))
+            (core/with-cursor {:status :success})))))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"

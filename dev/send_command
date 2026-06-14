@@ -50,11 +50,14 @@ if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~
 fi
 
 # Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ANSI-C quoting ($'...') embeds real escape chars so colors render in both
+# `echo -e` and `cat << EOF` heredocs (the help text). Plain '\033[...]'
+# strings only work with echo -e, leaving raw codes in heredoc output.
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+NC=$'\033[0m' # No Color
 
 error() {
     echo -e "${RED}❌ Error: $1${NC}" >&2
