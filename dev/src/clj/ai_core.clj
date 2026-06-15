@@ -1285,15 +1285,22 @@
          current-cursor (state/get-cursor)
          side (:side @state/client-state)]
 
-     ;; Fast path: if cursor has advanced past :since, return immediately
-     (if (and since-cursor (> current-cursor since-cursor))
-       (let [current-state @state/client-state
-             reason (relevance-reason current-state side false)]
+     ;; Fast path: if the cursor advanced past :since AND something we actually
+     ;; care about already happened in the race window, return immediately. A
+     ;; bare cursor advance with no relevant reason is NOT a wake — the cursor
+     ;; bumps on every server diff, including our own action echoing back and
+     ;; opponent economy ticks, so short-circuiting on the raw advance
+     ;; false-woke every --since wait that followed one of our own actions
+     ;; (reason :cursor-advanced, no new log entries). When nothing is relevant
+     ;; we fall through and keep waiting for a real event.
+     (if-let [since-reason (when (and since-cursor (> current-cursor since-cursor))
+                             (relevance-reason @state/client-state side false))]
+       (let [current-state @state/client-state]
          (when (:verbose opts)
-           (println (format "⚡ Cursor advanced (%d → %d), returning immediately"
-                           since-cursor current-cursor)))
+           (println (format "⚡ Cursor advanced (%d → %d), %s — returning immediately"
+                           since-cursor current-cursor (name since-reason))))
          {:status :already-advanced
-          :reason (or reason :cursor-advanced)
+          :reason since-reason
           :cursor current-cursor
           :run-active? (run-active? current-state)
           :has-prompt? (has-prompt? current-state side)})
