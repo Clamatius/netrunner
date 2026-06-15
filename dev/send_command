@@ -157,14 +157,14 @@ ensure_connection() {
     fi
 }
 
-# Show compact help (default) or full help (--full/--dev)
+# Show compact help (default), full player reference (--full), or dev/test (--dev)
 show_help() {
-    local show_full="${1:-}"
-    if [[ "$show_full" == "--full" ]] || [[ "$show_full" == "--dev" ]]; then
-        show_help_full
-    else
-        show_help_compact
-    fi
+    local mode="${1:-}"
+    case "$mode" in
+        --dev)  show_help_dev ;;
+        --full) show_help_full ;;
+        *)      show_help_compact ;;
+    esac
 }
 
 show_help_compact() {
@@ -347,13 +347,39 @@ ${GREEN}Installation:${NC}
                      Remotes: "new" creates new, "Server 1" etc. must exist
   install-index <N> [server] - Install card by index
 
-${GREEN}AI Bot (Corp only):${NC}
-  dashboard       - Show ranked heuristic options (all rules)
+${BLUE}Dev / test / infra commands${NC} (cheats, replay, heuristic-bot driver) —
+  not used when playing a game:  ./send_command <side> help --dev
+
+${YELLOW}Turn Timing Quick Reference:${NC}
+  ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
+  ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
+  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter → movement → access
+
+  ${BLUE}Common Stuck States:${NC}
+    • Both at 0 clicks, no prompts → Use 'start-turn'
+    • Run stopped → Check 'prompt' for decision needed
+    • Turn won't end → Check 'prompt' for blocking prompts
+
+EOF
+}
+
+# Dev / test / infra commands — NOT used when playing a game. Kept out of the
+# default and --full (player) help so the play-facing surface stays legible.
+show_help_dev() {
+    cat << EOF
+${BLUE}AI Player Command Interface — Dev / Test / Infra${NC}
+${YELLOW}(not used when playing a game — for player commands: help --full)${NC}
+
+${GREEN}Heuristic Bot (Corp infra / self-play):${NC}
+  dashboard        - Show ranked heuristic options (all rules)
   dashboard-compact [N] - Show top N available options
-  bot             - Make one heuristic decision and execute
-  bot-turn        - Play full turn with heuristic AI
-  bot-respond     - Respond to active run (rez/fire decisions)
-  bot-watch       - Continuously watch for and respond to runs
+  bot              - Make one heuristic decision and execute
+  bot-turn         - Play a full turn with the heuristic AI
+  bot-respond      - Respond to active run (rez/fire decisions)
+  bot-watch        - Continuously watch for and respond to runs
+  bot-loop [--patient N] - Autonomous loop (used by the match harness)
+  bot-loop-status  - Is the autonomous loop alive?
+  bot-loop-stop    - Stop the autonomous loop
 
 ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits
@@ -371,16 +397,6 @@ ${GREEN}Replay Recording:${NC}
   replay-save [f] - Save replay to file
   replay-status   - Show recording status
   replay-clear    - Clear recorded data
-
-${YELLOW}Turn Timing Quick Reference:${NC}
-  ${BLUE}Corp Turn:${NC} gain clicks → draw card → take actions → discard to hand size
-  ${BLUE}Runner Turn:${NC} gain clicks → take actions → discard to hand size
-  ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter → movement → access
-
-  ${BLUE}Common Stuck States:${NC}
-    • Both at 0 clicks, no prompts → Use 'start-turn'
-    • Run stopped → Check 'prompt' for decision needed
-    • Turn won't end → Check 'prompt' for blocking prompts
 
 EOF
 }
