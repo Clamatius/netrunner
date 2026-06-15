@@ -71,3 +71,37 @@
     (with-mock-state {:side "corp" :game-state nil}
       (is (= "NO-GAME"
              (str/trim (with-out-str (display/game-over-status))))))))
+
+(deftest test-status-compact-awaiting-start
+  ;; At a clean turn boundary the active-player wire field still names the player
+  ;; who just finished, so the compact status line used to show the stale side
+  ;; (e.g. "T5-corp ... | -"), disagreeing with game-over-status's
+  ;; AWAITING-START next-player=runner. A model reading the compact line at the
+  ;; boundary would mistake whose turn is starting. status-compact must flip to
+  ;; the next player and flag the boundary, matching game-over-status.
+  (testing "corp ended turn -> compact line names next-player runner + awaiting-start"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :end-turn true
+                                   :corp {:click 0 :credit 5 :hand [] :agenda-point 0}
+                                   :runner {:click 0 :credit 4 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/starts-with? line "T5-runner")
+            (str "expected boundary line to name next-player runner, got: " line))
+        (is (str/includes? line "awaiting-start")
+            (str "expected awaiting-start marker, got: " line))
+        (is (not (str/starts-with? line "T5-corp"))
+            (str "must not show stale finished side, got: " line)))))
+
+  (testing "mid-turn (corp acting, has clicks) still shows active side, no marker"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 2 :credit 5 :hand [] :agenda-point 0}
+                                   :runner {:click 0 :credit 4 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/starts-with? line "T5-corp")
+            (str "mid-turn should show active corp, got: " line))
+        (is (not (str/includes? line "awaiting-start"))
+            (str "mid-turn must not show boundary marker, got: " line))))))

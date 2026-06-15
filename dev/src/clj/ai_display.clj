@@ -575,6 +575,14 @@
             prompt (state/get-prompt)
             run-state (get-in gs [:run])
 
+            ;; At a clean turn boundary the active-player wire field still names
+            ;; the player who just finished, so flip to who acts next (matching
+            ;; game-over-status's AWAITING-START next-player). Otherwise tooling
+            ;; and models reading this line mistake whose turn is starting.
+            turn-status (state/get-turn-status)
+            waiting-start? (:waiting-to-start? turn-status)
+            display-side (if waiting-start? (:next-player turn-status) active-side)
+
             ;; Runner state
             runner-credits (get-in gs [:runner :credit] 0)
             runner-clicks (get-in gs [:runner :click] 0)
@@ -599,6 +607,7 @@
 
             prompt-str (cond
                         run-state (format "Run:%s" (:server run-state))
+                        waiting-start? "awaiting-start"
                         prompt (let [msg (:msg prompt)]
                                 (if (> (count msg) 30)
                                   (str (subs msg 0 27) "...")
@@ -607,7 +616,7 @@
 
         (println (format "T%d-%s | Me(%s):%s | Opp(%s):%s | %s"
                         turn
-                        active-side
+                        display-side
                         my-label
                         my-stats
                         opp-label
