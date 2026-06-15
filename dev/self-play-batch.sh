@@ -9,6 +9,7 @@
 # which prints exactly one of:
 #   GAME-OVER winner=corp turn=18
 #   GAME-OVER winner=tie turn=12
+#   AWAITING-START turn=12 next-player=runner
 #   IN-PROGRESS turn=12 whose-turn=runner clicks=3
 #   NO-GAME
 # Do NOT screen-scrape the human status banner here — that coupling broke this
@@ -37,7 +38,7 @@ for g in $(seq 1 "$NGAMES"); do
   prev=""; same=0; ended=""
   for i in $(seq 1 120); do
     st=$(./dev/send_command corp game-over-status 2>/dev/null \
-           | grep -E '^(GAME-OVER|IN-PROGRESS|NO-GAME)' | head -1)
+           | grep -E '^(GAME-OVER|AWAITING-START|IN-PROGRESS|NO-GAME)' | head -1)
 
     case "$st" in
       GAME-OVER*)

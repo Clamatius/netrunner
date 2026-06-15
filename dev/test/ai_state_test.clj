@@ -245,6 +245,63 @@
         (is (false? (:game-over? status)))
         (is (nil? (:winner status)))))))
 
+(deftest test-get-turn-status-waiting-to-start
+  ;; The turn boundary (end-turn flagged, or both sides at 0 clicks) is a clean
+  ;; "next player to start" state, NOT a stall. get-turn-status must expose this
+  ;; via :waiting-to-start? plus :next-player so machine consumers (umpire) can
+  ;; tell it apart from a mid-turn spin.
+  (testing "corp ended turn -> waiting-to-start?, next-player=runner"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 5
+                                   :end-turn true
+                                   :corp {:click 0}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (true? (:waiting-to-start? status)))
+        (is (= "runner" (:next-player status))))))
+
+  (testing "both at 0 clicks -> waiting-to-start?, next-player=corp"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "runner"
+                      :game-state {:active-player "runner"
+                                   :turn 6
+                                   :corp {:click 0}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (true? (:waiting-to-start? status)))
+        (is (= "corp" (:next-player status))))))
+
+  (testing "mid-turn (active player has clicks) -> not waiting-to-start?"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 5
+                                   :corp {:click 3}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (false? (:waiting-to-start? status))))))
+
+  ;; A run started with the runner's last click leaves BOTH sides at 0 clicks
+  ;; (corp is 0 during the runner's turn) but is mid-resolution, not a turn
+  ;; boundary. An active run must NOT be reported as waiting-to-start, else a
+  ;; wedged last-click run gets the patient boundary stall budget.
+  (testing "mid-run at 0 clicks -> not waiting-to-start?"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "runner"
+                      :game-state {:active-player "runner"
+                                   :turn 6
+                                   :run {:server [:hq] :position 1}
+                                   :corp {:click 0}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (false? (:waiting-to-start? status)))))))
+
 (deftest test-get-turn-status-waiting-prompt
   ;; The WIRE value of :prompt-type is the STRING "waiting", not the keyword
   ;; :waiting (see ai-stall comment + ai-core both-form match). A waiting

@@ -277,6 +277,17 @@
           ["✅" "Your turn to act" true])]
 
     {:whose-turn active-side
+     :next-player next-player
+     ;; A clean turn boundary (a player ended their turn, or both sides are at
+     ;; 0 clicks) is "next player to start", NOT a stall. Tooling uses this to
+     ;; avoid false-positive stall detection while a slow opponent thinks about
+     ;; its turn start. game-over takes precedence. An ACTIVE run is excluded:
+     ;; a run started with the last click leaves both sides at 0 clicks but is
+     ;; mid-resolution, not a turn boundary — a wedged run there must keep the
+     ;; tight mid-turn stall budget, not the patient boundary one.
+     :waiting-to-start? (boolean (and (not game-over?)
+                                      (not run-state)
+                                      (or end-turn both-zero-clicks)))
      :my-turn? my-turn
      :turn-number turn-num
      :can-act? can-act

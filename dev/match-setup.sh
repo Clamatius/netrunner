@@ -32,8 +32,11 @@ make reset >/dev/null 2>&1 || true
 
 # Confirm a game actually exists. reset.sh does NOT restart the game server
 # (port 1042 nREPL 7888); if it was down, reset can't make a game.
+# A fresh reset sits at turn 0, which game-over-status reports as
+# AWAITING-START (next-player=corp) — that still means a game EXISTS, so it must
+# pass this check alongside GAME-OVER/IN-PROGRESS. Only NO-GAME/empty is failure.
 st=$(./dev/send_command corp game-over-status 2>/dev/null \
-       | grep -E '^(GAME-OVER|IN-PROGRESS|NO-GAME)' | head -1 || true)
+       | grep -E '^(GAME-OVER|AWAITING-START|IN-PROGRESS|NO-GAME)' | head -1 || true)
 if [[ -z "$st" || "$st" == NO-GAME* ]]; then
   echo "❌ No active game after reset (game-over-status: ${st:-<none>})."
   echo "   The game server (1042 web / 7888 nREPL) is NOT restarted by reset.sh."

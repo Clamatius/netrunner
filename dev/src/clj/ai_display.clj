@@ -299,7 +299,13 @@
      NO-GAME                                  - no game state loaded
      GAME-OVER winner=corp turn=18                     - decided (winner = corp|runner)
      GAME-OVER winner=tie turn=12                      - tied game
+     AWAITING-START turn=12 next-player=runner         - clean turn boundary
      IN-PROGRESS turn=12 whose-turn=runner clicks=3    - game still running
+
+   AWAITING-START marks a clean turn boundary (a player ended their turn, or
+   both sides are at 0 clicks) and names who acts next, so tooling can apply a
+   patient boundary budget instead of mistaking a slow opponent's turn-start
+   think-time for a stall.
 
    The clicks field is the active player's remaining clicks, so tooling can
    distinguish a within-turn spin (same turn + same clicks, not progressing)
@@ -308,12 +314,21 @@
   (let [gs (state/get-game-state)]
     (if (nil? gs)
       (println "NO-GAME")
-      (let [{:keys [game-over? winner turn-number whose-turn]} (state/get-turn-status)
+      (let [{:keys [game-over? winner turn-number whose-turn
+                    waiting-to-start? next-player]} (state/get-turn-status)
             clicks (when whose-turn (get-in gs [(keyword whose-turn) :click]))]
-        (if game-over?
+        (cond
+          game-over?
           (println (format "GAME-OVER winner=%s turn=%s"
                            (if winner (str/lower-case (name winner)) "tie")
                            (or turn-number "?")))
+
+          waiting-to-start?
+          (println (format "AWAITING-START turn=%s next-player=%s"
+                           (or turn-number "?")
+                           (or next-player "?")))
+
+          :else
           (println (format "IN-PROGRESS turn=%s whose-turn=%s clicks=%s"
                            (or turn-number "?")
                            (or whose-turn "?")
