@@ -37,13 +37,23 @@
     (loop [waited 0]
       (if (>= waited timeout-ms)
         (do
-          ;; Only warn if the prompt truly didn't move at all. Same eid AND
-          ;; same msg AND still present = real stall worth flagging.
+          ;; Only react if the prompt truly didn't move at all. Same eid AND
+          ;; same msg AND still present.
           (let [final-prompt (state/get-prompt)]
             (when (and final-prompt
                        (= (:eid final-prompt) old-eid)
                        (= (:msg final-prompt) baseline-msg))
-              (println "⚠️  Timeout waiting for prompt change (prompt unchanged)")))
+              (if (state/select-prompt-type? (:prompt-type final-prompt))
+                ;; Expected for a partial multi-select: the server TOGGLES the
+                ;; chosen card and only resolves once :max cards are selected,
+                ;; so the prompt stays put. This is not a failure — do not warn
+                ;; as if the select was rejected (issue #18).
+                (println (str "ℹ️  Select prompt still open — card toggled but "
+                              "selection not yet resolved. For multi-card selects "
+                              "(e.g. discard down to N) use `multi-choose <i> <j> …` "
+                              "to select all at once."))
+                ;; Non-select prompt that genuinely didn't move = real stall.
+                (println "⚠️  Timeout waiting for prompt change (prompt unchanged)"))))
           false)
         (let [current-prompt (state/get-prompt)
               current-eid (:eid current-prompt)
@@ -178,7 +188,7 @@
         selectable (:selectable prompt)
         eid (:eid prompt)]
     (cond
-      (not= "select" (:prompt-type prompt))
+      (not (state/select-prompt-type? (:prompt-type prompt)))
       (do
         (println "❌ No select prompt active")
         (when prompt
@@ -248,7 +258,7 @@
         selectable (:selectable prompt)
         eid (:eid prompt)]
     (cond
-      (not= "select" (:prompt-type prompt))
+      (not (state/select-prompt-type? (:prompt-type prompt)))
       (do
         (println "❌ No select prompt active")
         (when prompt

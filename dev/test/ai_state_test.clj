@@ -286,3 +286,13 @@
     (is (false? (boolean (state/waiting-prompt-type? "select"))))
     (is (false? (boolean (state/waiting-prompt-type? :select))))
     (is (false? (boolean (state/waiting-prompt-type? nil))))))
+
+(deftest test-select-prompt-type?-predicate
+  (testing "matches both wire-string and keyword forms"
+    (is (true? (boolean (state/select-prompt-type? "select"))))
+    (is (true? (boolean (state/select-prompt-type? :select)))))
+  (testing "does not match non-select prompt types"
+    (is (false? (boolean (state/select-prompt-type? "waiting"))))
+    (is (false? (boolean (state/select-prompt-type? :waiting))))
+    (is (false? (boolean (state/select-prompt-type? "run"))))
+    (is (false? (boolean (state/select-prompt-type? nil))))))

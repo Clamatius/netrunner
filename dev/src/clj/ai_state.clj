@@ -188,6 +188,15 @@
   [prompt-type]
   (contains? #{:waiting "waiting"} prompt-type))
 
+(defn select-prompt-type?
+  "True if a :prompt-type denotes a card-select (targeting cursor) prompt.
+   The WIRE value is the STRING \"select\"; the server sets the keyword
+   :select pre-serialization and fixtures may use either. Match both so
+   callers never silently miss a form (mirrors waiting-prompt-type?; see the
+   b5fcf0830 :prompt-type audit)."
+  [prompt-type]
+  (contains? #{:select "select"} prompt-type))
+
 (defn get-prompt
   "Get current prompt for our side, if any"
   []
