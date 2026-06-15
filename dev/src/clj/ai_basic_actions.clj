@@ -471,6 +471,66 @@
                     (str/includes? text my-username)))
             recent-log))))
 
+(defn- opponent-turn-underway?
+  "Durable signal that our turn genuinely ended and the OPPONENT has taken over.
+   Used so the end-turn self-heal won't re-send merely because our 'is ending'
+   log line scrolled out of the recent window (vs. was actually rolled back):
+   the same flurry of opponent log lines that could push our line out is itself
+   proof the opponent is playing. True when the opponent has clicks, is the
+   active player, or has a 'started their turn' line in the recent log."
+  [client-state]
+  (let [my-side (keyword (:side client-state))
+        opp-side (if (= my-side :runner) :corp :runner)
+        opp-clicks (get-in client-state [:game-state opp-side :click])
+        active-player (get-in client-state [:game-state :active-player])
+        log (get-in client-state [:game-state :log])
+        recent (take-last 6 log)
+        my-username (get-my-username)
+        opp-started? (some #(let [t (:text %)]
+                              (and t
+                                   (str/includes? t "started their turn")
+                                   (or (nil? my-username)
+                                       (not (str/includes? t my-username)))))
+                           recent)]
+    (boolean
+     (or (and opp-clicks (pos? opp-clicks))
+         (and active-player (= active-player (name opp-side)))
+         opp-started?))))
+
+(defn end-turn-self-heal-decision
+  "Decide what smart-end-turn! should do once it has re-read state after a short
+   settle. The 'X is ending their turn' line can be an OPTIMISTIC client entry
+   the server rolls back on a :game/error resync — observed when an end-turn is
+   auto-fired during the unsettled window right after a last-click action whose
+   resolution is still settling (a just-finished run/access, or an event like
+   Wildcat Strike that forces the opponent to choose).
+
+   Given the post-settle re-read, ANY of these means the turn really ended:
+     :line-present?       our 'is ending' line still stands
+     :opponent-underway?  turn moved on (our line may have scrolled out of window)
+     :turn-advanced?      :turn incremented past where we started the end-turn
+   If ALL are false the end-turn was rolled back (turn still open at 0 clicks) ->
+   :resend, or the match deadlocks. :confirmed-ended must win on ANY evidence the
+   turn ended, since a needless re-send is the double-end that corrupts engine
+   state (per end-turn!'s Bug #2 guard)."
+  [{:keys [line-present? opponent-underway? turn-advanced?]}]
+  (if (or line-present? opponent-underway? turn-advanced?) :confirmed-ended :resend))
+
+(defn recheck-end-turn-state
+  "Re-read client state after a short settle and return the signals the self-heal
+   decision needs: whether our end-turn log line still stands, whether the
+   opponent has visibly taken over their turn, and whether :turn advanced past
+   `entry-turn` (the turn number when we attempted the end). Pulled out as a
+   public seam so smart-end-turn!'s self-heal branch is testable without racing
+   real wire timing."
+  [entry-turn]
+  (Thread/sleep core/standard-delay)
+  (let [cs @state/client-state]
+    {:line-present? (already-ended-this-turn? cs)
+     :opponent-underway? (opponent-turn-underway? cs)
+     :turn-advanced? (boolean (and entry-turn
+                                   (> (get-in cs [:game-state :turn] 0) entry-turn)))}))
+
 (defn end-turn!
   "End turn (validates all clicks used unless forced).
    The game engine handles oversized hand by prompting for discard during end-turn.
@@ -495,8 +555,9 @@
       ;; turn cycle (Run #4 1:11:32). Detected via our own recent log line.
       (already-ended-this-turn? client-state)
       (do
-        (println "⚠️  Turn already ended — refusing duplicate end-turn")
-        (println "   (recent log shows we've already ended this turn)")
+        (println "⚠️  Turn already ended — refusing duplicate end-turn (engine-corruption guard).")
+        (println "   If the game is NOT advancing and you're still at 0 clicks, the prior")
+        (println "   end-turn may have been rolled back — use smart-end-turn, which self-heals.")
         (core/with-cursor {:status :error :reason :already-ended}))
 
       ;; ERROR: clicks remaining and not forced
@@ -557,17 +618,11 @@
         prompt (get-in client-state [:game-state side :prompt-state])
         hand-size (count (get-in client-state [:game-state side :hand]))
         max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
-        log (get-in client-state [:game-state :log])
-        recent-log (take-last 3 log)
-        my-username (get-my-username)
         active-player (get-in client-state [:game-state :active-player])
         my-turn? (= (name side) active-player)
-        ;; Check if WE already ended (not opponent) - prevents double auto-end
-        already-ended? (some #(let [text (:text %)]
-                                (and text
-                                     (str/includes? text "is ending")
-                                     (and my-username (str/includes? text my-username))))
-                            recent-log)
+        ;; Check if WE already ended (not opponent) - prevents double auto-end.
+        ;; Shared guard (see already-ended-this-turn?).
+        already-ended? (already-ended-this-turn? client-state)
         ;; Active-run guard: never end turn while a run is in progress, even
         ;; with clicks=0 (paid abilities, breaker pumps, etc. can occur).
         active-run? (some? (get-in client-state [:game-state :run]))
@@ -654,19 +709,17 @@
         hand-size (or (get-in client-state [:game-state side :hand-count]) 0)
         max-hand-size (or (get-in client-state [:game-state side :hand-size :total]) 5)
         installed (get-in client-state [:game-state side :installed])
-        log (get-in client-state [:game-state :log])
-        recent-log (take-last 3 log)
-        my-username (get-my-username)
 
         ;; Check if we've actually started our turn
         turn-started? (turn-started-since-last-opp-end?)
 
-        ;; Check if WE already ended (not opponent) - prevents double auto-end
-        already-ended? (some #(let [text (:text %)]
-                                (and text
-                                     (str/includes? text "is ending")
-                                     (and my-username (str/includes? text my-username))))
-                            recent-log)
+        ;; Turn number at entry, so the self-heal re-read can detect a real
+        ;; transition (:turn advanced) vs a rolled-back end-turn.
+        turn (get-in client-state [:game-state :turn] 0)
+
+        ;; Check if WE already ended (not opponent) - prevents double auto-end.
+        ;; Shared guard so the initial check and the self-heal re-read agree.
+        already-ended? (already-ended-this-turn? client-state)
 
         ;; Check for EOT-related conditions
         has-prompt? (some? prompt)
@@ -690,11 +743,23 @@
         (println "⚠️  Cannot auto-end: Turn hasn't started yet")
         (core/with-cursor {:status :turn-not-started}))
 
-      ;; Already ended (avoid double send)
+      ;; Looks already-ended. But the "is ending" line can be an OPTIMISTIC entry
+      ;; the server rolls back on a :game/error resync (end-turn auto-fired during
+      ;; the unsettled priority window after a last-click opponent-decision event
+      ;; like Wildcat Strike). Re-read after a short settle: a genuine line
+      ;; persists (-> nothing to do); a rolled-back one vanishes (-> re-send, or
+      ;; the agent-vs-agent match deadlocks with us stuck at 0 clicks and the
+      ;; opponent correctly waiting on an end-turn that never landed).
       already-ended?
-      (do
-        (println "⚠️  Already ended turn (found in recent log)")
-        (core/with-cursor {:status :already-ended}))
+      (case (end-turn-self-heal-decision (recheck-end-turn-state turn))
+        :confirmed-ended
+        (do
+          (println "ℹ️  Turn already ended — nothing to do.")
+          (core/with-cursor {:status :already-ended}))
+        :resend
+        (do
+          (println "↻ Prior end-turn was rolled back (resync) — re-sending end-turn.")
+          (end-turn!)))
 
       ;; Can't end: clicks remaining
       (> clicks 0)

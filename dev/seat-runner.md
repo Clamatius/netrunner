@@ -83,6 +83,23 @@ C=$(./dev/send_command runner get-cursor)          # capture cursor first
 ./dev/send_command runner wait --since "$C"        # blocks until something relevant
 ```
 
+### ⚠️ If the game won't advance after you end your turn — re-send end-turn
+
+There is a known rough edge: when you end your turn right after a **last-click
+action whose resolution is still settling** (a run/access that just finished, or
+an event that made the Corp choose something like Wildcat Strike), the engine can
+**roll your end-turn back** on a resync. The symptom is sneaky: `smart-end-turn`
+reports success and `game-over-status` shows `AWAITING-START next-player=corp`,
+**but the Corp never starts** — because your end-turn never actually landed
+server-side. Do NOT conclude "Corp bot stalled" from this alone.
+
+**Recovery (do this before reporting any post-turn stall):** if you've ended your
+turn and the Corp hasn't started after a `wait` (you're still at 0 clicks and the
+game sits at `AWAITING-START next-player=corp` / your turn for ~10s+), simply
+**re-run `./dev/send_command runner smart-end-turn`.** Once the rollback has
+settled it will cleanly re-send and the Corp will pick up. Retry it 2–3 times,
+~3s apart, before deciding it's a genuine Corp-side stall.
+
 ## Knowing when to stop
 
 After each of your turns, check:
