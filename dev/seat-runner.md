@@ -50,6 +50,11 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
 
 1. **See state** (use the compact forms to save tokens):
    `status-compact`, `board-compact`, `hand`, `list-playables`.
+   **Don't guess what a card does — look it up:** `card-text "<name>"` gives any
+   card's type/cost/full text (works for cards you can see anywhere — in hand, on
+   the board, or at an access prompt), and `abilities "<name>"` lists an installed
+   card's numbered abilities for `use-ability`. If a command name doesn't exist,
+   the client suggests the right one.
 2. **Decide & act** per your heuristics — draw, gain credits, install
    programs/resources/hardware, run a server. Examples:
    `./dev/send_command runner draw`

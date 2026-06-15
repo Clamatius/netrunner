@@ -64,6 +64,32 @@ error() {
     exit 1
 }
 
+# Suggest the right command when an unknown one is typed. Discoverability aid for
+# the wide surface — a model that guesses 'card'/'card-info' should be pointed at
+# 'card-text' rather than just told "unknown". Prints to stderr; never exits.
+did_you_mean() {
+    local attempted="$1"
+    case "$attempted" in
+        card|card-info|cardinfo|cardtext|card-text-for|inspect|info|describe|read-card|lookup|whatis)
+            echo -e "${YELLOW}💡 Did you mean: card-text <name>${NC}  (look up any card's type/cost/text)" >&2; return;;
+        cards|playable|playables|plays|options|moves)
+            echo -e "${YELLOW}💡 Did you mean: list-playables${NC}" >&2; return;;
+        ability|abilites|card-abilities)
+            echo -e "${YELLOW}💡 Did you mean: abilities <name>${NC}" >&2; return;;
+        endturn|end|done|pass-turn)
+            echo -e "${YELLOW}💡 Did you mean: smart-end-turn  (or end-turn)${NC}" >&2; return;;
+    esac
+    # Fallback: substring match against the player-facing commands.
+    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"
+    local hits
+    hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd' ' -)
+    if [[ -n "$hits" ]]; then
+        echo -e "${YELLOW}💡 Did you mean: ${hits}${NC}" >&2
+    else
+        echo -e "${YELLOW}💡 Run './send_command <side> help' for commands, or 'help --full' for everything.${NC}" >&2
+    fi
+}
+
 success() {
     [[ "$DEBUG" == "1" ]] && echo -e "${GREEN}✅ $1${NC}"
     return 0
@@ -154,11 +180,18 @@ ${GREEN}Essential Commands:${NC}
   hand             Show cards in hand
   prompt           Show current prompt (if any)
 
+${GREEN}Inspect (read-only — use these to decide):${NC}
+  card-text <name>   Look up ANY card's type, cost, and full text
+  abilities <name>   Show an installed card's abilities (for use-ability)
+  list-playables     List everything you can play/use right now
+  log [N]            Last N game-log entries (default 20)
+
 ${GREEN}Turn Actions:${NC}
   start-turn       Start your turn
   take-credit      Spend click for credit
   draw             Spend click to draw
   end-turn         End your turn
+  smart-end-turn   End turn if safe (handles discard; recommended)
 
 ${GREEN}Card Actions:${NC}
   play <name>      Play operation/event
@@ -1446,6 +1479,7 @@ case "$COMMAND" in
         ;;
 
     *)
+        did_you_mean "$COMMAND"
         error "Unknown command: $COMMAND"
         ;;
 esac
