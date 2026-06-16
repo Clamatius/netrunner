@@ -75,6 +75,7 @@
 (def show-log-compact display/show-log-compact)
 (def status-compact display/status-compact)
 (def board-compact display/board-compact)
+(def show-snapshot display/show-snapshot)
 (def show-prompt display/show-prompt)
 (def hand display/hand)
 (def show-hand display/show-hand)

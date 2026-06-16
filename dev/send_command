@@ -26,7 +26,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -230,6 +230,8 @@ ${YELLOW}Usage:${NC}
   ./send_command corp|runner <command> [args...]
 
 ${GREEN}Essential Commands:${NC}
+  snapshot [N]     One-shot: status + prompt + board + hand + last-N log +
+                   cursor in ONE call (the per-decision read-loop). Use this.
   status           Show game state (turn, credits, clicks)
   board            Show game board (servers, ICE, installed cards)
   hand             Show cards in hand
@@ -293,6 +295,9 @@ ${YELLOW}Examples:${NC}
   ./send_command corp start-game            - Corp starts the game
 
 ${GREEN}Status Commands:${NC}
+  snapshot [N]    - One-shot per-decision read-loop in a single call:
+                    status-compact + prompt(if any) + board-compact + hand +
+                    last-N log (default 5) + cursor. Fewer round-trips.
   status          - Show game state (turn, credits, clicks, hand size)
   board           - Show full game board (servers, ICE, rigs)
   hand            - Show cards in hand
@@ -556,6 +561,14 @@ case "$COMMAND" in
 
     status-compact)
         execute '(ai-actions/status-compact)'
+        ;;
+
+    snapshot)
+        # Bundled per-decision read-loop in one round-trip:
+        # status-compact + prompt(if any) + board-compact + hand + last-N log + cursor.
+        N="${1:-5}"
+        [[ ! "$N" =~ ^[0-9]+$ ]] && N=5
+        execute "(ai-actions/show-snapshot $N)"
         ;;
 
     board)

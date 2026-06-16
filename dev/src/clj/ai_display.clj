@@ -968,6 +968,28 @@
                 (println "    → Use 'continue' command to pass priority"))))))
       (println "No active prompt"))))
 
+(defn show-snapshot
+  "One-shot per-decision snapshot: compact status, the current prompt (only when
+   one is open), compact board, hand, the last N log lines, and the state cursor
+   -- i.e. the whole status/prompt/board/hand/log/get-cursor read-loop collapsed
+   into a single call (one round-trip, one model-facing turn). Read-only; N
+   defaults to 5 log lines. The trailing `cursor=<n>` is the value to pass to
+   `wait --since` before acting."
+  ([] (show-snapshot 5))
+  ([n]
+   (show-status-compact)
+   (when (state/get-prompt)
+     (println)
+     (show-prompt-detailed))
+   (println)
+   (show-board-compact)
+   (println)
+   (show-hand)
+   (println)
+   (show-log-compact n)
+   (println (str "cursor=" (core/get-cursor)))
+   nil))
+
 (defn show-card-text
   "Display full card information including text, cost, and abilities
    Usage: (show-card-text \"Sure Gamble\")

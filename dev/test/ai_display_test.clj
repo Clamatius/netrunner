@@ -105,3 +105,49 @@
             (str "mid-turn should show active corp, got: " line))
         (is (not (str/includes? line "awaiting-start"))
             (str "mid-turn must not show boundary marker, got: " line))))))
+
+(deftest test-show-snapshot-bundles-read-loop
+  ;; snapshot collapses the per-decision read-loop
+  ;; (status-compact + prompt? + board-compact + hand + log + cursor) into one
+  ;; call. The contract under test: a single show-snapshot faithfully contains
+  ;; each part's output, so a seat can replace ~6 round-trips with one.
+  (testing "no open prompt -> status + board + cursor present, no prompt section"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 2 :credit 5 :hand [] :agenda-point 0}
+                                   :runner {:click 0 :credit 4 :hand [] :agenda-point 0}})
+      (let [snap (with-out-str (display/show-snapshot 5))
+            status (str/trim (with-out-str (display/show-status-compact)))
+            board (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? snap status)
+            (str "snapshot must contain the compact status line, got: " snap))
+        ;; the bundling contract: each section must actually be present, so a
+        ;; section can't silently drop out of the snapshot unnoticed.
+        (is (and (seq board) (str/includes? snap board))
+            (str "snapshot must bundle the board-compact section, got: " snap))
+        (is (str/includes? snap "cursor=")
+            (str "snapshot must contain a cursor= marker, got: " snap))
+        ;; cursor is printed last (it's what you pass to `wait --since`)
+        (is (> (str/index-of snap "cursor=") (str/index-of snap status))
+            (str "cursor= must come after the status section, got: " snap))
+        ;; no prompt-state in this mock -> the prompt section must be absent
+        (is (not (str/includes? snap "Current Prompt:"))
+            (str "no open prompt should mean no prompt section, got: " snap)))))
+
+  (testing "open prompt -> snapshot includes the prompt section"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :prompt {:msg "Choose one" :prompt-type "choice"
+                               :choices [{:value "Yes"} {:value "No"}]}
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 2 :credit 5 :hand []
+                                          :prompt-state {:msg "Choose one"
+                                                         :prompt-type "choice"
+                                                         :choices [{:value "Yes"} {:value "No"}]}}
+                                   :runner {:click 0 :credit 4 :hand []}})
+      (let [snap (with-out-str (display/show-snapshot 5))]
+        (is (str/includes? snap "Choose one")
+            (str "open prompt must appear in snapshot, got: " snap))
+        (is (str/includes? snap "cursor=")
+            (str "snapshot must still end with cursor=, got: " snap))))))
