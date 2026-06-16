@@ -186,6 +186,12 @@
                  (do (update-lingering-effect-durations state side :until-next-runner-turn-ends :until-runner-turn-ends)
                      (update-floating-event-durations state side :until-next-runner-turn-ends :until-runner-turn-ends)))
                (swap! state assoc :end-turn true)
+               ;; Defensive: clear the incoming player's :turn-started so they can always
+               ;; begin the next turn, even if their own prior end-turn left the flag stuck
+               ;; (e.g. a rolled-back end-turn that restored pre-end state). Without this,
+               ;; start-turn (guarded by when-not :turn-started) silently no-ops and the
+               ;; game wedges at the boundary with active-player stuck on the ending side.
+               (swap! state dissoc-in [(other-side side) :turn-started])
                (clean-set-aside! state side)
                (doseq [card (all-active-installed state :runner)]
                  ;; Clear :installed :this-turn as turn has ended

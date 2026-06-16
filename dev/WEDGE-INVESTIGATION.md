@@ -1,5 +1,24 @@
 # Turn-boundary wedge — ROOT CAUSE FOUND + CONFIRMED (2026-06-16)
 
+## STATUS: FIXED (Option 1, defensive engine fix) — 2026-06-16
+
+Implemented in `src/clj/game/core/turns.clj` `end-turn-continue`: right after the
+boundary sets `:end-turn true` (line 188), we now also
+`(swap! state dissoc-in [(other-side side) :turn-started])`, guaranteeing the
+incoming player can always `start-turn` regardless of how their prior flag got
+stuck. Safe wrt the "act before clicks" (phase-1.2) flow: the incoming side is not
+in phase 1.2 at the boundary, and the extra-turns path restarts the *same* side, so
+clearing the *other* side's flag never interferes.
+
+Regression test: `test/clj/game/core/turns_test.clj`
+(`wedge-stale-turn-started-cleared-on-boundary`) — red→green confirmed (without the
+fix: `active-player` stuck on `:runner`, corp click 0; with it: corp turn starts).
+Engine suites green (turns/engine/scenarios 3077 assertions; Encore extra-turns
+46 assertions). Options 2 (root self-heal) and 3 (umpire watchdog) remain available
+if the wedge ever recurs through a path this defensive clear doesn't cover.
+
+
+
 First rung-2 game (two isolated model seats) wedged at the turn-3→4 boundary; no
 normal client action recovered it.
 
