@@ -168,6 +168,61 @@ show_help() {
 }
 
 show_help_compact() {
+    # Role-aware: a seat only sees the actions legal for its side, so a Runner
+    # never reads (or is tempted by) rez/advance/score and a Corp never reads
+    # run/jack-out. With no side (./send_command help — human/doc usage) we show
+    # the combined form for backward compatibility.
+    local role_actions role_running role_examples
+    case "$CLIENT_NAME" in
+        corp)
+            role_actions="${GREEN}Card Actions:${NC}
+  play <name>      Play operation
+  install <name> <server>  Install into a server (new, HQ, R&D, remote1, ...)
+  advance <name>   Advance an installed card
+  score <name>     Score an advanced agenda
+  rez <name>       Rez ICE / asset / upgrade"
+            role_running="${GREEN}Defending Runs:${NC}
+  monitor-run      Participate in the opponent's run (auto-pass priority
+                   windows, surface rez/fire decisions). Required during
+                   runner runs — see 'help --full' for flags.
+  continue         Pass priority (e.g. decline to rez / fire)."
+            role_examples="  ./send_command corp status
+  ./send_command corp install \"Hedge Fund\" HQ
+  ./send_command corp advance \"Project Atlas\"
+  ./send_command corp score \"Project Atlas\""
+            ;;
+        runner)
+            role_actions="${GREEN}Card Actions:${NC}
+  play <name>      Play an event
+  install <name>   Install a program / resource / hardware"
+            role_running="${GREEN}Running:${NC}
+  run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
+  continue         Continue run / pass priority
+  jack-out         Abort the current run"
+            role_examples="  ./send_command runner status
+  ./send_command runner run HQ
+  ./send_command runner install \"Cleaver\"
+  ./send_command runner choose 0"
+            ;;
+        *)
+            role_actions="${GREEN}Card Actions:${NC}
+  play <name>      Play operation/event
+  install <name> <server>  Install card (Corp needs server: new, HQ, etc.)
+  advance <name>   Advance installed card (Corp)
+  score <name>     Score agenda (Corp)
+  rez <name>       Rez ICE/asset/upgrade (Corp)"
+            role_running="${GREEN}Running:${NC}
+  run <server>     Runner: start a run (HQ, R&D, Archives, remote1, etc.)
+  continue         Continue run / pass priority
+  jack-out         Runner: abort the current run
+  monitor-run      Corp: participate in opponent's run (auto-pass priority
+                   windows, surface rez/fire decisions). See 'help --full'."
+            role_examples="  ./send_command corp install \"Hedge Fund\" HQ
+  ./send_command runner run HQ
+  ./send_command runner choose 0"
+            ;;
+    esac
+
     cat << EOF
 ${BLUE}AI Player Command Interface${NC}
 
@@ -193,19 +248,9 @@ ${GREEN}Turn Actions:${NC}
   end-turn         End your turn
   smart-end-turn   End turn if safe (handles discard; recommended)
 
-${GREEN}Card Actions:${NC}
-  play <name>      Play operation/event
-  install <name> <server>  Install card (Corp needs server: new, HQ, etc.)
-  advance <name>   Advance installed card
-  score <name>     Score agenda
-  rez <name>       Rez ICE/asset/upgrade
+${role_actions}
 
-${GREEN}Running:${NC}
-  run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
-  continue         Continue run / pass priority
-  monitor-run      Corp: participate in opponent's run (auto-pass priority
-                   windows, surface rez/fire decisions). Required during
-                   opponent runs — see 'help --full' for flags.
+${role_running}
 
 ${GREEN}Prompts:${NC}
   choose <N>       Choose option N (0 = first)
@@ -225,10 +270,7 @@ ${GREEN}Lobby:${NC}
   start-game            Start game after players join
 
 ${YELLOW}Examples:${NC}
-  ./send_command corp status
-  ./send_command corp install "Hedge Fund" HQ
-  ./send_command runner run HQ
-  ./send_command runner choose 0
+${role_examples}
 
 ${BLUE}For full help:${NC} ./send_command help --full
 
@@ -480,7 +522,12 @@ else
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE"
 fi
 
-check_client
+# Help is pure text — it must work even when no REPL is running (e.g. after a
+# game times out and the REPLs get bounced). Everything else needs a live client.
+case "$COMMAND" in
+    help|--help|-h) ;;
+    *)              check_client ;;
+esac
 
 case "$COMMAND" in
     # Help
