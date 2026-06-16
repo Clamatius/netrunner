@@ -1180,7 +1180,7 @@ case "$COMMAND" in
                                         :room \"casual\"
                                         :allow-spectator true
                                         :spectatorhands true
-                                        :save-replay false
+                                        :save-replay true
                                         :api-access false
                                         :password \"\"
                                         :singleton false
