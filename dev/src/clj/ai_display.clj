@@ -1332,14 +1332,14 @@
       ;; Actionable prompt owned by us — must resolve before anything else.
       (and prompt (not waiting?))
       (do
-        (println (format "📋 You have an ACTIONABLE prompt: \"%s\" (type %s)" (:msg prompt) ptype))
+        (println (format "📋 You have an ACTIONABLE prompt [%s]: %s" ptype (:msg prompt)))
         (println "   → Owner: YOU. Resolve it before any other action.")
         (println "   → Use: prompt (see choices), then choose <N> / choose-card <N> / choose-value \"<text>\""))
 
       ;; Waiting prompt — blocked on the opponent, NOT a stall.
       (and prompt waiting?)
       (do
-        (println (format "⛔ You have a WAITING prompt: \"%s\"" (:msg prompt)))
+        (println (format "⛔ You have a WAITING prompt: %s" (:msg prompt)))
         (println "   → Owner: OPPONENT. You are blocked until they act — this is NOT a stall.")
         (if (re-find #"(?i)mulligan|keep hand" (str (:msg prompt)))
           (println "   → They're still on their opening mulligan. Use: wait, then start-turn once it clears.")
