@@ -28,6 +28,23 @@
           uid)
       uid)))
 
+(defn- opponent-mulligan-pending?
+  "True when our OWN prompt is the opening-mulligan 'waiting for opponent to keep
+   hand or mulligan' window.
+
+   The Corp can keep + start-turn before the Runner finishes its opening
+   mulligan; the engine then grants the Corp clicks but bounces every action off
+   the still-pending mulligan prompt — a wedged, half-started turn. seat-corp.md
+   makes start-turn step 0, so a fast Corp racing ahead of a slow Runner trips
+   this in real agent-vs-agent play. Detected from our own prompt-state (the
+   server tells us directly), so no fog-of-war peek at the opponent is needed."
+  [client-state]
+  (let [p (get-in client-state [:game-state (keyword (:side client-state)) :prompt-state])]
+    (boolean
+      (and p
+           (= "waiting" (str (:prompt-type p)))
+           (re-find #"(?i)mulligan|keep hand" (str (:msg p)))))))
+
 (defn can-start-turn?
   "Check if we CAN legally start our turn right now.
 
@@ -39,6 +56,7 @@
    - :turn-already-started - we already have clicks
    - :turn-already-played - we already started/played this turn (checked via logs)
    - :opponent-restarted - opponent started a new turn after ending (we missed window)
+   - :opponent-mulligan - opponent hasn't finished their opening mulligan yet
    - :not-first-player - Runner trying to start first turn (Corp goes first)
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
@@ -83,6 +101,12 @@
       ;; Already played this turn (0 clicks but log shows we started)
       already-played?
       {:can-start false :reason :turn-already-played}
+
+      ;; Opponent hasn't finished their opening mulligan — starting now races
+      ;; ahead of mulligan resolution and wedges the turn (clicks granted, but
+      ;; every action bounces off the pending-mulligan prompt).
+      (opponent-mulligan-pending? client-state)
+      {:can-start false :reason :opponent-mulligan}
 
       ;; Opponent started a new turn after ending the previous one
       opp-restarted?
@@ -156,6 +180,9 @@
 
           :not-first-player
           (println "❌ Cannot perform action: Corp goes first\n   Wait for Corp to start and complete their turn")
+
+          :opponent-mulligan
+          (println "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn")
 
           ;; Default
           (println "❌ Cannot perform action: Turn not ready"))
@@ -261,6 +288,10 @@
         ;; unaffected.
         post-discard-active? (or (get-in client-state [:game-state :corp-post-discard :active])
                                  (get-in client-state [:game-state :runner-post-discard :active]))
+        ;; Opponent's opening mulligan still pending (our own prompt is the
+        ;; "waiting for opponent to keep/mulligan" window). Starting now wedges
+        ;; the turn — see opponent-mulligan-pending?.
+        opp-mulligan-pending? (opponent-mulligan-pending? client-state)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
         is-first-turn? (and (= turn-number 0)
@@ -286,6 +317,15 @@
         (println "   Corp always goes first in turn 1")
         (println "   Wait for Corp to start and complete their turn")
         (core/with-cursor {:status :error :reason :not-your-turn :expected-side "corp"}))
+
+      ;; ERROR: Opponent hasn't finished their opening mulligan yet. Starting
+      ;; now races ahead of mulligan resolution and wedges the turn.
+      opp-mulligan-pending?
+      (do
+        (println "❌ ERROR: Opponent hasn't finished their opening mulligan yet")
+        (println "   Starting now would race ahead of mulligan resolution and wedge your turn")
+        (println "   Use 'wait' until they keep/mulligan, then start-turn")
+        (core/with-cursor {:status :error :reason :opponent-mulligan}))
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?

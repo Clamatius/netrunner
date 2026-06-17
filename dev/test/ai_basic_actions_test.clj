@@ -61,6 +61,61 @@
                 "Without :active flag, post-discard branch must not fire")))))))
 
 ;; ============================================================================
+;; Opening-mulligan race: Corp must not start turn 1 while the opponent's
+;; mulligan is unresolved. The Corp can keep + start-turn before the Runner
+;; finishes mulligan; the engine then grants Corp clicks but bounces every
+;; action off the pending-mulligan prompt — a wedged half-started turn. Detected
+;; from our OWN waiting prompt (the server tells us directly; no fog-of-war).
+;; ============================================================================
+
+(deftest test-start-turn-blocks-while-opponent-mulligan-pending
+  (testing "Corp start-turn! is refused (sends nothing) while its own prompt is the pending-mulligan wait"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand []}
+                      :corp {:click 0 :credit 5 :hand []
+                             :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                                            :prompt-type "waiting" :selectable []}}
+                      :turn 0
+                      :active-player "corp"
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :opponent-mulligan (:reason result)))
+            (is (empty? @sent) "must not send start-turn while opponent mulligan pending")))))))
+
+(deftest test-start-turn-allows-first-turn-when-no-mulligan-prompt
+  (testing "Corp first turn is NOT blocked by the mulligan guard once the prompt is gone"
+    (let [sent (atom [])
+          ;; No pending-mulligan prompt: mulligan resolved, Corp may start.
+          game-state {:runner {:click 0 :credit 5 :hand []}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :turn 0
+                      :active-player "corp"
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (not= :opponent-mulligan (:reason result))
+                "mulligan guard must not fire when no pending-mulligan prompt is present")
+            (is (seq @sent) "should attempt to send start-turn")))))))
+
+(deftest test-can-start-turn-reports-opponent-mulligan
+  (testing "can-start-turn? surfaces :opponent-mulligan for the pending-mulligan wait"
+    (let [game-state {:runner {:click 0 :credit 5 :hand []}
+                      :corp {:click 0 :credit 5 :hand []
+                             :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                                            :prompt-type "waiting" :selectable []}}
+                      :turn 0
+                      :active-player "corp"
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (let [result (basic/can-start-turn?)]
+          (is (false? (:can-start result)))
+          (is (= :opponent-mulligan (:reason result))))))))
+
+;; ============================================================================
 ;; smart-end-turn! over-hand-size: must END (to trigger discard prompt), not refuse
 ;; ============================================================================
 ;; Regression for the self-play deadlock: a side at 0 clicks but over hand size
