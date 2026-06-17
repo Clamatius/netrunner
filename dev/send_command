@@ -357,7 +357,9 @@ ${GREEN}Running:${NC}
 
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from prompt (0 = first option)
-  choose-value <text> - Choose by matching text (e.g., "Yes", "Steal")
+  choose-value <text> - Choose by matching text (e.g., "Yes", "Steal").
+                        Also presses a SELECT prompt's meta-button, e.g.
+                        choose-value "Done" to stop selecting cards.
   choose-card <N> - Select card N from selectable cards
   multi-choose <cards...> - Select MULTIPLE cards
 

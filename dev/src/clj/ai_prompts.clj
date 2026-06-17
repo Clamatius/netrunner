@@ -87,21 +87,48 @@
         (println "⚠️  No active prompt")
         (core/with-cursor {:status :error :reason "No active prompt"})))))
 
-(defn choose-option!
-  "Choose from prompt by index (side-aware).
-   Waits for prompt state to change after sending choice.
+(defn- press-choice!
+  "Send a choice-button press (by :uuid) for the current prompt, then wait for it
+   to resolve. Works on ANY prompt type, including `select` prompts — their
+   Done / decline / meta buttons live in :choices and are pressed via the same
+   `choice` command as ordinary button prompts.
 
-   For prompts of type 'select' (card-selection prompts like Mutual Favor or
-   Send a Message), use `choose-card!` instead — `choose 0` against a select
-   prompt either errors or picks an unrelated meta-choice like 'Done'."
-  [index]
+   `choose-option!` keeps its index-based select guard (a bare index is ambiguous
+   between :choices and the selectable cards), so this shared helper is what lets
+   `choose-by-value!` reach a NAMED button (e.g. \"Done\") on a select prompt —
+   previously such a meta-option was unreachable, forcing the seat to over-select
+   just to escape the prompt (laundry-list #5)."
+  [choice]
   (let [client-state @state/client-state
         side (:side client-state)
         side-kw (when side (keyword (clojure.string/lower-case side)))
         gameid (:gameid client-state)
         prompt (get-in client-state [:game-state side-kw :prompt-state])
+        old-eid (:eid prompt)]
+    (println (str "✅ Chose: " (:value choice)))
+    (ws/send-message! :game/action
+                      {:gameid gameid
+                       :command "choice"
+                       :args {:choice {:uuid (:uuid choice)}}})
+    (wait-for-prompt-change! old-eid)
+    (maybe-auto-end-turn-after-prompt!)
+    (core/with-cursor {:status :success :choice choice})))
+
+(defn choose-option!
+  "Choose from prompt by index (side-aware).
+   Waits for prompt state to change after sending choice.
+
+   For prompts of type 'select' (card-selection prompts like Mutual Favor or
+   Send a Message), use `choose-card!` to pick a card. To press a NAMED meta
+   button on a select prompt (e.g. \"Done\" to stop selecting), use
+   `choose-value \"Done\"` — a bare index here is refused because it's ambiguous
+   between the choice buttons and the selectable cards."
+  [index]
+  (let [client-state @state/client-state
+        side (:side client-state)
+        side-kw (when side (keyword (clojure.string/lower-case side)))
+        prompt (get-in client-state [:game-state side-kw :prompt-state])
         prompt-type (:prompt-type prompt)
-        old-eid (:eid prompt)
         choices (:choices prompt)
         choice (nth choices index nil)
         choice-uuid (:uuid choice)]
@@ -113,9 +140,9 @@
         (println (format "⚠️  This is a SELECT prompt (%d selectable card(s)) — use choose-card <N>, not choose <N>."
                         (count selectable)))
         (when (seq choices)
-          (println "    (`choose` would pick from these meta-options, probably not what you want:)")
+          (println "    To press a meta-option below (e.g. stop selecting), use choose-value \"<label>\":")
           (doseq [[i c] (map-indexed vector choices)]
-            (println (format "      %d. %s" i (:value c)))))
+            (println (format "      • %s" (:value c)))))
         (println "    Selectable cards:")
         (doseq [[i cid-or-card] (map-indexed vector selectable)]
           (let [card (if (string? cid-or-card)
@@ -125,15 +152,7 @@
         (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
 
       choice-uuid
-      (do
-        (println (str "✅ Chose: " (:value choice)))
-        (ws/send-message! :game/action
-                          {:gameid gameid
-                           :command "choice"
-                           :args {:choice {:uuid choice-uuid}}})
-        (wait-for-prompt-change! old-eid)
-        (maybe-auto-end-turn-after-prompt!)
-        (core/with-cursor {:status :success :choice choice}))
+      (press-choice! choice)
 
       :else
       (do
@@ -146,11 +165,17 @@
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring match).
-   Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")"
+   Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")
+
+   Works on `select` prompts too: the Done / decline / meta buttons live in
+   :choices, so `choose-value \"Done\"` presses them by name — the only way to
+   reach a select prompt's meta-option (`choose <N>` is refused there as
+   ambiguous, `choose-card <N>` only picks selectable cards)."
   [value-text]
   (let [client-state @state/client-state
         side (:side client-state)
-        prompt (get-in client-state [:game-state (keyword side) :prompt-state])
+        side-kw (when side (keyword (clojure.string/lower-case side)))
+        prompt (get-in client-state [:game-state side-kw :prompt-state])
         choices (:choices prompt)
         value-lower (clojure.string/lower-case (str value-text))
         ;; Find first choice whose value contains the search text
@@ -164,9 +189,7 @@
                              idx)))
                        choices))]
     (if matching-idx
-      (let [choice (nth choices matching-idx)]
-        (println (str "✅ Chose: " (:value choice)))
-        (choose-option! matching-idx))
+      (press-choice! (nth choices matching-idx))
       (do
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")
