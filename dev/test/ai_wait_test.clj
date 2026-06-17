@@ -44,6 +44,34 @@
           (is (= :my-turn (:reason result))
               (str "expected :my-turn, got: " result)))))))
 
+(deftest test-since-advance-turn-boundary-is-my-turn-start
+  ;; Opponent ended their turn in the race window: it's our turn but the turn
+  ;; hasn't been started yet (0 clicks). This must wake with :my-turn-start, NOT
+  ;; :my-turn — the seat needs to call start-turn first, and the distinct reason
+  ;; keeps a clean boundary from looking like an actionable turn (or a stall).
+  (testing "opponent ended turn, 0 clicks -> :already-advanced :my-turn-start"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                                  {:active-player "runner" :turn 5 :end-turn true
+                                   :corp {:click 0} :runner {:click 0}})
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :already-advanced (:status result)))
+          (is (= :my-turn-start (:reason result))
+              (str "expected :my-turn-start, got: " result)))))))
+
+(deftest test-since-advance-turn-zero-corp-is-my-turn-start
+  ;; Post-mulligan, turn 0, Corp goes first but has 0 clicks until start-turn.
+  ;; Same boundary semantics as a normal turn handoff.
+  (testing "turn 0 corp, 0 clicks -> :already-advanced :my-turn-start"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                                  {:active-player "corp" :turn 0
+                                   :corp {:click 0} :runner {:click 0}})
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :already-advanced (:status result)))
+          (is (= :my-turn-start (:reason result))
+              (str "expected :my-turn-start, got: " result)))))))
+
 (deftest test-since-relevant-advance-short-circuits-run-started
   ;; A run started in the race window — still a wake.
   (testing "cursor advanced AND a run is active -> :already-advanced :run-started"

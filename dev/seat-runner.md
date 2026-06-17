@@ -51,8 +51,9 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
 0. **Start your turn — it does NOT auto-start.** When `wait` wakes you for your
    turn (or right after the mulligan), you will show `0 clicks / awaiting-start`
    until you run `./dev/send_command runner start-turn`. Do this every turn before
-   acting. (A `wait` that woke with reason `my-turn` but still shows 0 clicks just
-   means the turn is waiting to be started — that's not a stall.)
+   acting. A `wait` at a turn boundary wakes with reason `my-turn-start` (and
+   prints a 👉 start-turn reminder) — that means start your turn, it is NOT a
+   stall. Reason `my-turn` (with clicks) means act now.
 1. **See state** (use the compact forms to save tokens):
    `status-compact`, `board-compact`, `hand`, `list-playables`.
    **Don't guess what a card does — look it up:** `card-text "<name>"` gives any

@@ -403,10 +403,12 @@
       (is (= :my-turn (relevance-reason state "runner" false))))))
 
 (deftest test-relevance-opponent-ended-turn
-  (testing "opponent has called end-turn; I'm up — :my-turn"
+  (testing "opponent has called end-turn; I'm up but at 0 clicks — :my-turn-start"
+    ;; Turn boundary, not a live actionable turn: the seat must call start-turn
+    ;; first. Distinct reason so it doesn't read as a stall or mislead the seat.
     (let [state (state-with {:side "runner" :active-player "corp"
                              :my-clicks 0 :end-turn true})]
-      (is (= :my-turn (relevance-reason state "runner" false))))))
+      (is (= :my-turn-start (relevance-reason state "runner" false))))))
 
 (deftest test-relevance-no-reason-when-nothing-changed
   (testing "no run transition, no prompt, not my turn → nil (don't wake)"

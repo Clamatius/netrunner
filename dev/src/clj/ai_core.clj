@@ -1172,6 +1172,28 @@
       ;; (Corp always goes first)
       (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))
 
+(defn- turn-awaiting-start?
+  "True when it's our turn at a boundary but the turn has NOT been started yet
+   (we hold 0 clicks). The seat must call `start-turn` before it can act.
+
+   This is the subset of `my-turn-to-act?` that is a turn boundary rather than a
+   live, actionable turn. It lets `relevance-reason` wake with the distinct
+   reason :my-turn-start instead of :my-turn, so the seat isn't misled into
+   trying to act before starting (and so a boundary doesn't read like a stall).
+   Both seats hit this confusion in the first rung-2 game (laundry-list #1)."
+  [state side]
+  (let [my-side (keyword side)
+        active-player (get-in state [:game-state :active-player])
+        my-clicks (get-in state [:game-state my-side :click] 0)
+        end-turn (get-in state [:game-state :end-turn])
+        turn-number (get-in state [:game-state :turn] 0)]
+    (and (= 0 my-clicks)
+         (or
+           ;; Opponent ended their turn; active-player is still them until I start
+           (and end-turn (not= (name my-side) active-player))
+           ;; Post-mulligan turn 0: Corp goes first but hasn't started
+           (and (= 0 turn-number) (= my-side :corp))))))
+
 (defn- ping-message?
   "Check if a log entry is a 'ping' wake signal.
    Returns true for exact match 'ping' (case-insensitive, trimmed).
@@ -1197,7 +1219,9 @@
                             approach-server). Catches the case where Runner
                             breaks all subs but the run keeps going and Corp
                             needs to participate via monitor-run.
-     :my-turn            — it's our turn to act
+     :my-turn-start      — it's our turn at a boundary; we must call start-turn
+                           before acting (we hold 0 clicks until we do)
+     :my-turn            — it's our turn and we have clicks; act now
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
@@ -1237,9 +1261,12 @@
             (not= initial-run-phase current-phase))
        :run-phase-change
 
-       ;; It's our turn to act (need to start-turn or take action)
+       ;; It's our turn. Distinguish a live actionable turn (:my-turn, we have
+       ;; clicks) from a turn boundary where we must call start-turn first
+       ;; (:my-turn-start, 0 clicks). Conflating them made a boundary look like
+       ;; a stall and misled both seats in the first rung-2 game.
        (my-turn-to-act? state side)
-       :my-turn
+       (if (turn-awaiting-start? state side) :my-turn-start :my-turn)
 
        ;; Nothing relevant
        :else nil))))
@@ -1252,7 +1279,8 @@
      - we get an actionable prompt — encounter, rez window, paid-ability
        window, access decision, choice prompt, etc. (:has-prompt)
      - a run that was in progress ends (:run-ended)
-     - it becomes our turn to act (:my-turn)
+     - it becomes our turn at a boundary, start-turn needed (:my-turn-start)
+     - it becomes our turn to act with clicks in hand (:my-turn)
      - the opponent sends a 'ping' chat message (:ping wake — escape hatch
        for when an external observer wants to nudge us)
      - the timeout expires (:timeout)
@@ -1300,7 +1328,9 @@
        (let [current-state @state/client-state]
          (when (:verbose opts)
            (println (format "⚡ Cursor advanced (%d → %d), %s — returning immediately"
-                           since-cursor current-cursor (name since-reason))))
+                           since-cursor current-cursor (name since-reason)))
+           (when (= since-reason :my-turn-start)
+             (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)")))
          {:status :already-advanced
           :reason since-reason
           :cursor current-cursor
@@ -1345,6 +1375,8 @@
                  (do
                    (when (:verbose opts)
                      (println (format "⚡ Woke up: %s" (name reason)))
+                     (when (= reason :my-turn-start)
+                       (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"))
                      (println "")
                      (println "📜 Game log while you were waiting:")
                      (if (seq entries-since-start)
