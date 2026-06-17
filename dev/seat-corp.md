@@ -49,6 +49,11 @@ Corp mulligans before the Runner. Make your call, then the Runner will mulligan:
 You have 3 clicks. A rough loop (use `snapshot` to pull status + prompt + board +
 hand + recent log + cursor in ONE call):
 
+0. **Start your turn — it does NOT auto-start.** After you keep your hand (your
+   first turn) and whenever a `wait` wakes you for your turn, you will show
+   `0 clicks / awaiting-start` until you run `./dev/send_command corp start-turn`.
+   Do this every turn before acting. (A `wait` that woke with reason `my-turn` but
+   still shows 0 clicks just means the turn is waiting to be started — not a stall.)
 1. **See state:** `./dev/send_command corp snapshot`
    **Don't guess what a card does — look it up:** `card-text "<name>"` gives any
    card's type/cost/text; `abilities "<name>"` lists an installed card's numbered
