@@ -10,9 +10,14 @@
      make test                    - Run all unit tests
      lein test ai-actions-test    - Run this test namespace"
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-actions]
+            [ai-card-actions]
             [ai-websocket-client-v2 :as ws]))
+
+;; Var-reference to test the private formatter without dropping defn-.
+(def format-credit-line #'ai-card-actions/format-credit-line)
 
 ;; ============================================================================
 ;; State Query Tests
@@ -172,6 +177,36 @@
     (println "========================================\n")
     (when (or (pos? (:fail results)) (pos? (:error results)))
       (System/exit 1))))
+
+;; ============================================================================
+;; format-credit-line — net-of-play-cost disclosure (laundry-list #6)
+;; Creative Commission "Gain 5" costs 1 → nets +4; the line must make that
+;; reconcilable instead of looking like an engine miscount.
+;; ============================================================================
+
+(deftest test-credit-line-discloses-play-cost
+  (testing "a 'Gain 5' card costing 1 shows +4 net and discloses the 1 play cost"
+    (let [line (format-credit-line 8 12 1)]
+      (is (str/includes? line "8 → 12"))
+      (is (str/includes? line "+4 net"))
+      (is (str/includes? line "after 1 to play")
+          (str "play cost should be disclosed, got: " line)))))
+
+(deftest test-credit-line-zero-cost-omits-play-cost
+  (testing "a free card shows the net gain with no play-cost clause"
+    (let [line (format-credit-line 5 10 0)]
+      (is (str/includes? line "+5 net"))
+      (is (not (str/includes? line "to play"))))))
+
+(deftest test-credit-line-no-change-returns-nil
+  (testing "no credit movement => no line at all"
+    (is (nil? (format-credit-line 7 7 3)))))
+
+(deftest test-credit-line-negative-delta
+  (testing "paying for a non-economy event shows a negative net and the cost"
+    (let [line (format-credit-line 10 7 3)]
+      (is (str/includes? line "-3 net"))
+      (is (str/includes? line "after 3 to play")))))
 
 (comment
   ;; Run all happy path tests

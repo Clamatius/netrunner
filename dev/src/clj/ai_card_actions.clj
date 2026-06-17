@@ -10,6 +10,23 @@
 ;; Card Actions
 ;; ============================================================================
 
+(defn- format-credit-line
+  "Format the post-play credit-change line, or nil when credits didn't move.
+
+   The delta is NET: it already has the card's play cost subtracted. A card that
+   reads 'Gain 5' but costs 1 to play nets +4, which previously looked like an
+   engine miscount to the seat (laundry-list #6). When the card had a play cost
+   we now spell that out — 'after N to play' — so the gross card text and the net
+   swing reconcile without mental math."
+  [before after card-cost]
+  (let [delta (- after before)]
+    (when (not= delta 0)
+      (str "   💰 Credits: " before " → " after
+           " (" (if (pos? delta) "+" "") delta " net"
+           (when (and card-cost (pos? card-cost))
+             (str ", after " card-cost " to play"))
+           ")"))))
+
 (defn play-card!
   "Play a card from hand by name or index.
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
@@ -66,13 +83,11 @@
                   (let [after-state @state/client-state
                         after-credits (get-in after-state [:game-state side :credit])
                         after-clicks (get-in after-state [:game-state side :click])
-                        credit-delta (- after-credits before-credits)
                         ;; Check if playing created a prompt
                         new-prompt (state/get-prompt)]
                     (println (str "🃏 Played: " card-title))
-                    (when (not= credit-delta 0)
-                      (println (str "   💰 Credits: " before-credits " → " after-credits
-                                   " (" (if (pos? credit-delta) "+" "") credit-delta ")")))
+                    (when-let [credit-line (format-credit-line before-credits after-credits card-cost)]
+                      (println credit-line))
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                     ;; Show prompt if card created one (e.g., Jailbreak asking for server)
                     (when (and new-prompt (not (state/waiting-prompt-type? (:prompt-type new-prompt))))
