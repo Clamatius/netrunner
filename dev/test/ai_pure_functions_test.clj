@@ -580,6 +580,45 @@
             "non-card map with :cid but no :title must not be returned as a card")))))
 
 ;; ============================================================================
+;; normalize-server-name tests
+;; ============================================================================
+
+(deftest test-normalize-server-centrals
+  (testing "central server variants normalize to canonical names"
+    (is (= "HQ" (:normalized (core/normalize-server-name "hq"))))
+    (is (= "HQ" (:normalized (core/normalize-server-name "HQ"))))
+    (is (= "R&D" (:normalized (core/normalize-server-name "rd"))))
+    (is (= "R&D" (:normalized (core/normalize-server-name "r&d"))))
+    (is (= "Archives" (:normalized (core/normalize-server-name "archives"))))))
+
+(deftest test-normalize-server-remotes
+  (testing "remote variants normalize to 'Server N'"
+    (is (= "Server 1" (:normalized (core/normalize-server-name "remote1"))))
+    (is (= "Server 1" (:normalized (core/normalize-server-name "remote 1"))))
+    (is (= "Server 2" (:normalized (core/normalize-server-name "server 2"))))))
+
+(deftest test-normalize-server-new
+  (testing "the various 'new remote' spellings all create a new remote"
+    (is (= "New remote" (:normalized (core/normalize-server-name "new"))))
+    (is (= "New remote" (:normalized (core/normalize-server-name "remotenew"))))
+    (is (= "New remote" (:normalized (core/normalize-server-name "server new"))))))
+
+(deftest test-normalize-server-new-remote-phrasing
+  (testing "the game's own UI label 'New remote' (and 'new server') is accepted"
+    ;; Regression: a seat naturally types the label the engine shows ("New remote").
+    ;; Previously re-matches on the new-pattern required a full-string match, so
+    ;; the trailing ' remote' fell through to a literal nonexistent server name.
+    (is (= "New remote" (:normalized (core/normalize-server-name "new remote"))))
+    (is (= "New remote" (:normalized (core/normalize-server-name "New remote"))))
+    (is (= "New remote" (:normalized (core/normalize-server-name "new server"))))
+    (is (= "New remote" (:normalized (core/normalize-server-name "new  remote"))))))
+
+(deftest test-normalize-server-passthrough
+  (testing "unrecognized names pass through unchanged (no false 'new' match)"
+    (is (= "Server 1" (:normalized (core/normalize-server-name "Server 1"))))
+    (is (= "Newfoundland" (:normalized (core/normalize-server-name "Newfoundland"))))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

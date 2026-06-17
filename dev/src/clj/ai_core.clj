@@ -832,8 +832,10 @@
   [server-input]
   (let [s (clojure.string/lower-case (clojure.string/trim server-input))
         remote-pattern #"(?:remote|r|server)\s*(\d+)"
-        ;; Pattern for 'new' server: new, remotenew, remote new, servernew, server new
-        new-pattern #"(?:remote\s*|server\s*)?new"
+        ;; Pattern for 'new' server: new, remotenew, remote new, servernew,
+        ;; server new, and the engine's own label phrasing 'new remote' /
+        ;; 'new server' (a seat naturally types the label the game UI shows).
+        new-pattern #"(?:remote\s*|server\s*)?new(?:\s*(?:remote|server))?"
         normalized (cond
                      ;; Central servers
                      (= s "hq") "HQ"

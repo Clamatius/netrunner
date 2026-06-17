@@ -55,8 +55,9 @@ hand + recent log + cursor in ONE call):
    abilities. If a command name doesn't exist, the client suggests the right one.
 2. **Decide & act:** draw, gain credits, install ICE on a server, install an
    agenda/asset into a remote. The server arg is one of: `new` (creates a fresh
-   remote — use the bare token `new`, NOT `"new remote"`), an existing
-   `remote1`/`remote2`/…, or a central `HQ`/`R&D`/`Archives` (ICE only). Advance
+   remote — `"new remote"` / `"new server"` also work, matching the game's own
+   label), an existing `remote1`/`remote2`/…, or a central `HQ`/`R&D`/`Archives`
+   (ICE only). Advance
    an agenda, score it, or rez. Examples:
    `./dev/send_command corp install "Funhouse" "R&D"`
    `./dev/send_command corp install "Offworld Office" new`
