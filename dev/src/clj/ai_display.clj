@@ -1201,19 +1201,34 @@
                      (or clicks "?")
                      (or credits "?")))
 
-    ;; Check for active prompts
-    (let [prompt (first (:prompt my-state))
-          prompt-state (:prompt-state my-state)]
-      (when (or prompt prompt-state)
-        (let [msg (or (:msg prompt-state) (:msg prompt))]
-          (when msg
-            (println (format "\n⚠️  Active Prompt: %s" msg))
-            (println "   Use 'send_command prompt' to see choices, or 'send_command choose <N>' to resolve")))))
+    ;; Check for active prompts. An active prompt BLOCKS the actions listed
+    ;; below — the engine may still mark cards :playable, but you cannot play
+    ;; them until the prompt is resolved (or, for a `waiting` prompt, until the
+    ;; opponent acts). Say so plainly: the GPT-5.5 seat read the playable list as
+    ;; actionable during a pending-mulligan wait and burned turns trying to act.
+    (let [prompt-state (:prompt-state my-state)
+          prompt (first (:prompt my-state))
+          active-prompt (or prompt-state prompt)
+          blocked? (boolean active-prompt)
+          waiting? (state/waiting-prompt-type? (:prompt-type active-prompt))
+          msg (or (:msg prompt-state) (:msg prompt))]
+      (when blocked?
+        (println (format "\n⚠️  Active Prompt: %s" (or msg "(no message)")))
+        (if waiting?
+          (do
+            (println "   ⛔ You are WAITING on the opponent — the actions below are NOT playable right now.")
+            (println "   Use 'wait' until this clears; don't try to act through it."))
+          (do
+            (println "   ⛔ Answer this prompt FIRST — the actions below are blocked until you resolve it.")
+            (println "   Use 'prompt' to see choices, then 'choose <N>' / 'choose-card <N>' / 'choose-value <text>'.")))))
 
     ;; Playable hand cards
-    (let [playable-cards (filter :playable hand)]
+    (let [blocked? (boolean (or (:prompt-state my-state) (first (:prompt my-state))))
+          playable-cards (filter :playable hand)]
       (when (seq playable-cards)
-        (println "\n📋 Hand Cards:")
+        (println (if blocked?
+                   "\n📋 Hand Cards (⛔ blocked by active prompt — see above):"
+                   "\n📋 Hand Cards:"))
         (doseq [card playable-cards]
           (let [card-name (core/format-card-name-with-index card hand)
                 cost (:cost card)
@@ -1291,6 +1306,77 @@
       {:playable-cards card-count
        :playable-abilities ability-count
        :clicks clicks})))
+
+(defn show-blocker-diagnosis
+  "Read-only diagnosis of why you can/can't act right now and the ONE next
+   command to run. Safe — never mutates state. Answers the GPT-5.5 seat's ask
+   for a 'diagnose-blocker' that names who owns the blocking prompt and whether
+   it's actionable, instead of guessing from contradictory-looking status lines."
+  []
+  (let [ts (state/get-turn-status)
+        prompt (state/get-prompt)
+        ptype (:prompt-type prompt)
+        waiting? (state/waiting-prompt-type? ptype)
+        side (:side @state/client-state)
+        side-kw (when side (keyword (clojure.string/lower-case side)))
+        my-clicks (get-in @state/client-state [:game-state side-kw :click])
+        next-lc (clojure.string/lower-case (or (:next-player ts) ""))]
+    (println "\n=== BLOCKER DIAGNOSIS ===")
+    (println (format "Side: %s | Turn %s, active: %s | your clicks: %s"
+                     (or side "?") (:turn-number ts) (or (:whose-turn ts) "?")
+                     (if (nil? my-clicks) "?" my-clicks)))
+    (cond
+      (:game-over? ts)
+      (println (format "🏁 Game over — %s. Nothing to do." (:status-text ts)))
+
+      ;; Actionable prompt owned by us — must resolve before anything else.
+      (and prompt (not waiting?))
+      (do
+        (println (format "📋 You have an ACTIONABLE prompt: \"%s\" (type %s)" (:msg prompt) ptype))
+        (println "   → Owner: YOU. Resolve it before any other action.")
+        (println "   → Use: prompt (see choices), then choose <N> / choose-card <N> / choose-value \"<text>\""))
+
+      ;; Waiting prompt — blocked on the opponent, NOT a stall.
+      (and prompt waiting?)
+      (do
+        (println (format "⛔ You have a WAITING prompt: \"%s\"" (:msg prompt)))
+        (println "   → Owner: OPPONENT. You are blocked until they act — this is NOT a stall.")
+        (if (re-find #"(?i)mulligan|keep hand" (str (:msg prompt)))
+          (println "   → They're still on their opening mulligan. Use: wait, then start-turn once it clears.")
+          (println "   → Use: wait --since <cursor>")))
+
+      ;; Active run, no prompt for us yet.
+      (:in-run? ts)
+      (do
+        (println (format "🏃 A run is in progress on %s." (or (:run-server ts) "?")))
+        (println "   → Use: monitor-run (or continue-run) to participate / advance it."))
+
+      ;; Turn boundary — my turn but not started (0 clicks).
+      (and (:waiting-to-start? ts) (= next-lc (clojure.string/lower-case (or side ""))))
+      (do
+        (println "🟢 It's your turn but it has NOT started yet (0 clicks until you do).")
+        (println "   → Use: start-turn"))
+
+      ;; Boundary, but the other player starts next.
+      (:waiting-to-start? ts)
+      (do
+        (println (format "⏳ Waiting for %s to start their turn." (:next-player ts)))
+        (println "   → Use: wait --since <cursor>"))
+
+      ;; Not my turn.
+      (not (:my-turn? ts))
+      (do
+        (println (format "⏳ It's %s's turn, not yours." (or (:whose-turn ts) "the opponent")))
+        (println "   → Use: wait --since <cursor>"))
+
+      ;; My turn with clicks, nothing blocking.
+      (:can-act? ts)
+      (println "✅ Nothing is blocking you — your turn, clicks in hand. Act (see list-playables).")
+
+      :else
+      (println (format "ℹ️  %s" (:status-text ts))))
+    (println (str "cursor=" (core/get-cursor)))
+    nil))
 
 (defn help
   "Show available commands"

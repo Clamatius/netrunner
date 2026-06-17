@@ -26,7 +26,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|indicate-action|take-credit|draw|end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -80,7 +80,7 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: smart-end-turn  (or end-turn)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
-    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"
+    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"
     local hits
     hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd' ' -)
     if [[ -n "$hits" ]]; then
@@ -241,6 +241,7 @@ ${GREEN}Inspect (read-only — use these to decide):${NC}
   card-text <name>   Look up ANY card's type, cost, and full text
   abilities <name>   Show an installed card's abilities (for use-ability)
   list-playables     List everything you can play/use right now
+  diagnose-blocker   Explain why you can/can't act and the one next command to run
   log [N]            Last N game-log entries (default 20)
 
 ${GREEN}Turn Actions:${NC}
@@ -310,6 +311,7 @@ ${GREEN}Status Commands:${NC}
   card-text <name>   - Look up card information (type, cost, text)
   abilities <name>   - Show abilities for installed card
   list-playables  - List all currently playable actions (cards, abilities)
+  diagnose-blocker - Explain why you can/can't act + the single next command
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
@@ -638,6 +640,12 @@ case "$COMMAND" in
         ensure_connection
         info "Listing all playable actions..."
         execute "(ai-actions/list-playables)"
+        ;;
+
+    diagnose-blocker)
+        ensure_connection
+        info "Diagnosing what's blocking you..."
+        execute "(ai-actions/show-blocker-diagnosis)"
         ;;
 
     # Basic actions

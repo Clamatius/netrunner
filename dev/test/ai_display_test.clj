@@ -151,3 +151,109 @@
             (str "open prompt must appear in snapshot, got: " snap))
         (is (str/includes? snap "cursor=")
             (str "snapshot must still end with cursor=, got: " snap))))))
+
+;; ============================================================================
+;; list-playables — must flag that an active prompt BLOCKS the listed actions.
+;; The GPT-5.5 seat read the playable list as actionable during a pending
+;; mulligan wait and burned turns trying to act through it.
+;; ============================================================================
+
+(deftest test-list-playables-flags-waiting-prompt-block
+  (testing "a waiting prompt marks the playable list as blocked / not actionable"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 0
+                                   :corp {:click 0 :credit 5
+                                          :hand [{:cid 1 :title "Hedge Fund" :type "Operation"
+                                                  :cost 5 :playable true}]
+                                          :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                                                         :prompt-type "waiting"}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "⛔") (str "must flag the block, got: " out))
+        (is (str/includes? out "WAITING") (str "waiting prompt should say WAITING, got: " out))
+        (is (str/includes? out "blocked by active prompt")
+            (str "hand list should be marked blocked, got: " out))))))
+
+(deftest test-list-playables-actionable-prompt-says-answer-first
+  (testing "a choice prompt tells the seat to answer it first (not 'wait')"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 2 :credit 5
+                                          :hand [{:cid 1 :title "Hedge Fund" :type "Operation"
+                                                  :cost 5 :playable true}]
+                                          :prompt-state {:msg "Choose one"
+                                                         :prompt-type "choice"
+                                                         :choices [{:value "Yes"} {:value "No"}]}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "⛔"))
+        (is (str/includes? out "Answer this prompt FIRST")
+            (str "actionable prompt should steer to answering, got: " out))))))
+
+(deftest test-list-playables-no-block-when-no-prompt
+  (testing "with no active prompt, the playable list is not marked blocked"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5
+                                          :hand [{:cid 1 :title "Hedge Fund" :type "Operation"
+                                                  :cost 5 :playable true}]}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/list-playables))]
+        (is (not (str/includes? out "⛔")) (str "no block flag expected, got: " out))
+        (is (str/includes? out "Hedge Fund"))))))
+
+;; ============================================================================
+;; show-blocker-diagnosis — read-only "why can't I act + what next" (GPT-5.5 ask)
+;; ============================================================================
+
+(deftest test-blocker-diagnosis-waiting-mulligan
+  (testing "pending-mulligan wait names the opponent as owner and steers to wait+start-turn"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 0
+                                   :corp {:click 0 :credit 5 :hand []
+                                          :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                                                         :prompt-type "waiting"}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "WAITING"))
+        (is (str/includes? out "OPPONENT"))
+        (is (str/includes? out "opening mulligan"))
+        (is (str/includes? out "cursor="))))))
+
+(deftest test-blocker-diagnosis-actionable-prompt
+  (testing "an actionable prompt is flagged as ours to resolve, steering to choose"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 2 :credit 5 :hand []
+                                          :prompt-state {:msg "Choose one"
+                                                         :prompt-type "choice"
+                                                         :choices [{:value "Yes"} {:value "No"}]}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "ACTIONABLE"))
+        (is (str/includes? out "choose"))))))
+
+(deftest test-blocker-diagnosis-turn-not-started
+  (testing "my-turn boundary with 0 clicks steers to start-turn"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 0
+                                   :corp {:click 0 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "start-turn"))))))
+
+(deftest test-blocker-diagnosis-can-act
+  (testing "my turn with clicks and no prompt reports nothing blocking"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "Nothing is blocking"))))))

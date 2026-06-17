@@ -93,6 +93,7 @@
 (def inspect-state display/inspect-state)
 (def inspect-prompt display/inspect-prompt)
 (def list-playables display/list-playables)
+(def show-blocker-diagnosis display/show-blocker-diagnosis)
 (def help display/help)
 
 ;; ============================================================================
