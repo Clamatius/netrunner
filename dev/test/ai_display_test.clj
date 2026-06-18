@@ -310,3 +310,32 @@
       (is (str/includes? out "YOUR move"))
       (is (str/includes? out "wait for Runner"))
       (is (not (str/includes? out "access cards"))))))
+
+;; ============================================================================
+;; show-prompt-detailed with no prompt — turn-aware "what now?"
+;; "No active prompt" alone misled at a turn boundary (reader concludes the game
+;; isn't waiting on them when it's their turn to start). The no-prompt path now
+;; appends the turn-aware next action.
+;; ============================================================================
+
+(deftest test-prompt-no-prompt-turn-not-started
+  (testing "no prompt at my unstarted-turn boundary steers to start-turn"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 0
+                                   :corp {:click 0 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "No active prompt"))
+        (is (str/includes? out "start-turn"))))))
+
+(deftest test-prompt-no-prompt-can-act
+  (testing "no prompt with clicks in hand tells me it's my turn to act"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "your turn"))
+        (is (str/includes? out "list-playables"))))))

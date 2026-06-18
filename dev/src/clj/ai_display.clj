@@ -1030,7 +1030,40 @@
                 (println "  Action: Paid ability window")
                 (println "    → No choices required")
                 (println "    → Use 'continue' command to pass priority"))))))
-      (println "No active prompt"))))
+      ;; No prompt object. "No active prompt" alone is technically true but
+      ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
+      ;; them when it's actually their turn to start). Append the turn-aware next
+      ;; action so `prompt` reliably answers "what do I do now?".
+      (let [ts (state/get-turn-status)
+            side (:side @state/client-state)
+            next-lc (clojure.string/lower-case (or (:next-player ts) ""))
+            my-lc (clojure.string/lower-case (or side ""))]
+        (println "No active prompt — no decision is pending for you right now.")
+        (cond
+          (:game-over? ts)
+          (println (format "🏁 Game over — %s." (:status-text ts)))
+
+          (:in-run? ts)
+          (println (format "🏃 A run is in progress on %s → use 'monitor-run' / 'continue'."
+                           (or (:run-server ts) "?")))
+
+          ;; Turn boundary, my turn to start.
+          (and (:waiting-to-start? ts) (= next-lc my-lc))
+          (println "🟢 It's YOUR turn but it hasn't started yet (0 clicks) → use 'start-turn'.")
+
+          ;; Turn boundary, opponent starts next.
+          (:waiting-to-start? ts)
+          (println (format "⏳ Waiting for %s to start their turn → use 'wait'." (:next-player ts)))
+
+          (not (:my-turn? ts))
+          (println (format "⏳ It's %s's turn, not yours → use 'wait'."
+                           (or (:whose-turn ts) "the opponent")))
+
+          (:can-act? ts)
+          (println "✅ It's your turn with clicks in hand → act (see 'list-playables').")
+
+          :else
+          (println (format "ℹ️  %s" (:status-text ts))))))))
 
 (defn show-snapshot
   "One-shot per-decision snapshot: compact status, the current prompt (only when
