@@ -891,6 +891,62 @@
                   (doseq [ab playable-abs]
                     (println (format "       → %s" (:label ab)))))))))))))
 
+(defn run-server-display
+  "Human-readable name for a run's target server, given the last element of the
+   run's :server vector (e.g. \"rd\", \"hq\", \"archives\", \"remote1\").
+   Falls back to a generic phrase if the key is unrecognised/nil."
+  [server-key]
+  (let [k (when server-key (clojure.string/lower-case (str server-key)))]
+    (cond
+      (= k "rd") "R&D"
+      (= k "hq") "HQ"
+      (= k "archives") "Archives"
+      (and k (re-matches #"remote\d+" k)) (str "Server " (subs k 6))
+      (seq k) (str "the " k " server")
+      :else "the server")))
+
+(defn run-priority-hint-lines
+  "Side-aware hint lines for a run priority window (movement / approach-server).
+
+   A run only advances when BOTH players pass priority (`continue`); the engine
+   records the first side to pass in the run's `:no-action`. The old rendering
+   printed an identical symmetric line to both seats ('Use continue to pass
+   priority'), so each side read it as 'I'm waiting on the other' and the run
+   deadlocked — and the Runner never learned that continuing here is what gets it
+   its access. This disambiguates whose move it is now and what `continue` does.
+
+   `run` is the [:game-state :run] map; `my-side` is \"runner\"/\"corp\".
+   Returns a vector of lines to println."
+  [run my-side]
+  (let [position  (:position run)
+        past-ice? (or (nil? position) (zero? position))
+        server    (run-server-display (last (:server run)))
+        na        (let [v (:no-action run)]
+                    (cond (keyword? v) (name v) (string? v) v :else nil))
+        opp       (if (= my-side "runner") "Corp" "Runner")
+        ;; What the Runner specifically gains by continuing this window.
+        gain      (when (= my-side "runner")
+                    (if past-ice?
+                      (str "breach " server " and access cards")
+                      (str "approach the next ICE on " server)))]
+    (cond
+      ;; I have already passed — waiting on the opponent; no action from me.
+      (= na my-side)
+      [(str "    ⏸️  You have already passed priority here — waiting for " opp
+            " to pass before the run advances.")
+       (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)")]
+
+      ;; Opponent already passed — my continue advances the run now.
+      (and na (not= na my-side))
+      [(str "    → It's YOUR move: " opp " has already passed priority. Use 'continue' to "
+            (or gain "advance the run") ".")]
+
+      ;; Fresh window — nobody has passed yet.
+      :else
+      [(str "    → It's YOUR move: use 'continue' to pass priority"
+            (when gain (str " (this is what gets you your access: " gain ")")) ".")
+       (str "      (BOTH players must pass for the run to advance — after you continue, expect to wait for " opp ".)")])))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -905,7 +961,8 @@
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
         (when-let [card (:card prompt)]
-          (println "  Card:" (:title card) (when (:type card) (str "(" (:type card) ")"))))
+          (println (str "  Card: " (:title card)
+                        (when (:type card) (str " (" (:type card) ")")))))
         (when has-choices
           (println "  Choices:")
           (doseq [[idx choice] (map-indexed vector (:choices prompt))]
@@ -960,7 +1017,14 @@
                 ;; During encounter-ice, show ICE and breaker info
                 (when (= run-phase "encounter-ice")
                   (show-encounter-ice-info state run my-side))
-                (println "    → Use 'continue' to pass priority"))
+                ;; Movement / approach-server are both-must-pass priority windows;
+                ;; spell out whose move it is and what continuing does, so neither
+                ;; seat assumes the run advances on its own (the symmetric
+                ;; 'pass priority' text deadlocked cross-model play).
+                (if (contains? #{"movement" "approach-server"} run-phase)
+                  (doseq [line (run-priority-hint-lines run my-side)]
+                    (println line))
+                  (println "    → Use 'continue' to pass priority")))
               ;; Not in a run
               (do
                 (println "  Action: Paid ability window")

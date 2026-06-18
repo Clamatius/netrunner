@@ -257,3 +257,56 @@
                                    :runner {:click 0 :credit 5 :hand []}})
       (let [out (with-out-str (display/show-blocker-diagnosis))]
         (is (str/includes? out "Nothing is blocking"))))))
+
+;; ============================================================================
+;; run-priority-hint-lines — side/priority-aware movement-window guidance
+;; Regression for the cross-model deadlock: the symmetric "Use 'continue' to
+;; pass priority" line told both seats the same thing, so each waited on the
+;; other and the run stalled. The hint must name whose move it is (via the run's
+;; :no-action) and tell the Runner that continuing is what yields its access.
+;; ============================================================================
+
+(deftest test-priority-hint-fresh-window-runner-naked-server
+  (testing "Runner, nobody passed yet, no ICE left: continue -> breach & access"
+    (let [lines (display/run-priority-hint-lines
+                 {:phase "movement" :position 0 :server ["hq"] :no-action false}
+                 "runner")
+          out (str/join "\n" lines)]
+      (is (str/includes? out "YOUR move"))
+      (is (str/includes? out "breach HQ and access cards"))
+      (is (str/includes? out "BOTH players must pass")))))
+
+(deftest test-priority-hint-fresh-window-runner-more-ice
+  (testing "Runner, fresh window, ICE still ahead: continue -> approach next ICE"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 2 :server ["rd"] :no-action nil}
+                              "runner"))]
+      (is (str/includes? out "approach the next ICE on R&D"))
+      (is (not (str/includes? out "access cards"))))))
+
+(deftest test-priority-hint-i-already-passed-waits
+  (testing "Side that already passed is told to wait, not re-continue"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["hq"] :no-action "runner"}
+                              "runner"))]
+      (is (str/includes? out "already passed priority"))
+      (is (str/includes? out "waiting for Corp"))
+      (is (str/includes? out "Re-sending 'continue' does nothing")))))
+
+(deftest test-priority-hint-opponent-passed-my-move
+  (testing "When opponent already passed, it's my move to advance"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["rd"] :no-action :corp}
+                              "runner"))]
+      (is (str/includes? out "YOUR move"))
+      (is (str/includes? out "Corp has already passed"))
+      (is (str/includes? out "breach R&D and access cards")))))
+
+(deftest test-priority-hint-corp-side-no-access-language
+  (testing "Corp seat gets whose-move guidance but no Runner 'access' phrasing"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["hq"] :no-action false}
+                              "corp"))]
+      (is (str/includes? out "YOUR move"))
+      (is (str/includes? out "wait for Runner"))
+      (is (not (str/includes? out "access cards"))))))
