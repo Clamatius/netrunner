@@ -357,6 +357,14 @@ ${GREEN}Running:${NC}
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start
 
+  ${BLUE}monitor-run Flags:${NC} (Corp)
+    --fire-if-asked  Sleep mode: auto-fire, auto-continue, wake only for rez
+    --persistent     Own the WHOLE Runner run with one command: sleep through
+                     empty priority windows instead of exiting, wake only for a
+                     real rez/fire/access decision or run end. Use this for
+                     autonomous Corp seats so you don't re-issue monitor-run
+                     through every symmetric 'pass priority' window.
+
 ${GREEN}Prompts:${NC}
   choose <N>      - Choose option N from prompt (0 = first option)
   choose-value <text> - Choose by matching text (e.g., "Yes", "Steal").

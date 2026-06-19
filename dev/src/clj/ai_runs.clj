@@ -150,6 +150,13 @@
           (= arg "--return-on-signal")
           (recur rest-args server (assoc flags :return-on-signal true))
 
+          ;; --persistent: keep the defender loop alive across empty
+          ;; opponent-priority windows during a run (sleep & recheck instead
+          ;; of exiting), so a cross-model seat doesn't re-issue monitor-run
+          ;; through every symmetric priority pass. Real decisions still wake it.
+          (= arg "--persistent")
+          (recur rest-args server (assoc flags :persistent true))
+
           (= arg "--no-continue")
           (recur rest-args server (assoc flags :no-continue true))
 
@@ -1077,7 +1084,7 @@
    :iterations - how many times continue-run! was called
    :elapsed-ms - how long the loop ran"
   [& {:keys [max-iterations timeout-ms wait-delay-ms stuck-threshold pause-on-events
-             return-on-runner-signal]
+             return-on-runner-signal persistent persistent-wait-delay-ms]
       :or {max-iterations 500    ; Raised from 50 - stuck detection handles loops
            timeout-ms 300000     ; Was 30000 — too short for LLM-paced games
            wait-delay-ms 200
@@ -1088,7 +1095,19 @@
            ;; The autonomous Corp loop sets this true so the wait is surfaced to
            ;; its own per-tick stall tracker (which nudges/bails) instead of being
            ;; swallowed by up to ~100s of internal polling.
-           return-on-runner-signal false}}]
+           return-on-runner-signal false
+           ;; When true (monitor-run --persistent), an empty opponent-priority
+           ;; window (:waiting-for-opponent family) during an ACTIVE run is NOT
+           ;; terminal — sleep persistent-wait-delay-ms and recheck, keeping the
+           ;; defender loop alive so a cross-model seat doesn't have to re-issue
+           ;; monitor-run through every symmetric priority pass. Real decisions
+           ;; (:decision-required / :fire-decision-required / rez/event statuses)
+           ;; are terminal-status? and return ABOVE this branch, so persistence
+           ;; only ever sleeps through genuinely-empty windows. Bounded by
+           ;; timeout-ms. The idle wait does not advance `iteration`, so it never
+           ;; trips the action-oriented max-iterations guard.
+           persistent false
+           persistent-wait-delay-ms 1000}}]
   (let [start-time (System/currentTimeMillis)
         deadline (+ start-time timeout-ms)]
     (loop [iteration 0
@@ -1152,17 +1171,26 @@
                 (Thread/sleep wait-delay-ms)
                 (recur (inc iteration) [])))  ; Reset history on wait
 
-            ;; Waiting for opponent - terminal status, stop loop
-            ;; The other client needs to run their own loop (e.g., Corp runs monitor-run!)
+            ;; Waiting for opponent. Normally terminal — the other client needs
+            ;; to run their own loop (e.g., Corp runs monitor-run!). In persistent
+            ;; mode, while the run is still active, instead sleep and recheck so
+            ;; the seat keeps a live defender loop across empty priority windows.
             (or (= status :waiting-for-opponent)
                 (= status :waiting-for-corp-rez)
                 (= status :waiting-for-corp-fire)
                 (= status :waiting-for-opponent-paid-abilities))
-            (do
-              (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
-              (assoc result
-                     :iterations (inc iteration)
-                     :elapsed-ms (- (System/currentTimeMillis) start-time)))
+            (if (and persistent
+                     (some? (get-in @state/client-state [:game-state :run])))
+              ;; Idle wait: don't advance `iteration` (timeout governs the bound,
+              ;; not the action-stuck max-iterations guard); reset stuck history.
+              (do
+                (Thread/sleep persistent-wait-delay-ms)
+                (recur iteration []))
+              (do
+                (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
+                (assoc result
+                       :iterations (inc iteration)
+                       :elapsed-ms (- (System/currentTimeMillis) start-time))))
 
             ;; Prompt handled (e.g., credit source auto-select) - continue without stuck tracking
             ;; This is progress but not run-phase progress, so don't add to history
@@ -1214,6 +1242,11 @@
      --rez <ice-name>    Only rez specified ICE, decline others
      --fire-unbroken     Auto-fire unbroken subs when Runner signals
      --fire-if-asked     Sleep mode: auto-fire, auto-continue, wake only for rez
+     --persistent        Stay in the loop across empty opponent-priority windows
+                         (sleep & recheck instead of exiting on :waiting-for-opponent).
+                         For autonomous Corp seats — one monitor-run owns the whole
+                         Runner run; wakes only for a real rez/fire/access decision
+                         or run end. Eliminates re-issuing through symmetric passes.
      --since <cursor>    Fast-return: immediately return if run ended/started since cursor
 
    Usage:
@@ -1221,6 +1254,7 @@
      (monitor-run! \"--no-rez\")              ; Also auto-decline all rez opportunities
      (monitor-run! \"--rez\" \"Tithe\")        ; Only rez Tithe, decline others
      (monitor-run! \"--fire-if-asked\")       ; Sleep until run ends
+     (monitor-run! \"--persistent\")          ; Own the whole run; wake only for decisions
      (monitor-run! \"--since\" \"892\")        ; Fast-return if state advanced"
   [& args]
   (let [{:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
@@ -1259,8 +1293,11 @@
         ;; Reset strategy at start of monitoring (Corp has separate atom from Runner)
         ;; This prevents stale --rez sets from previous runs
         (reset-strategy!)
-        ;; Apply new strategy flags (excluding :since which is just for fast-return check)
-        (let [strategy-flags (dissoc flags :since)]
+        ;; Apply new strategy flags. Exclude control flags that govern the loop
+        ;; itself (not the rez/fire strategy): :since (fast-return), :persistent
+        ;; and :return-on-signal (loop behavior) — so they don't pollute the
+        ;; 🎯 Strategy line or the run-strategy atom.
+        (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
           (when (seq strategy-flags)
             (set-strategy! strategy-flags)
             (println (format "🎯 Strategy: %s"
@@ -1271,7 +1308,10 @@
                                                           (name k)))
                                                       strategy-flags))))))
         (println "👁️  Monitoring run... (auto-passing boring windows)")
-        (let [result (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags)))]
+        (when (:persistent flags)
+          (println "🔁 Persistent mode — staying in the loop across empty windows (wakes for decisions / run end)"))
+        (let [result (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
+                                          :persistent (boolean (:persistent flags)))]
           ;; Include cursor in result for caller to track
           (assoc result :cursor (state/get-cursor)))))))
 

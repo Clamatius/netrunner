@@ -410,6 +410,98 @@
           (is (= :max-iterations (:status r))
               "without the opt-in it keeps polling the runner-signal wait"))))))
 
+;; ============================================================================
+;; Persistent monitor-run (Michael's decree / codex55 058): a Corp seat should
+;; own the whole Runner run with ONE monitor-run --persistent, sleeping through
+;; empty symmetric priority windows instead of exiting and being re-issued. The
+;; cross-model game-1 deadlock (msg 057) was exactly this: each model read the
+;; symmetric "continue to pass priority" line as "waiting on the other guy."
+;; ============================================================================
+
+(deftest test-auto-continue-loop-persistent-survives-empty-window
+  (testing "persistent mode sleeps through :waiting-for-opponent while the run is
+            active and keeps looping until the run actually completes — it does
+            NOT bail on the first empty priority window"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:run {:phase "approach-server" :position 0}
+                    :corp {:click 3} :runner {:click 2}
+                    :active-player "runner" :turn 5 :log []}}
+      (let [calls (atom 0)]
+        (with-redefs [runs/continue-run! (fn [& _]
+                                           (if (< (swap! calls inc) 3)
+                                             {:status :waiting-for-opponent}
+                                             {:status :run-complete}))
+                      ai-basic-actions/check-auto-end-turn! (fn [& _] nil)
+                      runner-handlers/reset-state! (fn [& _] nil)
+                      ws/send-message! (fn [& _] nil)
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (let [r (runs/auto-continue-loop! :persistent true
+                                            :persistent-wait-delay-ms 1
+                                            :max-iterations 50 :timeout-ms 3000)]
+            (is (= :run-complete (:status r))
+                "persistent loop must ride out the empty windows to run-complete")
+            (is (>= @calls 3) "must have polled past the waiting windows")))))))
+
+(deftest test-auto-continue-loop-persistent-still-wakes-for-decision
+  (testing "persistent mode is NOT a black hole — a real Corp decision
+            (:decision-required, caught by terminal-status? above the wait branch)
+            still returns immediately so the seat can rez/fire"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:run {:phase "approach-ice" :position 1}
+                    :corp {:click 3} :runner {:click 2}
+                    :active-player "runner" :turn 5 :log []}}
+      (with-redefs [runs/continue-run! (fn [& _] {:status :decision-required})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :persistent true
+                                          :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000)]
+          (is (= :decision-required (:status r)))
+          (is (= 1 (:iterations r)) "must wake on the first poll for a real decision"))))))
+
+(deftest test-auto-continue-loop-default-exits-on-waiting
+  (testing "WITHOUT --persistent the loop still exits on :waiting-for-opponent on
+            the first poll (locks the existing one-step/HITL contract — persistence
+            is strictly opt-in)"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:run {:phase "approach-server" :position 0}
+                    :corp {:click 3} :runner {:click 2}
+                    :active-player "runner" :turn 5 :log []}}
+      (with-redefs [runs/continue-run! (fn [& _] {:status :waiting-for-opponent})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :max-iterations 50 :timeout-ms 3000)]
+          (is (= :waiting-for-opponent (:status r)))
+          (is (= 1 (:iterations r)) "default mode returns control on the first wait"))))))
+
+(deftest test-auto-continue-loop-persistent-returns-when-run-gone
+  (testing "persistent mode only sleeps while the run is ACTIVE — if the run
+            object is gone it returns instead of hanging (defensive guard against
+            a lagging/no-run state pairing with a stale :waiting status)"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:corp {:click 3} :runner {:click 2}
+                    :active-player "runner" :turn 5 :log []}}  ;; no :run
+      (with-redefs [runs/continue-run! (fn [& _] {:status :waiting-for-opponent})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :persistent true
+                                          :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000)]
+          (is (= :waiting-for-opponent (:status r))
+              "no active run → persistent falls through to the terminal return"))))))
+
 (deftest test-choose-fires-end-turn-when-prompt-resolves-run
   (testing "choose-by-index! triggers auto-end-turn when the resolved prompt
             was the last step of a completed run (Bug #3, prompt-tail variant
