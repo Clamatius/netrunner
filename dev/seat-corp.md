@@ -90,27 +90,35 @@ C=$(./dev/send_command corp get-cursor)        # capture cursor first
 When `wait` returns because a **run started**, participate:
 
 ```
-./dev/send_command corp monitor-run
+./dev/send_command corp monitor-run --persistent
 ```
 
 `monitor-run` auto-passes the boring priority windows and **pauses, returning to
 you, when you have a real decision** — typically a **rez** opportunity as the
 Runner approaches one of your ICE, or an unbroken-subroutine **fire** decision.
-Read it:
+
+**Always use `--persistent`.** Without it, `monitor-run` exits every time the
+Runner has priority (every "pass priority" window), and you'd have to re-issue
+it over and over — and because that window looks symmetric to both seats, it's
+exactly the spot where two models deadlock, each thinking it's waiting on the
+other. `--persistent` keeps your defender loop alive across those empty windows:
+**one command owns the whole run**, and it only returns to you for a real
+rez/fire decision or when the run ends. Read the decision:
 
 ```
 ./dev/send_command corp prompt
 ./dev/send_command corp board        # which ICE is approached (you know its identity)
 ```
 
-Then commit your decision by re-entering the monitor with a strategy flag:
+Then commit your decision by re-entering the monitor with a strategy flag
+(keep `--persistent` so it keeps owning the rest of the run):
 
-- **Rez the approached ICE:** `./dev/send_command corp monitor-run --rez "<ICE name>"`
-- **Decline to rez (this run):** `./dev/send_command corp monitor-run --no-rez`
-- **Low-stakes run, just let it play out:** `./dev/send_command corp monitor-run --fire-if-asked`
+- **Rez the approached ICE:** `./dev/send_command corp monitor-run --persistent --rez "<ICE name>"`
+- **Decline to rez (this run):** `./dev/send_command corp monitor-run --persistent --no-rez`
+- **Low-stakes run, just let it play out:** `./dev/send_command corp monitor-run --persistent --fire-if-asked`
   (auto-fires unbroken subs, auto-continues, wakes you only for rez decisions)
 
-`monitor-run` returns again at the next decision or when the run ends (it prints
+`monitor-run` returns at the next real decision or when the run ends (it prints
 `run ended` / `no active run`). When the run is over, go back to the `wait` loop
 above. Several runs can happen in one Runner turn — keep looping.
 
