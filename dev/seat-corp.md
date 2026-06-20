@@ -122,6 +122,13 @@ Then commit your decision by re-entering the monitor with a strategy flag
 `run ended` / `no active run`). When the run is over, go back to the `wait` loop
 above. Several runs can happen in one Runner turn — keep looping.
 
+**If `monitor-run --persistent` returns because of a TIMEOUT** (it says so) **and
+a run is still active, just re-issue `monitor-run --persistent`.** A slow opponent
+that thinks for many minutes mid-run can outlast one monitor window — a timeout
+return is normal pacing, NOT a stall and NOT a decision. Re-entering simply
+re-arms the defender loop where it left off. (Only treat repeated timeouts with
+*zero* board movement across several re-issues as a possible genuine wedge.)
+
 **Rez judgement:** rez when the ICE actually stops or taxes a run you care about
 (protecting an agenda/centrals you can't afford to lose), not reflexively — rezzing
 burns credits and reveals the card. A cheap ICE on a server with nothing worth
