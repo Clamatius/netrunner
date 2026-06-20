@@ -1417,7 +1417,15 @@
         side (:side @state/client-state)
         side-kw (when side (keyword (clojure.string/lower-case side)))
         my-clicks (get-in @state/client-state [:game-state side-kw :click])
-        next-lc (clojure.string/lower-case (or (:next-player ts) ""))]
+        next-lc (clojure.string/lower-case (or (:next-player ts) ""))
+        run (get-in @state/client-state [:game-state :run])
+        run-phase (:phase run)
+        my-side-lc (when side (clojure.string/lower-case side))
+        ;; A prompt is resolvable-via-choose only if it carries actual choices or
+        ;; selectable cards. A passive run priority / paid-ability window has a
+        ;; prompt object (sometimes a non-"waiting" :prompt-type) but NO options —
+        ;; the next action there is `continue`, not `choose`.
+        has-options? (boolean (or (seq (:choices prompt)) (seq (:selectable prompt))))]
     (println "\n=== BLOCKER DIAGNOSIS ===")
     (println (format "Side: %s | Turn %s, active: %s | your clicks: %s"
                      (or side "?") (:turn-number ts) (or (:whose-turn ts) "?")
@@ -1426,12 +1434,28 @@
       (:game-over? ts)
       (println (format "🏁 Game over — %s. Nothing to do." (:status-text ts)))
 
-      ;; Actionable prompt owned by us — must resolve before anything else.
-      (and prompt (not waiting?))
+      ;; Actionable prompt with real options owned by us — resolve via choose.
+      (and prompt (not waiting?) has-options?)
       (do
         (println (format "📋 You have an ACTIONABLE prompt [%s]: %s" ptype (:msg prompt)))
         (println "   → Owner: YOU. Resolve it before any other action.")
         (println "   → Use: prompt (see choices), then choose <N> / choose-card <N> / choose-value \"<text>\""))
+
+      ;; Passive prompt during a run = a priority / paid-ability window. The next
+      ;; action is `continue`, NOT `choose`. This is the branch that used to be
+      ;; missing: a non-"waiting" passive run prompt (e.g. the run-initiation
+      ;; "Waiting for Corp paid abilities" window) fell through to the actionable
+      ;; branch above and told the seat to `choose`, contradicting what `prompt`
+      ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
+      (and (:in-run? ts) prompt (not waiting?))
+      (do
+        (println (format "⏸️  Run priority / paid-ability window%s: %s"
+                         (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
+        (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
+        (if (contains? #{"movement" "approach-server"} run-phase)
+          (doseq [line (run-priority-hint-lines run my-side-lc)]
+            (println line))
+          (println "   → Use: continue (to pass priority) — or monitor-run to participate in the run.")))
 
       ;; Waiting prompt — blocked on the opponent, NOT a stall.
       (and prompt waiting?)

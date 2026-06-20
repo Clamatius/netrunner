@@ -211,16 +211,20 @@
         selectable (:selectable prompt)
         eid (:eid prompt)]
     (cond
-      (not (state/select-prompt-type? (:prompt-type prompt)))
-      (do
-        (println "❌ No select prompt active")
-        (when prompt
-          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
-        (core/with-cursor {:status :error :reason "No select prompt"}))
-
+      ;; choose-card resolves a card-targeting prompt. The canonical wire type is
+      ;; "select", but some engine prompts (e.g. Mutual Favor's stack search) carry
+      ;; :selectable cards under a different :prompt-type ("other"). Gate on the
+      ;; PRESENCE of selectable cards, not the type string, so choose-card works
+      ;; wherever there are cards to pick — and steer text-choice prompts to
+      ;; `choose` rather than the misleading "No select prompt active". (backlog #3)
       (empty? selectable)
       (do
-        (println "❌ No selectable cards in current prompt")
+        (if (and prompt (seq (:choices prompt)))
+          (do (println "❌ This prompt has text choices, not selectable cards.")
+              (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
+          (println "❌ No selectable cards in current prompt"))
+        (when prompt
+          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
         (core/with-cursor {:status :error :reason "No selectable cards"}))
 
       (not (< -1 index (count selectable)))
@@ -281,16 +285,17 @@
         selectable (:selectable prompt)
         eid (:eid prompt)]
     (cond
-      (not (state/select-prompt-type? (:prompt-type prompt)))
-      (do
-        (println "❌ No select prompt active")
-        (when prompt
-          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
-        (core/with-cursor {:status :error :reason "No select prompt active"}))
-
+      ;; Gate on the PRESENCE of selectable cards, not the :prompt-type string,
+      ;; so multi-choose works on card-targeting prompts that aren't typed
+      ;; "select" (mirrors choose-card!; see backlog #3).
       (empty? selectable)
       (do
-        (println "❌ No selectable cards in current prompt")
+        (if (and prompt (seq (:choices prompt)))
+          (do (println "❌ This prompt has text choices, not selectable cards.")
+              (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
+          (println "❌ No selectable cards in current prompt"))
+        (when prompt
+          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
         (core/with-cursor {:status :error :reason "No selectable cards"}))
 
       (empty? card-refs)

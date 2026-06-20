@@ -238,6 +238,43 @@
         (is (str/includes? out "ACTIONABLE"))
         (is (str/includes? out "choose"))))))
 
+(deftest test-blocker-diagnosis-run-initiation-passive-prompt
+  (testing "a passive (no-choices) run-priority prompt steers to continue, NOT choose
+            — regression for the run-initiation diagnose-blocker/continue contradiction (backlog #4)"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :run {:phase "approach-ice" :position 1
+                                         :server ["hq"] :no-action false}
+                                   :runner {:click 2 :credit 5 :hand []
+                                            ;; non-"waiting" prompt-type, but no choices/selectable:
+                                            ;; the exact shape that used to be mislabeled "resolve via choose"
+                                            :prompt-state {:msg "Waiting for Corp paid abilities (initiation phase)"
+                                                           :prompt-type "run"}}
+                                   :corp {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "priority") (str "should name a priority window, got: " out))
+        (is (str/includes? out "continue") (str "should steer to continue, got: " out))
+        (is (not (str/includes? out "ACTIONABLE"))
+            (str "must NOT mislabel a passive run prompt as a choose-prompt, got: " out))))))
+
+(deftest test-blocker-diagnosis-movement-window-uses-priority-hint
+  (testing "a passive prompt in the movement phase uses the side-aware priority hint"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 4
+                                   :run {:phase "movement" :position 0
+                                         :server ["rd"] :no-action :corp}
+                                   :runner {:click 1 :credit 5 :hand []
+                                            :prompt-state {:msg "You may use paid abilities"
+                                                           :prompt-type "run"}}
+                                   :corp {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        ;; run-priority-hint-lines: opponent (Corp) already passed -> it's my move to breach
+        (is (str/includes? out "YOUR move") (str "should use the priority hint, got: " out))
+        (is (str/includes? out "breach R&D") (str "should explain what continue yields, got: " out))
+        (is (not (str/includes? out "ACTIONABLE")))))))
+
 (deftest test-blocker-diagnosis-turn-not-started
   (testing "my-turn boundary with 0 clicks steers to start-turn"
     (with-mock-state (mock-client-state

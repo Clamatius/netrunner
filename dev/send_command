@@ -78,6 +78,10 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: abilities <name>${NC}" >&2; return;;
         endturn|end|done|pass-turn)
             echo -e "${YELLOW}💡 Did you mean: smart-end-turn  (or end-turn)${NC}" >&2; return;;
+        resolve|select|pick|confirm|accept|approve|decline|answer|respond|ok|yes|no)
+            echo -e "${YELLOW}💡 Did you mean: choose <N>  (resolve a prompt; also choose-card <N> / choose-value \"<text>\" / multi-choose <i> <j>)${NC}" >&2; return;;
+        cont|advance-run|pass|pass-priority|next)
+            echo -e "${YELLOW}💡 Did you mean: continue  (pass priority in a run; or monitor-run to participate)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
     local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"

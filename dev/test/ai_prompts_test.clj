@@ -105,3 +105,61 @@
                     (is (= :error (:status r)))))]
         (is (str/includes? out "SELECT prompt"))
         (is (str/includes? out "choose-value"))))))
+
+;; ============================================================================
+;; choose-card! / multi-choose! gate on :selectable, not the :prompt-type string
+;; (backlog #3). Some engine prompts (e.g. Mutual Favor's stack search) carry
+;; selectable cards under :prompt-type "other"; the old "select"-only gate
+;; rejected them with "No select prompt active", stranding the seat. The gate is
+;; now the presence of selectable cards. A pure text-choice prompt (no
+;; selectable) is steered to `choose` instead of the misleading select error.
+;; ============================================================================
+
+(def ^:private other-typed-card-select-prompt
+  {:prompt-type "other"
+   :eid "mf-1"
+   :msg "Choose a connection or virtual resource"
+   :selectable [{:cid "c1" :title "Smartware Distributor"}
+                {:cid "c2" :title "Telework Contract"}]})
+
+(deftest choose-card-accepts-other-typed-selectable-prompt
+  (testing "choose-card on an 'other'-typed prompt WITH selectable cards selects, not rejects"
+    (let [sent (atom nil)]
+      (with-mock-state (mock-client-state :side "runner" :prompt other-typed-card-select-prompt)
+        (with-redefs [ws/select-card! (fn [card _eid] (reset! sent card) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [out (with-out-str
+                      (let [r (prompts/choose-card! 1)]
+                        (is (= :success (:status r)) (str "expected success, got: " r))))]
+            (is (= "Telework Contract" (:title @sent))
+                (str "expected the indexed card to be selected, got: " @sent))
+            (is (not (str/includes? out "No select prompt active"))
+                (str "must not reject an other-typed selectable prompt, got: " out))))))))
+
+(deftest choose-card-steers-text-choice-prompt-to-choose
+  (testing "choose-card on a pure text-choice prompt (no selectable) steers to `choose`"
+    (let [sent (atom nil)]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :prompt {:prompt-type "choice" :eid "ch-1" :msg "Pick one"
+                                 :choices [{:value "A"} {:value "B"}]})
+        (with-redefs [ws/select-card! (fn [_card _eid] (reset! sent :sent) true)]
+          (let [out (with-out-str
+                      (let [r (prompts/choose-card! 0)]
+                        (is (= :error (:status r)))))]
+            (is (nil? @sent) "must not send a select for a text-choice prompt")
+            (is (str/includes? out "choose")
+                (str "should steer to choose, got: " out))))))))
+
+(deftest multi-choose-accepts-other-typed-selectable-prompt
+  (testing "multi-choose on an 'other'-typed prompt WITH selectable cards selects, not rejects"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :prompt other-typed-card-select-prompt)
+        (with-redefs [ws/select-card! (fn [card _eid] (swap! sent conj (:title card)) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+          (let [out (with-out-str
+                      (let [r (prompts/multi-choose! 0 1)]
+                        (is (= :success (:status r)) (str "expected success, got: " r))))]
+            (is (= ["Smartware Distributor" "Telework Contract"] @sent))
+            (is (not (str/includes? out "No select prompt active")))))))))
