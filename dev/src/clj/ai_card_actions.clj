@@ -652,29 +652,46 @@
   [card-name]
   (let [client-state @state/client-state
         side (:side client-state)
-        before-score (get-in client-state [:game-state :corp :agenda-point])]
+        before-score (or (get-in client-state [:game-state :corp :agenda-point]) 0)]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can score agendas")
       (let [card (core/find-installed-corp-card card-name)]
         (if card
           (if (= "Agenda" (:type card))
-            (let [gameid (:gameid client-state)
-                  card-ref (core/create-card-ref card)
-                  agenda-points (:agendapoints card)
-                  ;; Capture log size BEFORE sending to avoid race conditions
-                  initial-log-size (core/get-log-size)]
-              (ws/send-message! :game/action
-                                {:gameid gameid
-                                 :command "score"
-                                 :args {:card card-ref}})
-              ;; Wait and verify action appeared in log (look for "score" or card name)
-              (if (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
-                (let [after-state @state/client-state
-                      after-score (get-in after-state [:game-state :corp :agenda-point])
-                      runner-score (get-in after-state [:game-state :runner :agenda-point])]
-                  (println (str "🎯 Scored: " card-name
-                               (when agenda-points (str " (+" agenda-points " points)"))))
-                  (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner")))
-                (println (str "⚠️  Sent score command for: " card-name " - but action not confirmed in game log (may have failed)"))))
+            (let [requirement (:advancementcost card)
+                  counters (or (:advance-counter card) 0)]
+              ;; Pre-check: an agenda with fewer advancement counters than its
+              ;; requirement is not scoreable — the engine will refuse. Catch it
+              ;; here so we never send a doomed score command (and never print a
+              ;; phantom "Scored"). Marquee game-2 surfaced score printing
+              ;; "🎯 Scored (+N points)" on an under-advanced Superconducting Hub
+              ;; that did NOT actually score.
+              (if (and requirement (< counters requirement))
+                (println (str "❌ " card-name " is not scoreable yet: " counters "/" requirement
+                              " advancement counters (needs " (- requirement counters) " more)."))
+                (let [gameid (:gameid client-state)
+                      card-ref (core/create-card-ref card)
+                      agenda-points (:agendapoints card)
+                      ;; Capture log size BEFORE sending to avoid race conditions
+                      initial-log-size (core/get-log-size)]
+                  (ws/send-message! :game/action
+                                    {:gameid gameid
+                                     :command "score"
+                                     :args {:card card-ref}})
+                  ;; Let the action settle, then VERIFY BY SCORE DELTA — not just
+                  ;; by the card name appearing in the log (which false-positives
+                  ;; on prior scores / "cannot score" messages). Only a real
+                  ;; increase in Corp agenda points means the agenda scored.
+                  (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
+                  (let [after-state @state/client-state
+                        after-score (or (get-in after-state [:game-state :corp :agenda-point]) 0)
+                        runner-score (or (get-in after-state [:game-state :runner :agenda-point]) 0)]
+                    (if (> after-score before-score)
+                      (do
+                        (println (str "🎯 Scored: " card-name
+                                     (when agenda-points (str " (+" agenda-points " points)"))))
+                        (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner")))
+                      (println (str "⚠️  " card-name " did NOT score (Corp agenda points unchanged at "
+                                   before-score "). The engine refused it — check advancement counters/timing.")))))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
           (println (str "❌ Card not found installed: " card-name)))))))

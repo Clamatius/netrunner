@@ -1186,11 +1186,25 @@
               (do
                 (Thread/sleep persistent-wait-delay-ms)
                 (recur iteration []))
-              (do
-                (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
-                (assoc result
-                       :iterations (inc iteration)
-                       :elapsed-ms (- (System/currentTimeMillis) start-time))))
+              (if persistent
+                ;; Persistent, but the run object is GONE (nil). The run already
+                ;; ended — typically the access boundary, where the run tears down
+                ;; while the Runner still resolves access. Marquee game-2 surfaced
+                ;; this returning a stale :waiting-for-opponent + "Corp should run
+                ;; monitor-run" tip, which then immediately said "No active run to
+                ;; monitor" — a self-contradicting double-step. Return a CLEAN
+                ;; :no-run terminal so the seat goes straight back to its wait loop.
+                (do
+                  (println "✅ Run ended — no further Corp decision. Back to the wait loop.")
+                  (assoc result
+                         :status :no-run
+                         :iterations (inc iteration)
+                         :elapsed-ms (- (System/currentTimeMillis) start-time)))
+                (do
+                  (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
+                  (assoc result
+                         :iterations (inc iteration)
+                         :elapsed-ms (- (System/currentTimeMillis) start-time)))))
 
             ;; Prompt handled (e.g., credit source auto-select) - continue without stuck tracking
             ;; This is progress but not run-phase progress, so don't add to history

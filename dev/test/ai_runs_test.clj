@@ -485,8 +485,13 @@
 
 (deftest test-auto-continue-loop-persistent-returns-when-run-gone
   (testing "persistent mode only sleeps while the run is ACTIVE — if the run
-            object is gone it returns instead of hanging (defensive guard against
-            a lagging/no-run state pairing with a stale :waiting status)"
+            object is gone it returns a CLEAN :no-run terminal (not a stale
+            :waiting-for-opponent + 'Corp should run monitor-run' tip). Marquee
+            game-2 access-boundary mislabel: a persistent monitor returned
+            :waiting-for-opponent at the access boundary (run torn down, Runner
+            still resolving access), and re-issuing then said 'No active run to
+            monitor' — a self-contradicting double-step. The clean :no-run sends
+            the seat straight back to its wait loop."
     (with-mock-state
       {:connected true
        :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
@@ -494,13 +499,15 @@
        :game-state {:corp {:click 3} :runner {:click 2}
                     :active-player "runner" :turn 5 :log []}}  ;; no :run
       (with-redefs [runs/continue-run! (fn [& _] {:status :waiting-for-opponent})
+                    ai-basic-actions/check-auto-end-turn! (fn [& _] nil)
+                    runner-handlers/reset-state! (fn [& _] nil)
                     ws/send-message! (fn [& _] nil)
                     ai-core/show-turn-indicator (fn [& _] nil)]
         (let [r (runs/auto-continue-loop! :persistent true
                                           :persistent-wait-delay-ms 1
                                           :max-iterations 50 :timeout-ms 3000)]
-          (is (= :waiting-for-opponent (:status r))
-              "no active run → persistent falls through to the terminal return"))))))
+          (is (= :no-run (:status r))
+              "no active run → persistent returns a clean :no-run terminal"))))))
 
 (deftest test-choose-fires-end-turn-when-prompt-resolves-run
   (testing "choose-by-index! triggers auto-end-turn when the resolved prompt

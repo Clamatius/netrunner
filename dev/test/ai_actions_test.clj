@@ -14,6 +14,7 @@
             [test-helpers :refer :all]
             [ai-actions]
             [ai-card-actions]
+            [ai-core]
             [ai-websocket-client-v2 :as ws]))
 
 ;; Var-reference to test the private formatter without dropping defn-.
@@ -207,6 +208,59 @@
     (let [line (format-credit-line 10 7 3)]
       (is (str/includes? line "-3 net"))
       (is (str/includes? line "after 3 to play")))))
+
+;; ============================================================================
+;; score-agenda! — must NOT print phantom success (marquee game-2 finding).
+;; GPT-5.5 Corp saw "🎯 Scored: Superconducting Hub (+1 points)" on an
+;; under-advanced agenda that did NOT actually score. Two guards:
+;;  (1) pre-check: refuse an agenda with fewer counters than its requirement;
+;;  (2) verify by real Corp agenda-point DELTA, not by card name in the log.
+;; ============================================================================
+
+(deftest test-score-rejects-underadvanced-agenda
+  (testing "score-agenda! refuses an under-advanced agenda WITHOUT sending a
+            score command and WITHOUT printing a phantom 'Scored'"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-client-state
+          :side "corp"
+          :servers {:remote1 {:content [{:cid 1 :title "Superconducting Hub"
+                                         :type "Agenda" :advancementcost 3
+                                         :advance-counter 2 :agendapoints 1
+                                         :zone ["servers" "remote1" "content"]}]}})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (ai-card-actions/score-agenda! "Superconducting Hub"))]
+            (is (zero? (count @sent))
+                "must not send a doomed score command for an under-advanced agenda")
+            (is (str/includes? out "not scoreable")
+                "must explain it is not scoreable")
+            (is (str/includes? out "needs 1 more")
+                "must state how many more advancements are needed")
+            (is (not (str/includes? out "🎯 Scored"))
+                "must NOT print a phantom success")))))))
+
+(deftest test-score-verifies-by-score-delta-not-log-match
+  (testing "a fully-advanced agenda whose score is refused by the engine (no
+            agenda-point delta) must report 'did NOT score', not a phantom 'Scored'
+            — even though the card name appears in the log"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-client-state
+          :side "corp"
+          :servers {:remote1 {:content [{:cid 1 :title "Send a Message"
+                                         :type "Agenda" :advancementcost 5
+                                         :advance-counter 5 :agendapoints 3
+                                         :zone ["servers" "remote1" "content"]}]}})
+        ;; verify-action-in-log returns true (card name matched in log) but the
+        ;; Corp's agenda-point never moved (stays 0) → must NOT claim a score.
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-action-in-log (fn [& _] true)]
+          (let [out (with-out-str (ai-card-actions/score-agenda! "Send a Message"))]
+            (is (= 1 (count @sent)) "a fully-advanced agenda still sends the score command")
+            (is (str/includes? out "did NOT score")
+                "no agenda-point delta → must report the score did not happen")
+            (is (not (str/includes? out "🎯 Scored"))
+                "must NOT print a phantom success on a refused score")))))))
 
 (comment
   ;; Run all happy path tests
