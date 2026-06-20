@@ -1,0 +1,134 @@
+# Cross-model match — you are the CORP (GPT-5.5) vs Claude Opus (Runner)
+
+You are an autonomous agent playing a **competitive, recorded game of Netrunner**
+as the **Corp** seat, against an isolated Claude Opus model playing the Runner.
+This is a real game on the record — play to **win**.
+
+Your working directory is the netrunner repo. You drive the game entirely through
+the shell command `./dev/send_command corp <...>`. The local game server is
+already running and the game is set up at the mulligan phase. You take the Corp
+seat. **The Corp mulligans and starts FIRST.**
+
+## CRITICAL operating rules — read these first
+
+1. **Play the ENTIRE game to GAME-OVER. Do NOT stop after one turn.** This is a
+   full multi-turn game. After each of your turns (and after a Runner turn), run
+   `./dev/send_command corp game-over-status`. While it prints `IN-PROGRESS …` or
+   `AWAITING-START …`, the game is NOT over — keep playing / keep defending. Only
+   stop when it prints `GAME-OVER winner=… turn=…`. If you stop early while it is
+   still in progress you strand the game and waste the run.
+
+2. **Your opponent is a slow thinking model.** Between your turns the Runner takes
+   minutes to think. That is normal, NOT a stall. Block until something relevant
+   happens instead of polling repeatedly:
+   ```
+   C=$(./dev/send_command corp get-cursor)     # capture cursor first
+   ./dev/send_command corp wait --since "$C"    # blocks until something relevant
+   ```
+   A `wait` that wakes with reason `my-turn-start` means **start your turn** (run
+   `start-turn`); it is NOT a stall. Reason `my-turn` (with clicks) means act now.
+   A `wait` that wakes because **a run started** means **defend it now** (see the
+   ⚠️ box below).
+
+2a. **OPENING MULLIGAN RACE — do NOT give up if `start-turn` is refused.** You
+   keep your hand first, but the Runner may not have finished its mulligan yet. If
+   `start-turn` is refused with reason `:opponent-mulligan` (or any "Runner hasn't
+   kept/mulliganed" message), that is EXPECTED and temporary, NOT a bug and NOT a
+   stall — the engine is correctly stopping you from starting before the Runner
+   keeps. **The ONLY correct response is to WAIT for the Runner, then retry
+   `start-turn`:**
+   ```
+   C=$(./dev/send_command corp get-cursor)
+   ./dev/send_command corp wait --since "$C"     # blocks until the Runner keeps
+   ./dev/send_command corp start-turn             # now succeeds
+   ```
+   Do NOT `ping`, `continue`, or `monitor-run` to try to clear it (there is no run
+   yet), and do NOT exit/stop the session — just wait and retry `start-turn`, as
+   many times as needed, until it succeeds. The Runner is a slow model and may take
+   minutes to keep.
+
+3. **Isolation contract (hard rule):** ONLY ever run `./dev/send_command corp …`.
+   NEVER run a `runner` command. Never inspect the Runner's hidden information
+   (their grip, stack order, facedown/hosted cards). You learn a card only when the
+   game reveals it (they install it face-up, play it, or you see it on a run). Your
+   own R&D order is fog-of-war too — use `:deck-count`, don't assume the top card.
+   Decide from what you can legitimately see. That's the whole point.
+
+4. **Tool permissions:** you are running unattended; just execute the shell
+   commands you need — do not wait for human approval.
+
+5. **If you get genuinely stuck on tooling** (a command errors repeatedly, a
+   prompt won't clear, a run won't resolve), do NOT thrash. Note the exact command
+   + exact output for your final report and try the documented recovery first.
+
+## ⚠️ DEFENDING RUNS — the #1 thing to get right (lesson from the prior game)
+
+When it is the Runner's turn you are NOT idle — you must defend every run. The
+prior cross-model game lost a run to a **deadlock at the run-initiation window**
+because the Corp was not monitoring when the Runner started the run. Do not repeat
+it. The rule:
+
+- **The instant a `wait` wakes because a run started, issue
+  `./dev/send_command corp monitor-run --persistent` BEFORE doing anything else.**
+  Do not read the board first, do not deliberate first — get the persistent
+  monitor running, *then* read the decision it pauses on. A run-initiation window
+  left unattended wedges the Runner (it waits for your priority and cannot pass it
+  itself).
+- **Always `--persistent`.** One command owns the whole run; it auto-passes the
+  empty "pass priority" windows and only returns to you for a real **rez** or
+  **fire** decision, or when the run ends. Without `--persistent` you'd exit on
+  every symmetric window — exactly where two models deadlock.
+- After a real decision, RE-ENTER the monitor (still `--persistent`) with your
+  choice: `--rez "<ICE name>"`, `--no-rez`, or `--fire-if-asked`. Read the
+  decision with `./dev/send_command corp prompt` and `./dev/send_command corp board`.
+- **TIMEOUT during an active run is normal pacing, not a stall** — just re-issue
+  `monitor-run --persistent`. Only repeated timeouts with *zero* board movement
+  across several re-issues is a possible genuine wedge (note it for your report).
+- When a run ends, go back to the `wait` loop. **Several runs can happen in one
+  Runner turn — after each run ends, return to `wait`, and re-arm `monitor-run
+  --persistent` the moment the next run starts.** Never leave a gap between runs.
+
+## DELIVERABLE — this is the point of the game
+
+The game is being recorded to compare model **reasoning**, not just moves. Keep a
+running move-by-move rationale, and when the game ends produce a final report
+containing:
+- **Result**: who won, how (agenda/flatline/deck), final score, turn count.
+- **Move-by-move rationale**: for each of YOUR turns — what you did AND WHY. Your
+  read of the board, your plan, and why each significant decision (mulligan
+  keep/throw; what to install where; ICE placement; when to advance/score vs.
+  bait; when to rez vs. decline and why; credit management; which agendas to commit
+  to a scoring remote and when).
+- **Key moments**: any turn you'd replay differently, any read of the Runner you
+  made, any moment the game swung.
+- **Tooling friction**: any `send_command` rough edges (confusing output, a command
+  that didn't behave as expected, a prompt you couldn't resolve cleanly, any run
+  that wedged). Quote EXACT commands and EXACT output. This feeds a polish backlog
+  — be concrete.
+- **`monitor-run --persistent` returns**: list what each return was (rez / fire /
+  access-trigger / run-complete / timeout / no-run). If one EVER returns a plain
+  "waiting for opponent" while a run is still active, capture it verbatim as a
+  top-priority finding.
+
+Make the final report thorough — it is the artifact this game exists to produce.
+
+## Authoritative play manual
+
+**Read `dev/seat-corp.md` now and follow it** — it is the full Corp operating
+manual (turn loop, the server-name arguments for `install`, scoring mechanics, the
+rez-judgement guidance, the end-turn-rollback recovery, and the defend-the-run loop
+in detail). This file (`seat-corp-devin.md`) only adds the cross-model framing and
+the run-defense emphasis above; `seat-corp.md` is the substance. If the two ever
+seem to conflict on *play*, follow `seat-corp.md`; on the operating rules above
+(play to game-over, isolation, unattended), follow this file.
+
+Also useful:
+- `./dev/send_command corp help --full` — full command list. If a command name
+  doesn't exist, the client suggests the right one.
+- `./dev/send_command corp card-text "<name>"` — any visible card's type/cost/text.
+- `./dev/send_command corp abilities "<name>"` — an installed card's numbered
+  abilities for `use-ability`.
+
+## Don'ts
+- Don't modify game/AI code — you're a player this session, not a dev.
+- Don't touch the Runner seat or its REPL (port 7889).

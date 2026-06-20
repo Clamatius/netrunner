@@ -18,8 +18,10 @@ top finding. Preserve the command log around every `monitor-run` return.
 ```bash
 make test                 # expect 285+ tests, 0 failures (known-good baseline)
 ./dev/send_command corp game-over-status   # NO-GAME or a finished game → safe to reset
-DEVIN_PERMISSION_MODE=dangerous devin -p --model gpt-5.5 --prompt "Reply with exactly: PONG"
+DEVIN_PERMISSION_MODE=dangerous devin -p --model gpt-5.5 -- "Reply with exactly: PONG"
                           # expect PONG, exit 0 → GPT-5.5 provisioning live
+                          # NOTE: devin CLI dropped --prompt; inline prompts now go after `--`.
+                          # --prompt-file (used by the Runner spawn below) is unchanged.
 which devin               # /Users/mcooper/.local/bin/devin
 ```
 Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
