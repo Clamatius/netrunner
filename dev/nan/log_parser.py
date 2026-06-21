@@ -212,19 +212,21 @@ def detect_side_from_action(action_text):
         return "Corp"
     if "makes their mandatory start of turn draw" in action_text:
         return "Corp"
-    # Run-related actions are Runner
-    if " make a run on " in action_text or " makes a run on " in action_text:
+    # Run-related actions are Runner. Use word boundaries (\b) rather than a
+    # leading space: replay action text begins with the verb (the actor token is
+    # stripped to its own line), so " scores " / " steals " never matched.
+    if re.search(r"\bmakes? a run on ", action_text):
         return "Runner"
-    if " breaches " in action_text:
+    if re.search(r"\bbreaches\b", action_text):
         return "Runner"
-    if " encounters " in action_text:
+    if re.search(r"\bencounters\b", action_text):
         return "Runner"
-    if " jacks out" in action_text:
+    if re.search(r"\bjacks out\b", action_text):
         return "Runner"
     # Score is Corp, steal is Runner
-    if " scores " in action_text and " agenda point" in action_text:
+    if re.search(r"\bscores\b", action_text) and "agenda point" in action_text:
         return "Corp"
-    if " steals " in action_text:
+    if re.search(r"\bsteals\b", action_text):
         return "Runner"
     # Rez is typically Corp
     if " rez " in action_text.lower() and "protecting" in action_text:

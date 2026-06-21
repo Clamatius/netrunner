@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import os
 from log_parser import parse_log_lines, generate_dsl
@@ -20,10 +21,42 @@ def patch(state, diff):
     new_state = _apply_removals(new_state, removals)
     return new_state
 
+def _apply_seq_changes(state, changes):
+    """Apply a Clojure 'differ' sequence diff to a list.
+
+    differ encodes vector alterations as a flat list of (marker, value) pairs:
+      - marker "+" => append value to the end of the list
+      - integer index (int or digit-string) => recurse/replace at that index
+    The replay log is append-only ("+"), but index edits are handled too so
+    other vectors (servers, rig, ...) reconstruct correctly.
+    """
+    new_list = list(state)
+    i = 0
+    while i + 1 < len(changes):
+        marker, value = changes[i], changes[i + 1]
+        if marker == "+":
+            new_list.append(value)
+        else:
+            try:
+                idx = int(marker)
+            except (ValueError, TypeError):
+                idx = None
+            if idx is not None:
+                while len(new_list) <= idx:
+                    new_list.append(None)
+                new_list[idx] = _apply_changes(new_list[idx], value)
+        i += 2
+    return new_list
+
+
 def _apply_changes(state, changes):
     if state is None:
         return changes
-        
+
+    # Clojure differ sequence diff: list-of-pairs against a list state.
+    if isinstance(changes, list) and isinstance(state, list):
+        return _apply_seq_changes(state, changes)
+
     if isinstance(changes, dict):
         if not isinstance(state, dict) and not isinstance(state, list):
             # Replacing primitive with dict?
@@ -116,43 +149,33 @@ def extract_log(state):
     if not log:
         return []
         
-    # Extract text lines
+    # Replay log entries are dicts {user, text, timestamp}. In jinteki replays
+    # game events are ALL "__system__" messages with the acting player embedded
+    # in the text ("ai-corp scores ...", "ai-runner steals ..."). log_parser
+    # expects raw text-log triples:
+    #   Actor
+    #   [timestamp]
+    #   action text
+    # so we reconstruct the actor from the text prefix rather than the user
+    # field. Non-event chrome ("[hr]", "ai-corp has created the game.") yields
+    # an actor token but simplify_action returns None for it, so it's dropped.
     lines = []
     for entry in log:
-        if isinstance(entry, dict):
-            # Format: "user" (actor), "text"
-            # log_parser expects raw lines like:
-            # "Clamatius"
-            # "[9:36:39]"
-            # "scores Send a Message..."
-            #
-            # The JSON log entries usually have "user" and "text".
-            # We need to format them to look like the text log log_parser expects.
-            user = entry.get('user', 'Unknown')
-            if user == "__system__":
-                # System messages might not have user line in text log?
-                # Or they appear as "System"?
-                # In game3_log.txt: "ai-runner" ...
-                pass
-            
-            text = entry.get('text', '')
-            
-            # The log_parser expects:
-            # Actor
-            # Timestamp (optional for logic but parser checks for it?)
-            # Action
-            
-            # If user is present, add it
-            if user and user != "__system__":
-                lines.append(user)
-                
-            # Timestamp? The parser checks:
-            # if i + 2 < len(lines) and lines[i+1].startswith("["):
-            # So we need a timestamp line.
-            lines.append("[00:00:00]") # Fake timestamp
-            
-            lines.append(text)
-            
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get('text', '')
+        if not text:
+            continue
+        user = entry.get('user', 'Unknown')
+        if user and user != "__system__":
+            actor = user
+        else:
+            m = re.match(r'([\w.-]+) ', text)
+            actor = m.group(1) if m else "System"
+        lines.append(actor)
+        lines.append("[00:00:00]")  # synthetic timestamp; parser only checks "[" prefix
+        lines.append(text)
+
     return lines
 
 def main():
