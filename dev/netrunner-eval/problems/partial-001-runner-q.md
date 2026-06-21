@@ -22,8 +22,10 @@ runner:
   credits: 7
   points: 4
   clicks: 4
-  grip:
+  grip:                  # 3 non-critical cards (rig already set up) — Q2 tanks 2 net damage, leaving 1
     - {card: Carmen}
+    - {card: Cleaver}
+    - {card: Mayfly}
   rig:
     - {card: Carmen}
     - {card: Cleaver}

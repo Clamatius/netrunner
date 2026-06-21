@@ -1,0 +1,195 @@
+Netrunner Reasoning Eval — Claude Opus 4.8, BLIND run (2026-06-20)
+Fresh subagent context. Input: build-eval output only (all 22 problems, q-only).
+No answer keys, no repo access. Solving guide: SKILL_SOLVE.md format.
+Scored in: results_20260620_opus48.md
+(Raw model output below; HTML entities &amp;/&gt; are from the agent transcript.)
+================================================================================
+
+## Solution: breach-001-runner
+
+### Answer
+The key facts: Server 1 has Brân 1.0 (rezzed, Bioroid — 3 subs, can bypass with clicks), Manegarm Skunkworks (rezzed — on approach to server, ETR unless spend 2 clicks OR pay 5¢), and the agenda. Runner: 5¢, 4 clicks, grip = Sure Gamble, Overclock, Mayfly. No programs installed.
+
+Q1 (Click 1 = Sure Gamble): SG → 9¢; install Mayfly → 8¢; Overclock+run; pay Skunkworks 5; boost Mayfly +5, break Brân 3 subs. [NOTE: scorer found this line is ~1 credit short.]
+Q2 (Click 1 = Install Mayfly): install Mayfly → 4¢; Overclock+run (3 pool +5 hosted); Skunkworks via 2 clicks; Brân 8¢ exactly. Win.
+Q3 (Click 1 = Overclock): Overclock+run; Skunkworks 5¢ from hosted; bypass Brân with 3 clicks (Bioroid). Win. (No Mayfly/SG needed.)
+
+### Reasoning
+Brân is a Bioroid (lose-click to break). Skunkworks tax payable as 2 clicks OR 5¢ — that fungibility enables three distinct first clicks. Q3 (clicks for Brân) is cheapest; Q2 pays Skunkworks with clicks and breaks Brân with Mayfly+Overclock exactly; Q1 uses real money.
+
+### Confidence
+high
+
+---
+
+## Solution: break-001-runner
+
+### Answer
+Sure Gamble (→11¢), install Cleaver (→8), install Unity (→5), run Server 1: Whitespace str0 break both subs 2¢ (→3); Palisade str4 Cleaver boost+1 (2¢) break ETR (1¢) (→0). Access agenda, steal. End 0¢.
+
+### Reasoning
+Code gate → Unity, barrier → Cleaver. Break = 5¢, install = 6¢, SG nets +4. 7→11→5→0. Palisade +2 on remote = str4 needs +1. Carmen/Docklands not needed.
+
+### Confidence
+high
+
+---
+
+## Solution: lethal-001-runner
+
+### Answer
+HQ: Karunā (sentry str3, 2×2 net) + 2 cards (agenda + Manegarm Skunkworks). Runner 13¢, grip Carmen/Carmen/Unity + Unity installed. Could not construct a true guarantee: random single-card HQ access with an irremovable non-agenda (Skunkworks in hand). Safe maximizing line = install Carmen + two fully-broken HQ runs (must break Karunā or 4 net damage flatlines the 3-card grip). 75% to hit agenda.
+
+### Reasoning
+Karunā unbroken = 4 net = flatline (grip 3). So break every run: Carmen +3 (2¢) + 2 subs (2¢) = 4¢/run. 13 → install 5 → run 4 → run 4 → 0. Two random accesses ≈ 75%, not a guarantee with the listed cards.
+
+### Confidence
+low — suspect a missing mechanic (Skunkworks as installed upgrade / access-all reading). [SCORER: the line is run Archives first for Carmen discount, then trash Skunkworks on access to guarantee. Missed.]
+
+---
+
+## Solution: midgame-001-runner
+
+### Answer
+2-counter remote card ≈ Send a Message (5/5, 3pt) or a 2nd Urtica. Either way: don't contest now (SaM "needs 5, has 2, not scorable soon"; Urtica = 4 net for nothing; and at 2¢ can't afford Brân+Palisade). Build economy/draw — Telework +3, Smartware drip, VRcation to dig. Set up R&D pressure next turn.
+
+### Reasoning
+[SCORER: WRONG — Corp finishes SaM in ONE turn (3 advance clicks: 2→5 = score). Must contest now, click through all of Brân to deny the ice-install sub, break Palisade, access. Tempo miscount.]
+
+### Confidence
+medium
+
+---
+
+## Solution: mull-001-corp
+### Answer Keep.
+### Reasoning Economy (Hedge Fund) + 2 cheap ICE + agenda + trap. Textbook keep.
+### Confidence high
+
+---
+
+## Solution: mull-002-corp
+### Answer Mulligan.
+### Reasoning 3 agendas (flood), only econ is Gov Subsidy (cost 10, have 5 — unplayable), only ICE is Brân (rez 6). No playable economy or early defense. Snap mull.
+### Confidence high
+
+---
+
+## Solution: mull-003-runner
+### Answer Keep.
+### Reasoning Sure Gamble + Smartware (econ), Cleaver + Carmen (2/3 breakers), Jailbreak. Only missing Unity. Strong.
+### Confidence high
+
+---
+
+## Solution: mull-004-runner
+### Answer Mulligan.
+### Reasoning Full breaker suite (Cleaver/Cleaver/Carmen/Unity) but ZERO economy + a dead duplicate Cleaver. Rig with no money is dead weight.
+### Confidence medium
+
+---
+
+## Solution: multirun-001-runner
+### Answer Maximum HQ accesses = 2. (Reasoning muddled — could not cleanly close the credits.)
+### Reasoning Money-constrained (Karunā 4¢/run). Considered Archives-run Carmen discount + Docklands but kept failing to fit 9¢. [SCORER: right number, line never cleanly stated.]
+### Confidence low
+
+---
+
+## Solution: partial-001-runner
+### Answer
+Grip = 1 card (Carmen). Q1 full break: Karunā +3 (2¢) + 2 subs (2¢) = 4¢; Palisade +1 (2¢) + 1 (1¢) = 3¢; total 7¢ → end 0¢, grip intact (1). Steal, win.
+Q2: at grip 1, NO sub can safely fire — Karunā's 2-damage subs flatline a 1-card grip, Palisade's only sub is ETR. So Q2 not survivable here; must do Q1. (If grip ≥3, tank one Karunā sub for −1¢/−2 cards.)
+Q3: choose partial when grip is big and you're credit-starved; full break when grip is small (as here) or you can afford it.
+### Reasoning [SCORER: CORRECT for the board as written, and correctly surfaced that the answer key assumes a 3-card grip the question didn't provide → doc bug, now fixed.]
+### Confidence high
+
+---
+
+## Solution: remote-001-corp
+### Answer
+Q1: NO, Runner can't breach — no Decoder for Whitespace, no Killer for Tithe. Q2: server already safe, but Regolith occupies the root, so install Offworld in a fresh ICE'd remote instead.
+### Reasoning [SCORER: WRONG — Whitespace (lose 3¢ / ETR-if-≤6¢) and Tithe (1 net / gain 1¢) have NO hard ETR; Runner tanks through with Red Team+Pennyshaver ≈ $11 and breaks Palisades. Fell for the "missing breaker = safe" trap.]
+### Confidence medium
+
+---
+
+## Solution: remote-002-corp
+### Answer
+Q4 best: Install Offworld in Server 1 (behind unrezzed Karunā — Runner has no Killer), Advance, Advance. To steal they must tank 4 net (Karunā doesn't ETR; sub1 offers jack-out, tempting a bail after 2). Score next turn. Q1: behind Palisade (S2) they break with Cleaver for 3¢ → steal. Q3: Nico is fine econ but concedes tempo.
+### Reasoning Runner's gap is the Killer → agenda belongs behind the sentry. [SCORER: core decision correct; missed the I-A-C-vs-I-A-A $2-buffer refinement.]
+### Confidence high
+
+---
+
+## Solution: score-001-corp
+### Answer
+Score Superconducting Hub (Adv 3, behind protection where Runner — 1-card grip, no Killer — can't break Karunā). Seamless can't target a same-turn install, so: install Hub, advance, advance (2/3) this turn; finish + score next turn.
+### Reasoning Hub is the fast/cheap agenda; even if contested it's only 1 point. Gov Subsidy not needed at 12¢.
+### Confidence medium
+
+---
+
+## Solution: scoring-002-corp
+### Answer
+Score Send a Message (3pt → 6 = win, tutorial-6) via the deep rezzed S1 wall. Seamless can't hit same-turn install, so: install SaM in S1, advance, advance (2/5) this turn; next turn 2× Seamless (+4 → 6) and score. Runner at 2¢ can't break Tithe+Brân+Palisade. Q2 (SG+Overclock grip): the burst could plausibly steal the exposed 3-pointer — be more cautious / Skunkworks could shut it down.
+### Reasoning [SCORER: PARTIAL — omitted Manegarm Skunkworks from the main line; it's the load-bearing upgrade the puzzle is about. Gestured at it only in Q2.]
+### Confidence medium
+
+---
+
+## Solution: servers-001-runner
+### Answer
+Maximum ≈ 6 accesses. Chain Jailbreaks: Jailbreak R&D (break Whitespace w/ Unity 2¢ → 2 accesses + draw), Jailbreak HQ (tank Tithe's 1 net — no ETR → 2 accesses + draw), repeat as drawn. 7¢ budget supports ~3 Jailbreak runs.
+### Reasoning Jailbreak = 2 accesses + a draw, and stack has more Jailbreaks. Tithe has no ETR → tank the 1 damage instead of installing Carmen.
+### Confidence low — count is draw-dependent; method sound.
+
+---
+
+## Solution: trace-001-corp
+### Answer
+Q1: don't boost → trace[1], Runner pays 1¢ (has 8), trace fails. Q2: single Scorched (4 meat) fully absorbed by Plascrete's 4 counters → no kill. Q3: concluded NO flatline this cycle — only one Scorched exists and Plascrete eats it; boosting the trace for a tag accomplishes nothing lethal. Pivot to the agenda race.
+### Reasoning [SCORER: Q1/Q2 correct. Q3 WRONG — play Scorched (→Archives), Archived Memories ($0) recurs it, boost trace to land core damage dropping grip 4→3, second Scorched = 4 > 3 = flatline. Missed the recursion. Also: out-of-scope cards not in decklists.]
+### Confidence low
+
+---
+
+## Solution: turn1-001-corp
+### Answer Hedge Fund → ICE R&D (Whitespace) → ICE HQ (Whitespace). End 9¢, centrals protected.
+### Reasoning Standard strong T1: economy + double-ice centrals.
+### Confidence high
+
+---
+
+## Solution: turn1-002-corp
+### Answer Install Karunā (R&D), Diviner (HQ), click for credit (→6¢).
+### Reasoning Gov Subsidy (cost 10) unplayable; ice the centrals with affordable-to-rez ICE. [SCORER: PARTIAL — missed installing Brân on a remote for the Send-a-Message free-rez synergy; clicked for credit instead.]
+### Confidence medium
+
+---
+
+## Solution: turn1-003-runner
+### Answer Sure Gamble → install Smartware → Jailbreak a central (force rez / 2 accesses / draw) → VRcation (draw 4, lose last click).
+### Reasoning One of several accepted lines (aggressive Jailbreak variant). VRcation last so its click-loss is free.
+### Confidence medium
+
+---
+
+## Solution: turn1-004-runner
+### Answer Sure Gamble → run Server 1 (free, no ICE; trash asset / steal) → install Smartware → install Carmen (discounted to 3 via the successful run).
+### Reasoning Run-then-install-Carmen discount; deny Corp's turn-1 economy asset. [SCORER: PARTIAL — Corp has NO ICE anywhere; missed the free R&D + HQ accesses ("run everything").]
+### Confidence high
+
+---
+
+## Solution: window-001-corp
+### Answer Install Superconducting Hub behind Brân (S1), advance, advance (2/3); score next turn. Q2 risk: HQ flood — Send a Message stealable on a cheap HQ run. Q3: installing agendas out of HQ de-floods it; don't burn HQ cards (they shield SaM).
+### Reasoning Runner has no Killer and hasn't run → Brân remote is a scoring window. [SCORER: main thrust correct; missed the precise "install Nico + credit, don't Hedge Fund" optimization.]
+### Confidence medium
+
+---
+
+## Solution: yomi-001-corp
+### Answer Q1: Install Offworld (S1, behind Brân), credit, credit; score next turn (Seamless+advances). Q2: Install Regolith first (bait), rez, click for credits. Q3: leveling game — if Runner checks, you traded a 2¢ asset for their whole turn + 3¢; if not, free econ. Q2 > Q1 at 3¢ because immediate jam leaves you broke.
+### Reasoning "The threat of an agenda is a resource; condition the opponent first." Money is threat. Matches the yomi lesson.
+### Confidence medium

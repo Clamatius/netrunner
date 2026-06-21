@@ -72,7 +72,10 @@ def validate_card_list(items: list, field_name: str, valid_cards: set) -> list:
         else:
             issues.append(f"{field_name}[{i}]: Invalid item type {type(item).__name__}")
             continue
-        
+
+        # Strip trailing state annotations, e.g. "Tollbooth (Femme counter)" -> "Tollbooth"
+        card_name = re.sub(r'\s*\([^)]*\)\s*$', '', card_name).strip()
+
         if card_name and card_name not in valid_cards:
             # Special cases that are OK
             if card_name in ('Unknown', 'Agenda', 'Asset', 'Upgrade'):

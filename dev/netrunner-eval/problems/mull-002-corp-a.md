@@ -3,7 +3,7 @@
 ## Expected Reasoning
 
 **Hand composition check:**
-- Economy: Government Subsidy (requires 6 credits - UNPLAYABLE, have 5)
+- Economy: Government Subsidy (costs 10 credits - UNPLAYABLE, have 5)
 - ICE: Brân 1.0 (6 to rez - can't rez Turn 1 even with clicking for credits)
 - Agendas: THREE agendas (4 points total) - agenda flood
 

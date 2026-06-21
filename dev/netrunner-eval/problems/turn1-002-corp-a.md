@@ -4,7 +4,7 @@
 
 **Resource assessment:**
 - 3 clicks, 5 credits
-- Economy: Government Subsidy (needs 6 credits - can't play!)
+- Economy: Government Subsidy (costs 10 credits - can't play!)
 - ICE: Brân (rez 6), Karunā (rez 4), Diviner (rez 2)
 - Agenda: Send a Message (3/1) - key card here
 - Fast advance: Seamless Launch (not useful without remote)
@@ -39,11 +39,11 @@ Draw, hope for economy. If we get Hedge Fund, we can start playing real Netrunne
 
 ## Notes
 - Seamless Launch doesn't help score Send a Message much (3/1 needs 3 advancements, Seamless gives 2, still need 1 more + install turn)
-- Gov Subsidy needs us at 6 credits - we need to draw into Hedge Fund or click up
+- Gov Subsidy costs 10 - we need to draw into Hedge Fund or click up
 - The "do nothing" answer (click for credits) is worse than getting ICE down
 
 ## Common Mistakes
 - Clicking for credits instead of installing ICE (wastes the turn)
-- Trying to play Government Subsidy (costs 6, have 5)
+- Trying to play Government Subsidy (costs 10, have 5)
 - Not recognizing Send a Message + Brân synergy
 - Putting Brân on a central (can't rez it anyway, wastes the gambit setup)

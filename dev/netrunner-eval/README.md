@@ -23,6 +23,19 @@ netrunner-eval/
     └── *-a.md             # Reference answers (for scoring)
 ```
 
+## Tooling Setup
+
+`build-eval` is pure bash and needs nothing. The Python helpers
+(`validate_puzzles.py`, `render_puzzles.py`) need `pyyaml`:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python validate_puzzles.py   # integrity check: card names, sections, YAML
+```
+
+`validate_puzzles.py` should report `0 total issues` on a clean tree.
+
 ## How to Run
 
 ### Single-Shot Eval
