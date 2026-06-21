@@ -385,6 +385,7 @@ ${GREEN}Waiting / Synchronization:${NC}
                               run started (even mid 'wait my turn')
                               run ended
                               our turn to act
+                              game over (match ended — stop, don't hang)
                               timeout (default 300s)
                             Silent on opponent economy/draws/installs.
                             ALWAYS pair with --since: capture a cursor

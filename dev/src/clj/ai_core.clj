@@ -1241,6 +1241,14 @@
          current-phase (run-phase state)
          has-actionable-prompt? (has-prompt? state side)]
      (cond
+       ;; Game over - the match ended (winner declared, concession, or tie).
+       ;; Highest priority: nothing else matters once the game is decided, and
+       ;; a seat sitting in a long `wait` when the game ends would otherwise
+       ;; burn the full timeout (default 300s) before noticing. Wake immediately
+       ;; so the seat can tear down / report instead of hanging.
+       (state/game-over? (:game-state state))
+       :game-over
+
        ;; Run started - high priority, wake up!
        (and current-run-active? (not initial-run-active?))
        :run-started
@@ -1377,6 +1385,10 @@
                      (println (format "⚡ Woke up: %s" (name reason)))
                      (when (= reason :my-turn-start)
                        (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"))
+                     (when (= reason :game-over)
+                       (let [winner (get-in current-state [:game-state :winner])]
+                         (println (format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."
+                                          (if winner (str " — " (clojure.string/capitalize (name winner)) " wins") "")))))
                      (println "")
                      (println "📜 Game log while you were waiting:")
                      (if (seq entries-since-start)

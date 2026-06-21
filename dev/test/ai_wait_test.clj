@@ -94,3 +94,46 @@
                                    :corp {:click 0} :runner {:click 2}})
         (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
           (is (= :timeout (:status result))))))))
+
+(deftest test-game-over-wakes-via-fast-path
+  ;; Game ended in the race window (Runner won on their own turn while Corp was
+  ;; in a `wait`). The cursor advanced; the fast path must short-circuit with
+  ;; :game-over — NOT fall through, and NOT mistake a frozen non-our-turn for a
+  ;; phantom advance. This is the #5 marquee rough edge: a finished game left a
+  ;; waiting seat hanging the full timeout.
+  (testing "game over + cursor advanced -> :already-advanced :game-over"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                                  {:active-player "runner" :turn 10 :winner "runner"
+                                   :corp {:click 0} :runner {:click 1}})
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :already-advanced (:status result)))
+          (is (= :game-over (:reason result))
+              (str "expected :game-over, got: " result)))))))
+
+(deftest test-game-over-wakes-without-since
+  ;; No :since cursor — the normal poll loop must wake on :game-over rather than
+  ;; burning the timeout. game-over outranks the timeout check in the cond.
+  (testing "game over, no :since -> :relevant-change :game-over (not :timeout)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                                  {:active-player "runner" :turn 10 :winner "runner"
+                                   :corp {:click 0} :runner {:click 1}})
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :relevant-change (:status result))
+              (str "game-over must wake, not time out, got: " result))
+          (is (= :game-over (:reason result))))))))
+
+(deftest test-game-over-via-reason-and-end-time
+  ;; The other game-over signal: no :winner, but :reason + :end-time set
+  ;; (tie / timed-out match). Must wake the same way.
+  (testing "reason + end-time game over -> :game-over"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                                  {:active-player "corp" :turn 10
+                                   :reason "Decked" :end-time "2026-06-20T00:00:00Z"
+                                   :corp {:click 2} :runner {:click 0}})
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :already-advanced (:status result)))
+          (is (= :game-over (:reason result))
+              (str "expected :game-over, got: " result)))))))

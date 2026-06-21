@@ -353,3 +353,23 @@
     (is (false? (boolean (state/select-prompt-type? :waiting))))
     (is (false? (boolean (state/select-prompt-type? "run"))))
     (is (false? (boolean (state/select-prompt-type? nil))))))
+
+(deftest test-game-over?-predicate
+  (testing "winner set -> game over"
+    (is (true? (state/game-over? {:winner "runner"})))
+    (is (true? (state/game-over? {:winner "corp" :reason "Flatline"}))))
+  (testing "reason + end-time set (tie / decked) -> game over"
+    (is (true? (state/game-over? {:reason "Decked" :end-time "2026-06-20T00:00:00Z"}))))
+  (testing "live game -> not over"
+    (is (false? (state/game-over? {:active-player "runner" :turn 5})))
+    ;; :reason without :end-time is NOT game-over (e.g. a mid-game annotation)
+    (is (false? (state/game-over? {:reason "Decked"})))
+    (is (false? (state/game-over? {:end-time "2026-06-20T00:00:00Z"})))
+    (is (false? (state/game-over? nil))))
+  (testing "zero-arg form reads current client game-state"
+    (with-mock-state {:connected true :side "corp"
+                      :game-state {:winner "runner" :turn 10}}
+      (is (true? (state/game-over?))))
+    (with-mock-state {:connected true :side "corp"
+                      :game-state {:turn 5 :active-player "corp"}}
+      (is (false? (state/game-over?))))))

@@ -126,6 +126,15 @@
     (throw (ex-info "Cannot read game state: disconnected" {:stale true})))
   (:game-state @client-state))
 
+(defn game-over?
+  "True when the game has ended. Canonical predicate shared by status, the
+   bot loops, and the `wait` wake logic. The engine signals game-over either
+   by setting :winner (a side won/conceded) or by setting both :reason and
+   :end-time (e.g. a tie or a timed-out match). Accepts an optional game-state
+   map; defaults to the current client game-state."
+  ([] (game-over? (get-game-state)))
+  ([gs] (boolean (or (:winner gs) (and (:reason gs) (:end-time gs))))))
+
 (defn active-player [] (get-in @client-state [:game-state :active-player]))
 (defn my-turn? [] (= (:side @client-state) (active-player)))
 (defn turn-number [] (get-in @client-state [:game-state :turn]))
@@ -223,7 +232,7 @@
         turn-num (turn-number)
         end-turn (get-in gs [:end-turn])
         winner (:winner gs)
-        game-over? (boolean (or winner (and (:reason gs) (:end-time gs))))
+        game-over? (game-over? gs)
         prompt (get-prompt)
         prompt-type (:prompt-type prompt)
         run-state (get-in gs [:run])
