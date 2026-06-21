@@ -2,6 +2,7 @@
 
 ## Situation
 Turn 8. You're Runner.
+Format: Tutorial — **6 agenda points to win** (System Gateway tutorial decks).
 Score: Corp 3, Runner 3 (both scored [[Offworld Office]] + [[Superconducting Hub]])
 ID: The Catalyst (no special ability, 40 card min, 1 link)
 

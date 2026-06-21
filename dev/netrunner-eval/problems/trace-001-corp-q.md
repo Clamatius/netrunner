@@ -1,6 +1,8 @@
 # Problem: trace-001-corp [Hard]
 
 > **Note:** This puzzle uses cards from the original Android: Netrunner (FFG era), not the current System Gateway format. Standard game: first to 7 agenda points wins.
+>
+> **Benchmark hygiene:** Several cards here (Tollbooth, Eli 1.0, Enigma, Rototurret, Data Raven, Gordian Blade, Desperado, Femme Fatale, Sneakdoor Beta, etc.) are *not* in `decklists.md` and have no text in the Card Text Reference, so solving leans on out-of-context card *recall* rather than the provided-context reasoning the tutorial set tests. **Exclude this problem from model-vs-model head-to-head scoring** (e.g. Opus vs GPT-5.5) unless every referenced card is given full text — it measures a different capability.
 
 ## Context
 
