@@ -1,6 +1,6 @@
 # Runner Tutorial Deck: The Catalyst
 
-Tutorial games are played to 6 points.
+The default match format is System Gateway **Intermediate** (booster added, 40-card deck), played to **7 points** — see the booster note at the end. The base Beginner deck below is played to 6.
 
 2x Creative Commission ($ event, play last click if possible)
 3x Jailbreak (multi-access for centrals)

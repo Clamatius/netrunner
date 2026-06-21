@@ -1,6 +1,6 @@
 # Corp Tutorial Deck: The Syndicate
 
-Tutorial games are played to 6 points.
+The default match format is System Gateway **Intermediate** (booster added, 40-card deck), played to **7 points** — see the booster note at the end. The base Beginner deck below is played to 6.
 
 3x Offworld Office (4/2 agenda)
 2x Send a Message (5/3 agenda, rez ice on steal/score)
