@@ -360,10 +360,33 @@
 ;; Mulligan
 ;; ============================================================================
 
+(def ^:private mulligan-sync-wait-checks
+  "How many polling checks (~500ms each) keep-hand/mulligan wait for an opening
+   prompt to appear when NONE is cached yet. Only fires on a genuinely-empty
+   prompt-state (e.g. the brief window right after a client reconnect, before the
+   initial game-state has synced). The far more common 'no mulligan prompt' cause
+   — the opponent hasn't finished their own mulligan yet — leaves a 'waiting'
+   prompt in cache, so get-prompt returns non-nil and this wait is skipped.
+   4 checks ≈ 2s."
+  4)
+
+(defn- waiting-for-opponent-mulligan?
+  "True when `prompt` is the opening-mulligan 'waiting for opponent to keep hand
+   or mulligan' window. The Corp resolves its opening mulligan first, so a Runner
+   that calls keep-hand/mulligan before the Corp has decided genuinely has no
+   mulligan prompt yet — just this waiting one. Detecting it lets us say 'wait for
+   them' instead of the misleading 'No mulligan prompt active'."
+  [prompt]
+  (boolean
+    (and prompt
+         (= "waiting" (str (:prompt-type prompt)))
+         (re-find #"(?i)mulligan|keep hand" (str (:msg prompt))))))
+
 (defn keep-hand
   "Keep hand during mulligan"
   []
-  (let [prompt (state/get-prompt)
+  (let [prompt (or (state/get-prompt)
+                   (core/wait-for-prompt mulligan-sync-wait-checks))
         prompt-type (:prompt-type prompt)
         client-state @state/client-state
         side-str (:side client-state)
@@ -383,16 +406,23 @@
         (core/with-cursor
           {:status :success
            :data {:action :keep-hand}}))
-      (do
-        (println "⚠️  No mulligan prompt active")
-        (core/with-cursor
-          {:status :error
-           :reason "No mulligan prompt active"})))))
+      (if (waiting-for-opponent-mulligan? prompt)
+        (do
+          (println "⏳ Opponent hasn't finished their opening mulligan yet (Corp decides first).\n   Wait for them to keep/mulligan, then run keep-hand again.")
+          (core/with-cursor
+            {:status :error
+             :reason "Opponent mulligan pending"}))
+        (do
+          (println "⚠️  No mulligan prompt active")
+          (core/with-cursor
+            {:status :error
+             :reason "No mulligan prompt active"}))))))
 
 (defn mulligan
   "Mulligan (redraw) hand"
   []
-  (let [prompt (state/get-prompt)
+  (let [prompt (or (state/get-prompt)
+                   (core/wait-for-prompt mulligan-sync-wait-checks))
         prompt-type (:prompt-type prompt)
         client-state @state/client-state
         side-str (:side client-state)
@@ -414,11 +444,17 @@
         (core/with-cursor
           {:status :success
            :data {:action :mulligan}}))
-      (do
-        (println "⚠️  No mulligan prompt active")
-        (core/with-cursor
-          {:status :error
-           :reason "No mulligan prompt active"})))))
+      (if (waiting-for-opponent-mulligan? prompt)
+        (do
+          (println "⏳ Opponent hasn't finished their opening mulligan yet (Corp decides first).\n   Wait for them to keep/mulligan, then run mulligan again.")
+          (core/with-cursor
+            {:status :error
+             :reason "Opponent mulligan pending"}))
+        (do
+          (println "⚠️  No mulligan prompt active")
+          (core/with-cursor
+            {:status :error
+             :reason "No mulligan prompt active"}))))))
 
 (defn auto-keep-mulligan
   "Automatically handle mulligan by keeping hand"

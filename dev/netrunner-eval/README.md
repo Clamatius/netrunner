@@ -2,6 +2,17 @@
 
 A benchmark for testing strategic reasoning in the asymmetric card game Android: Netrunner.
 
+> **Scope: this eval is Beginner / 6-point by design.** The problems are built on
+> System Gateway **Beginner** decks (see `decklists.md`), which is a **6 agenda points
+> to win** format. This is internally correct, *not* a stale leftover from live play —
+> several problems (`midgame-001`, `scoring-002`) have reference answers whose lessons
+> depend on lethality *at 6 points*. **Do not "fix" the win threshold to 7 without
+> re-scoping the decks to Intermediate** — a raw number bump against Beginner decks
+> describes a hybrid format that is worse than either option. Live marquee games use SG
+> **Intermediate** decks (7-point); that parity is a deliberate future task (re-scope to
+> Intermediate decklists + rewrite the threshold-dependent answer keys), tracked as
+> option **(B)** in the `ai-netrunner` forum thread. See `## Limitations` below.
+
 ## What This Tests
 
 - **State comprehension** - Reading game state accurately
@@ -119,7 +130,7 @@ Approximate token counts:
 
 ## Limitations
 
-- Tutorial decks only (System Gateway)
+- Tutorial decks only (System Gateway **Beginner** — 6-point win; see scope note at top)
 - No advanced mechanics (tags, bad publicity, etc.)
 - Some problems have multiple valid answers
 - Strategic "best" is sometimes subjective

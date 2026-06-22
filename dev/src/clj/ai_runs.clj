@@ -963,7 +963,11 @@
         ;; Handler chain in priority order
         handlers [handle-force-mode
                   handle-opponent-wait
-                  corp-handlers/handle-corp-rez-strategy
+                  (fn [ctx]  ; Wrapper: mark a rez attempt so a failed (unaffordable) rez isn't retried forever
+                    (when-let [result (corp-handlers/handle-corp-rez-strategy ctx)]
+                      (when-let [pos (:rez-attempted-at result)]
+                        (set-strategy! {:rez-attempted-at pos}))
+                      result))
                   corp-handlers/handle-corp-rez-decision
                   ;; fire-if-asked is "sleep mode" - handles fire and empty windows
                   (fn [ctx]  ; Wrapper to update strategy after firing

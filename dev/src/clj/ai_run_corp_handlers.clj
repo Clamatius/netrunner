@@ -71,6 +71,14 @@
     (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           ice-rezzed? (:rezzed current-ice)
+          position (get-in state [:game-state :run :position])
+          ;; We mark a rez attempt per-position. If we already attempted to rez
+          ;; this ICE and it's STILL unrezzed on a later pass, the rez did not
+          ;; take — almost always because the Corp can't afford the effective
+          ;; cost (e.g. a Tread Lightly run adds +3 to every ICE's rez cost).
+          ;; Without this guard the handler re-sends the rez every iteration and
+          ;; the run wedges until the stuck-detector trips.
+          rez-already-attempted? (= (:rez-attempted-at strategy) position)
           should-rez? (and (not (:no-rez strategy))
                           (:rez strategy)
                           (contains? (:rez strategy) ice-title)
@@ -78,14 +86,28 @@
       (cond
         ;; --no-rez: always decline
         (:no-rez strategy)
-        (let [position (get-in state [:game-state :run :position])
-              status-key [:corp-no-rez position ice-title]
+        (let [status-key [:corp-no-rez position ice-title]
               already-printed? (= @last-waiting-status status-key)]
           (when-not already-printed?
             (reset! last-waiting-status status-key)
             (println (format "   Strategy: declining rez on %s" ice-title)))
           (merge (send-continue! gameid)
                  {:action :auto-declined-rez
+                  :ice ice-title}))
+
+        ;; Wanted to rez, already tried, ICE still unrezzed → the rez failed.
+        ;; Report once and decline so the run proceeds instead of looping.
+        (and should-rez? rez-already-attempted?)
+        (let [base-cost (get current-ice :cost 0)
+              credits (get-in state [:game-state :corp :credit] 0)
+              status-key [:corp-rez-failed position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "   ⚠️  Rez of %s did not take — likely can't afford it (base cost %d, Corp has %d, plus any run surcharge such as Tread Lightly's +3). Declining."
+                            ice-title base-cost credits)))
+          (merge (send-continue! gameid)
+                 {:action :rez-failed-declined
                   :ice ice-title}))
 
         ;; --rez <ice-name>: rez if in set
@@ -100,7 +122,10 @@
                                 :args {:card card-ref}})
               {:status :action-taken
                :action :auto-rezzed
-               :ice ice-title})
+               :ice ice-title
+               ;; Persisted by the wrapper in ai_runs so a failed (unaffordable)
+               ;; rez is detected next pass instead of retried forever.
+               :rez-attempted-at position})
             (do
               (println (format "   Could not find ICE to rez: %s" ice-title))
               {:status :decision-required

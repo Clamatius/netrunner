@@ -6,7 +6,8 @@
             [ai-state :as state]
             [ai-basic-actions :as basic]
             [ai-websocket-client-v2 :as ws]
-            [test-helpers :refer [mock-client-state with-mock-state]]))
+            [ai-core :as core]
+            [test-helpers :refer [mock-client-state with-mock-state make-prompt]]))
 
 ;; ============================================================================
 ;; wait-for-prompt-change! — select-prompt false-timeout (issue #18)
@@ -163,3 +164,109 @@
                         (is (= :success (:status r)) (str "expected success, got: " r))))]
             (is (= ["Smartware Distributor" "Telework Contract"] @sent))
             (is (not (str/includes? out "No select prompt active")))))))))
+
+;; ============================================================================
+;; keep-hand / mulligan — opening-mulligan ergonomics (polish round 2026-06-22)
+;;
+;; Two related rough edges, both surfaced by playing a real game:
+;;
+;;  1. Opponent-mulligan-first. The Corp resolves its opening mulligan BEFORE the
+;;     Runner gets a mulligan prompt at all. A Runner that calls keep-hand too
+;;     early genuinely has no mulligan prompt — only a 'waiting for Corp' one. The
+;;     old code reported the generic, alarming "No mulligan prompt active"; it now
+;;     detects the waiting window and says "wait for them, then try again".
+;;
+;;  2. Genuine pre-sync gap. If NO prompt is cached at all (the brief window right
+;;     after a client reconnect), keep-hand/mulligan now do a bounded
+;;     wait-for-prompt before giving up, rather than false-negating immediately.
+;; ============================================================================
+
+(def ^:private waiting-for-corp-mulligan-prompt
+  {:prompt-type "waiting"
+   :eid "wait-mull-1"
+   :msg "Waiting for Corp to keep hand or mulligan"
+   :choices []})
+
+(deftest keep-hand-absorbs-post-bounce-sync-race
+  (testing "keep-hand waits for a late-arriving mulligan prompt instead of false-negating"
+    (let [mull (make-prompt :prompt-type "mulligan"
+                            :choices [{:value "Keep" :uuid "keep-uuid"}
+                                      {:value "Mulligan" :uuid "mull-uuid"}])
+          sent (atom nil)]
+      ;; Cache starts with NO prompt (sync hasn't landed yet).
+      (with-mock-state (mock-client-state :side "runner" :prompt nil)
+        (with-redefs [;; wait-for-prompt simulates the async sync completing:
+                      ;; it populates the cache and returns the prompt.
+                      core/wait-for-prompt
+                      (fn [_checks]
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] mull)
+                        mull)
+                      ws/send-message! (fn [_evt data] (reset! sent data) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [out (with-out-str
+                      (let [r (prompts/keep-hand)]
+                        (is (= :success (:status r))
+                            (str "expected success after sync race, got: " r))))]
+            ;; Pressed the Keep button (option 0), not bailed.
+            (is (= {:choice {:uuid "keep-uuid"}} (:args @sent)))
+            (is (not (str/includes? out "No mulligan prompt active")))))))))
+
+(deftest keep-hand-still-errors-when-truly-no-prompt
+  (testing "keep-hand reports no prompt when none is cached and none arrives"
+    (with-mock-state (mock-client-state :side "runner" :prompt nil)
+      (with-redefs [core/wait-for-prompt (fn [_checks] nil)]
+        (let [result (atom nil)
+              out (with-out-str (reset! result (prompts/keep-hand)))]
+          (is (= :error (:status @result)))
+          (is (str/includes? out "No mulligan prompt active")))))))
+
+(deftest keep-hand-explains-when-waiting-on-opponent-mulligan
+  (testing "keep-hand called before Corp mulligans gives a 'wait for them' message, not the generic error"
+    (with-mock-state (mock-client-state :side "runner" :prompt waiting-for-corp-mulligan-prompt)
+      ;; wait-for-prompt must NOT be consulted — a waiting prompt is already cached.
+      (with-redefs [core/wait-for-prompt (fn [_checks]
+                                           (throw (ex-info "should not wait when a prompt is cached" {})))]
+        (let [result (atom nil)
+              out (with-out-str (reset! result (prompts/keep-hand)))]
+          (is (= :error (:status @result)))
+          (is (= "Opponent mulligan pending" (:reason @result)))
+          (is (str/includes? out "opening mulligan"))
+          (is (not (str/includes? out "No mulligan prompt active"))
+              (str "should not show the generic error for the waiting case, got: " out)))))))
+
+(deftest mulligan-explains-when-waiting-on-opponent-mulligan
+  (testing "mulligan called before Corp mulligans gives a 'wait for them' message, not the generic error"
+    (with-mock-state (mock-client-state :side "runner" :prompt waiting-for-corp-mulligan-prompt)
+      (with-redefs [core/wait-for-prompt (fn [_checks]
+                                           (throw (ex-info "should not wait when a prompt is cached" {})))]
+        (let [result (atom nil)
+              out (with-out-str (reset! result (prompts/mulligan)))]
+          (is (= :error (:status @result)))
+          (is (= "Opponent mulligan pending" (:reason @result)))
+          (is (str/includes? out "opening mulligan"))
+          (is (not (str/includes? out "No mulligan prompt active"))))))))
+
+(deftest mulligan-absorbs-post-bounce-sync-race
+  (testing "mulligan waits for a late-arriving prompt instead of false-negating"
+    (let [mull (make-prompt :prompt-type "mulligan"
+                            :choices [{:value "Keep" :uuid "keep-uuid"}
+                                      {:value "Mulligan" :uuid "mull-uuid"}])
+          sent (atom nil)]
+      (with-mock-state (mock-client-state :side "runner" :prompt nil)
+        (with-redefs [core/wait-for-prompt
+                      (fn [_checks]
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] mull)
+                        mull)
+                      ws/send-message! (fn [_evt data] (reset! sent data) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [out (with-out-str
+                      (let [r (prompts/mulligan)]
+                        (is (= :success (:status r))
+                            (str "expected success after sync race, got: " r))))]
+            ;; Pressed the Mulligan button (option 1).
+            (is (= {:choice {:uuid "mull-uuid"}} (:args @sent)))
+            (is (not (str/includes? out "No mulligan prompt active")))))))))
