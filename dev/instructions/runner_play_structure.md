@@ -223,7 +223,7 @@ When you hit ICE, in order:
 When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 
 ```bash
-./send_command abilities "Cleaver"
+./dev/send_command runner abilities "Cleaver"
 ```
 
 **Outside a run (or wrong ICE type):**
@@ -249,11 +249,11 @@ When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 **ALWAYS use the "Fully break" ability [2] when available** (unless you want some subs to fire).
 
 ```bash
-./send_command run "R&D"
-./send_command continue                    # Approach ICE
-./send_command continue                    # Encounter ICE
-./send_command use-ability "Cleaver" 2     # Fully break
-./send_command continue                    # Done breaking, proceed
+./dev/send_command runner run "R&D"
+./dev/send_command runner continue                    # Approach ICE
+./dev/send_command runner continue                    # Encounter ICE
+./dev/send_command runner use-ability "Cleaver" 2     # Fully break
+./dev/send_command runner continue                    # Done breaking, proceed
 ```
 
 ### Manual Breaking (Situational)
@@ -261,10 +261,10 @@ When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 When you only want to break some subroutines:
 
 ```bash
-./send_command use-ability "Mayfly" 0      # "Break 1 subroutine"
-./send_command choose 0                     # Break first sub
-./send_command choose 1                     # Done (let remaining fire)
-./send_command continue                     # Pass priority
+./dev/send_command runner use-ability "Mayfly" 0      # "Break 1 subroutine"
+./dev/send_command runner choose 0                     # Break first sub
+./dev/send_command runner choose 1                     # Done (let remaining fire)
+./dev/send_command runner continue                     # Pass priority
 ```
 
 ---
