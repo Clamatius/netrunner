@@ -205,6 +205,50 @@
         (is (not (str/includes? out "⛔")) (str "no block flag expected, got: " out))
         (is (str/includes? out "Hedge Fund"))))))
 
+(deftest test-list-playables-run-window-corp-not-choose
+  (testing "a passive run-priority prompt steers the Corp to continue/rez, NOT choose
+            — regression for forum [093]: Corp told 'choose <N>' / '0 playables' during
+            a run window read it as a dead end instead of a deliberate pass"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 1
+                                   :run {:phase "initiation" :position 1
+                                         :server ["hq"] :no-action false}
+                                   :corp {:click 0 :credit 7 :hand []
+                                          :prompt-state {:msg "The Runner is running on HQ"
+                                                         :prompt-type "run"}}
+                                   :runner {:click 3 :credit 5 :hand []}})
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "RUN priority window")
+            (str "should name the run priority window, got: " out))
+        (is (not (str/includes? out "Answer this prompt FIRST"))
+            (str "must NOT tell the Corp to answer a run window as a choose-prompt, got: " out))
+        (is (not (str/includes? out "choose <N>"))
+            (str "must NOT steer to choose during a run window, got: " out))
+        (is (str/includes? out "continue")
+            (str "should steer to continue (pass priority), got: " out))
+        (is (str/includes? out "rez")
+            (str "should surface the Corp's rez option, got: " out))))))
+
+(deftest test-list-playables-run-window-runner-not-choose
+  (testing "a passive run-priority prompt steers the Runner to continue/break, NOT choose"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 1
+                                   :run {:phase "approach-server" :position 0
+                                         :server ["hq"] :no-action false}
+                                   :runner {:click 2 :credit 5 :hand []
+                                            :prompt-state {:msg "You may use paid abilities"
+                                                           :prompt-type "run"}}
+                                   :corp {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "RUN priority window")
+            (str "should name the run priority window, got: " out))
+        (is (not (str/includes? out "Answer this prompt FIRST"))
+            (str "must NOT tell the Runner to answer a run window as a choose-prompt, got: " out))
+        (is (str/includes? out "continue")
+            (str "should steer to continue (advance the run), got: " out))))))
+
 ;; ============================================================================
 ;; show-blocker-diagnosis — read-only "why can't I act + what next" (GPT-5.5 ask)
 ;; ============================================================================

@@ -1018,7 +1018,20 @@
                 (if (contains? #{"movement" "approach-server"} run-phase)
                   (doseq [line (run-priority-hint-lines run my-side)]
                     (println line))
-                  (println "    → Use 'continue' to pass priority")))
+                  ;; Other run windows (initiation / approach-ice / encounter).
+                  ;; "Use continue to pass priority" alone reads to the Corp as
+                  ;; "that's the only thing" — but continuing here is a CHOICE to
+                  ;; decline action. Spell out the rez / paid-ability options so a
+                  ;; passing Corp knows it passed up something, not that it was
+                  ;; forced. (re forum [093] — Corp told it can continue, not that
+                  ;; it has other options when nothing looks interesting.)
+                  (if (= my-side "corp")
+                    (do
+                      (println "    → 'continue' passes priority here (you DECLINE to act this window).")
+                      (println "    → Other options: rez a card / fire a paid ability if useful.")
+                      (when (= run-phase "approach-ice")
+                        (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
+                    (println "    → Use 'continue' to pass priority (advance the run)."))))
               ;; Not in a run
               (do
                 (println "  Action: Paid ability window")
@@ -1302,13 +1315,40 @@
           active-prompt (or prompt-state prompt)
           blocked? (boolean active-prompt)
           waiting? (state/waiting-prompt-type? (:prompt-type active-prompt))
-          msg (or (:msg prompt-state) (:msg prompt))]
+          msg (or (:msg prompt-state) (:msg prompt))
+          ;; A passive run prompt (run in progress, no choices/selectable) is a
+          ;; priority / paid-ability window — the next action is `continue`/`rez`,
+          ;; NOT `choose`. The old "answer this prompt FIRST → choose <N>" advice
+          ;; here was flatly wrong for a run window (same contradictory-guidance
+          ;; family as the diagnose-blocker fix): the Corp can't `choose` an
+          ;; opponent's run, and reads "0 playables / choose <N>" as a dead end.
+          run (:run gs)
+          run-phase (:phase run)
+          run-window? (and run active-prompt
+                           (not (seq (:choices active-prompt)))
+                           (not (seq (:selectable active-prompt))))]
       (when blocked?
         (println (format "\n⚠️  Active Prompt: %s" (or msg "(no message)")))
-        (if waiting?
+        (cond
+          waiting?
           (do
             (println "   ⛔ You are WAITING on the opponent — the actions below are NOT playable right now.")
             (println "   Use 'wait' until this clears; don't try to act through it."))
+
+          run-window?
+          (do
+            (println (format "   ⏸️  This is a RUN priority window%s — NOT a choose-prompt; 'choose' does not apply."
+                             (if run-phase (str " (phase: " run-phase ")") "")))
+            (if (= side :corp)
+              (do
+                (println "   Your options here: rez a card / fire a paid ability if useful, or 'continue' to pass priority (decline to act).")
+                (println "   • ICE rez happens at the approach-ice window — there: continue --rez <ice>  (or --no-rez to decline).")
+                (println "   • 'monitor-run' auto-passes boring windows and stops only when a real decision is owed."))
+              (do
+                (println "   Your options here: 'continue' to advance the run (pass priority), or fire a break / paid ability if useful.")
+                (println "   • 'monitor-run' or 'continue --full-break' can auto-handle routine windows."))))
+
+          :else
           (do
             (println "   ⛔ Answer this prompt FIRST — the actions below are blocked until you resolve it.")
             (println "   Use 'prompt' to see choices, then 'choose <N>' / 'choose-card <N>' / 'choose-value <text>'.")))))
