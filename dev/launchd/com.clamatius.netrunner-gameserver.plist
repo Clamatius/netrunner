@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.clamatius.netrunner-gameserver</string>
+
+    <!-- Wait for mongo (27017) before starting lein, so web.dev's (go) in
+         project.clj :init can connect on the first try. Then exec the headless
+         REPL on the nREPL port (:port arg), which hosts the game web server on
+         WEB_SERVER_PORT (see EnvironmentVariables below). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>until /usr/bin/nc -z localhost 27017; do sleep 2; done; exec /opt/homebrew/bin/lein repl :headless :host localhost :port 7888</string>
+    </array>
+
+    <!-- Run from the canonical (main) checkout. The game engine here rarely
+         changes; AI-client dev happens in worktrees and does NOT need this. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/mcooper/workspace/claudvestigation/michael_projects/netrunner</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- Web/game server port. Clients connect to ws://localhost:<this>/chsk -->
+        <key>WEB_SERVER_PORT</key>
+        <string>1042</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep the server up; restart if it ever exits. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mcooper/Library/Logs/netrunner-gameserver.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mcooper/Library/Logs/netrunner-gameserver.log</string>
+</dict>
+</plist>
