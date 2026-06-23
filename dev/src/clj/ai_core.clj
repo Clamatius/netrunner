@@ -813,6 +813,54 @@
                        (:title %)))
          first)))
 
+(defn resolve-selectable
+  "Resolve a prompt's :selectable list, separating cards this seat can actually
+   pick from PHANTOM entries — CIDs absent from the seat's visible game state
+   (hidden/opponent cards the engine leaks into the selectable list, e.g. on the
+   discard-to-hand-size prompt). Returns
+   {:pickable [{:idx <n> :card <map>} ...] :phantom [<idx> ...]}.
+
+   Indices are the ORIGINAL positions in :selectable — choose-card resolves by
+   `(nth selectable index)`, so callers must never renumber the underlying list."
+  [selectable]
+  (reduce
+   (fn [acc [idx s]]
+     (let [card (if (string? s) (find-card-by-cid s) s)]
+       (if (and (map? card) (:title card))
+         (update acc :pickable conj {:idx idx :card card})
+         (update acc :phantom conj idx))))
+   {:pickable [] :phantom []}
+   (map-indexed vector selectable)))
+
+(defn format-selectable-card
+  "Format one resolved selectable card for display: title, type, zone, rez state."
+  [card]
+  (let [title (or (:title card) (:printed-title card) "?")
+        card-type (:type card)
+        zone (:zone card)
+        rezzed? (:rezzed card)]
+    (str title
+         (when (seq (str card-type)) (str " [" card-type "]"))
+         (when (and (seq zone) (:title card))
+           (str " (in " (str/join "/" (map name zone)) ")"))
+         (when (some? rezzed?) (if rezzed? " (rezzed)" " (unrezzed)")))))
+
+(defn print-selectable!
+  "Print resolved :selectable parts truthfully: pickable cards with their TRUE
+   indices, then a single warning line for any phantom entries (CIDs the seat
+   can't see and can't select). Takes the {:pickable :phantom} map from
+   resolve-selectable (resolve once, print once). `indent` is the leading
+   whitespace per line."
+  [{:keys [pickable phantom]} indent]
+  (doseq [{:keys [idx card]} pickable]
+    (println (str indent idx ". " (format-selectable-card card))))
+  (when (seq phantom)
+    (println (str indent "⚠️  " (count phantom)
+                  (if (= 1 (count phantom)) " entry (index " " entries (indices ")
+                  (str/join ", " phantom)
+                  ") are cards you can't see (hidden/opponent) —"
+                  " not selectable from this seat; ignore them."))))
+
 ;; ============================================================================
 ;; Server Name Normalization
 ;; ============================================================================

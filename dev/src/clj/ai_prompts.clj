@@ -144,11 +144,7 @@
           (doseq [[i c] (map-indexed vector choices)]
             (println (format "      • %s" (:value c)))))
         (println "    Selectable cards:")
-        (doseq [[i cid-or-card] (map-indexed vector selectable)]
-          (let [card (if (string? cid-or-card)
-                       (core/find-card-by-cid cid-or-card)
-                       cid-or-card)]
-            (println (format "      %d. %s" i (or (:title card) cid-or-card)))))
+        (core/print-selectable! (core/resolve-selectable selectable) "      ")
         (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
 
       choice-uuid
@@ -247,8 +243,13 @@
             (wait-for-prompt-change! eid)
             (maybe-auto-end-turn-after-prompt!)
             (core/with-cursor {:status :success :card card}))
-          (do
-            (println (format "❌ Could not resolve card at index %d" index))
+          (let [{:keys [pickable]} (core/resolve-selectable selectable)
+                pickable-idxs (map :idx pickable)]
+            (println (format "❌ Index %d isn't a card you can select — it's hidden/opponent (not in your view)." index))
+            (if (seq pickable-idxs)
+              (println (format "   Selectable indices: %s. Use 'prompt' to see them by name."
+                              (clojure.string/join ", " pickable-idxs)))
+              (println "   No selectable cards resolve from this seat — use 'prompt' / choose-value for meta-options."))
             (core/with-cursor {:status :error :reason "Card resolution failed"})))))))
 
 (defn- find-card-in-selectable

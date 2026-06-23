@@ -989,22 +989,16 @@
                 (println (str "  ⚠️  MULTI-SELECT: Choose " cards-required " card(s)"))
                 (println "     Use: multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."))
               (println "  Selectable cards: (Use choose-card to select by index)"))
-            (println (str "  Available (" (count selectable) " cards):"))
-            (doseq [[idx cid-or-card] (map-indexed vector selectable)]
-              ;; Selectable can be CID strings or card maps - resolve CIDs to cards
-              (let [card (if (string? cid-or-card)
-                           (core/find-card-by-cid cid-or-card)
-                           cid-or-card)
-                    title (or (:title card) (:printed-title card)
-                             (when (seq (:zone card)) (str "Card in " (clojure.string/join "/" (map name (:zone card)))))
-                             (str "CID: " (if (string? cid-or-card) cid-or-card "?")))
-                    card-type (or (:type card) "")
-                    zone (:zone card)
-                    rezzed? (:rezzed card)]
-                (println (str "    " idx ". " title
-                            (when (seq card-type) (str " [" card-type "]"))
-                            (when (and (seq zone) (:title card)) (str " (in " (clojure.string/join "/" (map name zone)) ")"))
-                            (when (some? rezzed?) (if rezzed? " (rezzed)" " (unrezzed)"))))))))
+            ;; Render via the shared helper: pickable cards with their true
+            ;; indices + a single warning line for phantom (unresolvable) CIDs,
+            ;; instead of dumping raw "CID: <uuid>" lines that confuse indexing.
+            (let [{:keys [pickable phantom] :as parts} (core/resolve-selectable selectable)]
+              (println (str "  Available ("
+                            (if (seq phantom)
+                              (str (count pickable) " selectable; " (count phantom) " hidden/unselectable")
+                              (str (count selectable) " cards"))
+                            "):"))
+              (core/print-selectable! parts "    "))))
         ;; Handle paid ability windows / passive prompts
         (when (and (not has-choices) (not has-selectable))
           (let [run (get-in state [:game-state :run])

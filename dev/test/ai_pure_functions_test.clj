@@ -656,6 +656,56 @@
 ;; Test Suite Main
 ;; ============================================================================
 
+;; ============================================================================
+;; resolve-selectable / format-selectable-card tests
+;;
+;; Regression for the discard-prompt phantom-CID bug: the engine's
+;; discard-to-hand-size :selectable leaks hidden/opponent CIDs the seat can't
+;; resolve. They must be partitioned out (as :phantom) with their ORIGINAL
+;; indices preserved on the pickable cards, since choose-card uses (nth ...).
+;; String CIDs not present in game state resolve to nil -> phantom; card maps
+;; with :title resolve directly without needing live game state.
+;; ============================================================================
+
+(deftest test-resolve-selectable-all-cards
+  (testing "all card maps resolve as pickable with their indices"
+    (let [sel [{:cid "a" :title "Unity" :type "Program" :zone ["hand"]}
+               {:cid "b" :title "Cleaver" :type "Program" :zone ["hand"]}]
+          {:keys [pickable phantom]} (core/resolve-selectable sel)]
+      (is (empty? phantom))
+      (is (= [0 1] (map :idx pickable)))
+      (is (= ["Unity" "Cleaver"] (map (comp :title :card) pickable))))))
+
+(deftest test-resolve-selectable-phantom-cids
+  (testing "string CIDs absent from game state are phantom; card maps stay pickable with TRUE indices"
+    (let [sel ["phantom-cid-1" "phantom-cid-2"
+               {:cid "c" :title "Tread Lightly" :type "Event" :zone ["hand"]}
+               {:cid "d" :title "Carmen" :type "Program" :zone ["hand"]}]
+          {:keys [pickable phantom]} (core/resolve-selectable sel)]
+      ;; phantom keeps original positions 0,1 (the leaked hidden CIDs)
+      (is (= [0 1] phantom))
+      ;; pickable keeps original positions 2,3 — NOT renumbered to 0,1,
+      ;; because choose-card resolves by (nth selectable index)
+      (is (= [2 3] (map :idx pickable)))
+      (is (= ["Tread Lightly" "Carmen"] (map (comp :title :card) pickable))))))
+
+(deftest test-resolve-selectable-empty
+  (testing "empty selectable yields empty parts"
+    (let [{:keys [pickable phantom]} (core/resolve-selectable [])]
+      (is (empty? pickable))
+      (is (empty? phantom)))))
+
+(deftest test-format-selectable-card
+  (testing "formats title, type, zone, and rez state"
+    (is (= "Unity [Program] (in hand)"
+           (core/format-selectable-card {:title "Unity" :type "Program" :zone ["hand"]})))
+    (is (= "Ice Wall [ICE] (in servers/hq/ices) (unrezzed)"
+           (core/format-selectable-card {:title "Ice Wall" :type "ICE"
+                                         :zone ["servers" "hq" "ices"] :rezzed false})))
+    (is (= "Eli 1.0 [ICE] (in servers/rd/ices) (rezzed)"
+           (core/format-selectable-card {:title "Eli 1.0" :type "ICE"
+                                         :zone ["servers" "rd" "ices"] :rezzed true})))))
+
 (defn -main []
   (let [results (run-tests 'ai-pure-functions-test)]
     (println "\n========================================")
