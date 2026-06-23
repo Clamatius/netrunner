@@ -166,13 +166,13 @@ Named after the M:tG card — slow but inexorable, lower-variance than it feels 
 
 ## Git Workflow
 
-**Main dev branch:** `feat/ai_player_experiment`
+**Integration branch:** `ai-player/main` (pushed to `origin` = Clamatius fork). All AI-player work merges here. The canonical checkout (this directory) stays on `ai-player/main` and is kept current — `git pull` before starting to avoid conflicts with async work.
 
-**Before starting work:** Always `git pull` to avoid merge conflicts with Michael's changes.
+**`master` is upstream (mtgred/netrunner) — never commit AI work to it.** This project is a sidecar checked into the fork for convenience, not destined for upstream. Pull engine updates by merging `master` → `ai-player/main` (one-directional, never the reverse); these arrive in big bursts.
 
-**Committing:** Can commit directly to feature branches (this project, Server Defender, other Michael projects). This avoids stepping on each other's toes when working asynchronously.
+**Feature work:** branch off `ai-player/main` in a git worktree (e.g. `../netrunner-<feature>` on branch `ai-player/<feature>`), implement, then merge back into `ai-player/main` — open a PR on the fork for review (Claude + Codex review combo), or a direct `--no-ff` merge for small vetted work.
 
-**For complex features:** Create a feature branch, implement against RFC specs, then PR for review.
+**Other Michael projects** (Server Defender, etc.): commit directly to feature branches as before.
 
 ## Issue Tracker
 
