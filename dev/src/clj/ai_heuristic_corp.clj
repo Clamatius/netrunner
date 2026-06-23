@@ -1039,17 +1039,26 @@
   (println (str/join "" (repeat 50 "-")))
 
   ;; First, handle any pending prompts
-  (when (handle-prompt-if-needed)
-    (Thread/sleep 500))  ; Brief pause after prompt
+  (let [prompt-handled? (handle-prompt-if-needed)]
+    (when prompt-handled?
+      (Thread/sleep 500))  ; Brief pause after prompt
 
-  ;; Then decide and execute
-  (if-let [decision (decide-action)]
-    (let [result (execute-decision decision)]
-      (println (str/join "" (repeat 50 "-")))
-      result)
-    (do
-      (println "🤖 No action available (no clicks?)")
-      {:status :no-action})))
+    ;; Then decide and execute
+    (if-let [decision (decide-action)]
+      (let [result (execute-decision decision)]
+        (println (str/join "" (repeat 50 "-")))
+        result)
+      (if prompt-handled?
+        ;; We DID act this step — resolved a prompt (e.g. an opponent-card
+        ;; "Choose one" during the Runner's turn). Reporting "No action
+        ;; available" here is misleading: it reads as a stall when the bot
+        ;; actually did its job. Say so plainly instead.
+        (do
+          (println "🤖 Resolved a pending prompt — no further action this step.")
+          {:status :prompt-handled})
+        (do
+          (println "🤖 No action available (no clicks?)")
+          {:status :no-action})))))
 
 (defn play-full-turn
   "Play the full turn until no clicks remain.

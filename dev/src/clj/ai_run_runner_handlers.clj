@@ -265,7 +265,8 @@
               (when cost-label
                 (println (format "   %s (cost: %s)" label cost-label)))
               (let [result (actions/use-ability! card-name ability-index)]
-                (if (= :success (:status result))
+                (case (:status result)
+                  :success
                   (do
                     ;; Success - clear failure count for this position
                     (swap! failed-ability-attempts dissoc position)
@@ -274,9 +275,20 @@
                      :message (format "Auto-broke %s with %s" ice-title card-name)
                      :ice ice-title
                      :breaker card-name})
+
+                  ;; The break ability fired but spawned a sub-prompt that must be
+                  ;; resolved first — most commonly "pay from which credit source?"
+                  ;; when some credits are hosted on a card (e.g. Overclock). This is
+                  ;; NOT a failure: return nil so the monitor loop auto-resolves the
+                  ;; prompt and the break completes. Crucially, do NOT burn an
+                  ;; unaffordable-retry on it (use-ability! already printed the
+                  ;; "⏳ Ability triggered prompt" line).
+                  :waiting-input
+                  nil
+
+                  ;; Genuine failure (:error) - increment failure count and return
+                  ;; nil to retry. After max-retries, falls through to let-subs-fire.
                   (do
-                    ;; Failure - increment failure count and return nil to retry
-                    ;; After max-retries, will fall through to let-subs-fire path
                     (swap! failed-ability-attempts update position (fnil inc 0))
                     (println (format "❌ Ability failed (attempt %d/%d) - may be unaffordable"
                                    (inc fail-count) max-retries))

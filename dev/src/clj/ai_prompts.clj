@@ -105,7 +105,7 @@
         gameid (:gameid client-state)
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         old-eid (:eid prompt)]
-    (println (str "✅ Chose: " (:value choice)))
+    (println (str "✅ Chose: " (core/format-choice choice)))
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"

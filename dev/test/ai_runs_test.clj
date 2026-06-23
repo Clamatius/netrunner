@@ -10,6 +10,7 @@
             [ai-basic-actions :as ai-basic-actions]
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
+            [ai-card-actions :as card-actions]
             [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
@@ -696,6 +697,51 @@
             ;; full-break should fall through when no ICE
             (is (not= :ability-used (:status result))))
           (runs/reset-strategy!))))))
+
+(defn- full-break-args
+  "Build a handle-runner-full-break arg map: runner at encounter-ice facing a
+   rezzed ICE with one unbroken sub, holding a breaker with a dynamic break
+   ability. Used to drive the use-ability! return-status branches."
+  []
+  (let [ice {:title "Diviner" :rezzed true
+             :subroutines [{:broken false :fired false}]}
+        program {:title "Unity"
+                 :abilities [{:dynamic :auto-pump-and-break
+                              :label "Match strength and fully break Diviner"
+                              :cost-label "3 [Credits]"}]}
+        state {:game-state {:run {:position 1 :server ["rd"]}
+                            :corp {:servers {:rd {:ices [ice]}}}
+                            :runner {:rig {:program [program]} :credit 6}}}]
+    {:side "runner" :run-phase "encounter-ice" :state state
+     :strategy {:full-break true} :gameid "g" :my-prompt nil}))
+
+(deftest test-full-break-waiting-input-is-not-an-unaffordable-failure
+  (testing "When the break ability spawns a credit-source sub-prompt (e.g. paying
+            from credits hosted on Overclock), use-ability! returns :waiting-input.
+            That is NOT an unaffordable failure: the handler must return nil so the
+            monitor loop resolves the prompt, WITHOUT burning a retry on the
+            unaffordable counter or printing the misleading '❌ Ability failed'.
+            Regression: the old binary success/else check mislabelled the pay-prompt
+            as a failed, possibly-unaffordable break."
+    (runner-handlers/reset-state!)
+    (with-redefs [card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
+      (let [result (runner-handlers/handle-runner-full-break (full-break-args))]
+        (is (nil? result)
+            "waiting-input lets the loop resolve the prompt -> returns nil")
+        (is (empty? @runner-handlers/failed-ability-attempts)
+            "waiting-input must NOT increment the unaffordable retry counter")))))
+
+(deftest test-full-break-error-still-counts-as-failure
+  (testing "A genuine :error from use-ability! still increments the unaffordable
+            retry counter (so repeated genuine failures eventually fall through to
+            the let-subs-fire / pause path). Guards the fix above from over-reaching."
+    (runner-handlers/reset-state!)
+    (with-redefs [card-actions/use-ability! (fn [_ _] {:status :error :reason "no creds"})]
+      (let [result (runner-handlers/handle-runner-full-break (full-break-args))]
+        (is (nil? result) "error returns nil to retry")
+        (is (= 1 (get @runner-handlers/failed-ability-attempts 1))
+            "genuine error increments the retry counter for this position")))
+    (runner-handlers/reset-state!)))
 
 (deftest test-pass-fired-ice-sends-continue-once-then-waits
   (testing "After subs fire, runner sends ONE pass-continue then waits for the

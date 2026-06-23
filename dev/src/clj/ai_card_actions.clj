@@ -94,7 +94,7 @@
                       (println (str "   📋 " (:msg new-prompt)))
                       (when-let [choices (:choices new-prompt)]
                         (println (str "      Choices: " (clojure.string/join ", "
-                                       (map-indexed #(str %1 "." (:value %2)) choices))))))
+                                       (map-indexed #(str %1 "." (core/format-choice %2)) choices))))))
                     ;; Show turn indicator only if we won't auto-end (which shows its own)
                     (when (and (> after-clicks 0) (nil? new-prompt))
                       (core/show-turn-indicator))

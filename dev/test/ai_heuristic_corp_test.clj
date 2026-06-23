@@ -104,3 +104,24 @@
           (is (= :advance action)
               "Should advance the agenda already in the remote, not install a 2nd")
           (is (= "Send a Message" (:card-name args))))))))
+
+;; ============================================================================
+;; play-turn: prompt-handled vs no-action reporting
+;; ============================================================================
+;; Regression: the heuristic Corp resolves an opponent-card "Choose one" prompt
+;; (e.g. Wildcat Strike during the Runner's turn) correctly, but `corp bot`
+;; then printed "🤖 No action available (no clicks?)" and returned :no-action —
+;; reading as a stall when the bot had actually just done its job.
+
+(deftest test-play-turn-prompt-handled-not-misreported
+  (testing "play-turn that resolves a prompt but has no further action reports
+            :prompt-handled, not the misleading :no-action"
+    (with-redefs [h/handle-prompt-if-needed (fn [] true)
+                  h/decide-action (fn [] nil)]
+      (is (= :prompt-handled (:status (h/play-turn)))))))
+
+(deftest test-play-turn-genuine-no-action-unchanged
+  (testing "play-turn with no prompt AND no decision still reports :no-action"
+    (with-redefs [h/handle-prompt-if-needed (fn [] false)
+                  h/decide-action (fn [] nil)]
+      (is (= :no-action (:status (h/play-turn)))))))

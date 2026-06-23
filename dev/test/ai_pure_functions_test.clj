@@ -621,6 +621,38 @@
     (is (= "Newfoundland" (:normalized (core/normalize-server-name "Newfoundland"))))))
 
 ;; ============================================================================
+;; format-choice tests
+;; ============================================================================
+;; Regression: card-valued choices (e.g. Mutual Favor's "Choose an Icebreaker")
+;; were rendered as raw EDN maps ("{:cid \"...\", :title \"Carmen\", ...}") at the
+;; inline post-play prompt display and the "✅ Chose:" confirmation, because those
+;; sites printed (:value choice) directly instead of going through format-choice.
+;; These lock the human/agent-readable contract both sites now depend on.
+
+(deftest test-format-choice-card-map-in-value
+  (testing "a choice whose :value is a card map renders the card name, not raw EDN"
+    (let [choice {:uuid "u1"
+                  :value {:cid "abc" :title "Carmen" :printed-title "Carmen"}}
+          out (core/format-choice choice)]
+      (is (not (clojure.string/includes? out ":cid"))
+          "must not leak raw EDN map keys")
+      (is (clojure.string/includes? out "Carmen")
+          "must surface the card title"))))
+
+(deftest test-format-choice-bare-card-map
+  (testing "a bare card map (no :value wrapper) also renders the title"
+    (is (clojure.string/includes?
+         (core/format-choice {:cid "abc" :title "Cleaver"}) "Cleaver"))))
+
+(deftest test-format-choice-string-value-unchanged
+  (testing "plain string-valued choices (e.g. server names) still render as-is"
+    (is (= "R&D" (core/format-choice {:uuid "u" :value "R&D"})))))
+
+(deftest test-format-choice-label-choice
+  (testing "label-only choices (e.g. action buttons) render the label"
+    (is (= "Done" (core/format-choice {:label "Done"})))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 
