@@ -187,7 +187,7 @@ show_help_compact() {
   rez <name>       Rez ICE / asset / upgrade"
             role_running="${GREEN}Defending Runs:${NC}
   monitor-run      Participate in the opponent's run (auto-pass priority
-                   windows, surface rez/fire decisions). Required during
+                   windows, surface real Corp decisions). Required during
                    runner runs — see 'help --full' for flags.
   continue         Pass priority (e.g. decline to rez / fire)."
             role_examples="  ./send_command corp status
@@ -363,10 +363,10 @@ ${GREEN}Running:${NC}
     --no-continue    Don't auto-continue after run start
 
   ${BLUE}monitor-run Flags:${NC} (Corp)
-    --fire-if-asked  Sleep mode: auto-fire, auto-continue, wake only for rez
+    --fire-if-asked  Sleep mode: auto-fire, auto-continue, wake for rez/upgrade
     --persistent     Own the WHOLE Runner run with one command: sleep through
                      empty priority windows instead of exiting, wake only for a
-                     real rez/fire/access decision or run end. Use this for
+                     real rez/fire/upgrade/access decision or run end. Use this for
                      autonomous Corp seats so you don't re-issue monitor-run
                      through every symmetric 'pass priority' window.
 

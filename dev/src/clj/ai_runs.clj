@@ -8,6 +8,7 @@
             [ai-basic-actions :as basic]
             [ai-card-actions :as actions]
             [ai-run-tactics :as tactics]
+            [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-run-runner-handlers :as runner-handlers]))
 
@@ -983,6 +984,7 @@
                   corp-handlers/handle-corp-fire-decision
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
+                  corp-handlers/handle-corp-server-upgrade-decision
                   corp-handlers/handle-paid-ability-window
                   runner-handlers/handle-auto-select-single-card
                   runner-handlers/handle-runner-approach-ice
@@ -1052,6 +1054,16 @@
     (let [recent (take threshold state-history)]
       (apply = recent))))
 
+(defn- print-while-you-slept!
+  "Print material run events that happened during a persistent monitor sleep."
+  [start-log-count]
+  (let [log (get-in @state/client-state [:game-state :log])
+        lines (corp-decisions/summarize-slept-log log start-log-count)]
+    (when (seq lines)
+      (println "While you slept:")
+      (doseq [line lines]
+        (println (str "   " line))))))
+
 (defn auto-continue-loop!
   "Runs continue-run! in a loop until run ends or decision required.
 
@@ -1113,6 +1125,7 @@
            persistent false
            persistent-wait-delay-ms 1000}}]
   (let [start-time (System/currentTimeMillis)
+        start-log-count (count (get-in @state/client-state [:game-state :log]))
         deadline (+ start-time timeout-ms)]
     (loop [iteration 0
            state-history []]   ; Track [phase position ice] for stuck detection
@@ -1120,6 +1133,8 @@
         ;; Safety: max iterations (should rarely trigger with stuck-detection)
         (>= iteration max-iterations)
         (do
+          (when persistent
+            (print-while-you-slept! start-log-count))
           (println (format "⚠️  Auto-continue stopped: max iterations (%d) reached" max-iterations))
           {:status :max-iterations
            :wake-reason :max-iterations
@@ -1129,6 +1144,8 @@
         ;; Safety: timeout
         (> (System/currentTimeMillis) deadline)
         (do
+          (when persistent
+            (print-while-you-slept! start-log-count))
           (println (format "⚠️  Auto-continue stopped: timeout (%dms) reached" timeout-ms))
           {:status :timeout
            :wake-reason :timeout
@@ -1150,6 +1167,8 @@
             ;; here, including from monitor-run! on the off-turn side.
             (terminal-status? status)
             (do
+              (when persistent
+                (print-while-you-slept! start-log-count))
               (when (or (= status :run-complete) (= status :no-run))
                 (basic/check-auto-end-turn!)
                 ;; Clear per-run runner handler atoms (passed-ice-position,
@@ -1199,6 +1218,7 @@
                 ;; monitor" — a self-contradicting double-step. Return a CLEAN
                 ;; :no-run terminal so the seat goes straight back to its wait loop.
                 (do
+                  (print-while-you-slept! start-log-count)
                   (println "✅ Run ended — no further Corp decision. Back to the wait loop.")
                   (assoc result
                          :status :no-run

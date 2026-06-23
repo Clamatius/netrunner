@@ -65,6 +65,32 @@ make watch-runner       # Stream runner game events (for Monitor)
 # Auto-end-turn triggers after clicks spent (unless agenda scorable)
 ```
 
+## Dev / QA Commands
+
+For QA and scenario setup, `./dev/send_command <side> help --dev` lists the dev/test/infra
+commands (these are hidden from `help --full`). The most useful for building test boards:
+
+```bash
+# Scenario setup
+./dev/send_command corp draw-to-card "Palisade"   # Draw until a named card is in hand
+./dev/send_command corp find-card "Manegarm Skunkworks"  # Multi-turn search (bot takes turns)
+./dev/send_command corp fix-credits 20            # CHEATING: set credits directly
+./dev/send_command corp discard-card "Hedge Fund" # Move a card to discard (testing)
+
+# Inspection / control
+./dev/send_command corp eval "<clojure-expr>"     # Eval arbitrary Clojure in the AI client REPL
+./dev/send_command corp nuke-state                # Clear cached game state
+./dev/send_command corp connect                   # Manually reconnect WebSocket
+
+# Heuristic bot (self-play / autonomous)
+./dev/send_command corp bot-turn                  # Play a full turn with the heuristic AI
+./dev/send_command corp bot-respond               # Respond to an active run (rez/fire)
+```
+
+`draw-to-card` is click-limited (only draws within the current turn's clicks); `find-card`
+spans turns via the bot. `eval` is the escape hatch for inspecting live state, e.g.
+`eval "(get-in @ai-state/client-state [:game-state :run])"`.
+
 ## Important Behaviors
 
 **Action verification:** Actions return `{:status :success|:waiting-input|:error}`:

@@ -75,12 +75,17 @@ it. The rule:
   left unattended wedges the Runner (it waits for your priority and cannot pass it
   itself).
 - **Always `--persistent`.** One command owns the whole run; it auto-passes the
-  empty "pass priority" windows and only returns to you for a real **rez** or
-  **fire** decision, or when the run ends. Without `--persistent` you'd exit on
-  every symmetric window — exactly where two models deadlock.
+  empty "pass priority" windows and only returns to you for a real **rez**,
+  **fire**, attacked-server **upgrade**, unsupported prompt, or run-end decision.
+  Without `--persistent` you'd exit on every symmetric window — exactly where two
+  models deadlock.
 - After a real decision, RE-ENTER the monitor (still `--persistent`) with your
-  choice: `--rez "<ICE name>"`, `--no-rez`, or `--fire-if-asked`. Read the
-  decision with `./dev/send_command corp prompt` and `./dev/send_command corp board`.
+  choice: `--rez "<ICE name>"`, `--no-rez`, or `--fire-if-asked`. For an
+  attacked-server upgrade, use `rez "<upgrade>"` or `continue`, then re-enter the
+  monitor. Read any unclear decision with `./dev/send_command corp prompt` and
+  `./dev/send_command corp board`.
+- Treat raw `continue`, `continue-run`, `rez`, and `fire-subs` as low-level
+  escape hatches. Most runs should be handled by `monitor-run --persistent`.
 - **TIMEOUT during an active run is normal pacing, not a stall** — just re-issue
   `monitor-run --persistent`. Only repeated timeouts with *zero* board movement
   across several re-issues is a possible genuine wedge (note it for your report).
