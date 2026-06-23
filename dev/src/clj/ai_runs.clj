@@ -1205,7 +1205,14 @@
                          :iterations (inc iteration)
                          :elapsed-ms (- (System/currentTimeMillis) start-time)))
                 (do
-                  (println "💡 Tip: Corp should run 'monitor-run' to participate in the run")
+                  ;; Side-aware tip. This loop just passed THIS seat's window and
+                  ;; is now waiting on the opponent. The advice depends on who's
+                  ;; running it: a Runner waits on the Corp to defend (monitor-run);
+                  ;; a Corp that already passed waits on the Runner to act — telling
+                  ;; the Corp to "run monitor-run" there is backwards (it just did).
+                  (if (core/side= "Corp" (:side @state/client-state))
+                    (println "💡 Waiting for Runner to act (e.g. 'continue' / next run step) — they hold priority.")
+                    (println "💡 Tip: Corp should run 'monitor-run' to participate in the run"))
                   (assoc result
                          :iterations (inc iteration)
                          :elapsed-ms (- (System/currentTimeMillis) start-time)))))
