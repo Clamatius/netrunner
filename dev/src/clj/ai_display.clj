@@ -13,6 +13,10 @@
 
 (def update-hud-section hud/update-hud-section)
 
+;; Forward declaration: run-server-display (defined below, near the run-priority
+;; helpers) is used by the status displays above its definition.
+(declare run-server-display)
+
 ;; ============================================================================
 ;; Status & Information
 ;; ============================================================================
@@ -180,7 +184,7 @@
             ;; Run status
             (when run-state
               (println "\n🏃 ACTIVE RUN:")
-              (println "  Server:" (:server run-state))
+              (println "  Server:" (run-server-display (last (:server run-state))))
               (println "  Phase:" (:phase run-state))
               (when-let [pos (:position run-state)]
                 (println "  Position:" pos))
@@ -621,7 +625,7 @@
             opp-label (if (= my-side "runner") "C" "R")
 
             prompt-str (cond
-                        run-state (format "Run:%s" (:server run-state))
+                        run-state (format "Run:%s" (run-server-display (last (:server run-state))))
                         waiting-start? "awaiting-start"
                         prompt (let [msg (:msg prompt)]
                                 (if (> (count msg) 30)

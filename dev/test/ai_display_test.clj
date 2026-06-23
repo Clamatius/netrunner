@@ -106,6 +106,60 @@
         (is (not (str/includes? line "awaiting-start"))
             (str "mid-turn must not show boundary marker, got: " line))))))
 
+(deftest test-run-server-display
+  (testing "central server keys render human-readable"
+    (is (= "R&D" (display/run-server-display "rd")))
+    (is (= "HQ" (display/run-server-display "hq")))
+    (is (= "Archives" (display/run-server-display "archives"))))
+  (testing "remote keys render as Server N"
+    (is (= "Server 1" (display/run-server-display "remote1"))))
+  (testing "nil / unknown fall back gracefully"
+    (is (= "the server" (display/run-server-display nil)))))
+
+(deftest test-status-compact-run-target-not-raw-edn
+  ;; The compact status used to print the raw :server vector -> `Run:["rd"]`,
+  ;; which reads as leaked EDN rather than a server name. It must render the
+  ;; human-readable target.
+  (testing "active run shows Run:R&D, not Run:[\"rd\"]"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :run {:server ["rd"] :phase "initiation"}
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0 :rig {}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Run:R&D")
+            (str "expected human-readable run target, got: " line))
+        (is (not (str/includes? line "[\"rd\"]"))
+            (str "must not leak raw EDN server vector, got: " line))))))
+
+(deftest test-status-compact-hosted-credits
+  ;; Credits hosted on rig/play-area cards (issue #21) must surface as (+N) so
+  ;; the seat doesn't undercount affordability. The (+N) form avoids colliding
+  ;; with the Nh hand suffix.
+  (testing "runner with hosted credits shows pool(+hosted)c"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :runner {:click 2 :credit 0 :hand [] :agenda-point 0
+                                            :rig {:resource [{:title "Red Team"
+                                                              :counter {:credit 12}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "0(+12)c")
+            (str "expected hosted-credit annotation, got: " line)))))
+  (testing "no hosted credits -> plain credit count, no parens"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0 :rig {}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "5c/")
+            (str "expected plain credit count, got: " line))
+        (is (not (str/includes? line "(+"))
+            (str "must not show hosted annotation when none, got: " line))))))
+
 (deftest test-show-snapshot-bundles-read-loop
   ;; snapshot collapses the per-decision read-loop
   ;; (status-compact + prompt? + board-compact + hand + log + cursor) into one
