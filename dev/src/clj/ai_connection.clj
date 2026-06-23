@@ -377,9 +377,17 @@
               (do
                 (println "❌ Resync sent but state did not arrive in time")
                 false)))
-          (do
-            (println "❌ Join succeeded but not confirmed in lobby - resync skipped")
-            false)))
+          (if (nil? found-gameid)
+            ;; We never found our game in the lobby and were rejoining the stale
+            ;; gameid (a corpse). The join was NOT confirmed — almost certainly the
+            ;; game was idle-purged. Say so honestly instead of "Join succeeded".
+            (do
+              (println "❌ Game appears to be gone — not found in the lobby, and rejoining the stale id was not confirmed.")
+              (println "   Most likely idle-purged (long pauses end the game). Run: ./dev/reset.sh for a fresh game.")
+              false)
+            (do
+              (println "❌ Rejoin not confirmed in lobby within 5s — resync skipped (transient; retry the command).")
+              false))))
       (do
         (println "❌ Could not find any game to rejoin")
         (println "   Try: list-lobbies + join + resync manually")
