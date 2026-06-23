@@ -189,6 +189,36 @@
 (defn corp-clicks [] (clicks-for-side :corp))
 (defn corp-hand-count [] (hand-count-for-side :corp))
 
+(defn- card-credit-counters
+  "Recursively collect {:title :credits} for a card and any cards hosted on it
+   that carry a positive :credit counter."
+  [card]
+  (let [n (get-in card [:counter :credit] 0)
+        here (when (pos? n) [{:title (or (:title card) "Unknown") :credits n}])
+        hosted (mapcat card-credit-counters (:hosted card))]
+    (concat here hosted)))
+
+(defn runner-hosted-credits
+  "Credits hosted on the Runner's visible cards -- the rig (programs/hardware/
+   resources, plus anything hosted on them) and the play-area, where run events
+   like Overclock park their :credit counters for the duration of a run. Many of
+   these are spendable (notably for run/break payments), but the status credit
+   field reports only the pool, so an agent reasoning about affordability
+   undercounts. Returns {:total N :sources [{:title :credits} ...]} (issue #21).
+
+   We deliberately do NOT assert run-spendability here: that lives in server-side
+   card-def :pay-credits interactions the wire client never sees. We surface the
+   hosted credits and name their sources so the agent can judge -- honest about
+   what's hosted without over-claiming what's spendable."
+  ([] (runner-hosted-credits (get-game-state)))
+  ([gs]
+   (let [rig (get-in gs [:runner :rig])
+         cards (concat (:program rig) (:hardware rig) (:resource rig)
+                       (get-in gs [:runner :play-area]))
+         sources (vec (mapcat card-credit-counters cards))]
+     {:total (reduce + 0 (map :credits sources))
+      :sources sources})))
+
 (defn waiting-prompt-type?
   "True if a :prompt-type denotes a passive 'waiting for opponent' prompt.
    The WIRE value is the STRING \"waiting\"; older/fixture code uses the

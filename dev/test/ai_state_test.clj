@@ -373,3 +373,47 @@
     (with-mock-state {:connected true :side "corp"
                       :game-state {:turn 5 :active-player "corp"}}
       (is (false? (state/game-over?))))))
+
+;; ============================================================================
+;; Hosted Run-Spendable Credits (issue #21)
+;; ============================================================================
+
+(deftest test-runner-hosted-credits
+  (testing "no hosted credits -> total 0, empty sources"
+    (is (= {:total 0 :sources []}
+           (state/runner-hosted-credits {:runner {:rig {}}})))
+    ;; cards present but none carry a credit counter
+    (is (= {:total 0 :sources []}
+           (state/runner-hosted-credits
+             {:runner {:rig {:program [{:title "Leech" :counter {:virus 2}}]
+                             :hardware [{:title "Cyberdelia"}]}}}))))
+
+  (testing "Overclock parks credits in the play-area during a run"
+    (let [gs {:runner {:rig {}
+                       :play-area [{:title "Overclock" :counter {:credit 5}}]}}
+          {:keys [total sources]} (state/runner-hosted-credits gs)]
+      (is (= 5 total))
+      (is (= [{:title "Overclock" :credits 5}] sources))))
+
+  (testing "sums across rig zones and play-area"
+    (let [gs {:runner {:rig {:resource [{:title "Ghost Runner" :counter {:credit 3}}]
+                             :hardware [{:title "Cyberdelia" :counter {:credit 1}}]
+                             :program [{:title "Leech" :counter {:virus 2}}]}
+                       :play-area [{:title "Overclock" :counter {:credit 5}}]}}
+          {:keys [total sources]} (state/runner-hosted-credits gs)]
+      (is (= 9 total))
+      (is (= 3 (count sources)))
+      (is (= #{"Ghost Runner" "Cyberdelia" "Overclock"}
+             (set (map :title sources))))))
+
+  (testing "recurses into hosted cards (e.g. credits on a hosted card)"
+    (let [gs {:runner {:rig {:hardware [{:title "Console"
+                                         :hosted [{:title "Hosted Econ" :counter {:credit 2}}]}]}}}
+          {:keys [total sources]} (state/runner-hosted-credits gs)]
+      (is (= 2 total))
+      (is (= [{:title "Hosted Econ" :credits 2}] sources))))
+
+  (testing "zero credit counter is not surfaced"
+    (is (= {:total 0 :sources []}
+           (state/runner-hosted-credits
+             {:runner {:play-area [{:title "Spent Overclock" :counter {:credit 0}}]}})))))

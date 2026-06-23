@@ -198,7 +198,15 @@
                       (println (format "     Subs: %d unbroken of %d" unbroken (count subs))))))))
 
             (println "\n--- RUNNER ---")
-            (println "Credits:" (state/runner-credits))
+            (let [hosted (state/runner-hosted-credits)]
+              (if (pos? (:total hosted))
+                (println (format "Credits: %d (+%d hosted: %s)"
+                                 (state/runner-credits)
+                                 (:total hosted)
+                                 (clojure.string/join ", "
+                                   (map #(format "%s %d" (:title %) (:credits %))
+                                        (:sources hosted)))))
+                (println "Credits:" (state/runner-credits))))
             (let [clicks runner-clicks]
               (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
                 (do
@@ -588,6 +596,13 @@
             runner-clicks (get-in gs [:runner :click] 0)
             runner-hand (get-in gs [:runner :hand] [])
             runner-ap (get-in gs [:runner :agenda-point] 0)
+            ;; Credits hosted on rig/play-area cards (e.g. Overclock during a run)
+            ;; are spendable but omitted from the pool field -- surface as (+N)
+            ;; so the seat doesn't undercount affordability (issue #21).
+            runner-hosted (:total (state/runner-hosted-credits gs))
+            runner-cred-str (if (pos? runner-hosted)
+                              (format "%d(+%d)" runner-credits runner-hosted)
+                              (str runner-credits))
 
             ;; Corp state
             corp-credits (get-in gs [:corp :credit] 0)
@@ -597,11 +612,11 @@
 
             ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
             my-stats (if (= my-side "runner")
-                      (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap)
+                      (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks (count runner-hand) runner-ap)
                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap))
             opp-stats (if (= my-side "runner")
                        (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap)
-                       (format "%dc/%dcl/%dh/%dAP" runner-credits runner-clicks (count runner-hand) runner-ap))
+                       (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks (count runner-hand) runner-ap))
             my-label (if (= my-side "runner") "R" "C")
             opp-label (if (= my-side "runner") "C" "R")
 
