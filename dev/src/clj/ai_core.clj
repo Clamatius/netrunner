@@ -369,6 +369,57 @@
            :reason "Action not confirmed in game log (timeout)"
            :card-name card-name}))))))
 
+(defn new-prompt?
+  "Did a genuinely NEW prompt (a new decision point) appear, given the prompt
+   seen before the action (`initial`) and the prompt seen now (`current`)?
+
+   Structural inequality alone is unreliable: prompt-state is NOT cleared
+   passively when a prompt resolves/cancels, so `initial` is often a stale
+   leftover that is byte-identical to a freshly re-opened same-shaped prompt
+   (e.g. using Red Team twice both open \"Choose a server\"). `(not= current
+   initial)` is then false and the real prompt is missed -- surfacing a bogus
+   \"Ability failed (timeout)\" for an ability that actually worked.
+
+   Each prompt instance carries a unique :eid, so a differing eid is the
+   reliable \"new decision\" signal; we fall back to structural inequality for
+   the rare eid-less prompt."
+  [initial current]
+  (boolean
+    (and current
+         (or (not= (:eid current) (:eid initial))
+             (not= current initial)))))
+
+(defn classify-ability-result
+  "Pure classifier for ability verification. Given the prompt/log seen before
+   the action and the current prompt/log, decide the outcome. Returns a status
+   map (:success / :waiting-input) or nil if nothing has changed yet (keep
+   polling). Extracted from verify-ability-in-log so the eid-aware new-prompt
+   logic is unit-testable without the live atom or wall clock."
+  [card-name {:keys [initial-prompt current-prompt initial-size current-log]}]
+  (let [current-size (count current-log)
+        new-entries (drop initial-size current-log)
+        card-in-new-entries (some #(when (string? (:text %))
+                                     (str/includes? (:text %) card-name))
+                                  new-entries)]
+    (cond
+      ;; Card name in NEW log entries = success
+      card-in-new-entries
+      {:status :success :card-name card-name}
+
+      ;; New prompt created = waiting for input
+      (new-prompt? initial-prompt current-prompt)
+      {:status :waiting-input
+       :prompt current-prompt
+       :card-name card-name}
+
+      ;; Log grew (but no card name visible) = might be success
+      ;; (some abilities may not mention card name in log)
+      (> current-size initial-size)
+      {:status :success :card-name card-name}
+
+      ;; No change yet
+      :else nil)))
+
 (defn verify-ability-in-log
   "Check if ability usage appears in game log.
    Unlike verify-action-in-log, doesn't check zone change (card stays installed).
@@ -389,36 +440,12 @@
         initial-prompt (or pre-prompt (state/get-prompt))
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
-                       (let [client-state @state/client-state
-                             log (get-in client-state [:game-state :log])
-                             current-size (count log)
-                             current-prompt (state/get-prompt)
-                             ;; Check if new prompt was created
-                             new-prompt-created (and current-prompt
-                                                     (not= current-prompt initial-prompt))
-                             ;; Only check NEW log entries (added after initial-size)
-                             new-entries (drop initial-size log)
-                             card-in-new-entries (some #(when (string? (:text %))
-                                                          (str/includes? (:text %) card-name))
-                                                       new-entries)]
-                         (cond
-                           ;; Card name in NEW log entries = success
-                           card-in-new-entries
-                           {:status :success :card-name card-name}
-
-                           ;; New prompt created = waiting for input
-                           new-prompt-created
-                           {:status :waiting-input
-                            :prompt current-prompt
-                            :card-name card-name}
-
-                           ;; Log grew (but no card name visible) = might be success
-                           ;; (some abilities may not mention card name in log)
-                           (> current-size initial-size)
-                           {:status :success :card-name card-name}
-
-                           ;; No change yet
-                           :else nil)))]
+                       (classify-ability-result
+                         card-name
+                         {:initial-prompt initial-prompt
+                          :current-prompt (state/get-prompt)
+                          :initial-size initial-size
+                          :current-log (get-in @state/client-state [:game-state :log])}))]
     ;; Poll until we get a result or timeout
     (loop []
       (if-let [result (check-result)]

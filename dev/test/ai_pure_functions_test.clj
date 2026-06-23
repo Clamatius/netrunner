@@ -706,6 +706,75 @@
            (core/format-selectable-card {:title "Eli 1.0" :type "ICE"
                                          :zone ["servers" "rd" "ices"] :rezzed true})))))
 
+;; ============================================================================
+;; new-prompt? / classify-ability-result (ai-core) -- eid-aware prompt detection
+;; Regression: use-ability! reported "Ability failed (timeout)" for abilities
+;; that opened a prompt (e.g. Red Team's "Choose a server"), because prompt-state
+;; isn't cleared on resolve so the stale leftover compared structurally-equal to
+;; the freshly re-opened same-shaped prompt.
+;; ============================================================================
+
+(deftest test-new-prompt?
+  (testing "no current prompt -> not new"
+    (is (false? (core/new-prompt? nil nil)))
+    (is (false? (core/new-prompt? {:eid {:eid 1} :msg "x"} nil))))
+
+  (testing "first prompt after a nil baseline -> new"
+    (is (true? (core/new-prompt? nil {:eid {:eid 1} :msg "Choose a server"}))))
+
+  (testing "same eid (genuinely the same ongoing decision) -> not new"
+    (let [p {:eid {:eid 10371} :msg "Choose a server"}]
+      (is (false? (core/new-prompt? p p)))))
+
+  (testing "THE BUG: stale leftover byte-identical to a freshly re-opened prompt"
+    ;; Without eid-awareness these compare structurally equal and the real
+    ;; prompt is missed. Different :eid is the reliable new-decision signal.
+    (let [stale   {:eid {:eid 100} :msg "Choose a server"
+                   :choices [{:value "HQ"} {:value "R&D"}]}
+          re-open {:eid {:eid 200} :msg "Choose a server"
+                   :choices [{:value "HQ"} {:value "R&D"}]}]
+      (is (true? (core/new-prompt? stale re-open)))))
+
+  (testing "eid-less prompts fall back to structural inequality"
+    (is (true? (core/new-prompt? {:msg "old"} {:msg "new"})))
+    (is (false? (core/new-prompt? {:msg "same"} {:msg "same"})))))
+
+(deftest test-classify-ability-result
+  (testing "card name in NEW log entries -> success"
+    (is (= {:status :success :card-name "Red Team"}
+           (core/classify-ability-result "Red Team"
+             {:initial-prompt nil :current-prompt nil
+              :initial-size 1
+              :current-log [{:text "old"} {:text "ai-runner uses Red Team to make a run"}]}))))
+
+  (testing "log entry only counted when AFTER initial-size (no stale match)"
+    (is (nil? (core/classify-ability-result "Red Team"
+                {:initial-prompt nil :current-prompt nil
+                 :initial-size 1
+                 :current-log [{:text "ai-runner uses Red Team to make a run"}]}))))
+
+  (testing "new prompt (re-opened same-shaped) -> waiting-input"
+    (let [stale   {:eid {:eid 100} :msg "Choose a server"}
+          re-open {:eid {:eid 200} :msg "Choose a server"}
+          r (core/classify-ability-result "Red Team"
+              {:initial-prompt stale :current-prompt re-open
+               :initial-size 5 :current-log [{:text "a"} {:text "b"} {:text "c"}
+                                             {:text "d"} {:text "e"}]})]
+      (is (= :waiting-input (:status r)))
+      (is (= re-open (:prompt r)))))
+
+  (testing "log grew without card name -> success"
+    (is (= {:status :success :card-name "Mystery"}
+           (core/classify-ability-result "Mystery"
+             {:initial-prompt nil :current-prompt nil
+              :initial-size 1 :current-log [{:text "a"} {:text "b"}]}))))
+
+  (testing "nothing changed -> nil (keep polling / eventual timeout)"
+    (let [p {:eid {:eid 7} :msg "stale"}]
+      (is (nil? (core/classify-ability-result "Red Team"
+                  {:initial-prompt p :current-prompt p
+                   :initial-size 2 :current-log [{:text "a"} {:text "b"}]}))))))
+
 (defn -main []
   (let [results (run-tests 'ai-pure-functions-test)]
     (println "\n========================================")
