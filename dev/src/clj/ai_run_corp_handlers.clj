@@ -9,7 +9,8 @@
    - Returns nil to fall through to next handler
    - Returns result map {:status ... :action ...} to stop handler chain"
   (:require [ai-websocket-client-v2 :as ws]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [ai-run-corp-decisions :as decisions]))
 
 ;; ============================================================================
 ;; Shared Helpers
@@ -37,22 +38,6 @@
   (Thread/sleep 100)
   {:status :action-taken
    :action :sent-continue})
-
-(defn- filter-meaningful-log-entries
-  "Filter log entries to exclude 'no further action' spam."
-  [log-entries]
-  (remove #(clojure.string/includes? (str (:text %)) "has no further action") log-entries))
-
-(defn- runner-signaled-let-fire?
-  "Check if Runner has signaled they're done breaking on current ICE.
-   Looks for the specific system message in recent game log."
-  [state ice-title]
-  (let [log (get-in state [:game-state :log])
-        meaningful (filter-meaningful-log-entries log)
-        recent (take-last 20 meaningful)]
-    (some #(and (clojure.string/includes? (str (:text %)) "indicates to fire")
-                (clojure.string/includes? (str (:text %)) ice-title))
-          recent)))
 
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
@@ -147,28 +132,25 @@
 
 (defn handle-corp-rez-decision
   "Priority 1.7: Corp at approach-ice WITHOUT strategy - pause for human decision."
-  [{:keys [side run-phase my-prompt strategy state]}]
+  [{:keys [side strategy state]}]
   (when (and (= side "corp")
-             (= run-phase "approach-ice")
-             my-prompt
              (not (:no-rez strategy))
              (not (:rez strategy)))
-    (let [current-ice (core/current-run-ice state)]
-      (when (and current-ice (not (:rezzed current-ice)))
-        (let [ice-title (:title current-ice "ICE")
-              position (get-in state [:game-state :run :position])
+    (let [decision (decisions/corp-run-decision state)]
+      (when (= :rez-ice (:kind decision))
+        (let [ice-title (get-in decision [:ice :title] "ICE")
+              position (get-in decision [:ice :position])
               status-key [:corp-rez-decision position ice-title]
               already-printed? (= @last-waiting-status status-key)]
           (when-not already-printed?
             (reset! last-waiting-status status-key)
-            (let [base-cost (get current-ice :cost 0)
-                  run-source (get-in state [:game-state :run :source-card :title])]
-              (println (format "Rez decision: %s (base cost %d)" ice-title base-cost))
-              (when run-source
-                (println (format "   Run started by: %s" run-source))))
-            (println "   Use continue with '--rez <name>' to rez, or '--no-rez' to decline"))
+            (doseq [line (decisions/present-corp-run-decision decision)]
+              (println line))
+            (when-let [run-source (get-in state [:game-state :run :source-card :title])]
+              (println (format "   Run started by: %s" run-source))))
           {:status :decision-required
-           :wake-reason :rez-decision
+           :wake-reason (:wake-reason decision)
+           :decision decision
            :message (format "Corp must decide: rez %s or continue" ice-title)
            :ice ice-title
            :position position})))))
@@ -191,7 +173,7 @@
           ice-title (:title current-ice "ICE")
           subroutines (:subroutines current-ice)
           unbroken-subs (filter #(not (:broken %)) subroutines)
-          runner-signaled? (runner-signaled-let-fire? state ice-title)]
+          runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)]
       (cond
         already-fired-here? nil
         (nil? current-ice)
@@ -218,45 +200,40 @@
 (defn handle-corp-fire-decision
   "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision.
    Returns :decision-required if Runner has signaled, :waiting-for-runner-signal otherwise."
-  [{:keys [side run-phase my-prompt strategy state]}]
+  [{:keys [side strategy state]}]
   (when (and (= side "corp")
-             (= run-phase "encounter-ice")
-             my-prompt
              (not (:fire-unbroken strategy)))
-    (let [current-ice (core/current-run-ice state)
-          subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
-      (when (and current-ice (seq unbroken-subs))
-        (let [ice-title (:title current-ice "ICE")
-              sub-count (count unbroken-subs)
-              position (get-in state [:game-state :run :position])
-              runner-signaled? (runner-signaled-let-fire? state ice-title)
-              status-key [:corp-fire-decision position ice-title runner-signaled?]
+    (let [decision (decisions/corp-run-decision state)]
+      (when (contains? #{:fire-unbroken :waiting-runner-signal} (:kind decision))
+        (let [ice-title (get-in decision [:ice :title] "ICE")
+              sub-count (get-in decision [:ice :unbroken-count] 0)
+              position (get-in decision [:ice :position])
+              status-key [:corp-fire-decision position ice-title (:kind decision)]
               already-printed? (= @last-waiting-status status-key)]
-          (if runner-signaled?
-            ;; Runner signaled - Corp must decide NOW
+          (case (:kind decision)
+            :fire-unbroken
             (do
               (when-not already-printed?
                 (reset! last-waiting-status status-key)
-                (println (format "Subs unbroken: %s (%d sub%s)"
-                               ice-title sub-count (if (= sub-count 1) "" "s")))
-                (println "   Runner has signaled 'let subs fire'")
-                (println "   fire-subs <name>  - fire the unbroken subs")
-                (println "   continue          - pass without firing"))
+                (doseq [line (decisions/present-corp-run-decision decision)]
+                  (println line)))
               {:status :decision-required
-               :wake-reason :fire-decision
+               :wake-reason (:wake-reason decision)
+               :decision decision
                :message (format "Corp must decide: fire %d sub(s) on %s or continue" sub-count ice-title)
                :ice ice-title
                :unbroken-count sub-count
                :position position})
-            ;; Runner hasn't signaled - keep waiting (auto-continue loop will poll)
+
+            :waiting-runner-signal
             (do
               (when-not already-printed?
                 (reset! last-waiting-status status-key)
-                (println (format "⏳ Waiting for Runner to break or signal on %s (%d unbroken sub%s)..."
-                               ice-title sub-count (if (= sub-count 1) "" "s"))))
+                (doseq [line (decisions/present-corp-run-decision decision)]
+                  (println (str "⏳ " line "..."))))
               {:status :waiting-for-runner-signal
-               :wake-reason :waiting-for-opponent
+               :wake-reason (:wake-reason decision)
+               :decision decision
                :message (format "Waiting for Runner to break or signal on %s" ice-title)
                :ice ice-title
                :unbroken-count sub-count
@@ -290,7 +267,7 @@
         (let [ice-title (:title current-ice "ICE")
               subroutines (:subroutines current-ice)
               unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-              runner-signaled? (runner-signaled-let-fire? state ice-title)
+              runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)
               already-fired-here? (= (:fired-at-position strategy) position)]
           (cond
             ;; Already fired at this position - continue
@@ -388,6 +365,26 @@
                :wake-reason :waiting-for-opponent
                :message (format "Waiting for Runner to continue past %s" ice-title)
                :phase run-phase})))))))
+
+(defn handle-corp-server-upgrade-decision
+  "Wake before access when an unrezzed upgrade in the attacked server may matter."
+  [{:keys [side state]}]
+  (when (= side "corp")
+    (let [decision (decisions/corp-run-decision state)]
+      (when (= :server-upgrade (:kind decision))
+        (let [card-title (get-in decision [:card :title] "upgrade")
+              status-key [:corp-server-upgrade-decision (:server decision) card-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (doseq [line (decisions/present-corp-run-decision decision)]
+              (println line)))
+          {:status :decision-required
+           :wake-reason (:wake-reason decision)
+           :decision decision
+           :message (format "Corp must decide: rez %s before access or continue" card-title)
+           :card card-title
+           :server (:server decision)})))))
 
 ;; ============================================================================
 ;; General Priority Passing
