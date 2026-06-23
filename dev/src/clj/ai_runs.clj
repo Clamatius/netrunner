@@ -1190,9 +1190,17 @@
               (assoc result
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time))
+              ;; Idle wait for the Runner to break/signal. Like the persistent
+              ;; :waiting-for-opponent branch below, DON'T advance `iteration`:
+              ;; this is an idle opponent wait, not an action loop, so it must be
+              ;; bounded by timeout-ms (LLM-paced, ~300s) — not the action-stuck
+              ;; max-iterations guard (~100s). Advancing it made a Corp parked at
+              ;; an encounter waiting for a slow Runner bail mid-run with a
+              ;; misleading "max iterations reached", defeating monitor-run
+              ;; --persistent's whole-run ownership (b7e710d11).
               (do
                 (Thread/sleep wait-delay-ms)
-                (recur (inc iteration) [])))  ; Reset history on wait
+                (recur iteration [])))  ; Reset history; idle wait, don't advance iteration
 
             ;; Waiting for opponent. Normally terminal — the other client needs
             ;; to run their own loop (e.g., Corp runs monitor-run!). In persistent

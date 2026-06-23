@@ -406,10 +406,16 @@
                                           :max-iterations 50 :timeout-ms 2000)]
           (is (= :waiting-for-runner-signal (:status r)))
           (is (= 1 (:iterations r)) "must return on the first poll, not loop"))
-        ;; Default (hand-driven monitor-run): keeps polling internally.
-        (let [r (runs/auto-continue-loop! :max-iterations 3 :timeout-ms 2000 :wait-delay-ms 1)]
-          (is (= :max-iterations (:status r))
-              "without the opt-in it keeps polling the runner-signal wait"))))))
+        ;; Default (hand-driven / persistent monitor-run): keeps polling
+        ;; internally. The idle runner-signal wait is bounded by timeout-ms (the
+        ;; LLM-paced idle bound), NOT the action-stuck max-iterations guard —
+        ;; otherwise a Corp parked at an encounter waiting for a slow Runner bails
+        ;; mid-run after ~100s with a misleading "max iterations reached".
+        (let [r (runs/auto-continue-loop! :max-iterations 3 :timeout-ms 50 :wait-delay-ms 1)]
+          (is (= :timeout (:status r))
+              "idle runner-signal wait is governed by timeout, not max-iterations")
+          (is (< (:iterations r) 3)
+              "idle polling must not advance the action-stuck iteration counter"))))))
 
 ;; ============================================================================
 ;; Persistent monitor-run (Michael's decree / codex55 058): a Corp seat should
