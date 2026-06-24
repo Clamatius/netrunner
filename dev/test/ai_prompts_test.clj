@@ -166,6 +166,56 @@
             (is (not (str/includes? out "No select prompt active")))))))))
 
 ;; ============================================================================
+;; choose-card! — partial multi-select must not trigger the auto-end-turn hook
+;;
+;; choose-card! fires maybe-auto-end-turn-after-prompt! after every select. On a
+;; partial multi-select (discard-to-N, prompt STAYS PUT while the server toggles
+;; toward :max) nothing has resolved, yet the hook reaches check-auto-end-turn!,
+;; which — clicks=0, prompt still blocking — prints a spurious
+;;   "⚠️  Cannot auto-end turn: Active prompt must be resolved first
+;;    💡 Use 'prompt' command to see choices, or 'choose' to respond"
+;; directly UNDER the ℹ️ "card toggled … use `multi-choose`" steer, contradicting
+;; it (choose vs multi-choose). Found live driving a Corp discard-to-5.
+;;
+;; Fix: only run the auto-end hook when wait-for-prompt-change! reports the prompt
+;; actually moved/resolved. When unchanged the prompt is still blocking, so
+;; auto-end could never fire anyway — gating loses nothing, removes the noise.
+;; ============================================================================
+
+(deftest choose-card-partial-multiselect-skips-auto-end-turn
+  (testing "an unchanged (partial multi-select) prompt does NOT invoke the auto-end-turn check"
+    (let [auto-end-called? (atom false)]
+      (with-mock-state (mock-client-state
+                        :side "corp"
+                        :prompt {:prompt-type "select" :eid "disc-1"
+                                 :msg "Discard down to 5 cards"
+                                 :selectable [{:cid "c1" :title "Hedge Fund"}
+                                              {:cid "c2" :title "IPO"}]})
+        (with-redefs [ws/select-card! (fn [_card _eid] true)
+                      ;; partial select: server toggles, prompt unchanged
+                      prompts/wait-for-prompt-change! (fn [_eid & _] false)
+                      basic/check-auto-end-turn! (fn [] (reset! auto-end-called? true))]
+          (with-out-str (prompts/choose-card! 0))
+          (is (false? @auto-end-called?)
+              "partial multi-select must not reach the auto-end-turn check"))))))
+
+(deftest choose-card-resolving-select-still-runs-auto-end-turn
+  (testing "a select that RESOLVES the prompt (moved) still runs the auto-end-turn check"
+    (let [auto-end-called? (atom false)]
+      (with-mock-state (mock-client-state
+                        :side "corp"
+                        :prompt {:prompt-type "select" :eid "disc-1"
+                                 :msg "Discard down to 5 cards"
+                                 :selectable [{:cid "c1" :title "Hedge Fund"}]})
+        (with-redefs [ws/select-card! (fn [_card _eid] true)
+                      ;; final select reaches :max → prompt resolves/moves
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                      basic/check-auto-end-turn! (fn [] (reset! auto-end-called? true))]
+          (with-out-str (prompts/choose-card! 0))
+          (is (true? @auto-end-called?)
+              "a resolving select must still run the auto-end-turn check"))))))
+
+;; ============================================================================
 ;; keep-hand / mulligan — opening-mulligan ergonomics (polish round 2026-06-22)
 ;;
 ;; Two related rough edges, both surfaced by playing a real game:
