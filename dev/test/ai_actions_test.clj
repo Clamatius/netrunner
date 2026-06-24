@@ -262,6 +262,53 @@
             (is (not (str/includes? out "🎯 Scored"))
                 "must NOT print a phantom success on a refused score")))))))
 
+;; ============================================================================
+;; fire-subs-report — honest output when a fired subroutine opens a prompt
+;; ============================================================================
+;; Regression for the live-found bug: firing Brân 1.0's "install an ice" sub
+;; opens a Corp prompt and pauses resolution, so there are no new log entries
+;; yet — and the old code wrongly reported "subs already broken or run already
+;; ended", stalling the Corp on an unhandled prompt it believed was a no-op.
+
+(deftest fire-subs-report-prompt-opened
+  (testing "a subroutine that opens a new prompt is surfaced, not mislabeled as a no-op"
+    (let [prompt {:msg "Choose an ice to install from Archives or HQ"
+                  :prompt-type "select"}
+          {:keys [lines result]} (ai-card-actions/fire-subs-report
+                                  "Brân 1.0" 17 18 [] prompt)
+          out (str/join "\n" lines)]
+      (is (= :waiting-input (:status result))
+          "an open prompt means we're waiting on input, not done")
+      (is (= prompt (:prompt result)) "the prompt is threaded back to the caller")
+      (is (str/includes? out "needs input before the rest can fire")
+          "must tell the Corp a sub is mid-resolution")
+      (is (str/includes? out "Choose an ice to install from Archives or HQ")
+          "must echo the actual pending prompt message")
+      (is (not (str/includes? out "already broken"))
+          "must NOT claim the subs were already broken")
+      (is (not (str/includes? out "run had already ended"))
+          "must NOT claim the run already ended"))))
+
+(deftest fire-subs-report-subs-fired
+  (testing "new log entries (subs actually fired) are listed as success"
+    (let [{:keys [lines result]} (ai-card-actions/fire-subs-report
+                                  "Palisade" 5 6
+                                  [{:text "Corp uses Palisade to end the run."}]
+                                  nil)
+          out (str/join "\n" lines)]
+      (is (= :success (:status result)))
+      (is (str/includes? out "Corp uses Palisade to end the run.")
+          "fired-sub log lines are echoed"))))
+
+(deftest fire-subs-report-genuine-noop
+  (testing "no entries and no new prompt is a real no-op (e.g. subs already broken)"
+    (let [{:keys [lines result]} (ai-card-actions/fire-subs-report
+                                  "Ice Wall" 9 9 [] nil)
+          out (str/join "\n" lines)]
+      (is (= :success (:status result)))
+      (is (str/includes? out "no new log entries")
+          "the honest no-op message is preserved for the genuinely-empty case"))))
+
 (comment
   ;; Run all happy path tests
   (run-tests 'ai-actions-test)

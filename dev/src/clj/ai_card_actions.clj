@@ -517,6 +517,48 @@
                            :args nil})
         (Thread/sleep core/quick-delay)))))
 
+(defn fire-subs-report
+  "Pure: decide what to print and return after firing unbroken subroutines.
+
+   The subtle case this exists for: a fired subroutine can OPEN A PROMPT (e.g.
+   Brân 1.0's \"install an ice from HQ/Archives\" sub), which pauses sub
+   resolution until the Corp resolves it. In that window there are often no new
+   *log* entries yet, so the naive \"no new log entries\" branch wrongly reports
+   \"subs already broken or run already ended\" — leaving the Corp sitting on an
+   unhandled prompt while believing the fire was a no-op (a flow stall on the
+   blessed Corp defense path). Detecting the newly-opened prompt and surfacing it
+   is the honest signal.
+
+   Inputs:
+     ice-title    - ICE name (string)
+     old-cursor   - cursor before firing (int)
+     new-cursor   - cursor after firing (int)
+     new-entries  - already-sliced new log entries (seq of {:text ...})
+     new-prompt   - a genuinely NEW prompt our side must resolve, or nil
+                    (caller computes via core/new-prompt? to dodge stale state)
+   Returns {:lines [str...] :result <status-map>}."
+  [ice-title old-cursor new-cursor new-entries new-prompt]
+  (let [header (format "✅ Fire request acknowledged (cursor %d → %d)" old-cursor new-cursor)
+        entry-lines (map #(str "  • " (:text %)) new-entries)]
+    (cond
+      ;; A subroutine opened a prompt; the rest can't fire until it's resolved.
+      (some? new-prompt)
+      {:lines (concat [header]
+                      entry-lines
+                      [(str "⏸️  A subroutine needs input before the rest can fire: "
+                            (:msg new-prompt))
+                       "   Resolve it (choose-value \"<label>\" / choose-card <N>), then firing continues."])
+       :result {:status :waiting-input :ice ice-title :prompt new-prompt}}
+
+      (seq new-entries)
+      {:lines (cons header entry-lines)
+       :result {:status :success :ice ice-title}}
+
+      :else
+      {:lines [header
+               "  (no new log entries — subs were already broken, or the run had already ended)"]
+       :result {:status :success :ice ice-title}})))
+
 (defn fire-unbroken-subs!
   "Fire unbroken subroutines on ICE (Corp only)
    Used during runs when Runner doesn't/can't break all subs
@@ -539,6 +581,7 @@
                          :side (:side card)
                          :type (:type card)}
                 old-cursor (state/get-cursor)
+                old-prompt (state/get-prompt)
                 old-log-count (count (get-in client-state [:game-state :log]))]
             (println (str "⚡ Firing unbroken subroutines on " (:title card) "..."))
             (ws/send-message! :game/action
@@ -549,14 +592,16 @@
             (let [new-state @state/client-state
                   new-cursor (state/get-cursor)
                   new-log (get-in new-state [:game-state :log])
-                  new-entries (drop old-log-count new-log)]
-              (println (format "✅ Fire request acknowledged (cursor %d → %d)"
-                              old-cursor new-cursor))
-              (if (seq new-entries)
-                (doseq [entry new-entries]
-                  (println (str "  • " (:text entry))))
-                (println "  (no new log entries — subs may have been already broken or run already ended)"))
-              (core/with-cursor {:status :success :ice (:title card)}))))))))
+                  new-entries (drop old-log-count new-log)
+                  cur-prompt (state/get-prompt)
+                  ;; eid-aware so a stale leftover prompt isn't mistaken for a
+                  ;; sub-opened one (see core/new-prompt? rationale).
+                  new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
+                  {:keys [lines result]} (fire-subs-report
+                                          (:title card) old-cursor new-cursor
+                                          new-entries new-prompt)]
+              (doseq [l lines] (println l))
+              (core/with-cursor result))))))))
 
 (defn advance-card!
   "Advance an installed Corp card (agenda, ICE, or asset).
