@@ -522,6 +522,20 @@
                              :position 1 :ice-count 3 :ice-name "Ice Wall"})]
       (is (str/includes? inner "3 of 3") (str "innermost should be 3 of 3:\n" inner)))))
 
+(deftest test-ladder-pass-order-out-of-range-position
+  (testing "position > ice-count drops the index rather than printing a bogus 'ICE 0 of N'"
+    ;; Defensive: the wire is the volatile coupling; a position past the ICE count
+    ;; must never render a non-positive / nonsense pass index (misleading output).
+    (let [out (ladder-str {:phase "encounter-ice" :server-name "R&D"
+                           :position 4 :ice-count 3 :ice-name "Ice Wall"})]
+      (is (not (str/includes? out "0 of 3"))
+          (str "must not print a zero index:\n" out))
+      (is (not (re-find #"-\d+ of" out))
+          (str "must not print a negative index:\n" out))
+      ;; falls back to the bare "Encounter ICE" rung with no "N of M"
+      (is (re-find #"Encounter ICE(?! \d)" out)
+          (str "out-of-range position should drop the pass index entirely:\n" out)))))
+
 (deftest test-ladder-approach-ice-hides-unrezzed-name
   (testing "approach-ice with unknown (unrezzed) ICE shows no card name"
     (let [out (ladder-str {:phase "approach-ice" :server-name "HQ"

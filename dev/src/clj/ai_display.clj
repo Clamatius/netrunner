@@ -1011,8 +1011,11 @@
     (when cur
       (let [srv      (or server-name "the server")
             ;; Pass order: the Runner meets the OUTERMOST ICE (position = ice-count)
-            ;; first, so pass-index counts up as position counts down.
-            pass-idx (when (and ice-count position (pos? position))
+            ;; first, so pass-index counts up as position counts down. Guard the
+            ;; upper bound too: a position > ice-count (shouldn't happen, but the
+            ;; wire is the volatile coupling) would otherwise print a bogus
+            ;; "ICE 0 of N" / negative index — drop the index rather than lie.
+            pass-idx (when (and ice-count position (pos? position) (<= position ice-count))
                        (inc (- ice-count position)))
             ice-of   (if (and pass-idx ice-count) (format " %d of %d" pass-idx ice-count) "")
             ice-tag  (if ice-name (format " [%s]" ice-name) "")
