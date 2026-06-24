@@ -607,6 +607,11 @@
             runner-credits (get-in gs [:runner :credit] 0)
             runner-clicks (get-in gs [:runner :click] 0)
             runner-hand (get-in gs [:runner :hand] [])
+            ;; Hand/HQ size is PUBLIC info, but the opponent's :hand is fog-of-war
+            ;; hidden in wire state (arrives empty). Read the public :hand-count
+            ;; field so the Opp segment doesn't under-report the opponent's hand
+            ;; as 0h; fall back to (count hand) only if the count field is absent.
+            runner-hand-ct (get-in gs [:runner :hand-count] (count runner-hand))
             runner-ap (get-in gs [:runner :agenda-point] 0)
             ;; Credits hosted on rig/play-area cards (e.g. Overclock during a run)
             ;; are spendable but omitted from the pool field -- surface as (+N)
@@ -620,15 +625,16 @@
             corp-credits (get-in gs [:corp :credit] 0)
             corp-clicks (get-in gs [:corp :click] 0)
             corp-hand (get-in gs [:corp :hand] [])
+            corp-hand-ct (get-in gs [:corp :hand-count] (count corp-hand))
             corp-ap (get-in gs [:corp :agenda-point] 0)
 
             ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
             my-stats (if (= my-side "runner")
-                      (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks (count runner-hand) runner-ap)
-                      (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap))
+                      (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks runner-hand-ct runner-ap)
+                      (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks corp-hand-ct corp-ap))
             opp-stats (if (= my-side "runner")
-                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks (count corp-hand) corp-ap)
-                       (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks (count runner-hand) runner-ap))
+                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks corp-hand-ct corp-ap)
+                       (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks runner-hand-ct runner-ap))
             my-label (if (= my-side "runner") "R" "C")
             opp-label (if (= my-side "runner") "C" "R")
 
