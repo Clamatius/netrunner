@@ -79,9 +79,13 @@
     (if prompt
       (do
         (ws/choose! choice)
-        ;; Wait for prompt to change instead of fixed sleep
-        (wait-for-prompt-change! old-eid)
-        (maybe-auto-end-turn-after-prompt!)
+        ;; Wait for prompt to change instead of fixed sleep. Only run the
+        ;; auto-end-turn hook if the prompt actually moved/resolved — an
+        ;; unchanged prompt is still blocking, so auto-end could never fire and
+        ;; the hook would only print a spurious "resolve the prompt" warning.
+        ;; (See choose-card! for the partial-multi-select case this bites.)
+        (when (wait-for-prompt-change! old-eid)
+          (maybe-auto-end-turn-after-prompt!))
         (core/with-cursor {:status :success}))
       (do
         (println "⚠️  No active prompt")
@@ -110,8 +114,9 @@
                       {:gameid gameid
                        :command "choice"
                        :args {:choice {:uuid (:uuid choice)}}})
-    (wait-for-prompt-change! old-eid)
-    (maybe-auto-end-turn-after-prompt!)
+    ;; Only run the auto-end hook if the prompt actually moved (see choose-card!).
+    (when (wait-for-prompt-change! old-eid)
+      (maybe-auto-end-turn-after-prompt!))
     (core/with-cursor {:status :success :choice choice})))
 
 (defn choose-option!
@@ -239,9 +244,16 @@
           (do
             (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
             (ws/select-card! card eid)
-            ;; Wait for prompt to change instead of fixed sleep
-            (wait-for-prompt-change! eid)
-            (maybe-auto-end-turn-after-prompt!)
+            ;; Wait for prompt to change instead of fixed sleep. Gate the
+            ;; auto-end-turn hook on the prompt ACTUALLY moving: a partial
+            ;; multi-select (e.g. discard-to-N) leaves the prompt put while the
+            ;; server toggles toward :max — nothing resolved — so firing the hook
+            ;; would print a spurious "⚠️ Cannot auto-end turn: resolve the prompt"
+            ;; whose "use 'choose'" tip contradicts the `multi-choose` steer
+            ;; printed just above. When unchanged the prompt is still blocking, so
+            ;; auto-end could never fire anyway — gating loses nothing. (#18 tail)
+            (when (wait-for-prompt-change! eid)
+              (maybe-auto-end-turn-after-prompt!))
             (core/with-cursor {:status :success :card card}))
           (let [{:keys [pickable]} (core/resolve-selectable selectable)
                 pickable-idxs (map :idx pickable)]
