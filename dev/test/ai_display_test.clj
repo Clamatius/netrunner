@@ -160,6 +160,35 @@
         (is (not (str/includes? line "(+"))
             (str "must not show hosted annotation when none, got: " line))))))
 
+(deftest test-status-compact-opponent-hand-count-public
+  ;; HQ/grip size is PUBLIC information in Netrunner. The compact header used
+  ;; (count hand), but the opponent's :hand is fog-of-war hidden in the wire
+  ;; state (arrives empty), so the Opp segment under-reported the opponent hand
+  ;; as 0h while the full `status` correctly showed the real count. The header
+  ;; must read the public :hand-count field for both seats, matching status.
+  (testing "runner seat: corp hand hidden but :hand-count public -> Opp shows 5h"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 1
+                                   :runner {:click 4 :credit 5 :hand [{:title "A"} {:title "B"}]
+                                            :hand-count 2 :agenda-point 0 :rig {}}
+                                   :corp {:click 0 :credit 5 :hand [] :hand-count 5 :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Opp(C):5c/0cl/5h/0AP")
+            (str "opponent hand count must come from public :hand-count, got: " line))
+        (is (not (str/includes? line "Opp(C):5c/0cl/0h"))
+            (str "must not under-report opp hand as 0h, got: " line)))))
+  (testing "corp seat: runner grip hidden but :hand-count public -> Opp shows 5h"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 2
+                                   :corp {:click 3 :credit 8 :hand [{:title "X"}]
+                                          :hand-count 1 :agenda-point 0}
+                                   :runner {:click 0 :credit 4 :hand [] :hand-count 5 :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Opp(R):4c/0cl/5h/0AP")
+            (str "opponent grip count must come from public :hand-count, got: " line))))))
+
 (deftest test-show-snapshot-bundles-read-loop
   ;; snapshot collapses the per-decision read-loop
   ;; (status-compact + prompt? + board-compact + hand + log + cursor) into one
