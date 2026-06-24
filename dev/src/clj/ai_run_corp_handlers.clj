@@ -10,6 +10,7 @@
    - Returns result map {:status ... :action ...} to stop handler chain"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
+            [ai-state :as state]
             [ai-run-corp-decisions :as decisions]))
 
 ;; ============================================================================
@@ -159,6 +160,41 @@
 ;; Corp Fire Handlers
 ;; ============================================================================
 
+(defn fire-unbroken-strategy-result
+  "Pure: given whether the fired subroutine opened a NEW prompt the Corp must
+   resolve (computed by the caller via core/new-prompt? to dodge stale
+   prompt-state), decide what the autonomous --fire-unbroken strategy auto-fire
+   should print and return.
+
+   This is the strategy-path twin of card-actions' fire-subs-report (issue #24).
+   The manual fire-subs path already surfaces a sub-opened prompt honestly; the
+   pre-committed --fire-unbroken *strategy* used to send the command and return
+   :action-taken unconditionally, so when a fired sub opens a prompt (e.g. Brân
+   1.0's \"install an ice from HQ/Archives\" sub) the run loop marched on while
+   the Corp sat on an unhandled prompt — the same flow-stall class #23 fixed, on
+   the un-babysat path.
+
+   Both branches keep :fired-at-position so the caller still records it (the ICE
+   was fired; re-entry must not re-fire). Only :status differs: :decision-required
+   pauses the loop to resolve the opened prompt; :action-taken lets it continue.
+
+   Returns {:lines [str...] :result <status-map>}."
+  [ice-title sub-count position new-prompt]
+  (let [base {:action :auto-fired-subs
+              :ice ice-title
+              :sub-count sub-count
+              :fired-at-position position}]
+    (if (some? new-prompt)
+      {:lines [(format "⏸️  A subroutine on %s opened a prompt the Corp must resolve: %s"
+                       ice-title (:msg new-prompt))
+               "   Resolve it (choose-value \"<label>\" / choose-card <N>), then continue the run."]
+       :result (assoc base
+                      :status :decision-required
+                      :wake-reason :sub-opened-prompt
+                      :prompt new-prompt)}
+      {:lines []
+       :result (assoc base :status :action-taken)})))
+
 (defn handle-corp-fire-unbroken
   "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs.
    Waits for Runner's signal before firing (model-vs-model coordination)."
@@ -185,17 +221,25 @@
           (println (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (Runner signaled)"
                           (count unbroken-subs) ice-title))
           ;; Note: caller must call set-strategy! to mark fired-at-position
-          ;; We return the position so ai_runs can update it
-          (let [card-ref (core/create-card-ref current-ice)]
+          ;; (result carries it in both branches). We capture the pre-fire prompt
+          ;; so that — if a fired sub OPENS a prompt (issue #24) — we surface it as
+          ;; :decision-required instead of letting the loop march on (the same
+          ;; honest-reporting the manual fire-subs path got in #23).
+          (let [card-ref (core/create-card-ref current-ice)
+                old-prompt (state/get-prompt)]
             (ws/send-message! :game/action
                              {:gameid gameid
                               :command "unbroken-subroutines"
                               :args {:card card-ref}})
-            {:status :action-taken
-             :action :auto-fired-subs
-             :ice ice-title
-             :sub-count (count unbroken-subs)
-             :fired-at-position position}))))))
+            (Thread/sleep core/medium-delay)
+            (let [cur-prompt (state/get-prompt)
+                  ;; eid-aware so a stale leftover prompt isn't mistaken for a
+                  ;; sub-opened one (see core/new-prompt? rationale).
+                  new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
+                  {:keys [lines result]} (fire-unbroken-strategy-result
+                                          ice-title (count unbroken-subs) position new-prompt)]
+              (doseq [l lines] (println l))
+              result)))))))
 
 (defn handle-corp-fire-decision
   "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision.
@@ -283,16 +327,22 @@
             (do
               (println (format "   --fire-if-asked: Runner signaled, firing %d sub(s) on %s"
                               (count unbroken-subs) ice-title))
-              (let [card-ref (core/create-card-ref current-ice)]
+              ;; Same honest-prompt detection as --fire-unbroken (issue #24): a
+              ;; fired sub can open a Corp prompt, which must surface as
+              ;; :decision-required rather than letting the loop march on.
+              (let [card-ref (core/create-card-ref current-ice)
+                    old-prompt (state/get-prompt)]
                 (ws/send-message! :game/action
                                  {:gameid gameid
                                   :command "unbroken-subroutines"
                                   :args {:card card-ref}})
-                {:status :action-taken
-                 :action :auto-fired-subs
-                 :ice ice-title
-                 :sub-count (count unbroken-subs)
-                 :fired-at-position position}))
+                (Thread/sleep core/medium-delay)
+                (let [cur-prompt (state/get-prompt)
+                      new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
+                      {:keys [lines result]} (fire-unbroken-strategy-result
+                                              ice-title (count unbroken-subs) position new-prompt)]
+                  (doseq [l lines] (println l))
+                  result)))
 
             ;; Runner hasn't signaled yet - silently wait (poll again)
             :else

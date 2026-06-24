@@ -10,6 +10,7 @@
             [ai-basic-actions :as ai-basic-actions]
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
+            [ai-run-corp-handlers :as corp-handlers]
             [ai-card-actions :as card-actions]
             [ai-websocket-client-v2 :as ws]))
 
@@ -951,6 +952,50 @@
 
 ;; ============================================================================
 ;; Test Suite Summary
+;; ============================================================================
+;; fire-unbroken-strategy-result — honest autonomous-fire reporting (issue #24)
+;; ============================================================================
+;; The manual fire-subs path got honest prompt-detection in #23. The
+;; pre-committed --fire-unbroken / --fire-if-asked *strategy* paths used to
+;; send the fire command and return :action-taken unconditionally, so when a
+;; fired sub opened a Corp prompt (e.g. Brân 1.0's install-an-ice sub) the run
+;; loop marched on while the Corp sat on an unhandled prompt. These guard the
+;; pure decision: a sub-opened prompt → :decision-required (loop pauses to
+;; resolve), no prompt → :action-taken (loop continues). Both keep
+;; :fired-at-position so re-entry never re-fires.
+
+(deftest fire-unbroken-strategy-result-prompt-opened
+  (testing "a fired sub that opens a new prompt surfaces as :decision-required, not :action-taken"
+    (let [prompt {:msg "Choose an ice to install from Archives or HQ"
+                  :prompt-type "select"
+                  :eid 4242}
+          {:keys [lines result]} (corp-handlers/fire-unbroken-strategy-result
+                                  "Brân 1.0" 1 1 prompt)
+          out (clojure.string/join "\n" lines)]
+      (is (= :decision-required (:status result))
+          "an open prompt must pause the loop (terminal status), not let it march on")
+      (is (= prompt (:prompt result)) "the opened prompt is threaded back to the caller")
+      (is (= 1 (:fired-at-position result))
+          "still records fired-at-position so re-entry never re-fires the ICE")
+      (is (= :auto-fired-subs (:action result)))
+      (is (clojure.string/includes? out "Brân 1.0")
+          "names the ICE whose sub opened the prompt")
+      (is (clojure.string/includes? out "Choose an ice to install from Archives or HQ")
+          "echoes the actual pending prompt message")
+      (is (clojure.string/includes? out "Resolve it")
+          "tells the Corp how to clear the prompt"))))
+
+(deftest fire-unbroken-strategy-result-no-prompt
+  (testing "a fired sub with no opened prompt is :action-taken so the loop continues"
+    (let [{:keys [lines result]} (corp-handlers/fire-unbroken-strategy-result
+                                  "Palisade" 2 0 nil)]
+      (is (= :action-taken (:status result))
+          "no prompt → keep auto-continuing, as before")
+      (is (= 0 (:fired-at-position result)) "fired-at-position is preserved")
+      (is (= 2 (:sub-count result)))
+      (is (nil? (:prompt result)) "no prompt threaded when none opened")
+      (is (empty? lines) "the no-prompt path stays quiet (the fire line is printed by the caller)"))))
+
 ;; ============================================================================
 
 (defn -main
