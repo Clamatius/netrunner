@@ -474,3 +474,93 @@
       (let [out (with-out-str (display/show-prompt-detailed))]
         (is (str/includes? out "your turn"))
         (is (str/includes? out "list-playables"))))))
+
+;; ============================================================================
+;; Run-phase ladder (forum [099]): make the run timing structure explicit with a
+;; YOU-ARE-HERE marker so the seat sees the whole arc without reading the rules.
+;; Pure function — exercised directly, no live state needed.
+;; ============================================================================
+
+(defn- ladder-str [opts]
+  (str/join "\n" (display/run-phase-ladder-lines opts)))
+
+(deftest test-ladder-marks-current-phase-once
+  (testing "exactly one YOU ARE HERE marker, on the rung matching the live phase"
+    (let [out (ladder-str {:phase "encounter-ice" :server-name "R&D"
+                           :position 1 :ice-count 2 :ice-name "Tithe"})]
+      ;; one and only one marker
+      (is (= 1 (count (re-seq #"YOU ARE HERE" out)))
+          (str "expected a single marker, got:\n" out))
+      ;; it lands on the Encounter rung, not Approach
+      (let [marked (->> (str/split-lines out)
+                        (filter #(str/includes? % "YOU ARE HERE"))
+                        first)]
+        (is (str/includes? marked "Encounter")
+            (str "marker should be on the Encounter rung, got: " marked))))))
+
+(deftest test-ladder-shows-all-six-steps-and-server-name
+  (testing "ladder renders the full 6-step arc with the human server name"
+    (let [out (ladder-str {:phase "success" :server-name "HQ"
+                           :position 0 :ice-count 1 :ice-name nil})]
+      (doseq [step ["#1" "#2" "#3" "#4" "#5" "#6"]]
+        (is (str/includes? out step) (str "missing " step " in:\n" out)))
+      (is (str/includes? out "Access HQ"))
+      ;; success => marker on Access
+      (is (str/includes? (->> (str/split-lines out)
+                              (filter #(str/includes? % "YOU ARE HERE")) first)
+                         "Access")))))
+
+(deftest test-ladder-ice-pass-order-and-name
+  (testing "encounter shows pass-order index (outermost first) and rezzed ICE name"
+    ;; 3 ICE on server, position 3 = outermost = '1 of 3'
+    (let [outer (ladder-str {:phase "encounter-ice" :server-name "R&D"
+                             :position 3 :ice-count 3 :ice-name "Ice Wall"})]
+      (is (str/includes? outer "1 of 3") (str "outermost should be 1 of 3:\n" outer))
+      (is (str/includes? outer "[Ice Wall]")))
+    ;; position 1 = innermost = '3 of 3'
+    (let [inner (ladder-str {:phase "encounter-ice" :server-name "R&D"
+                             :position 1 :ice-count 3 :ice-name "Ice Wall"})]
+      (is (str/includes? inner "3 of 3") (str "innermost should be 3 of 3:\n" inner)))))
+
+(deftest test-ladder-pass-order-out-of-range-position
+  (testing "position > ice-count drops the index rather than printing a bogus 'ICE 0 of N'"
+    ;; Defensive: the wire is the volatile coupling; a position past the ICE count
+    ;; must never render a non-positive / nonsense pass index (misleading output).
+    (let [out (ladder-str {:phase "encounter-ice" :server-name "R&D"
+                           :position 4 :ice-count 3 :ice-name "Ice Wall"})]
+      (is (not (str/includes? out "0 of 3"))
+          (str "must not print a zero index:\n" out))
+      (is (not (re-find #"-\d+ of" out))
+          (str "must not print a negative index:\n" out))
+      ;; falls back to the bare "Encounter ICE" rung with no "N of M"
+      (is (re-find #"Encounter ICE(?! \d)" out)
+          (str "out-of-range position should drop the pass index entirely:\n" out)))))
+
+(deftest test-ladder-approach-ice-hides-unrezzed-name
+  (testing "approach-ice with unknown (unrezzed) ICE shows no card name"
+    (let [out (ladder-str {:phase "approach-ice" :server-name "HQ"
+                           :position 1 :ice-count 1 :ice-name nil})]
+      (is (str/includes? out "Approach ICE 1 of 1"))
+      (is (not (str/includes? out "["))
+          (str "must not invent an ICE name when unrezzed:\n" out))
+      (is (str/includes? (->> (str/split-lines out)
+                              (filter #(str/includes? % "YOU ARE HERE")) first)
+                         "Approach")))))
+
+(deftest test-ladder-movement-vs-approach-server
+  (testing "movement before innermost ICE marks Movement; past all ICE marks Approach server"
+    (let [mid (ladder-str {:phase "movement" :server-name "R&D"
+                           :position 1 :ice-count 2 :ice-name nil})]
+      (is (str/includes? (->> (str/split-lines mid)
+                              (filter #(str/includes? % "YOU ARE HERE")) first)
+                         "Movement")))
+    (let [past (ladder-str {:phase "movement" :server-name "R&D"
+                            :position 0 :ice-count 2 :ice-name nil})]
+      (is (str/includes? (->> (str/split-lines past)
+                              (filter #(str/includes? % "YOU ARE HERE")) first)
+                         "Approach server")))))
+
+(deftest test-ladder-unknown-phase-returns-nil
+  (testing "absent/unrecognised phase yields nil (caller falls back to bare line)"
+    (is (nil? (display/run-phase-ladder-lines {:phase nil :server-name "R&D"})))
+    (is (nil? (display/run-phase-ladder-lines {:phase "bogus" :server-name "R&D"})))))

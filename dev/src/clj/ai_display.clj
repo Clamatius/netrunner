@@ -13,9 +13,11 @@
 
 (def update-hud-section hud/update-hud-section)
 
-;; Forward declaration: run-server-display (defined below, near the run-priority
-;; helpers) is used by the status displays above its definition.
+;; Forward declaration: run-server-display and print-run-phase-ladder! (defined
+;; below, near the run-priority helpers) are used by the status displays above
+;; their definitions.
 (declare run-server-display)
+(declare print-run-phase-ladder!)
 
 ;; ============================================================================
 ;; Status & Information
@@ -185,9 +187,15 @@
             (when run-state
               (println "\n🏃 ACTIVE RUN:")
               (println "  Server:" (run-server-display (last (:server run-state))))
-              (println "  Phase:" (:phase run-state))
-              (when-let [pos (:position run-state)]
-                (println "  Position:" pos))
+              ;; Explicit phase ladder (forum [099]) — a YOU-ARE-HERE marker over
+              ;; the whole run arc beats a bare "Phase: movement" line that makes
+              ;; the seat reconstruct where it is from the rules. Falls back to the
+              ;; bare phase/position lines if the phase is unmodelled.
+              (when-not (print-run-phase-ladder! @state/client-state run-state
+                                                 (clojure.string/lower-case (or my-side "runner")))
+                (println "  Phase:" (:phase run-state))
+                (when-let [pos (:position run-state)]
+                  (println "  Position:" pos)))
               ;; Show ICE info during encounter-ice
               (when (= "encounter-ice" (:phase run-state))
                 (when-let [current-ice (core/current-run-ice @state/client-state)]
@@ -966,6 +974,85 @@
             (when gain (str " (this is what gets you your access: " gain ")")) ".")
        (str "      (BOTH players must pass for the run to advance — after you continue, expect to wait for " opp ".)")])))
 
+(def ^:private run-ladder-rungs
+  "Conceptual run-timing ladder (jinteki run structure), in order. Steps #2–#4
+   repeat per piece of ICE; the live :phase + :position pick the current rung."
+  [:begin :approach :encounter :movement :approach-server :access])
+
+(defn run-phase-ladder-lines
+  "Render the run's timing ladder with a YOU-ARE-HERE marker on the live rung, so
+   the seat sees the whole run arc at a glance without consulting the rules
+   (forum [099]).
+
+   Pure: the caller extracts the live facts and passes them in.
+     :phase       engine phase string — \"initiation\" | \"approach-ice\" |
+                  \"encounter-ice\" | \"movement\" | \"approach-server\" | \"success\"
+     :server-name display name of the attacked server (e.g. \"R&D\")
+     :position    ICE countdown — N = at ICE index N-1; 0/nil = past all ICE
+     :ice-count   number of ICE protecting the server (nil if unknown)
+     :ice-name    title of the current ICE (nil if unknown/unrezzed — never invent
+                  a name the Runner can't legally see)
+
+   Returns a vector of lines (header + 6 rungs), or nil when :phase is absent or
+   unrecognised (the caller then falls back to the bare phase line)."
+  [{:keys [phase server-name position ice-count ice-name]}]
+  (let [cur (case phase
+              "initiation"      :begin
+              "approach-ice"    :approach
+              "encounter-ice"   :encounter
+              ;; movement before the innermost ICE is passed is still :movement;
+              ;; once past all ICE (position 0/nil) the Runner is approaching the
+              ;; server. The wire phase stays "movement" across both, so split on
+              ;; position to keep the marker honest.
+              "movement"        (if (and position (pos? position)) :movement :approach-server)
+              "approach-server" :approach-server
+              "success"         :access
+              nil)]
+    (when cur
+      (let [srv      (or server-name "the server")
+            ;; Pass order: the Runner meets the OUTERMOST ICE (position = ice-count)
+            ;; first, so pass-index counts up as position counts down. Guard the
+            ;; upper bound too: a position > ice-count (shouldn't happen, but the
+            ;; wire is the volatile coupling) would otherwise print a bogus
+            ;; "ICE 0 of N" / negative index — drop the index rather than lie.
+            pass-idx (when (and ice-count position (pos? position) (<= position ice-count))
+                       (inc (- ice-count position)))
+            ice-of   (if (and pass-idx ice-count) (format " %d of %d" pass-idx ice-count) "")
+            ice-tag  (if ice-name (format " [%s]" ice-name) "")
+            label    {:begin           "#1 Run begins"
+                      :approach        (str "#2 Approach ICE" ice-of ice-tag)
+                      :encounter       (str "#3 Encounter ICE" ice-of ice-tag)
+                      :movement        "#4 Movement — pass ICE, then approach the next"
+                      :approach-server (str "#5 Approach server (" srv ")")
+                      :access          (str "#6 Access " srv)}
+            mark     (fn [rung]
+                       (if (= rung cur)
+                         (str "   ▶ " (label rung) "   ← YOU ARE HERE")
+                         (str "     " (label rung))))]
+        (into ["  📍 Run timing (steps #2–#4 repeat per ICE):"]
+              (map mark run-ladder-rungs))))))
+
+(defn print-run-phase-ladder!
+  "Derive run-phase-ladder facts from live client `state` and print the ladder.
+   Returns true if a ladder was printed, nil/false otherwise (caller may fall
+   back to a bare phase line)."
+  [state run my-side]
+  (let [current-ice (core/current-run-ice state)
+        server-key  (last (:server run))
+        ice-count   (count (get-in state [:game-state :corp :servers
+                                          (keyword server-key) :ices]))
+        lines (run-phase-ladder-lines
+               {:phase       (:phase run)
+                :server-name (run-server-display server-key)
+                :position    (:position run)
+                :ice-count   (when (pos? ice-count) ice-count)
+                ;; Only name a rezzed ICE — fog of war hides unrezzed identities.
+                :ice-name    (when (and current-ice (:rezzed current-ice))
+                               (:title current-ice))})]
+    (when (seq lines)
+      (doseq [line lines] (println line))
+      true)))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -1026,7 +1113,10 @@
             (if run-phase
               ;; Show run phase context
               (do
-                (println (str "  Run Phase: " run-phase))
+                ;; Explicit YOU-ARE-HERE ladder (forum [099]); falls back to the
+                ;; bare phase line for any phase the ladder doesn't model.
+                (when-not (print-run-phase-ladder! state run my-side)
+                  (println (str "  Run Phase: " run-phase)))
                 ;; During encounter-ice, show ICE and breaker info
                 (when (= run-phase "encounter-ice")
                   (show-encounter-ice-info state run my-side))
