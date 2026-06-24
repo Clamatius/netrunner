@@ -86,7 +86,11 @@ did_you_mean() {
     # Fallback: substring match against the player-facing commands.
     local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"
     local hits
-    hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd' ' -)
+    # `|| true`: grep exits non-zero on no match, which under `set -euo pipefail`
+    # would abort the whole script *here* — silently swallowing both this hint and
+    # the "Unknown command" error that follows. A novel wrong guess (no substring
+    # match) is exactly when we most need to print, so the substitution must never fail.
+    hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd' ' - || true)
     if [[ -n "$hits" ]]; then
         echo -e "${YELLOW}💡 Did you mean: ${hits}${NC}" >&2
     else
@@ -537,12 +541,16 @@ shift || true
 # Determine project root for logging
 NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Command logging - log every command with timestamp
+# Command logging - log every command with timestamp.
+# Logging is best-effort: a missing logs/ dir (fresh worktree) or unwritable path
+# must never abort the actual command under `set -euo pipefail`. mkdir the dir and
+# guard the write so a logging failure can't swallow the command the user asked for.
 LOG_FILE="${NETRUNNER_ROOT}/logs/commands.log"
+mkdir -p "${NETRUNNER_ROOT}/logs" 2>/dev/null || true
 if [[ -n "$CLIENT_NAME" ]]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $CLIENT_NAME: $COMMAND $*" >> "$LOG_FILE"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $CLIENT_NAME: $COMMAND $*" >> "$LOG_FILE" 2>/dev/null || true
 else
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE" 2>/dev/null || true
 fi
 
 # Help is pure text — it must work even when no REPL is running (e.g. after a
