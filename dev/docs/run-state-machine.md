@@ -501,7 +501,7 @@ Flags can be passed to `run!`, `continue-run!`, or `monitor-run!` to automate de
 | Flag | Description |
 |------|-------------|
 | `--no-rez` | Auto-decline all rez opportunities |
-| `--rez <ice>` | Only rez specified ICE, decline others (can repeat) |
+| `--rez <ice>` | Auto-rez the named ICE (can repeat). Any *other* unrezzed ICE PAUSES and hands back a rez decision — it is NOT silently declined. To decline the rest, send `--no-rez` (or re-enter `--rez "<that ICE>"`). |
 | `--fire-unbroken` | Auto-fire unbroken subs when Runner signals done breaking |
 | `--fire-if-asked` | Wait silently while Runner breaks, auto-fire when signaled, wake only for rez decisions |
 

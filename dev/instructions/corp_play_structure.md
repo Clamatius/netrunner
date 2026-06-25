@@ -292,7 +292,7 @@ Corp gets priority at specific timing windows:
 ```bash
 ./dev/send_command corp monitor-run                     # Auto-pass until decision needed
 ./dev/send_command corp monitor-run --no-rez            # Also auto-decline all rez
-./dev/send_command corp monitor-run --rez "Tithe"       # Only rez Tithe, decline others
+./dev/send_command corp monitor-run --rez "Tithe"       # Auto-rez Tithe; PAUSE on any other unrezzed ICE
 ./dev/send_command corp monitor-run --fire-unbroken     # Auto-fire when Runner signals done
 ```
 
@@ -315,7 +315,7 @@ If the run already ended, returns immediately instead of blocking.
 
 **Caveats:**
 - Uses stuck-state detection instead of iteration limits (500 max as safety net)
-- Always wakes for rez decisions unless --rez or --no-rez specified
+- Always wakes for rez decisions. `--rez "X"` auto-rezzes X but still wakes on *other* unrezzed ICE; only `--no-rez` declines everything silently
 - Fallback: Use manual `continue` + `fire-subs` sequence if automation fails
 
 ### Gotchas

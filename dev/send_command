@@ -361,7 +361,7 @@ ${GREEN}Running:${NC}
 
   ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE
-    --rez <name>     Corp: only rez ICE matching <name>
+    --rez <name>     Corp: auto-rez ICE matching <name>; pause on other unrezzed ICE
     --fire-unbroken  Corp: auto-fire unbroken subroutines
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start

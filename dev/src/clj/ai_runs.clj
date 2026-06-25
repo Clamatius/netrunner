@@ -22,7 +22,7 @@
 ;; Structure:
 ;; {:full-break true/false      ; Runner: auto-break all ICE
 ;;  :no-rez true/false          ; Corp: don't rez anything
-;;  :rez #{\"Ice Wall\" ...}    ; Corp: only rez these ICE names
+;;  :rez #{\"Ice Wall\" ...}    ; Corp: auto-rez these ICE; pause on other unrezzed ICE
 ;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
 ;;  :force true/false}          ; Bypass all smart checks
 (defonce run-strategy (atom {}))
@@ -94,7 +94,7 @@
    --tank <ice-name> : Runner pre-authorizes letting subs fire on specified ICE
    --tank-all        : Runner pre-authorizes letting subs fire on ALL ICE (yolo)
    --no-rez          : Corp doesn't rez anything
-   --rez <ice-name>  : Corp only rezzes specified ICE
+   --rez <ice-name>  : Corp auto-rezzes named ICE; PAUSES on other unrezzed ICE
    --fire-unbroken   : Corp auto-fires unbroken subs
    --no-continue     : Don't auto-continue after run start
    --force           : Bypass all smart checks (for continue-run)
@@ -279,7 +279,7 @@
    Strategy flags:
    --full-break      : Runner auto-breaks all ICE (no pauses for break decisions)
    --no-rez          : Corp doesn't rez anything (auto-declines all rez opportunities)
-   --rez <ice-name>  : Corp only rezzes specified ICE, declines others
+   --rez <ice-name>  : Corp auto-rezzes named ICE; other unrezzed ICE PAUSES for a rez decision (not auto-declined)
    --fire-unbroken   : Corp auto-fires all unbroken subroutines
    --no-continue     : Don't auto-continue after run initiation (stop at first decision)
 
@@ -287,7 +287,7 @@
    (run! \"hq\")                        ; Auto-continues till decision needed
    (run! \"remote1\" \"--full-break\")   ; Auto-breaks all ICE
    (run! \"hq\" \"--no-continue\")       ; Stop after initiation (rare)
-   (run! \"remote1\" \"--rez\" \"Ice Wall\") ; Corp only rezzes Ice Wall"
+   (run! \"remote1\" \"--rez\" \"Ice Wall\") ; Corp auto-rezzes Ice Wall, pauses on other unrezzed ICE"
   [& args]
   (if (not (core/side= "Runner" (:side @state/client-state)))
     (do
@@ -886,13 +886,13 @@
    Strategy flags (from run! or passed directly):
    --full-break      : Runner auto-breaks all ICE
    --no-rez          : Corp auto-declines all rez opportunities
-   --rez <ice-name>  : Corp only rezzes specified ICE
+   --rez <ice-name>  : Corp auto-rezzes named ICE; PAUSES on other unrezzed ICE
    --fire-unbroken   : Corp auto-fires unbroken subs
    --force           : Bypass ALL smart checks, just send continue
 
    🛑 MUST PAUSE (requires decision):
    - Opponent pressed WAIT/indicate-action
-   - Corp has rez opportunity (approach-ice with unrezzed ICE) [unless --no-rez/--rez]
+   - Corp has rez opportunity (approach-ice with unrezzed ICE) [unless --no-rez, or --rez naming THIS ICE]
    - Runner has 2+ real choices (not just Continue/Done) [unless --full-break]
    - Waiting for opponent's decision during run
 
@@ -1292,7 +1292,7 @@
 
    Flags:
      --no-rez            Auto-decline all rez opportunities
-     --rez <ice-name>    Only rez specified ICE, decline others
+     --rez <ice-name>    Auto-rez named ICE; PAUSE (return a rez decision) on other unrezzed ICE
      --fire-unbroken     Auto-fire unbroken subs when Runner signals
      --fire-if-asked     Sleep mode: auto-fire, auto-continue, wake only for rez
      --persistent        Stay in the loop across empty opponent-priority windows
@@ -1305,7 +1305,7 @@
    Usage:
      (monitor-run!)                           ; Auto-pass until decision needed
      (monitor-run! \"--no-rez\")              ; Also auto-decline all rez opportunities
-     (monitor-run! \"--rez\" \"Tithe\")        ; Only rez Tithe, decline others
+     (monitor-run! \"--rez\" \"Tithe\")        ; Auto-rez Tithe; pause on any other unrezzed ICE
      (monitor-run! \"--fire-if-asked\")       ; Sleep until run ends
      (monitor-run! \"--persistent\")          ; Own the whole run; wake only for decisions
      (monitor-run! \"--since\" \"892\")        ; Fast-return if state advanced"
