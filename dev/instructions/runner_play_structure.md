@@ -267,6 +267,20 @@ When you only want to break some subroutines:
 ./dev/send_command runner continue                     # Pass priority
 ```
 
+### If a run seems stuck at "priority / paid-ability window"
+
+Run **initiation**, **movement**, and **approach-server** are *both-must-pass*
+windows: the run only advances after **both** players pass priority. Once you've
+sent `continue` there, `prompt` / `diagnose-blocker` will say *"You have already
+passed priority here"* — re-sending `continue` does **nothing** (it's a no-op
+loop). You're waiting on the Corp to also pass.
+
+In cross-model play the Corp seat must be actively running `monitor-run` to pass
+an empty window. If it isn't, the run stalls and `wait` never resolves. To break
+out, **`jack-out`** ends the run cleanly. (If you have a real reason to be in the
+run, give the Corp seat a moment to pass first; only `jack-out` if it's clearly
+not coming.)
+
 ---
 
 ## Keep Your Options Open

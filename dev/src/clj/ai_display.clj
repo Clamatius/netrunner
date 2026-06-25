@@ -980,9 +980,18 @@
     (cond
       ;; I have already passed — waiting on the opponent; no action from me.
       (= na my-side)
-      [(str "    ⏸️  You have already passed priority here — waiting for " opp
-            " to pass before the run advances.")
-       (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)")]
+      (into
+        [(str "    ⏸️  You have already passed priority here — waiting for " opp
+              " to pass before the run advances.")
+         (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)")]
+        ;; Stall recovery (issue #31): a both-must-pass window only advances once
+        ;; the opponent also passes. In cross-model play the opposing seat must be
+        ;; actively monitoring the run to pass an empty window; if it isn't, the
+        ;; run stalls here and 'wait' never resolves. The Runner can break out with
+        ;; 'jack-out' (the marquee g3 escape hatch — "only jack-out cleared it").
+        (when (= my-side "runner")
+          [(str "      If " opp " isn't actively monitoring the run, it can stall here — "
+                "'jack-out' ends the run to recover.")]))
 
       ;; Opponent already passed — my continue advances the run now.
       (and na (not= na my-side))
@@ -1145,7 +1154,14 @@
                 ;; spell out whose move it is and what continuing does, so neither
                 ;; seat assumes the run advances on its own (the symmetric
                 ;; 'pass priority' text deadlocked cross-model play).
-                (if (contains? #{"movement" "approach-server"} run-phase)
+                ;; `initiation` is a both-must-pass window too (issue #31): the
+                ;; Runner routes through the already-passed-aware hint so a passed
+                ;; Runner is told to wait / jack-out rather than re-`continue` (a
+                ;; no-op loop). The Corp keeps its rich rez/decline guidance below.
+                (if (contains? (if (= my-side "runner")
+                                 #{"initiation" "movement" "approach-server"}
+                                 #{"movement" "approach-server"})
+                               run-phase)
                   (doseq [line (run-priority-hint-lines run my-side)]
                     (println line))
                   ;; Other run windows (initiation / approach-ice / encounter).
@@ -1616,7 +1632,15 @@
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
         (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
-        (if (contains? #{"movement" "approach-server"} run-phase)
+        ;; `initiation` is a both-must-pass window too (engine: continue :initiation
+        ;; needs BOTH sides), but only the Runner gets the already-passed-aware hint
+        ;; here — once it has passed, "use continue" is a no-op loop (issue #31 / g3).
+        ;; The Corp keeps the generic continue/monitor-run steer at initiation (it
+        ;; may still want to rez/fire a paid ability there).
+        (if (contains? (if (= my-side-lc "runner")
+                         #{"initiation" "movement" "approach-server"}
+                         #{"movement" "approach-server"})
+                       run-phase)
           (doseq [line (run-priority-hint-lines run my-side-lc)]
             (println line))
           (println "   → Use: continue (to pass priority) — or monitor-run to participate in the run.")))
