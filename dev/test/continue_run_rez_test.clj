@@ -252,3 +252,57 @@
               "should continue past the unrezzed ICE so the run proceeds")
           (is (re-find #"(?i)can't afford|did not take" out)
               (str "should explain why it declined, got: " out)))))))
+
+;; =============================================================================
+;; Test: --rez "X" must PAUSE on an unrezzed ICE that is NOT in the whitelist,
+;; not silently auto-decline it (marquee g3 finding, forum [112]).
+;;
+;; On a multi-ICE server the Corp commits `--rez "Palisade"` (outer). When the
+;; Runner reaches the inner unrezzed Tithe, the old :else branch sent `continue`
+;; and returned :auto-declined-rez WITHOUT handing control back — so the Corp
+;; never got to rez/fire its inner ICE. That violates the --persistent contract
+;; ("returns to you for a real rez/fire decision"): a 2nd unrezzed ICE the Corp
+;; hasn't spoken to IS a real decision. It now pauses (:decision-required) like
+;; the no-strategy approach-ice path, so the inner ICE gets its own decision.
+;; =============================================================================
+
+(defn- rez-strategy-ctx-ice
+  "Like rez-strategy-ctx but with a named, unrezzed ICE being approached."
+  [strategy ice-title]
+  {:side "corp"
+   :run-phase "approach-ice"
+   :my-prompt {:msg (str "Rez " ice-title "?") :prompt-type "run" :choices []}
+   :strategy strategy
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000002")
+   :state {:game-state
+           {:run {:phase "approach-ice" :position 1 :server [:hq]}
+            :corp {:credit 7
+                   :servers {:hq {:ices [{:cid 77 :title ice-title :cost 1 :rezzed false}]}}}}}})
+
+(deftest rez-strategy-unlisted-unrezzed-ice-pauses-for-decision
+  (testing "an unrezzed ICE not in the --rez whitelist pauses (returns a rez decision) instead of silently auto-declining"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [r (corp-handlers/handle-corp-rez-strategy
+                   ;; whitelist names Palisade; the run is approaching an unrezzed Tithe
+                   (rez-strategy-ctx-ice {:rez #{"Palisade"}} "Tithe"))]
+            (is (= :decision-required (:status r))
+                (str "an unrezzed ICE outside the --rez list is a real rez decision; must pause, got: " r))
+            (is (= "Tithe" (:ice r))
+                "should name the ICE the Corp must decide on")))
+        (is (not-any? #(= "continue" (:command %)) @sent)
+            "must NOT silently pass priority — pausing returns control to the Corp to decide on this ICE")))))
+
+(deftest rez-strategy-already-rezzed-unlisted-ice-still-continues
+  (testing "an ALREADY-rezzed ICE outside the --rez list just continues (no decision needed)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (let [ctx (-> (rez-strategy-ctx-ice {:rez #{"Palisade"}} "Tithe")
+                      (assoc-in [:state :game-state :corp :servers :hq :ices 0 :rezzed] true))]
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-rez-strategy ctx)]
+              (is (= :action-taken (:status r))
+                  (str "a rezzed unlisted ICE needs no decision; should continue, got: " r))))
+          (is (some #(= "continue" (:command %)) @sent)
+              "a rezzed ICE the Corp isn't rezzing should pass priority and proceed"))))))
