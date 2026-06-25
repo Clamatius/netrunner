@@ -123,13 +123,31 @@
           (println (format "   ICE %s already rezzed, continuing" ice-title))
           (send-continue! gameid))
 
-        ;; --rez set exists but this ICE not in it: decline
+        ;; --rez set exists but THIS unrezzed ICE is not in it: pause for a
+        ;; decision rather than silently auto-declining. The old behaviour sent
+        ;; `continue` and never handed control back, so on a multi-ICE server a
+        ;; Corp that committed `--rez "<outer>"` never got to rez/fire its inner
+        ;; ICE (marquee g3: inner Tithe never fired in the two runs that lost the
+        ;; game). That violates the --persistent contract — "returns to you for a
+        ;; real rez/fire decision": a 2nd unrezzed ICE the Corp hasn't spoken to
+        ;; IS a real decision. Surface it like the no-strategy approach-ice path
+        ;; (handle-corp-rez-decision); the Corp then rezzes it (plain `rez` /
+        ;; re-enter `--rez "<this>"`) or declines for the rest of the run
+        ;; (`--no-rez`). Print once per (position, ice) to avoid spam on re-entry.
         :else
-        (do
-          (println (format "   Strategy: --rez (not %s), declining" ice-title))
-          (merge (send-continue! gameid)
-                 {:action :auto-declined-rez
-                  :ice ice-title}))))))
+        (let [status-key [:corp-rez-strategy-decision position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "   Rez decision: %s — approaching an unrezzed ICE not in your --rez list." ice-title))
+            (println (format "      continue --rez \"%s\"   - rez it (keeps owning the run)" ice-title))
+            (println           "      continue --no-rez       - decline this and the rest of the run"))
+          {:status :decision-required
+           :wake-reason :rez-ice
+           :ice ice-title
+           :position position
+           :prompt my-prompt
+           :message (format "Corp must decide: rez %s or continue" ice-title)})))))
 
 (defn handle-corp-rez-decision
   "Priority 1.7: Corp at approach-ice WITHOUT strategy - pause for human decision."

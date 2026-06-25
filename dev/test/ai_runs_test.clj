@@ -157,8 +157,8 @@
           ;; Clean up
           (runs/reset-strategy!))))))
 
-(deftest test-corp-rez-declines-other-ice
-  (testing "Corp with --rez strategy declines ICE not in the set"
+(deftest test-corp-rez-pauses-on-other-unrezzed-ice
+  (testing "Corp with --rez strategy PAUSES on an unrezzed ICE not in the set (returns a rez decision) instead of silently declining — marquee g3 / forum [112]"
     (let [sent (atom [])]
       (with-mock-state
         (mock-state-with-run
@@ -170,12 +170,14 @@
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           ;; Set strategy to rez Ice Wall only (not Enigma)
           (runs/set-strategy! {:rez #{"Ice Wall"}})
+          ;; An unrezzed ICE the Corp hasn't named is a real rez decision under
+          ;; the --persistent contract: pause and hand control back, don't
+          ;; silently `continue` past it (which hid inner-ICE rezzes in g3).
           (let [result (runs/continue-run!)]
-            (is (= :action-taken (:status result)))
-            (is (= :auto-declined-rez (:action result)))
+            (is (= :decision-required (:status result)))
             (is (= "Enigma" (:ice result)))
-            (is (= 1 (count @sent)))
-            (is (= "continue" (get-in @sent [0 :data :command]))))
+            (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                "must NOT silently pass priority — the unrezzed ICE is a real rez decision"))
           ;; Clean up
           (runs/reset-strategy!))))))
 
