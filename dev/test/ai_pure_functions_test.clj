@@ -775,6 +775,54 @@
                   {:initial-prompt p :current-prompt p
                    :initial-size 2 :current-log [{:text "a"} {:text "b"}]}))))))
 
+;; ============================================================================
+;; capture-state-snapshot / show-state-diff tests (ai-core)
+;;
+;; The before/after verification snapshot must read PUBLIC count fields for
+;; zone sizes, not (count zone-vector). On the wire, a player's OWN deck is
+;; fog-of-war-hidden: it arrives as [] with the real size carried in the
+;; public :deck-count field (see game.core.diffs/deck-summary). Counting the
+;; empty vector reports a constant 0, so show-state-diff could never surface a
+;; draw. (Same bug class as the snapshot-header :hand-count fix, forum #28.)
+;; ============================================================================
+
+(defn- corp-snapshot-gs
+  "Wire-shaped game-state for the corp seat: own deck hidden as [] with the
+   real size in :deck-count; own hand is visible."
+  [deck-count hand-count]
+  {:corp   {:credit 7 :click 2
+            :hand (vec (repeat hand-count {:cid 0 :title "X"}))
+            :hand-count hand-count
+            :deck []                ; fog-of-war: own deck contents hidden
+            :deck-count deck-count  ; public size field
+            :discard [] :servers {}}
+   :runner {:credit 5 :click 0 :hand [] :rig {}}
+   :active-player "corp"})
+
+(deftest test-capture-snapshot-deck-size-uses-public-count
+  (testing "own deck is fog-hidden ([]) on the wire; :deck-size reads :deck-count"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (corp-snapshot-gs 30 2))
+      (let [snap (core/capture-state-snapshot)]
+        (is (= 30 (:deck-size snap))
+            "deck-size must reflect the public deck-count, not the empty fog-hidden vector")
+        (is (= 2 (:hand-size snap))
+            "hand-size for own (visible) hand")))))
+
+(deftest test-show-state-diff-surfaces-draw
+  (testing "a draw (deck 30->29, hand 2->3) shows the deck line in detailed diff"
+    (let [before (with-mock-state (mock-client-state :side "corp"
+                                                     :game-state (corp-snapshot-gs 30 2))
+                   (core/capture-state-snapshot))
+          after  (with-mock-state (mock-client-state :side "corp"
+                                                     :game-state (corp-snapshot-gs 29 3))
+                   (core/capture-state-snapshot))
+          out    (with-out-str (core/show-state-diff before after true))]
+      (is (re-find #"Deck: 30 . 29" out)
+          "detailed diff must surface deck movement on a draw")
+      (is (re-find #"Hand: 2 . 3" out)
+          "detailed diff must surface hand movement on a draw"))))
+
 (defn -main []
   (let [results (run-tests 'ai-pure-functions-test)]
     (println "\n========================================")
