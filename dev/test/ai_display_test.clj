@@ -432,6 +432,44 @@
         (is (str/includes? out "breach R&D") (str "should explain what continue yields, got: " out))
         (is (not (str/includes? out "ACTIONABLE")))))))
 
+(deftest test-blocker-diagnosis-initiation-already-passed-runner
+  (testing "Runner that already passed the run-initiation both-pass window is told
+            it has passed (wait / jack-out), NOT to re-send a no-op 'continue'
+            — marquee g3 stall (issue #31): a Runner that passed initiation kept
+            being told 'use continue', which loops back to the same wait."
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 6
+                                   :run {:phase "initiation" :position 1
+                                         :server ["hq"] :no-action "runner"}
+                                   :runner {:click 1 :credit 5 :hand []
+                                            :prompt-state {:msg "You are running on HQ"
+                                                           :prompt-type "run"}}
+                                   :corp {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "already passed priority")
+            (str "should tell the Runner it already passed, got: " out))
+        (is (str/includes? out "jack-out")
+            (str "should offer jack-out as the stall recovery, got: " out))
+        (is (not (str/includes? out "ACTIONABLE")))))))
+
+(deftest test-priority-hint-runner-already-passed-suggests-jackout
+  (testing "Runner already-passed hint names jack-out as recovery if the opponent
+            seat isn't monitoring (issue #31: 'only jack-out cleared it')"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "initiation" :position 1 :server ["hq"] :no-action "runner"}
+                              "runner"))]
+      (is (str/includes? out "already passed priority"))
+      (is (str/includes? out "jack-out")))))
+
+(deftest test-priority-hint-corp-already-passed-no-jackout
+  (testing "Corp already-passed hint does NOT suggest jack-out (Corp can't jack out)"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["hq"] :no-action "corp"}
+                              "corp"))]
+      (is (str/includes? out "already passed priority"))
+      (is (not (str/includes? out "jack-out"))))))
+
 (deftest test-blocker-diagnosis-turn-not-started
   (testing "my-turn boundary with 0 clicks steers to start-turn"
     (with-mock-state (mock-client-state
