@@ -37,6 +37,21 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn format-runner-agenda-line
+  "Runner's-eye agenda threat line, with units made explicit.
+
+   The old single header — `Missing: 18 (Drawn: ~0, HQ: 5, R&D: 38, Remotes: 0/0)`
+   — conflated two different units under one parenthetical, so it read as
+   '18 agendas, 5 of them in HQ, 38 in R&D'. In fact:
+     missing         - agenda *POINTS* not yet scored or stolen (Corp needs 7)
+     expected-drawn  - estimated agenda *CARDS* the Corp has likely drawn into HQ
+     hq-size/rd-size - total *CARD* counts in HQ / R&D — the haystack, not agendas
+     unrezzed/advanced - remote-server counts the Runner can see
+   Labelling the points-vs-cards split removes the misread."
+  [agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count]
+  (format "Agenda Points: %d / 7  │  Unaccounted: %d agenda pts — hiding among HQ %d / R&D %d cards, Remotes %d unrezzed / %d advanced (~%d agenda cards likely drawn)"
+          agenda-points missing hq-size rd-size unrezzed-count advanced-count expected-drawn))
+
 (defn show-status
   "Display current game status or lobby state"
   []
@@ -268,8 +283,8 @@
                                                         content)))
                                                remotes))]
               (if (= "runner" my-side)
-                (println (format "Agenda Points: %d / 7  │  Missing: %d (Drawn: ~%d, HQ: %d, R&D: %d, Remotes: %d/%d)"
-                                agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count))
+                (println (format-runner-agenda-line
+                          agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count))
                 (println "Agenda Points:" agenda-points "/ 7")))
             (println "\n--- CORP ---")
             (println "Credits:" (state/corp-credits))

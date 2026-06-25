@@ -10,6 +10,36 @@
             [test-helpers :refer [mock-client-state with-mock-state]]
             [ai-display :as display]))
 
+;; ============================================================================
+;; format-runner-agenda-line — points vs cards must be unambiguous
+;; ============================================================================
+;; The old header `Missing: 18 (Drawn: ~0, HQ: 5, R&D: 38, Remotes: 0/0)` mixed
+;; agenda *points* (Missing) with *card* counts (HQ/R&D) under one parenthetical,
+;; reading as "18 agendas, 5 in HQ". The relabel must keep the unit of each
+;; number legible.
+
+(deftest format-runner-agenda-line-labels-units
+  (testing "agenda points and card counts are each explicitly unit-labelled"
+    (let [line (display/format-runner-agenda-line 0 18 0 5 38 0 0)]
+      (is (str/includes? line "18 agenda pts")
+          "the unaccounted count is marked as agenda POINTS")
+      (is (str/includes? line "HQ 5 / R&D 38 cards")
+          "HQ/R&D are marked as CARD counts (the haystack), not agenda counts")
+      (is (str/includes? line "0 unrezzed")
+          "remote breakdown spells out unrezzed vs advanced")
+      (is (str/includes? line "0 advanced"))
+      (is (str/includes? line "~0 agenda cards likely drawn")
+          "the drawn estimate is labelled as an estimate of agenda cards")
+      (is (not (str/includes? line "Missing:"))
+          "the ambiguous bare 'Missing:' header is gone")))
+  (testing "values land in the right slots (no arg-order regression)"
+    (let [line (display/format-runner-agenda-line 4 11 3 6 30 2 1)]
+      (is (str/includes? line "Agenda Points: 4 / 7"))
+      (is (str/includes? line "11 agenda pts"))
+      (is (str/includes? line "HQ 6 / R&D 30 cards"))
+      (is (str/includes? line "Remotes 2 unrezzed / 1 advanced"))
+      (is (str/includes? line "~3 agenda cards likely drawn")))))
+
 (deftest test-game-over-status-decided
   (testing "decided game prints GAME-OVER with lowercased winner and turn"
     (with-mock-state (mock-client-state
