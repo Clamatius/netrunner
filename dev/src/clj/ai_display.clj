@@ -972,6 +972,13 @@
         na        (let [v (:no-action run)]
                     (cond (keyword? v) (name v) (string? v) v :else nil))
         opp       (if (= my-side "runner") "Corp" "Runner")
+        ;; The run timing splits each priority window into two sub-steps: the
+        ;; ACTIVE player passes first, then the opponent (forum [118]). During a
+        ;; run the active player is ALWAYS the Runner — runs only happen on the
+        ;; Runner's turn (rule invariant, memory run-priority-active-player-first),
+        ;; so we encode that directly rather than trusting the volatile
+        ;; :active-player wire field. Render: Runner = first sub-step, Corp = second.
+        i-am-active? (= my-side "runner")
         ;; What the Runner specifically gains by continuing this window.
         gain      (when (= my-side "runner")
                     (if past-ice?
@@ -998,11 +1005,21 @@
       [(str "    → It's YOUR move: " opp " has already passed priority. Use 'continue' to "
             (or gain "advance the run") ".")]
 
-      ;; Fresh window — nobody has passed yet.
-      :else
-      [(str "    → It's YOUR move: use 'continue' to pass priority"
+      ;; Fresh window — nobody has passed yet. Render the two sub-steps explicitly
+      ;; so each seat knows whether it's the first passer (active player) or the
+      ;; second (forum [118]/[120]).
+      i-am-active?
+      ;; Active player (Runner): your sub-step is FIRST.
+      [(str "    → YOUR sub-step (active player goes first): use 'continue' to pass priority"
             (when gain (str " (this is what gets you your access: " gain ")")) ".")
-       (str "      (BOTH players must pass for the run to advance — after you continue, expect to wait for " opp ".)")])))
+       (str "      (Both players pass to advance — " opp " gets its sub-step AFTER you pass.)")]
+
+      ;; Opponent of the active player (Corp): your sub-step is SECOND. You do NOT
+      ;; act in the Runner's sub-step — if you want to rez / fire a paid ability,
+      ;; you do it in your own sub-step, AFTER the Runner has passed (forum [120]).
+      :else
+      [(str "    ⏸️  " opp " (active player) has priority first here and hasn't passed yet.")
+       (str "      → Your sub-step comes next: wait for the " opp " to 'continue', then you 'continue' to advance the run.")])))
 
 (def ^:private run-ladder-rungs
   "Conceptual run-timing ladder (jinteki run structure), in order. Steps #2–#4
