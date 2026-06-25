@@ -970,8 +970,15 @@
         servers (:servers corp-state)]
     {:credits (get-in gs [side :credit])
      :clicks (get-in gs [side :click])
-     :hand-size (count (get-in gs [side :hand]))
-     :deck-size (count (get-in gs [side :deck]))
+     ;; Prefer the public count fields for zone sizes. On the wire a player's
+     ;; OWN deck is fog-of-war-hidden (arrives as [] with the real size in
+     ;; :deck-count), so (count deck) is a constant 0 and the deck never moves
+     ;; in show-state-diff — even on a draw. Own hand IS visible, but read its
+     ;; public :hand-count too for consistency. Fall back to (count zone) when
+     ;; the count field is absent OR nil (older/synthetic states); `or` guards
+     ;; present-but-nil, which a bare get-in default would not.
+     :hand-size (or (get-in gs [side :hand-count]) (count (get-in gs [side :hand])))
+     :deck-size (or (get-in gs [side :deck-count]) (count (get-in gs [side :deck])))
      :discard-size (count (get-in gs [side :discard]))
      :installed-count (if (= side :runner)
                        (+ (count (:program rig))
