@@ -499,14 +499,16 @@
 ;; ============================================================================
 
 (deftest test-priority-hint-fresh-window-runner-naked-server
-  (testing "Runner, nobody passed yet, no ICE left: continue -> breach & access"
+  (testing "Runner (active player), nobody passed yet, no ICE left: continue ->
+            breach & access, framed as the FIRST sub-step (forum [118]/[120])"
     (let [lines (display/run-priority-hint-lines
                  {:phase "movement" :position 0 :server ["hq"] :no-action false}
                  "runner")
           out (str/join "\n" lines)]
-      (is (str/includes? out "YOUR move"))
+      (is (str/includes? out "active player goes first"))
       (is (str/includes? out "breach HQ and access cards"))
-      (is (str/includes? out "BOTH players must pass")))))
+      ;; The opponent's sub-step comes AFTER the active player passes.
+      (is (str/includes? out "AFTER you pass")))))
 
 (deftest test-priority-hint-fresh-window-runner-more-ice
   (testing "Runner, fresh window, ICE still ahead: continue -> approach next ICE"
@@ -535,13 +537,31 @@
       (is (str/includes? out "breach R&D and access cards")))))
 
 (deftest test-priority-hint-corp-side-no-access-language
-  (testing "Corp seat gets whose-move guidance but no Runner 'access' phrasing"
+  (testing "Corp seat (non-active) in a fresh window is told the Runner (active
+            player) passes first and to wait — no Runner 'access' phrasing, and
+            (per [120]) NO 'you may rez / fire a paid ability now': the Corp acts
+            in its OWN sub-step, after the Runner has passed."
     (let [out (str/join "\n" (display/run-priority-hint-lines
                               {:phase "movement" :position 0 :server ["hq"] :no-action false}
                               "corp"))]
-      (is (str/includes? out "YOUR move"))
-      (is (str/includes? out "wait for Runner"))
-      (is (not (str/includes? out "access cards"))))))
+      (is (str/includes? out "active player"))
+      (is (str/includes? out "has priority first"))
+      (is (str/includes? out "wait for the Runner"))
+      (is (not (str/includes? out "access cards")))
+      ;; [120] correction: the Corp does not rez / fire paid abilities during the
+      ;; Runner's sub-step — that happens in the Corp's own sub-step afterwards.
+      (is (not (re-find #"(?i)rez" out)))
+      (is (not (re-find #"(?i)paid abilit" out))))))
+
+(deftest test-priority-hint-corp-fresh-window-is-second-passer
+  (testing "Corp fresh window does not claim 'it's YOUR move' — the Runner
+            (active player) passes first, the Corp passes second (forum [118])"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "approach-server" :position 0 :server ["rd"] :no-action nil}
+                              "corp"))]
+      (is (not (str/includes? out "YOUR move")))
+      (is (str/includes? out "Runner (active player) has priority first"))
+      (is (str/includes? out "Your sub-step comes next")))))
 
 ;; ============================================================================
 ;; show-prompt-detailed with no prompt — turn-aware "what now?"
