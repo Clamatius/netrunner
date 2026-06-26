@@ -515,9 +515,13 @@ execute() {
             echo "$RESULT"
         fi
     else
-        # Suppress all status map noise - we print human-readable messages instead
-        # Filter out any line starting with {:status (success, error, waiting, etc.)
-        echo "$RESULT" | grep -v '^{:status ' | grep -v '^nil$' || true
+        # Suppress all status map noise - we print human-readable messages instead.
+        # Two shapes leak as the REPL's return value: maps that LEAD with :status
+        # (success/error/waiting), and run-decision maps that lead with another key
+        # (e.g. {:wake-reason ... :status :fire-decision-required ...} from
+        # monitor-run rez/tank windows). Strip any single-line EDN map carrying a
+        # :status key in any position. Human output never starts with "{".
+        echo "$RESULT" | grep -vE '^\{[^}]*:status[ ,}]' | grep -v '^nil$' || true
     fi
 
     return $RET
