@@ -7,7 +7,7 @@ help:
 	@echo "  make check         - Quick AI code compile check"
 	@echo "                       (~1s with REPL+bb, ~30s cold start)"
 	@echo "  make test          - Run unit tests (~2s)"
-	@echo "  make verify        - check + test"
+	@echo "  make verify        - check + test + test-shell"
 	@echo ""
 	@echo "  make reset         - Fresh game (bounce REPLs, new game)"
 	@echo "  make resume        - Reload code, keep game state"
@@ -40,6 +40,7 @@ test:
 test-shell:
 	@echo "Running shell tests..."
 	@./dev/test/send_command_filter_test.sh
+	@./dev/test/ai_eval_charset_test.sh
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:
@@ -73,7 +74,7 @@ watch-corp:
 watch-runner:
 	@./dev/watch_game.sh runner
 
-# Combo: check + test (pre-commit quality gate)
+# Combo: check + test + test-shell (pre-commit quality gate)
 verify: check test test-shell
 	@echo "✅ All checks passed"
 
