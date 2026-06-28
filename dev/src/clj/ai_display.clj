@@ -369,6 +369,23 @@
                            (or whose-turn "?")
                            (if (some? clicks) clicks "?"))))))))
 
+(defn ice-encounter-label
+  "Annotation describing WHEN the Runner encounters this ICE during a run.
+
+   The engine :ices vector is ordered innermost-first: index 0 is closest to the
+   server (encountered LAST), the highest index is outermost (encountered FIRST).
+   This is the reverse of the obvious low-to-high reading order, which silently
+   inverted run-budget planning (issue #39). We surface the encounter ordinal so
+   the static board view matches the run-time 'position N' prompt.
+
+   `idx` is the engine index of the ICE; `total` is the ICE count on the server."
+  [idx total]
+  (cond
+    (<= total 1) ""  ;; only ICE on the server: no ordering ambiguity
+    (= idx (dec total)) " ⟵ outermost — Runner encounters this 1st"
+    (= idx 0) " ⟵ innermost — encountered last (guards server)"
+    :else (str " ⟵ encountered #" (- total idx) " of " total)))
+
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
   []
@@ -395,27 +412,33 @@
         (when (or (seq ice-list) (seq content-list))
           (println (str "\n📍 " (clojure.string/upper-case server-name)))
 
-          ;; Show ICE
+          ;; Show ICE — listed in Runner encounter order (outermost first), which
+          ;; is the REVERSE of the engine :ices vector. The #idx label keeps the
+          ;; engine index so it matches the run-time "position N" prompt. (issue #39)
           (if (seq ice-list)
-            (doseq [[idx ice] (map-indexed vector ice-list)]
-              (let [rezzed (:rezzed ice)
-                    title (core/format-card-name-with-index ice ice-list)
-                    subtypes (:subtypes ice)
-                    subtype-str (if (seq subtypes)
-                                  (clojure.string/join " " (map name subtypes))
-                                  "?")
-                    strength (:current-strength ice)
-                    status-icon (if rezzed "🔴" "⚪")
-                    ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
-                    display-name (cond
-                                   rezzed title
-                                   is-corp? (str title " [unrezzed]")
-                                   :else "Unrezzed ICE")]
-                (println (str "  ICE #" idx ": " status-icon " "
-                             display-name
-                             (when rezzed (str " (" subtype-str ")"))
-                             (when (and rezzed strength) (str " (str: " strength ")"))
-                             (format-counters ice)))))
+            (let [ice-total (count ice-list)]
+              (when (> ice-total 1)
+                (println "  (top→bottom = Runner encounter order: outermost first)"))
+              (doseq [[idx ice] (reverse (map-indexed vector ice-list))]
+                (let [rezzed (:rezzed ice)
+                      title (core/format-card-name-with-index ice ice-list)
+                      subtypes (:subtypes ice)
+                      subtype-str (if (seq subtypes)
+                                    (clojure.string/join " " (map name subtypes))
+                                    "?")
+                      strength (:current-strength ice)
+                      status-icon (if rezzed "🔴" "⚪")
+                      ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
+                      display-name (cond
+                                     rezzed title
+                                     is-corp? (str title " [unrezzed]")
+                                     :else "Unrezzed ICE")]
+                  (println (str "  ICE #" idx ": " status-icon " "
+                               display-name
+                               (when rezzed (str " (" subtype-str ")"))
+                               (when (and rezzed strength) (str " (str: " strength ")"))
+                               (format-counters ice)
+                               (ice-encounter-label idx ice-total))))))
             (println "  (No ICE)"))
 
           ;; Show Content (assets/agendas)

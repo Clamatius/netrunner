@@ -681,3 +681,53 @@
   (testing "absent/unrecognised phase yields nil (caller falls back to bare line)"
     (is (nil? (display/run-phase-ladder-lines {:phase nil :server-name "R&D"})))
     (is (nil? (display/run-phase-ladder-lines {:phase "bogus" :server-name "R&D"})))))
+
+;; ============================================================================
+;; Board ICE encounter order (issue #39)
+;; ============================================================================
+;; The :ices vector is engine order: index 0 = innermost (closest to server,
+;; encountered LAST), highest index = outermost (encountered FIRST). The board
+;; used to list them low-index-first, so the line you read first was the ICE the
+;; Runner meets last — inverting run-budget planning. The board must read in
+;; Runner encounter order and label outermost/innermost.
+
+(deftest ice-encounter-label-marks-ends
+  (testing "single ICE has no ordering ambiguity"
+    (is (= "" (display/ice-encounter-label 0 1))))
+  (testing "outermost (highest index) is encountered first"
+    (let [lbl (display/ice-encounter-label 1 2)]
+      (is (str/includes? lbl "outermost"))
+      (is (str/includes? lbl "1st"))))
+  (testing "innermost (index 0) is encountered last and guards the server"
+    (let [lbl (display/ice-encounter-label 0 2)]
+      (is (str/includes? lbl "innermost"))
+      (is (str/includes? lbl "last"))))
+  (testing "middle ICE gets its encounter ordinal (outermost-first counting)"
+    ;; 3 ICE: idx2=1st, idx1=2nd, idx0=3rd/last
+    (is (str/includes? (display/ice-encounter-label 1 3) "2"))))
+
+(deftest show-board-lists-ice-in-encounter-order
+  (testing "board renders outermost ICE first and annotates encounter order"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 12
+                    :corp {:servers {:remote1
+                                     {:ices [{:title "Palisade" :rezzed true :subtypes [:barrier]}
+                                             {:title "Karuna" :rezzed true :subtypes [:sentry]}]
+                                      :content [{:title "Project Atlas" :rezzed false}]}}}
+                    :runner {:rig {}}})
+      (let [out (with-out-str (display/show-board))
+            lines (str/split-lines out)
+            karuna-idx (first (keep-indexed (fn [i l] (when (str/includes? l "Karuna") i)) lines))
+            palisade-idx (first (keep-indexed (fn [i l] (when (str/includes? l "Palisade") i)) lines))]
+        (is (and karuna-idx palisade-idx) "both ICE lines render")
+        (is (< karuna-idx palisade-idx)
+            (str "outermost (Karuna, encountered 1st) must list ABOVE innermost (Palisade):\n" out))
+        ;; #idx must still equal engine position (runtime prompt shows "position N")
+        (is (str/includes? (nth lines karuna-idx) "#1")
+            "Karuna keeps engine index #1 (outermost = position 1)")
+        (is (str/includes? (nth lines palisade-idx) "#0")
+            "Palisade keeps engine index #0 (innermost = position 0)")
+        (is (str/includes? (nth lines karuna-idx) "outermost"))
+        (is (str/includes? (nth lines palisade-idx) "innermost"))))))
