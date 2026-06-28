@@ -694,17 +694,24 @@
 (deftest ice-encounter-label-marks-ends
   (testing "single ICE has no ordering ambiguity"
     (is (= "" (display/ice-encounter-label 0 1))))
-  (testing "outermost (highest index) is encountered first"
+  (testing "outermost (highest index) is encountered first, with its 1-based run position"
     (let [lbl (display/ice-encounter-label 1 2)]
       (is (str/includes? lbl "outermost"))
-      (is (str/includes? lbl "1st"))))
+      (is (str/includes? lbl "1st"))
+      ;; run prompt is 1-based: outermost of 2 = position 2/2 (idx+1), NOT #1
+      (is (str/includes? lbl "position 2/2")
+          (str "outermost must show the run-time 1-based position 2/2: " lbl))))
   (testing "innermost (index 0) is encountered last and guards the server"
     (let [lbl (display/ice-encounter-label 0 2)]
       (is (str/includes? lbl "innermost"))
-      (is (str/includes? lbl "last"))))
-  (testing "middle ICE gets its encounter ordinal (outermost-first counting)"
-    ;; 3 ICE: idx2=1st, idx1=2nd, idx0=3rd/last
-    (is (str/includes? (display/ice-encounter-label 1 3) "2"))))
+      (is (str/includes? lbl "last"))
+      (is (str/includes? lbl "position 1/2")
+          (str "innermost = run-time position 1/2 (idx+1): " lbl))))
+  (testing "middle ICE gets its encounter ordinal and 1-based position"
+    ;; 3 ICE: idx2=1st, idx1=2nd, idx0=3rd/last; idx1 run position = 2/3
+    (let [lbl (display/ice-encounter-label 1 3)]
+      (is (str/includes? lbl "2"))
+      (is (str/includes? lbl "position 2/3")))))
 
 (deftest show-board-lists-ice-in-encounter-order
   (testing "board renders outermost ICE first and annotates encounter order"
@@ -762,6 +769,35 @@
             (str "Choices block must name the `choose <N>` verb when selectable also present:\n" out))
         (is (str/includes? out "choose-card")
             (str "Selectable block keeps its choose-card verb:\n" out))))))
+
+(deftest show-prompt-detailed-select-both-blocks-uses-choose-value
+  ;; Codex review of PR #41: on a "select"-typed prompt the :choices are
+  ;; meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>` there,
+  ;; demanding `choose-value "<label>"`. The both-blocks help must NOT tell the
+  ;; player to use `choose <N>` for a select prompt's Choices block.
+  (testing "select prompt with both blocks steers Choices to choose-value, not choose <N>"
+    (with-mock-state
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 5
+                    :corp {:hand []
+                           :prompt-state {:prompt-type "select"
+                                          :eid "sel-1"
+                                          :msg "Select cards to trash"
+                                          :choices [{:value "Done"}]
+                                          :selectable [{:cid "c1" :title "Hedge Fund"}
+                                                       {:cid "c2" :title "IPO"}]}}
+                    :runner {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            lines (str/split-lines out)
+            choices-line (first (filter #(str/includes? % "Choices:") lines))]
+        (is choices-line "renders a Choices header")
+        (is (str/includes? out "choose-value")
+            (str "select-prompt Choices/meta block must steer to choose-value:\n" out))
+        (is (not (str/includes? choices-line "choose <N>"))
+            (str "must NOT advertise `choose <N>` for a select prompt's Choices block:\n" out))
+        (is (str/includes? out "choose-card")
+            (str "selectable cards still use choose-card:\n" out))))))
 
 ;; ============================================================================
 ;; Non-run paid-ability / waiting prompt — don't advertise run-only `continue`

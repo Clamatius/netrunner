@@ -375,16 +375,21 @@
    The engine :ices vector is ordered innermost-first: index 0 is closest to the
    server (encountered LAST), the highest index is outermost (encountered FIRST).
    This is the reverse of the obvious low-to-high reading order, which silently
-   inverted run-budget planning (issue #39). We surface the encounter ordinal so
-   the static board view matches the run-time 'position N' prompt.
+   inverted run-budget planning (issue #39).
+
+   We also surface the run-time :position the Runner will see in the encounter
+   prompt. That position is 1-based (current-run-ice maps position->ice[pos-1]),
+   so it is `idx + 1` — NOT the 0-based board `#idx`. Spelling out 'position N/M'
+   bridges the two numberings so the board and the run prompt agree.
 
    `idx` is the engine index of the ICE; `total` is the ICE count on the server."
   [idx total]
-  (cond
-    (<= total 1) ""  ;; only ICE on the server: no ordering ambiguity
-    (= idx (dec total)) " ⟵ outermost — Runner encounters this 1st"
-    (= idx 0) " ⟵ innermost — encountered last (guards server)"
-    :else (str " ⟵ encountered #" (- total idx) " of " total)))
+  (let [pos (inc idx)]  ;; run prompt shows 1-based :position (idx+1)
+    (cond
+      (<= total 1) ""  ;; only ICE on the server: no ordering ambiguity
+      (= idx (dec total)) (format " ⟵ outermost — Runner encounters this 1st (run prompt: position %d/%d)" pos total)
+      (= idx 0) (format " ⟵ innermost — encountered last, guards server (position %d/%d)" pos total)
+      :else (format " ⟵ encounter #%d of %d (position %d/%d)" (- total idx) total pos total))))
 
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
@@ -414,7 +419,8 @@
 
           ;; Show ICE — listed in Runner encounter order (outermost first), which
           ;; is the REVERSE of the engine :ices vector. The #idx label keeps the
-          ;; engine index so it matches the run-time "position N" prompt. (issue #39)
+          ;; 0-based engine index; the annotation spells out the 1-based run-time
+          ;; "position N/M" (idx+1) so the board and the run prompt agree. (#39)
           (if (seq ice-list)
             (let [ice-total (count ice-list)]
               (when (> ice-total 1)
@@ -1139,18 +1145,24 @@
         (when-let [card (:card prompt)]
           (println (str "  Card: " (:title card)
                         (when (:type card) (str " (" (:type card) ")")))))
-        ;; When BOTH a Choices and a Selectable block are present (e.g. Mutual
-        ;; Favor), name the verb each block uses so the player doesn't reach for
-        ;; the wrong one: `choose <N>` for Choices, `choose-card <N>` for
-        ;; Selectable. (issue #40)
-        (when (and has-choices has-selectable)
-          (println "  ⚠️  This prompt has TWO selectors — pick the right verb:")
-          (println "     • Choices block below → use `choose <N>`")
-          (println "     • Selectable cards block → use `choose-card <N>`"))
-        (when has-choices
-          (println (str "  Choices:" (when has-selectable "  (use `choose <N>`)")))
-          (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-            (println (str "    " idx ". " (core/format-choice choice)))))
+        ;; When BOTH a Choices and a Selectable block are present, name the verb
+        ;; each block uses so the player doesn't reach for the wrong one. The
+        ;; Choices verb DEPENDS ON prompt type: on a "select" prompt the :choices
+        ;; are meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>`
+        ;; there — they're pressed by name via `choose-value`. Only a non-select
+        ;; prompt (e.g. Mutual Favor's "other") takes `choose <N>`. (issue #40,
+        ;; codex review of PR #41)
+        (let [choices-verb (if (state/select-prompt-type? (:prompt-type prompt))
+                             "`choose-value \"<label>\"`"
+                             "`choose <N>`")]
+          (when (and has-choices has-selectable)
+            (println "  ⚠️  This prompt has TWO selectors — pick the right verb:")
+            (println (str "     • Choices block below → use " choices-verb))
+            (println "     • Selectable cards block → use `choose-card <N>`"))
+          (when has-choices
+            (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
+            (doseq [[idx choice] (map-indexed vector (:choices prompt))]
+              (println (str "    " idx ". " (core/format-choice choice))))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")
