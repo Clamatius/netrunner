@@ -369,6 +369,28 @@
                            (or whose-turn "?")
                            (if (some? clicks) clicks "?"))))))))
 
+(defn ice-encounter-label
+  "Annotation describing WHEN the Runner encounters this ICE during a run.
+
+   The engine :ices vector is ordered innermost-first: index 0 is closest to the
+   server (encountered LAST), the highest index is outermost (encountered FIRST).
+   This is the reverse of the obvious low-to-high reading order, which silently
+   inverted run-budget planning (issue #39).
+
+   We also surface the run-time :position the Runner will see in the encounter
+   prompt. That position is 1-based (current-run-ice maps position->ice[pos-1]),
+   so it is `idx + 1` — NOT the 0-based board `#idx`. Spelling out 'position N/M'
+   bridges the two numberings so the board and the run prompt agree.
+
+   `idx` is the engine index of the ICE; `total` is the ICE count on the server."
+  [idx total]
+  (let [pos (inc idx)]  ;; run prompt shows 1-based :position (idx+1)
+    (cond
+      (<= total 1) ""  ;; only ICE on the server: no ordering ambiguity
+      (= idx (dec total)) (format " ⟵ outermost — Runner encounters this 1st (run prompt: position %d/%d)" pos total)
+      (= idx 0) (format " ⟵ innermost — encountered last, guards server (position %d/%d)" pos total)
+      :else (format " ⟵ encounter #%d of %d (position %d/%d)" (- total idx) total pos total))))
+
 (defn show-board
   "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
   []
@@ -395,27 +417,34 @@
         (when (or (seq ice-list) (seq content-list))
           (println (str "\n📍 " (clojure.string/upper-case server-name)))
 
-          ;; Show ICE
+          ;; Show ICE — listed in Runner encounter order (outermost first), which
+          ;; is the REVERSE of the engine :ices vector. The #idx label keeps the
+          ;; 0-based engine index; the annotation spells out the 1-based run-time
+          ;; "position N/M" (idx+1) so the board and the run prompt agree. (#39)
           (if (seq ice-list)
-            (doseq [[idx ice] (map-indexed vector ice-list)]
-              (let [rezzed (:rezzed ice)
-                    title (core/format-card-name-with-index ice ice-list)
-                    subtypes (:subtypes ice)
-                    subtype-str (if (seq subtypes)
-                                  (clojure.string/join " " (map name subtypes))
-                                  "?")
-                    strength (:current-strength ice)
-                    status-icon (if rezzed "🔴" "⚪")
-                    ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
-                    display-name (cond
-                                   rezzed title
-                                   is-corp? (str title " [unrezzed]")
-                                   :else "Unrezzed ICE")]
-                (println (str "  ICE #" idx ": " status-icon " "
-                             display-name
-                             (when rezzed (str " (" subtype-str ")"))
-                             (when (and rezzed strength) (str " (str: " strength ")"))
-                             (format-counters ice)))))
+            (let [ice-total (count ice-list)]
+              (when (> ice-total 1)
+                (println "  (top→bottom = Runner encounter order: outermost first)"))
+              (doseq [[idx ice] (reverse (map-indexed vector ice-list))]
+                (let [rezzed (:rezzed ice)
+                      title (core/format-card-name-with-index ice ice-list)
+                      subtypes (:subtypes ice)
+                      subtype-str (if (seq subtypes)
+                                    (clojure.string/join " " (map name subtypes))
+                                    "?")
+                      strength (:current-strength ice)
+                      status-icon (if rezzed "🔴" "⚪")
+                      ;; Corp sees their own unrezzed ICE, Runner sees "Unrezzed ICE"
+                      display-name (cond
+                                     rezzed title
+                                     is-corp? (str title " [unrezzed]")
+                                     :else "Unrezzed ICE")]
+                  (println (str "  ICE #" idx ": " status-icon " "
+                               display-name
+                               (when rezzed (str " (" subtype-str ")"))
+                               (when (and rezzed strength) (str " (str: " strength ")"))
+                               (format-counters ice)
+                               (ice-encounter-label idx ice-total))))))
             (println "  (No ICE)"))
 
           ;; Show Content (assets/agendas)
@@ -1116,10 +1145,24 @@
         (when-let [card (:card prompt)]
           (println (str "  Card: " (:title card)
                         (when (:type card) (str " (" (:type card) ")")))))
-        (when has-choices
-          (println "  Choices:")
-          (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-            (println (str "    " idx ". " (core/format-choice choice)))))
+        ;; When BOTH a Choices and a Selectable block are present, name the verb
+        ;; each block uses so the player doesn't reach for the wrong one. The
+        ;; Choices verb DEPENDS ON prompt type: on a "select" prompt the :choices
+        ;; are meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>`
+        ;; there — they're pressed by name via `choose-value`. Only a non-select
+        ;; prompt (e.g. Mutual Favor's "other") takes `choose <N>`. (issue #40,
+        ;; codex review of PR #41)
+        (let [choices-verb (if (state/select-prompt-type? (:prompt-type prompt))
+                             "`choose-value \"<label>\"`"
+                             "`choose <N>`")]
+          (when (and has-choices has-selectable)
+            (println "  ⚠️  This prompt has TWO selectors — pick the right verb:")
+            (println (str "     • Choices block below → use " choices-verb))
+            (println "     • Selectable cards block → use `choose-card <N>`"))
+          (when has-choices
+            (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
+            (doseq [[idx choice] (map-indexed vector (:choices prompt))]
+              (println (str "    " idx ". " (core/format-choice choice))))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")
@@ -1195,11 +1238,22 @@
                       (when (= run-phase "approach-ice")
                         (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
                     (println "    → Use 'continue' to pass priority (advance the run)."))))
-              ;; Not in a run
-              (do
-                (println "  Action: Paid ability window")
-                (println "    → No choices required")
-                (println "    → Use 'continue' command to pass priority"))))))
+              ;; Not in a run. `continue` is RUN-ONLY (errors "No active run to
+              ;; monitor") — never advertise it here. A "waiting" prompt means the
+              ;; opponent is deciding (e.g. Wildcat Strike); the player takes no
+              ;; pass action and other actions may still be available. (issue #38)
+              (let [waiting? (state/waiting-prompt-type? (:prompt-type prompt))
+                    opp (if (= my-side "runner") "Corp" "Runner")]
+                (if waiting?
+                  (do
+                    (println (str "  Action: Waiting on " opp " — no action required from you."))
+                    (println (str "    → Other actions may still be available; use 'wait' to block until "
+                                  opp " decides."))
+                    (println "    → ('continue' is run-only and won't help here.)"))
+                  (do
+                    (println "  Action: Paid ability window (no run active)")
+                    (println "    → No choices required.")
+                    (println "    → 'continue' is run-only here — take your next action, or 'wait'."))))))))
       ;; No prompt object. "No active prompt" alone is technically true but
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next

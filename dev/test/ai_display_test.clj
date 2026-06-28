@@ -681,3 +681,149 @@
   (testing "absent/unrecognised phase yields nil (caller falls back to bare line)"
     (is (nil? (display/run-phase-ladder-lines {:phase nil :server-name "R&D"})))
     (is (nil? (display/run-phase-ladder-lines {:phase "bogus" :server-name "R&D"})))))
+
+;; ============================================================================
+;; Board ICE encounter order (issue #39)
+;; ============================================================================
+;; The :ices vector is engine order: index 0 = innermost (closest to server,
+;; encountered LAST), highest index = outermost (encountered FIRST). The board
+;; used to list them low-index-first, so the line you read first was the ICE the
+;; Runner meets last — inverting run-budget planning. The board must read in
+;; Runner encounter order and label outermost/innermost.
+
+(deftest ice-encounter-label-marks-ends
+  (testing "single ICE has no ordering ambiguity"
+    (is (= "" (display/ice-encounter-label 0 1))))
+  (testing "outermost (highest index) is encountered first, with its 1-based run position"
+    (let [lbl (display/ice-encounter-label 1 2)]
+      (is (str/includes? lbl "outermost"))
+      (is (str/includes? lbl "1st"))
+      ;; run prompt is 1-based: outermost of 2 = position 2/2 (idx+1), NOT #1
+      (is (str/includes? lbl "position 2/2")
+          (str "outermost must show the run-time 1-based position 2/2: " lbl))))
+  (testing "innermost (index 0) is encountered last and guards the server"
+    (let [lbl (display/ice-encounter-label 0 2)]
+      (is (str/includes? lbl "innermost"))
+      (is (str/includes? lbl "last"))
+      (is (str/includes? lbl "position 1/2")
+          (str "innermost = run-time position 1/2 (idx+1): " lbl))))
+  (testing "middle ICE gets its encounter ordinal and 1-based position"
+    ;; 3 ICE: idx2=1st, idx1=2nd, idx0=3rd/last; idx1 run position = 2/3
+    (let [lbl (display/ice-encounter-label 1 3)]
+      (is (str/includes? lbl "2"))
+      (is (str/includes? lbl "position 2/3")))))
+
+(deftest show-board-lists-ice-in-encounter-order
+  (testing "board renders outermost ICE first and annotates encounter order"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 12
+                    :corp {:servers {:remote1
+                                     {:ices [{:title "Palisade" :rezzed true :subtypes [:barrier]}
+                                             {:title "Karuna" :rezzed true :subtypes [:sentry]}]
+                                      :content [{:title "Project Atlas" :rezzed false}]}}}
+                    :runner {:rig {}}})
+      (let [out (with-out-str (display/show-board))
+            lines (str/split-lines out)
+            karuna-idx (first (keep-indexed (fn [i l] (when (str/includes? l "Karuna") i)) lines))
+            palisade-idx (first (keep-indexed (fn [i l] (when (str/includes? l "Palisade") i)) lines))]
+        (is (and karuna-idx palisade-idx) "both ICE lines render")
+        (is (< karuna-idx palisade-idx)
+            (str "outermost (Karuna, encountered 1st) must list ABOVE innermost (Palisade):\n" out))
+        ;; #idx must still equal engine position (runtime prompt shows "position N")
+        (is (str/includes? (nth lines karuna-idx) "#1")
+            "Karuna keeps engine index #1 (outermost = position 1)")
+        (is (str/includes? (nth lines palisade-idx) "#0")
+            "Palisade keeps engine index #0 (innermost = position 0)")
+        (is (str/includes? (nth lines karuna-idx) "outermost"))
+        (is (str/includes? (nth lines palisade-idx) "innermost"))))))
+
+;; ============================================================================
+;; Prompt with BOTH Choices and Selectable blocks — label which verb (issue #40)
+;; ============================================================================
+;; Mutual Favor showed a Choices: block AND a Selectable cards: block with no
+;; signal which selector applied; both seats reached for the wrong verb. When
+;; both blocks are present the display must say `choose <N>` belongs to Choices
+;; and `choose-card <N>` belongs to Selectable.
+
+(deftest show-prompt-detailed-disambiguates-both-blocks
+  (testing "a prompt with both Choices and Selectable labels each block's verb"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 5
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "mf-1"
+                                            :msg "Choose an Icebreaker"
+                                            :choices [{:value "Unity"} {:value "Cleaver"}]
+                                            :selectable [{:cid "c1" :title "Unity"}
+                                                         {:cid "c2" :title "Cleaver"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            lines (str/split-lines out)
+            choices-line (first (filter #(str/includes? % "Choices:") lines))]
+        (is choices-line "renders a Choices header")
+        (is (str/includes? choices-line "choose <N>")
+            (str "Choices block must name the `choose <N>` verb when selectable also present:\n" out))
+        (is (str/includes? out "choose-card")
+            (str "Selectable block keeps its choose-card verb:\n" out))))))
+
+(deftest show-prompt-detailed-select-both-blocks-uses-choose-value
+  ;; Codex review of PR #41: on a "select"-typed prompt the :choices are
+  ;; meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>` there,
+  ;; demanding `choose-value "<label>"`. The both-blocks help must NOT tell the
+  ;; player to use `choose <N>` for a select prompt's Choices block.
+  (testing "select prompt with both blocks steers Choices to choose-value, not choose <N>"
+    (with-mock-state
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 5
+                    :corp {:hand []
+                           :prompt-state {:prompt-type "select"
+                                          :eid "sel-1"
+                                          :msg "Select cards to trash"
+                                          :choices [{:value "Done"}]
+                                          :selectable [{:cid "c1" :title "Hedge Fund"}
+                                                       {:cid "c2" :title "IPO"}]}}
+                    :runner {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            lines (str/split-lines out)
+            choices-line (first (filter #(str/includes? % "Choices:") lines))]
+        (is choices-line "renders a Choices header")
+        (is (str/includes? out "choose-value")
+            (str "select-prompt Choices/meta block must steer to choose-value:\n" out))
+        (is (not (str/includes? choices-line "choose <N>"))
+            (str "must NOT advertise `choose <N>` for a select prompt's Choices block:\n" out))
+        (is (str/includes? out "choose-card")
+            (str "selectable cards still use choose-card:\n" out))))))
+
+;; ============================================================================
+;; Non-run paid-ability / waiting prompt — don't advertise run-only `continue`
+;; (issue #38)
+;; ============================================================================
+;; After Wildcat Strike (a non-run paid-ability window), the prompt said
+;; "Use 'continue' command to pass priority" — but `continue` is run-only and
+;; errors "No active run to monitor". And "Waiting for Corp to make a decision"
+;; read as a hard block though Runner actions still worked.
+
+(deftest show-prompt-detailed-non-run-waiting-does-not-advertise-continue
+  (testing "a non-run waiting prompt steers to wait, not the run-only `continue` (#38)"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 6
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "waiting"
+                                            :eid "wc-1"
+                                            :msg "Waiting for Corp to make a decision"
+                                            :card {:title "Wildcat Strike"}}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "Use 'continue' command to pass priority"))
+            (str "must NOT advertise run-only `continue` in a non-run window:\n" out))
+        (is (str/includes? out "Corp")
+            (str "should name the opponent we're waiting on:\n" out))
+        (is (or (str/includes? out "wait") (str/includes? out "Other actions"))
+            (str "should tell the player they can wait / still have actions:\n" out))))))

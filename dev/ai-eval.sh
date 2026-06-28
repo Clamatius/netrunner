@@ -60,12 +60,18 @@ if command -v bb &> /dev/null; then
     trap "rm -f '$EXPR_FILE'" EXIT
 
     bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+          ;; Pin UTF-8 for BOTH the slurp of our code (which may carry accented
+          ;; card names like \"Karunā\") and the decode of the nREPL response.
+          ;; Under a C locale a JVM default charset mis-decodes multibyte chars
+          ;; into replacement chars, so the card lookup sees \"Karun\" + garbage
+          ;; and fails (issue #37). bb itself defaults to UTF-8, but pinning makes
+          ;; this robust regardless of host charset.
           (let [expr-file \"$EXPR_FILE\"
-                expr-code (slurp expr-file)]
+                expr-code (slurp expr-file :encoding \"UTF-8\")]
             (with-open [sock (java.net.Socket. \"localhost\" $REPL_PORT)]
               (let [in (java.io.PushbackInputStream. (io/input-stream sock))
                     out (io/output-stream sock)
-                    bytes->str #(when % (String. (bytes %)))
+                    bytes->str #(when % (String. (bytes %) \"UTF-8\"))
                     result-value (atom nil)]
                 (b/write-bencode out {\"op\" \"eval\" \"code\" expr-code})
               (.flush out)
@@ -105,7 +111,11 @@ if command -v bb &> /dev/null; then
                         (System/exit 1)))
                     (catch Exception _ nil))))))"
 else
-    # Fallback to lein repl :connect (slower, for compatibility)
+    # Fallback to lein repl :connect (slower, for compatibility). Unlike bb, this
+    # is a stock JVM that honors file.encoding — under a C locale it defaults to a
+    # non-UTF-8 charset and mangles accented card names piped on stdin (issue #37).
+    # Pin UTF-8 so multibyte input/output survives this path too.
+    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
     timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
         grep -v "^user=>" | \
         grep -v "find-doc" | \

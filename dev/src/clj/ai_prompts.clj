@@ -241,20 +241,43 @@
                    (core/find-card-by-cid cid-or-card)
                    cid-or-card)]
         (if card
-          (do
-            (println (format "📇 Selecting card: %s (index %d)" (:title card) index))
+          ;; Don't claim success before the prompt confirms registration: print
+          ;; the confirmation only AFTER the prompt moves. A non-select prompt
+          ;; that doesn't move means choose-card was the WRONG verb (the engine
+          ;; wanted a text choice) — error + steer to `choose`, instead of the
+          ;; old "📇 Selecting card …" + spurious :success on a stall. (issue #40)
+          (let [select? (state/select-prompt-type? (:prompt-type prompt))]
             (ws/select-card! card eid)
-            ;; Wait for prompt to change instead of fixed sleep. Gate the
-            ;; auto-end-turn hook on the prompt ACTUALLY moving: a partial
-            ;; multi-select (e.g. discard-to-N) leaves the prompt put while the
-            ;; server toggles toward :max — nothing resolved — so firing the hook
-            ;; would print a spurious "⚠️ Cannot auto-end turn: resolve the prompt"
-            ;; whose "use 'choose'" tip contradicts the `multi-choose` steer
-            ;; printed just above. When unchanged the prompt is still blocking, so
-            ;; auto-end could never fire anyway — gating loses nothing. (#18 tail)
-            (when (wait-for-prompt-change! eid)
-              (maybe-auto-end-turn-after-prompt!))
-            (core/with-cursor {:status :success :card card}))
+            (cond
+              ;; Prompt moved → selection registered and resolved. Only here is it
+              ;; safe to run the auto-end-turn hook (a partial multi-select leaves
+              ;; the prompt put — see the select? branch). (#18 tail)
+              (wait-for-prompt-change! eid)
+              (do
+                (println (format "📇 Selected card: %s (index %d)" (:title card) index))
+                (maybe-auto-end-turn-after-prompt!)
+                (core/with-cursor {:status :success :card card}))
+
+              ;; Unchanged but a genuine multi-select toggle (discard-to-N): the
+              ;; server accumulates selections to :max and only then resolves.
+              ;; wait-for-prompt-change! already printed the multi-choose tip.
+              select?
+              (do
+                (println (format "📇 Toggled card: %s (index %d) — more selections needed"
+                                (:title card) index))
+                (core/with-cursor {:status :success :card card}))
+
+              ;; Unchanged on a NON-select prompt: choose-card is the wrong verb
+              ;; here (this prompt resolves by text choice). (issue #40)
+              :else
+              (do
+                (println (format "↪️  choose-card %d did not register — this prompt isn't a card-select."
+                                index))
+                (if (seq (:choices prompt))
+                  (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
+                  (println "   → Use 'prompt' to inspect, then choose / choose-value."))
+                (core/with-cursor {:status :error
+                                   :reason "Not a card-select prompt — use choose"}))))
           (let [{:keys [pickable]} (core/resolve-selectable selectable)
                 pickable-idxs (map :idx pickable)]
             (println (format "❌ Index %d isn't a card you can select — it's hidden/opponent (not in your view)." index))
