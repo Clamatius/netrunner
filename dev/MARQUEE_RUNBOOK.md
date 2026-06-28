@@ -54,13 +54,15 @@ Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
 4. **Spawn the Runner seat** (GPT-5.5) — run in background via Bash:
    ```bash
    DEVIN_PERMISSION_MODE=dangerous devin -p --model gpt-5.5 \
-     --prompt-file dev/seat-runner-devin.md
+     --prompt-file dev/seat-runner-devin.md > logs/marquee-runner-devin.log 2>&1
    ```
    `DEVIN_PERMISSION_MODE=dangerous` is REQUIRED (no human to approve tool calls;
    without it the seat hangs on the first `send_command`). devin runs in repo cwd,
    so it gets `send_command` + the local server for free. **devin output BUFFERS to
    process end** — you won't see incremental output; rely on the game log/watcher
-   for live state.
+   for live state. Capture the buffered output to a file so the Runner's final
+   report survives — use repo-root `logs/` (it exists; `dev/logs/` does NOT, a
+   redirect there fails).
 
 ## Monitor (read-only, fog-of-war intact)
 - NEVER peek into either seat's hidden info; only read the shared log / public state.

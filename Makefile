@@ -1,4 +1,4 @@
-.PHONY: test test-behavioral check check-full clean reset resume status help compile-deps watch-corp watch-runner
+.PHONY: test test-shell test-behavioral check check-full clean reset resume status help compile-deps watch-corp watch-runner
 
 # Default target
 help:
@@ -36,6 +36,11 @@ test:
 	@echo "Running unit tests..."
 	lein test ai-actions-test ai-actions-sad-path-test ai-basic-actions-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-wait-test continue-run-rez-test
 
+# Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
+test-shell:
+	@echo "Running shell tests..."
+	@./dev/test/send_command_filter_test.sh
+
 # Run behavioral tests (slow, requires game server)
 test-behavioral:
 	@echo "Running behavioral tests (slow, ~30s per test)..."
@@ -69,7 +74,7 @@ watch-runner:
 	@./dev/watch_game.sh runner
 
 # Combo: check + test (pre-commit quality gate)
-verify: check test
+verify: check test test-shell
 	@echo "✅ All checks passed"
 
 # AOT compile stable dependencies (one-time, speeds up cold start check)
