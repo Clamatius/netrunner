@@ -216,6 +216,52 @@
               "a resolving select must still run the auto-end-turn check"))))))
 
 ;; ============================================================================
+;; choose-card! — both-blocks ambiguity & no premature success (issue #40)
+;;
+;; Mutual Favor's "Choose an Icebreaker" carried BOTH a :choices block AND
+;; :selectable cards. `choose-card <n>` printed "📇 Selecting card: X", fired
+;; select-card!, then TIMED OUT (the engine wanted a text choice) — but still
+;; returned :success, and the only right verb was `choose <n>`. Near game-losing
+;; on both seats. Fix: a non-select prompt that doesn't move after a select means
+;; choose-card was the wrong verb → error + steer to `choose`, and the
+;; confirmation prints only AFTER the prompt actually moves.
+;; ============================================================================
+
+(deftest choose-card-on-nonselect-stall-steers-to-choose
+  (testing "choose-card on a non-select prompt that doesn't move errors and steers to `choose` (#40)"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :prompt {:prompt-type "other" :eid "mf-1"
+                               :msg "Choose an Icebreaker"
+                               :choices [{:value "Unity"} {:value "Cleaver"}]
+                               :selectable [{:cid "c1" :title "Unity"}
+                                            {:cid "c2" :title "Cleaver"}]})
+      (with-redefs [ws/select-card! (fn [_card _eid] true)
+                    ;; engine wanted a text choice; the select never registered
+                    prompts/wait-for-prompt-change! (fn [_eid & _] false)]
+        (let [out (with-out-str
+                    (let [r (prompts/choose-card! 0)]
+                      (is (= :error (:status r))
+                          (str "non-select stall must report error, not success: " r))))]
+          (is (str/includes? out "choose <N>")
+              (str "must steer to `choose <N>`: " out))
+          (is (not (str/includes? out "📇 Selected"))
+              (str "must not claim it selected the card: " out)))))))
+
+(deftest choose-card-confirms-only-after-registration
+  (testing "choose-card prints the card confirmation only AFTER the prompt moves (#40)"
+    (with-mock-state (mock-client-state
+                      :side "runner" :prompt other-typed-card-select-prompt)
+      (with-redefs [ws/select-card! (fn [_card _eid] true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (let [out (with-out-str
+                    (let [r (prompts/choose-card! 1)]
+                      (is (= :success (:status r)))))]
+          (is (str/includes? out "Selected")
+              (str "confirms the selection after registration: " out)))))))
+
+;; ============================================================================
 ;; keep-hand / mulligan — opening-mulligan ergonomics (polish round 2026-06-22)
 ;;
 ;; Two related rough edges, both surfaced by playing a real game:

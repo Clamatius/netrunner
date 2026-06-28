@@ -731,3 +731,34 @@
             "Palisade keeps engine index #0 (innermost = position 0)")
         (is (str/includes? (nth lines karuna-idx) "outermost"))
         (is (str/includes? (nth lines palisade-idx) "innermost"))))))
+
+;; ============================================================================
+;; Prompt with BOTH Choices and Selectable blocks — label which verb (issue #40)
+;; ============================================================================
+;; Mutual Favor showed a Choices: block AND a Selectable cards: block with no
+;; signal which selector applied; both seats reached for the wrong verb. When
+;; both blocks are present the display must say `choose <N>` belongs to Choices
+;; and `choose-card <N>` belongs to Selectable.
+
+(deftest show-prompt-detailed-disambiguates-both-blocks
+  (testing "a prompt with both Choices and Selectable labels each block's verb"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 5
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "mf-1"
+                                            :msg "Choose an Icebreaker"
+                                            :choices [{:value "Unity"} {:value "Cleaver"}]
+                                            :selectable [{:cid "c1" :title "Unity"}
+                                                         {:cid "c2" :title "Cleaver"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            lines (str/split-lines out)
+            choices-line (first (filter #(str/includes? % "Choices:") lines))]
+        (is choices-line "renders a Choices header")
+        (is (str/includes? choices-line "choose <N>")
+            (str "Choices block must name the `choose <N>` verb when selectable also present:\n" out))
+        (is (str/includes? out "choose-card")
+            (str "Selectable block keeps its choose-card verb:\n" out))))))

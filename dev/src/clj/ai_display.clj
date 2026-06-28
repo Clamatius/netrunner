@@ -1139,8 +1139,16 @@
         (when-let [card (:card prompt)]
           (println (str "  Card: " (:title card)
                         (when (:type card) (str " (" (:type card) ")")))))
+        ;; When BOTH a Choices and a Selectable block are present (e.g. Mutual
+        ;; Favor), name the verb each block uses so the player doesn't reach for
+        ;; the wrong one: `choose <N>` for Choices, `choose-card <N>` for
+        ;; Selectable. (issue #40)
+        (when (and has-choices has-selectable)
+          (println "  ⚠️  This prompt has TWO selectors — pick the right verb:")
+          (println "     • Choices block below → use `choose <N>`")
+          (println "     • Selectable cards block → use `choose-card <N>`"))
         (when has-choices
-          (println "  Choices:")
+          (println (str "  Choices:" (when has-selectable "  (use `choose <N>`)")))
           (doseq [[idx choice] (map-indexed vector (:choices prompt))]
             (println (str "    " idx ". " (core/format-choice choice)))))
         (when has-selectable
