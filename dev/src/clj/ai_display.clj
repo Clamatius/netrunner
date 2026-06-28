@@ -1226,11 +1226,22 @@
                       (when (= run-phase "approach-ice")
                         (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
                     (println "    → Use 'continue' to pass priority (advance the run)."))))
-              ;; Not in a run
-              (do
-                (println "  Action: Paid ability window")
-                (println "    → No choices required")
-                (println "    → Use 'continue' command to pass priority"))))))
+              ;; Not in a run. `continue` is RUN-ONLY (errors "No active run to
+              ;; monitor") — never advertise it here. A "waiting" prompt means the
+              ;; opponent is deciding (e.g. Wildcat Strike); the player takes no
+              ;; pass action and other actions may still be available. (issue #38)
+              (let [waiting? (state/waiting-prompt-type? (:prompt-type prompt))
+                    opp (if (= my-side "runner") "Corp" "Runner")]
+                (if waiting?
+                  (do
+                    (println (str "  Action: Waiting on " opp " — no action required from you."))
+                    (println (str "    → Other actions may still be available; use 'wait' to block until "
+                                  opp " decides."))
+                    (println "    → ('continue' is run-only and won't help here.)"))
+                  (do
+                    (println "  Action: Paid ability window (no run active)")
+                    (println "    → No choices required.")
+                    (println "    → 'continue' is run-only here — take your next action, or 'wait'."))))))))
       ;; No prompt object. "No active prompt" alone is technically true but
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next

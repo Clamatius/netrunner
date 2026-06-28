@@ -762,3 +762,32 @@
             (str "Choices block must name the `choose <N>` verb when selectable also present:\n" out))
         (is (str/includes? out "choose-card")
             (str "Selectable block keeps its choose-card verb:\n" out))))))
+
+;; ============================================================================
+;; Non-run paid-ability / waiting prompt — don't advertise run-only `continue`
+;; (issue #38)
+;; ============================================================================
+;; After Wildcat Strike (a non-run paid-ability window), the prompt said
+;; "Use 'continue' command to pass priority" — but `continue` is run-only and
+;; errors "No active run to monitor". And "Waiting for Corp to make a decision"
+;; read as a hard block though Runner actions still worked.
+
+(deftest show-prompt-detailed-non-run-waiting-does-not-advertise-continue
+  (testing "a non-run waiting prompt steers to wait, not the run-only `continue` (#38)"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 6
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "waiting"
+                                            :eid "wc-1"
+                                            :msg "Waiting for Corp to make a decision"
+                                            :card {:title "Wildcat Strike"}}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "Use 'continue' command to pass priority"))
+            (str "must NOT advertise run-only `continue` in a non-run window:\n" out))
+        (is (str/includes? out "Corp")
+            (str "should name the opponent we're waiting on:\n" out))
+        (is (or (str/includes? out "wait") (str/includes? out "Other actions"))
+            (str "should tell the player they can wait / still have actions:\n" out))))))
