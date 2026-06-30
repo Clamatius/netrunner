@@ -7,6 +7,10 @@
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-actions :as ai]
+            [ai-runs :as runs]
+            [ai-core :as core]
+            [ai-basic-actions :as basic]
+            [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-websocket-client-v2 :as ws]))
 
@@ -306,3 +310,109 @@
                   (str "a rezzed unlisted ICE needs no decision; should continue, got: " r))))
           (is (some #(= "continue" (:command %)) @sent)
               "a rezzed ICE the Corp isn't rezzing should pass priority and proceed"))))))
+
+;; =============================================================================
+;; Test: monitor-run --persistent must NOT drop the defender loop after a rez
+;; commit (#36, cross-model marquee g1).
+;;
+;; The --rez auto-rez returns :action-taken, but the NEXT iteration sees
+;; "Corp rezzes X" in the log and handle-events returns :ice-rezzed. That
+;; status is terminal-status? — correct for hand-driven monitor-run (pausing to
+;; show the user IS the point), but in --persistent mode it dropped the loop
+;; after the Corp's OWN rez, leaving the Runner holding priority at a window the
+;; Corp was no longer watching (soft deadlock; the Runner could only recover by
+;; jacking out, abandoning HQ pressure). The --persistent contract is "wakes
+;; only for a real rez/fire/access decision or run end", so a notable event must
+;; NOT terminate the persistent loop while the run is still active.
+;; =============================================================================
+
+(defn- scripted-continue-run
+  "A continue-run! stand-in that pops one scripted result per call (clamping to
+   the last once exhausted) and records the call count."
+  [results call-count]
+  (fn [& _]
+    (let [i @call-count]
+      (swap! call-count inc)
+      (nth results i (last results)))))
+
+(defn- run-active-corp-state []
+  (mock-client-state
+   :side "corp"
+   :game-state {:run {:phase "approach-ice" :position 1 :server [:hq]}
+                :corp {:prompt-state nil}
+                :runner {:prompt-state nil}
+                :log []}))
+
+(deftest persistent-monitor-survives-own-rez-event
+  (testing "--persistent rides through its own :ice-rezzed event and terminates only on run end (#36)"
+    (let [calls (atom 0)
+          ;; iteration 1: the rez event the loop's own auto-rez produced;
+          ;; iteration 2: the run finishes. Persistent mode must ride through #1.
+          script [{:status :ice-rezzed :wake-reason :ice-rezzed}
+                  {:status :run-complete :wake-reason :run-complete}]]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true)]
+              (is (= :run-complete (:status result))
+                  (str "persistent loop must ride through its own rez event to run end, got: " result))
+              (is (>= @calls 2)
+                  "loop must have continued past the :ice-rezzed iteration to reach run-complete"))))))))
+
+(deftest hand-driven-monitor-still-pauses-on-rez-event
+  (testing "without --persistent, an :ice-rezzed event is still terminal (hand-driven pause is the point)"
+    (let [calls (atom 0)
+          script [{:status :ice-rezzed :wake-reason :ice-rezzed}
+                  {:status :run-complete :wake-reason :run-complete}]]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)]
+          (with-out-str
+            (let [result (runs/auto-continue-loop!)]   ; non-persistent
+              (is (= :ice-rezzed (:status result))
+                  (str "hand-driven monitor-run must still pause on a rez event, got: " result))
+              (is (= 1 @calls)
+                  "should stop after the first (rez-event) iteration"))))))))
+
+(deftest persistent-monitor-still-pauses-on-real-decision
+  (testing "--persistent still terminates on a genuine rez DECISION (not a should-pause-for-event? status)"
+    (let [calls (atom 0)
+          script [{:status :decision-required :wake-reason :rez-ice :ice "Tithe"}]]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true)]
+              (is (= :decision-required (:status result))
+                  (str "a real rez decision must still wake the persistent seat, got: " result))
+              (is (= 1 @calls)
+                  "should return immediately on the decision"))))))))
+
+;; Spin-safety (Codex review of #36): a degenerate event that NEVER advances —
+;; continue-run! keeps returning :ice-rezzed with the run still active and the
+;; log unchanged — must NOT livelock the persistent loop. Because the event
+;; branch advances `iteration`, the max-iterations backstop bounds it. (In real
+;; play this never happens — the run moves and the rez line scrolls out of the
+;; 3-entry recent-log window, or the next status is :waiting-for-opponent — but
+;; the bound must hold regardless.)
+(deftest persistent-monitor-event-spin-is-bounded-by-max-iterations
+  (testing "a never-advancing :ice-rezzed in --persistent terminates via the max-iterations backstop, not a livelock"
+    (let [calls (atom 0)
+          ;; Always :ice-rezzed, run never ends — the pathological case.
+          always-rezzed (fn [& _] (swap! calls inc) {:status :ice-rezzed :wake-reason :ice-rezzed})]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! always-rezzed
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      ;; keep the test fast: tiny delay, low ceiling
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true :max-iterations 5)]
+              (is (= :max-iterations (:status result))
+                  (str "an unending event must hit the max-iterations backstop, got: " result))
+              (is (<= @calls 6)
+                  (str "must be bounded near max-iterations, not spinning unbounded; calls=" @calls)))))))))
