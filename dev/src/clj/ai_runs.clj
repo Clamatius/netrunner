@@ -1012,8 +1012,10 @@
 ;;
 ;; The loop calls continue-run! repeatedly until:
 ;; - Run completes (:run-complete)
-;; - Real decision required (:decision-required)
+;; - Real decision required (:decision-required / :fire-decision-required)
 ;; - Notable event occurs (:ice-rezzed, :ability-used, :subs-fired, :tag-or-damage)
+;;   — EXCEPT in --persistent mode during an active run, where the loop's own
+;;   notable events are routine and it keeps owning the run (see #36 below)
 ;; - Max iterations reached (safety guard)
 ;; - Timeout reached
 ;;
@@ -1112,16 +1114,23 @@
            ;; its own per-tick stall tracker (which nudges/bails) instead of being
            ;; swallowed by up to ~100s of internal polling.
            return-on-runner-signal false
-           ;; When true (monitor-run --persistent), an empty opponent-priority
-           ;; window (:waiting-for-opponent family) during an ACTIVE run is NOT
-           ;; terminal — sleep persistent-wait-delay-ms and recheck, keeping the
-           ;; defender loop alive so a cross-model seat doesn't have to re-issue
-           ;; monitor-run through every symmetric priority pass. Real decisions
-           ;; (:decision-required / :fire-decision-required / rez/event statuses)
-           ;; are terminal-status? and return ABOVE this branch, so persistence
-           ;; only ever sleeps through genuinely-empty windows. Bounded by
-           ;; timeout-ms. The idle wait does not advance `iteration`, so it never
-           ;; trips the action-oriented max-iterations guard.
+           ;; When true (monitor-run --persistent), during an ACTIVE run two
+           ;; status families that are terminal for hand-driven monitor-run are
+           ;; NOT terminal here, keeping the defender loop alive so a cross-model
+           ;; seat doesn't have to re-issue monitor-run:
+           ;;   (a) empty opponent-priority windows (:waiting-for-opponent
+           ;;       family) — sleep persistent-wait-delay-ms and recheck (idle
+           ;;       wait; does NOT advance `iteration`, bounded by timeout-ms);
+           ;;   (b) the loop's own notable events (should-pause-for-event?:
+           ;;       :ice-rezzed / :ability-used / :subs-fired / :tag-or-damage) —
+           ;;       sleep quick-delay and recur, ADVANCING `iteration` so the
+           ;;       max-iterations backstop still bounds a degenerate event spin
+           ;;       (#36). Only genuine decisions (:decision-required /
+           ;;       :fire-decision-required) — which are NOT should-pause-for-
+           ;;       event? — plus run-end remain terminal under --persistent, so
+           ;;       it "wakes only for a real rez/fire/access decision or run
+           ;;       end". Both branches are below; the event branch returns ABOVE
+           ;;       terminal-status?.
            persistent false
            persistent-wait-delay-ms 1000}}]
   (let [start-time (System/currentTimeMillis)
@@ -1158,6 +1167,35 @@
               current-state-key (get-run-state-key)
               new-history (cons current-state-key (take (dec stuck-threshold) state-history))]
           (cond
+            ;; Persistent mode: a notable-but-routine event the loop produced
+            ;; itself (its own ICE rez, an ability/subs firing, tag/damage
+            ;; dealt) is NOT a decision — the seat delegated the whole run.
+            ;; These statuses are terminal-status? for hand-driven monitor-run
+            ;; (where pausing to show the user is the point), but in --persistent
+            ;; mode treating them as terminal DROPPED the defender loop after a
+            ;; rez commit (#36): the auto-rez returns :action-taken, then the
+            ;; next iteration sees "Corp rezzes X" in the log and handle-events
+            ;; returns :ice-rezzed → loop exits, leaving the Runner holding
+            ;; priority at a window the Corp is no longer watching (soft
+            ;; deadlock; the Runner could only recover by jacking out). The
+            ;; documented --persistent contract is "wakes only for a real
+            ;; rez/fire/access decision or run end", and a notable event is none
+            ;; of those, so while the run is still active we keep owning it: the
+            ;; event was already printed by handle-events; just continue.
+            ;; Genuine decisions (:decision-required / :fire-decision-required)
+            ;; are NOT should-pause-for-event? and still terminate below.
+            ;; Spin-safe: iteration advances (max-iterations backstop stays
+            ;; live), and once the run moves past the event the rez line scrolls
+            ;; out of the 3-entry recent-log window — if it doesn't move, the
+            ;; next status is :waiting-for-opponent (persistent sleep), not a
+            ;; re-fired event.
+            (and persistent
+                 (should-pause-for-event? status)
+                 (some? (get-in @state/client-state [:game-state :run])))
+            (do
+              (Thread/sleep core/quick-delay)
+              (recur (inc iteration) state-history))  ; Keep OLD history; event isn't run-phase progress
+
             ;; Terminal status - stop loop.
             ;; Bug #3 fix: if the run completed and we burned the last click on
             ;; it, fire check-auto-end-turn! — otherwise the runner never sends
