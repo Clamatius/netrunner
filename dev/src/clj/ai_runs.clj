@@ -479,6 +479,29 @@
   (and prompt
        (not (is-waiting-prompt? prompt))))
 
+(defn seat-owns-trigger-decision?
+  "True if `my-prompt` is a decision THIS seat must resolve itself — an
+   on-steal/on-score agenda trigger or similar choice (e.g. Send a Message's
+   'you may rez a piece of ice, ignoring all costs') — as opposed to a
+   run-priority paid-ability window (prompt-type \"run\", handled by the
+   rez/continue path) or a passive \"waiting\" prompt.
+
+   The persistent monitor's :no-action heuristic (handle-waiting-for-opponent)
+   can mislabel such a trigger as an opponent-wait — it looks at run priority,
+   not at whether WE are holding an unresolved prompt — and then sleep on it
+   until the 300s timeout while the opponent is hard-blocked on our pending
+   trigger (#43). A `select` prompt with no valid targets (all our ICE already
+   rezzed) is the sharpest case: has-real-decision? is false (no selectable, only
+   an implicit Done), so nothing upstream surfaces it. This predicate lets the
+   loop return it as a decision so the seat can resolve it (rez a target / Done)."
+  [my-prompt]
+  (and my-prompt
+       (not= "run" (:prompt-type my-prompt))
+       (not= "waiting" (:prompt-type my-prompt))
+       (or (= "select" (:prompt-type my-prompt))
+           (seq (:choices my-prompt))
+           (seq (:selectable my-prompt)))))
+
 (defn should-i-act?
   "True if it's my turn to act during a run.
    Uses :no-action state as source of truth.
@@ -1248,14 +1271,37 @@
                 (= status :waiting-for-corp-rez)
                 (= status :waiting-for-corp-fire)
                 (= status :waiting-for-opponent-paid-abilities))
-            (if (and persistent
-                     (some? (get-in @state/client-state [:game-state :run])))
-              ;; Idle wait: don't advance `iteration` (timeout governs the bound,
-              ;; not the action-stuck max-iterations guard); reset stuck history.
-              (do
-                (Thread/sleep persistent-wait-delay-ms)
-                (recur iteration []))
-              (if persistent
+            (let [cur-state @state/client-state
+                  my-side (:side cur-state)
+                  my-prompt (get-in cur-state [:game-state (keyword my-side) :prompt-state])
+                  run-active? (some? (get-in cur-state [:game-state :run]))]
+              (cond
+                ;; #43: continue-run! mislabeled this as an opponent-wait, but THIS
+                ;; seat is holding its own on-steal/on-score agenda-trigger prompt
+                ;; (e.g. Send a Message) that only WE can resolve. Sleeping on it
+                ;; strands the game — the opponent is hard-blocked on "waiting for
+                ;; Corp to resolve pending triggers" and (in cross-model marquee g1)
+                ;; gave up after the 300s timeout. Surface it as a decision so the
+                ;; seat resolves it (rez a target / choose Done). Fires in both
+                ;; persistent and hand-driven mode — a real seat decision beats a
+                ;; misleading opponent-wait either way.
+                (seat-owns-trigger-decision? my-prompt)
+                (do
+                  (when persistent (print-while-you-slept! start-log-count))
+                  (println "🛑 You have a pending decision to resolve (agenda trigger / choice) — returning it.")
+                  (assoc result
+                         :status :decision-required
+                         :wake-reason :agenda-trigger-decision
+                         :iterations (inc iteration)
+                         :elapsed-ms (- (System/currentTimeMillis) start-time)))
+
+                ;; Idle wait: don't advance `iteration` (timeout governs the bound,
+                ;; not the action-stuck max-iterations guard); reset stuck history.
+                (and persistent run-active?)
+                (do
+                  (Thread/sleep persistent-wait-delay-ms)
+                  (recur iteration []))
+
                 ;; Persistent, but the run object is GONE (nil). The run already
                 ;; ended — typically the access boundary, where the run tears down
                 ;; while the Runner still resolves access. Marquee game-2 surfaced
@@ -1263,6 +1309,7 @@
                 ;; monitor-run" tip, which then immediately said "No active run to
                 ;; monitor" — a self-contradicting double-step. Return a CLEAN
                 ;; :no-run terminal so the seat goes straight back to its wait loop.
+                persistent
                 (do
                   (print-while-you-slept! start-log-count)
                   (println "✅ Run ended — no further Corp decision. Back to the wait loop.")
@@ -1270,6 +1317,8 @@
                          :status :no-run
                          :iterations (inc iteration)
                          :elapsed-ms (- (System/currentTimeMillis) start-time)))
+
+                :else
                 (do
                   ;; Side-aware tip. This loop just passed THIS seat's window and
                   ;; is now waiting on the opponent. The advice depends on who's
