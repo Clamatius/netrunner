@@ -166,6 +166,71 @@
             (is (not (str/includes? out "No select prompt active")))))))))
 
 ;; ============================================================================
+;; multi-choose! — no premature "Selection complete" on an unresolved prompt
+;;
+;; multi-choose! sent every select then UNCONDITIONALLY printed "✅ Selection
+;; complete" + returned :success, ignoring wait-for-prompt-change!. Found live on
+;; a Corp discard-to-5 (marquee g1): `multi-choose 0 1` reported success while the
+;; hand still held 7 cards and the prompt stayed open — directly under the ℹ️
+;; "select prompt still open" tip, contradicting it. Same misleading-output class
+;; already fixed for choose-card! (#40). Fix: only claim completion once the
+;; prompt actually moves; a select that stays put is "toggled, not resolved"
+;; (:waiting-input), and an unmoved NON-select prompt is the wrong verb (:error).
+;; ============================================================================
+
+(deftest multi-choose-unresolved-select-does-not-claim-complete
+  (testing "a select prompt that stays open (not resolved) must NOT report Selection complete / :success"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :prompt {:prompt-type "select" :eid "disc-1"
+                               :msg "Discard down to 5 cards"
+                               :selectable [{:cid "c1" :title "Hedge Fund"}
+                                            {:cid "c2" :title "IPO"}]})
+      (with-redefs [ws/select-card! (fn [_card _eid] true)
+                    ;; server toggled the cards but the prompt did not resolve
+                    prompts/wait-for-prompt-change! (fn [_eid & _] false)]
+        (let [out (with-out-str
+                    (let [r (prompts/multi-choose! 0 1)]
+                      ;; pin the contract: an unresolved real select is :waiting-input,
+                      ;; not :success (and not silently downgraded to :error either).
+                      (is (= :waiting-input (:status r))
+                          (str "unresolved select must report :waiting-input, got: " r))))]
+          (is (not (str/includes? out "Selection complete"))
+              (str "must not print 'Selection complete' when the prompt is still open, got: " out)))))))
+
+(deftest multi-choose-resolving-select-reports-complete
+  (testing "a select that RESOLVES the prompt (moved) still reports Selection complete + :success"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :prompt {:prompt-type "select" :eid "disc-1"
+                               :msg "Discard down to 5 cards"
+                               :selectable [{:cid "c1" :title "Hedge Fund"}
+                                            {:cid "c2" :title "IPO"}]})
+      (with-redefs [ws/select-card! (fn [_card _eid] true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (let [out (with-out-str
+                    (let [r (prompts/multi-choose! 0 1)]
+                      (is (= :success (:status r)) (str "expected success, got: " r))))]
+          (is (str/includes? out "Selection complete")))))))
+
+(deftest multi-choose-unmoved-nonselect-is-wrong-verb
+  (testing "multi-choose on a non-select prompt that doesn't move errors and steers to choose"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :prompt {:prompt-type "other" :eid "mf-1"
+                               :msg "Choose an icebreaker"
+                               :choices [{:value "Corroder"}]
+                               :selectable [{:cid "c1" :title "Corroder"}]})
+      (with-redefs [ws/select-card! (fn [_card _eid] true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] false)]
+        (let [out (with-out-str
+                    (let [r (prompts/multi-choose! 0)]
+                      (is (= :error (:status r)) (str "expected error, got: " r))))]
+          (is (not (str/includes? out "Selection complete")))
+          (is (str/includes? out "choose")
+              (str "should steer to choose, got: " out)))))))
+
+;; ============================================================================
 ;; choose-card! — partial multi-select must not trigger the auto-end-turn hook
 ;;
 ;; choose-card! fires maybe-auto-end-turn-after-prompt! after every select. On a
