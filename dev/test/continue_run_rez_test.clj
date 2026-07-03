@@ -416,3 +416,122 @@
                   (str "an unending event must hit the max-iterations backstop, got: " result))
               (is (<= @calls 6)
                   (str "must be bounded near max-iterations, not spinning unbounded; calls=" @calls)))))))))
+
+;; =============================================================================
+;; Test: monitor-run --persistent must RETURN on this seat's own on-steal/on-score
+;; agenda-trigger prompt, not sleep on it until the 300s timeout (#43, cross-model
+;; marquee g1 terminal wedge).
+;;
+;; When the Runner steals an agenda with an on-steal Corp ability (e.g. Send a
+;; Message: "you may rez a piece of ice, ignoring all costs"), the engine opens a
+;; CORP `select` prompt. If all Corp ICE are already rezzed the prompt has no
+;; selectable targets and only an implicit Done — so has-real-decision? is false
+;; and handle-real-decision doesn't fire. handle-waiting-for-opponent then labels
+;; it an opponent-wait via the :no-action heuristic (which ignores that the CORP
+;; itself is holding the prompt). In --persistent mode the loop slept & rechecked
+;; that "wait" forever, hitting the 300000ms timeout, while the Runner was hard-
+;; blocked on "Waiting for Corp to resolve pending triggers" and eventually gave
+;; up (game stranded at Corp 6 – Runner 5). The persistent loop must instead
+;; surface such a seat-owned trigger prompt as a decision.
+;; =============================================================================
+
+(defn- corp-state-with-prompt
+  "Run-active Corp mock state carrying a given Corp prompt-state."
+  [corp-prompt]
+  (mock-client-state
+   :side "corp"
+   :game-state {:run {:phase "access" :position 0 :server [:remote1]}
+                :corp {:prompt-state corp-prompt}
+                :runner {:prompt-state {:msg "Waiting for Corp to resolve pending triggers"
+                                        :prompt-type "waiting"}}
+                :log []}))
+
+(deftest persistent-monitor-returns-on-corp-on-steal-trigger-prompt
+  (testing "--persistent surfaces the Corp's own on-steal trigger select prompt as a decision instead of looping to timeout (#43)"
+    (let [calls (atom 0)
+          ;; continue-run! mislabels the trigger as an opponent wait
+          ;; (handle-waiting-for-opponent via the :no-action heuristic).
+          script [{:status :waiting-for-opponent :wake-reason :waiting-for-opponent}]]
+      (with-mock-state (corp-state-with-prompt
+                        {:msg "Choose a target for Send a Message"
+                         :prompt-type "select"
+                         :choices []
+                         :selectable []})   ; no valid rez targets — all ICE already rezzed
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :timeout-ms 2000
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :decision-required (:status result))
+                  (str "persistent loop must return the Corp's own trigger as a decision, not timeout, got: " result))
+              (is (= 1 @calls)
+                  "should return on the first waiting status that reveals our pending trigger"))))))))
+
+(deftest persistent-monitor-empty-wait-without-trigger-still-rides-through
+  (testing "--persistent with NO seat-owned prompt still sleeps through an empty opponent wait to run end (no #43 false positive)"
+    (let [calls (atom 0)
+          script [{:status :waiting-for-opponent :wake-reason :waiting-for-opponent}
+                  {:status :run-complete :wake-reason :run-complete}]]
+      (with-mock-state (corp-state-with-prompt nil)   ; Corp holds no prompt
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :run-complete (:status result))
+                  (str "an empty opponent wait with no seat prompt must ride through to run end, got: " result))
+              (is (>= @calls 2)
+                  "must recheck past the empty wait to reach run-complete"))))))))
+
+(deftest persistent-monitor-normal-defender-wait-rides-through
+  (testing "the normal Corp defender wait (passed priority mid-encounter, holding a 'run' window) is NOT a trigger decision — persistent rides through (no #36/#42 regression)"
+    (let [calls (atom 0)
+          script [{:status :waiting-for-opponent :wake-reason :waiting-for-opponent}
+                  {:status :run-complete :wake-reason :run-complete}]]
+      ;; Representative shape of "Corp passed, waiting for Runner to break ICE":
+      ;; mid-encounter run, Corp already passed (:no-action corp), holding the
+      ;; run paid-ability window (prompt-type "run"). This is exactly the window
+      ;; the persistent loop must sleep through, not surface as a decision.
+      (with-mock-state
+        (mock-client-state
+         :side "corp"
+         :game-state {:run {:phase "encounter-ice" :position 1 :server [:hq] :no-action "corp"}
+                      :corp {:prompt-state {:msg "Paid ability window" :prompt-type "run"
+                                            :choices [] :selectable []}}
+                      :runner {:prompt-state nil}
+                      :log []})
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :run-complete (:status result))
+                  (str "a normal defender wait must ride through to run end, not return a decision, got: " result))
+              (is (>= @calls 2)
+                  "must recheck past the empty defender wait to reach run-complete"))))))))
+
+(deftest persistent-monitor-run-type-window-is-not-a-trigger-decision
+  (testing "a Corp 'run'-type paid-ability window during an opponent wait is NOT a seat-owned trigger — rides through (no #43 false positive)"
+    (let [calls (atom 0)
+          script [{:status :waiting-for-opponent :wake-reason :waiting-for-opponent}
+                  {:status :run-complete :wake-reason :run-complete}]]
+      (with-mock-state (corp-state-with-prompt
+                        {:msg "Paid ability window" :prompt-type "run" :choices [] :selectable []})
+        (with-redefs [runs/continue-run! (scripted-continue-run script calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :run-complete (:status result))
+                  (str "a 'run'-type window must not be mistaken for a trigger decision, got: " result))
+              (is (>= @calls 2)
+                  "must recheck past the empty run-window wait to reach run-complete"))))))))

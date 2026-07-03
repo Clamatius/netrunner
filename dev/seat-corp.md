@@ -118,6 +118,15 @@ Then commit your decision by re-entering the monitor with a strategy flag
 - **Low-stakes run, just let it play out:** `./dev/send_command corp monitor-run --persistent --fire-if-asked`
   (auto-fires unbroken subs, auto-continues, wakes you only for rez decisions)
 
+**Non-rez trigger decisions.** Some agendas fire a Corp ability when the Runner
+*steals* them (or when you score them) — e.g. Send a Message ("you may rez a
+piece of ice, ignoring all costs"). The monitor returns with `🛑 You have a
+pending decision to resolve (agenda trigger / choice)`. This is NOT a rez window,
+so don't answer it with `--rez`: read it with `./dev/send_command corp prompt`,
+then resolve it directly — `choose-value "Done"` to decline (e.g. nothing worth a
+free rez / all your ICE already rezzed), or `choose-card "<ICE>"` to pick a
+target. Then, if the run is still live, re-enter `monitor-run --persistent`.
+
 `monitor-run` returns at the next real decision or when the run ends (it prints
 `run ended` / `no active run`). When the run is over, go back to the `wait` loop
 above. Several runs can happen in one Runner turn — keep looping.
