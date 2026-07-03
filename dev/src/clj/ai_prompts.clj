@@ -381,16 +381,41 @@
           (do
             (println "❌ No valid cards found to select")
             (core/with-cursor {:status :error :reason "No valid cards found"}))
-          (do
+          (let [select? (state/select-prompt-type? (:prompt-type prompt))]
             (println (format "📇 Selecting %d card(s)..." (count cards-to-select)))
             (doseq [{:keys [card ref]} cards-to-select]
               (println (format "   → %s" (:title card)))
               (ws/select-card! card eid)
               (Thread/sleep core/short-delay))
-            ;; Wait for prompt to change after all selections
-            (wait-for-prompt-change! eid)
-            (println "✅ Selection complete")
-            (core/with-cursor {:status :success :selected (count cards-to-select)})))))))
+            ;; Don't claim completion before the prompt confirms it. Only report
+            ;; success once the prompt actually moves/resolves. If it stays put the
+            ;; selection did NOT resolve — saying "Selection complete" there is the
+            ;; misleading-output bug that drove a marquee discard-to-5 misplay
+            ;; (cards still in hand, prompt still open). Mirrors choose-card! (#40).
+            (cond
+              (wait-for-prompt-change! eid)
+              (do
+                (println "✅ Selection complete")
+                (core/with-cursor {:status :success :selected (count cards-to-select)}))
+
+              ;; Select-type prompt still open: cards were toggled but :max not yet
+              ;; reached. wait-for-prompt-change! already printed the steer.
+              select?
+              (do
+                (println (format "⏳ %d card(s) toggled but the prompt is still open — selection not resolved."
+                                (count cards-to-select)))
+                (println "   → Select the remaining card(s), or use choose-value \"Done\" if the count is already right.")
+                (core/with-cursor {:status :waiting-input :selected (count cards-to-select)}))
+
+              ;; Non-select prompt that didn't move: multi-choose was the wrong verb.
+              :else
+              (do
+                (println "↪️  multi-choose did not register — this prompt isn't a card-select.")
+                (if (seq (:choices prompt))
+                  (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
+                  (println "   → Use 'prompt' to inspect, then choose / choose-value."))
+                (core/with-cursor {:status :error
+                                   :reason "Not a card-select prompt — use choose"})))))))))
 
 ;; ============================================================================
 ;; Mulligan
