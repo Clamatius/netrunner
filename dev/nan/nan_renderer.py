@@ -18,19 +18,23 @@ class NANRenderer:
             self.process_turn(line)
             
     def process_turn(self, line):
-        # Format: "Player T# [CorpScore-RunnerScore]: Actions" or "Player T#: Actions"
-        match = re.match(r"(Corp|Runner) T(\d+)(?: \[(\d+)-(\d+)\])?: (.+)", line)
+        # Format: "Player T# [CorpScore-RunnerScore] {Cn Rn}: Actions"
+        # (score and credit checkpoints optional)
+        match = re.match(
+            r"(Corp|Runner) T(\d+)(?: \[(\d+)-(\d+)\])?(?: \{C(\d+) R(\d+)\})?: (.+)",
+            line,
+        )
         if not match: return
-        
+
         player = match.group(1)
         turn = int(match.group(2))
-        
+
         # If scores are present in header, sync them
         if match.group(3) and match.group(4):
             self.corp_score = int(match.group(3))
             self.runner_score = int(match.group(4))
-            
-        actions_str = match.group(5)
+
+        actions_str = match.group(7)
         self.current_turn = turn
         actions = [a.strip() for a in actions_str.split(';')]
         
@@ -39,7 +43,13 @@ class NANRenderer:
 
     def apply_action(self, player, action):
         # Basic state tracking
-        
+
+        # Credit annotations ("credit →C6") are bookkeeping, not state the
+        # renderer tracks; a bare "→R7" token is a whole action's worth.
+        action = re.sub(r"\s*→[CR]\d+$", "", action)
+        if not action:
+            return
+
         # Install ICE
         # "ice S1" -> adds unrezzed ice to S1
         if action.startswith("ice "):

@@ -1,0 +1,18 @@
+Corp T1 [0-0] {C5 R5}: Hedge Fund →C9; ice R&D; ice HQ
+Runner T1 [0-0] {C9 R5}: run R&D; rez Karunā@0 R&D →C5; encounter Karunā@0; trash Mutual Favor and Overclock due to net damage; VRcation →R4; Creative Commission →R8
+Corp T2 [0-0] {C5 R8}: ice S1; install S1; advance S1 →C4
+Runner T2 [0-0] {C4 R8}: run S1; rez Tithe@0 S1 →C3; encounter Tithe@0; trash Conduit due to net damage; →C4; breach S1; access Offworld Office; steal Offworld Office; install Carmen →R5; Jailbreak; run R&D; encounter Karunā@0; →R1; breach R&D; access ?; access Tithe; access ?; access Public Trail; credit →R2
+Corp T3 [0-2] {C4 R2}: install S1; advance S1 →C3; credit →C4
+Runner T3 [0-2] {C4 R2}: VRcation →R1; credit →R2; run S1; encounter Tithe@0; →R0; breach S1; access Urtica Cipher; trash Overclock, Red Team, and Wildcat Strike due to net damage
+Corp T4 [0-2] {C4 R0}: draw; install S1; trash a card in Server 1; ice R&D →C3
+Runner T4 [0-2] {C3 R0}: install Smartware Distributor; use Smartware Distributor; draw; credit →R1; rez Nico Campaign S1 →C1
+Corp T5 [0-2] {C1 R1}: →C4; draw; draw; credit →C5
+Runner T5 [0-2] {C5 R1}: →R2; credit →R3; install Pennyshaver →R0; draw; draw
+Corp T6 [0-2] {C5 R0}: →C8; ice S2; ice S2 →C7; install S2
+Runner T6 [0-2] {C7 R0}: →R1; credit →R2; credit →R3; credit →R4; draw
+Corp T7 [0-2] {C7 R4}: →C10; trash Nico Campaign and draws 1 card; advance S2 →C9; advance S2 →C8; advance S2 →C7; score Superconducting Hub
+Runner T7 [1-2] {C7 R4}: →R5; Sure Gamble →R9; install Docklands Pass →R7; run HQ; rez Diviner@0 HQ →C5; encounter Diviner@0; trash Leech due to net damage; draw
+Corp T8 [1-2] {C5 R7}: Hedge Fund →C9; install S2; advance S2 →C8
+Runner T8 [1-2] {C8 R7}: Sure Gamble →R11; Tread Lightly →R10; run S2; rez Diviner@1 S2 →C3; encounter Diviner@1; trash Smartware Distributor due to net damage; breach S2; access Offworld Office; steal Offworld Office; draw; draw
+Corp T9 [1-4] {C3 R10}: Predictive Planogram →C6; credit →C7; credit →C8
+Runner T9 [1-4] {C8 R10}: install Unity →R7; Jailbreak; run HQ; encounter Diviner@0; →R5; breach HQ; access Palisade; access Send a Message; steal Send a Message; rez Brân 1.0@0 S2; access Palisade

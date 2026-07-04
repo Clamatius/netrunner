@@ -18,9 +18,12 @@ class NANParser:
         return game_record
 
     def parse_line(self, line):
-        # Format: "Player T# [CorpScore-RunnerScore]: Action1; Action2; ..."
-        # Score checkpoint is optional
-        match = re.match(r"(Corp|Runner) T(\d+)(?: \[(\d+)-(\d+)\])?: (.+)", line)
+        # Format: "Player T# [CorpScore-RunnerScore] {Cn Rn}: Action1; ..."
+        # Score and credit checkpoints are optional
+        match = re.match(
+            r"(Corp|Runner) T(\d+)(?: \[(\d+)-(\d+)\])?(?: \{C(\d+) R(\d+)\})?: (.+)",
+            line,
+        )
         if not match:
             print(f"Warning: Could not parse line: {line}")
             return None
@@ -29,7 +32,9 @@ class NANParser:
         turn_number = int(match.group(2))
         corp_score = int(match.group(3)) if match.group(3) else None
         runner_score = int(match.group(4)) if match.group(4) else None
-        actions_str = match.group(5)
+        corp_credits = int(match.group(5)) if match.group(5) else None
+        runner_credits = int(match.group(6)) if match.group(6) else None
+        actions_str = match.group(7)
 
         actions = [self.parse_action(a.strip()) for a in actions_str.split(";")]
 
@@ -42,19 +47,35 @@ class NANParser:
         if corp_score is not None:
             result["score"] = {"corp": corp_score, "runner": runner_score}
 
+        if corp_credits is not None:
+            result["credits"] = {"corp": corp_credits, "runner": runner_credits}
+
         return result
 
     def parse_action(self, action_str):
+        # Peel a trailing credit annotation: "rez Palisade@0 S1 →C4" or a
+        # standalone total "→R7" (credit change with no rendered action).
+        credits_after = None
+        match = re.match(r"(.*?)\s*→([CR])(\d+)$", action_str)
+        if match:
+            credits_after = (match.group(2), int(match.group(3)))
+            stripped = match.group(1)
+        else:
+            stripped = action_str
+
         # Simple verb-object parsing
-        parts = action_str.split(" ", 1)
-        verb = parts[0]
+        parts = stripped.split(" ", 1) if stripped else [""]
+        verb = parts[0] or None
         target = parts[1] if len(parts) > 1 else None
-        
-        return {
+
+        result = {
             "raw": action_str,
             "verb": verb,
             "target": target
         }
+        if credits_after is not None:
+            result["credits_after"] = credits_after
+        return result
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

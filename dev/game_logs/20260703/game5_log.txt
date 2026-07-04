@@ -1,0 +1,215 @@
+
+📜 GAME LOG (last 300 entries)
+  Clamatius has created the game.
+  ai-corp joined the game.
+  
+  ai-corp keeps their hand.
+  Clamatius keeps their hand.
+  ai-corp started their turn 1 with 5 [Credit] and 5 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] and pays 0 [Credits] to install facedown Diviner protecting R&D.
+  ai-corp spends [Click] and pays 0 [Credits] to install facedown Tithe protecting HQ.
+  ai-corp spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+  ai-corp is ending their turn 1 with 6 [Credit] and 4 cards in HQ.
+  Clamatius started their turn 1 with 5 [Credit] and 5 cards in their Grip.
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] and pays 5 [Credits] to play Sure Gamble.
+  Clamatius uses Sure Gamble to gain 9 [Credits].
+  Clamatius spends [Click] and pays 1 [Credits] to play Creative Commission.
+  Clamatius uses Creative Commission to gain 5 [Credits].
+  Clamatius is ending their turn 1 with 13 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 2 with 6 [Credit] and 4 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] to install facedown Regolith Mining License in the root of Server 1 (new remote).
+  ai-corp pays 2 [Credits] to rez Regolith Mining License in Server 1.
+  ai-corp spends [Click] to use Regolith Mining License to gain 3 [Credits].
+  ai-corp spends [Click] to use Regolith Mining License to gain 3 [Credits].
+  ai-corp is ending their turn 2 with 10 [Credit] and 4 cards in HQ.
+  Clamatius started their turn 2 with 13 [Credit] and 5 cards in their Grip.
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] to make a run on Server 1.
+  Clamatius will continue the run.
+  Clamatius approaches Server 1.
+  Clamatius breaches Server 1.
+  Clamatius accesses Regolith Mining License from Server 1.
+  Clamatius pays 3 [Credits] to trash Regolith Mining License from Server 1.
+  Clamatius spends [Click] and pays 0 [Credits] to install Smartware Distributor.
+  Clamatius spends [Click] to use Smartware Distributor to place 3 [Credits].
+  Clamatius is ending their turn 2 with 10 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 3 with 10 [Credit] and 4 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] and pays 0 [Credits] to play Predictive Planogram.
+  ai-corp uses Predictive Planogram to draw 3 cards.
+  ai-corp spends [Click] and pays 5 [Credits] to play Hedge Fund.
+  ai-corp uses Hedge Fund to gain 9 [Credits].
+  ai-corp discards 2 cards from HQ at end of turn.
+  ai-corp is ending their turn 3 with 14 [Credit] and 5 cards in HQ.
+  Clamatius started their turn 3 with 10 [Credit] and 5 cards in their Grip.
+  Clamatius uses Smartware Distributor to gain 1 [Credits].
+  Clamatius spends [Click] to make a run on HQ.
+  mental note: implement chat wake-up. we'll want to figure out why wait didn't fire here too
+  Clamatius approaches ice protecting HQ at position 0.
+  ai-corp pays 1 [Credits] to rez Tithe protecting HQ at position 0.
+  ai-corp has no further action.
+  Clamatius encounters Tithe protecting HQ at position 0.
+  Clamatius indicates to fire all unbroken subroutines on Tithe.
+  ai-corp uses Tithe to do 1 net damage.
+  ai-corp trashes DZMZ Optimizer due to net damage.
+  ai-corp uses Tithe to gain 1 [Credits].
+  ai-corp resolves 2 unbroken subroutines on Tithe (\"[subroutine] Do 1 net damage\" and \"[subroutine] Gain 1 [Credits]\").
+  Clamatius has no further action.
+  Clamatius passes Tithe protecting HQ at position 0.
+  Clamatius will continue the run.
+  Clamatius approaches HQ.
+  Clamatius breaches HQ.
+  Clamatius accesses Send a Message from HQ.
+  Clamatius steals Send a Message and gains 3 agenda points.
+  ai-corp uses Send a Message to rez Diviner protecting R&D at position 0 at no cost.
+  Clamatius spends [Click] and pays 0 [Credits] to play Mutual Favor.
+  Clamatius uses Mutual Favor to add Carmen from the stack to the grip and shuffle the stack.
+  Clamatius uses Mutual Favor to  install Carmen.
+  Clamatius pays 3 [Credits] to install Carmen from the Stack.
+  Clamatius spends [Click] to make a run on HQ.
+  Clamatius approaches Tithe protecting HQ at position 0.
+  Clamatius encounters Tithe protecting HQ at position 0.
+  Clamatius pays 2 [Credits] to use Carmen to break all 2 subroutines on Tithe.
+  Clamatius has no further action.
+  Clamatius passes Tithe protecting HQ at position 0.
+  Clamatius will continue the run.
+  Clamatius approaches HQ.
+  Clamatius breaches HQ.
+  Clamatius accesses Seamless Launch from HQ.
+  Clamatius spends [Click] and pays 1 [Credits] to play VRcation.
+  Clamatius uses VRcation to draw 4 cards.
+  Clamatius discards Overclock from their Grip at end of turn.
+  Clamatius is ending their turn 3 with 5 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 4 with 14 [Credit] and 4 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] and pays 0 [Credits] to install facedown Karunā protecting Server 2 (new remote).
+  ai-corp discards 1 card from HQ at end of turn.
+  ai-corp is ending their turn 4 with 14 [Credit] and 5 cards in HQ.
+  Clamatius started their turn 4 with 5 [Credit] and 5 cards in their Grip.
+  Clamatius uses Smartware Distributor to gain 1 [Credits].
+  Clamatius spends [Click] and pays 5 [Credits] to play Sure Gamble.
+  Clamatius uses Sure Gamble to gain 9 [Credits].
+  Clamatius spends [Click] and pays 0 [Credits] to play Jailbreak.
+  Clamatius uses Jailbreak to make a run on HQ.
+  Clamatius approaches Tithe protecting HQ at position 0.
+  Clamatius encounters Tithe protecting HQ at position 0.
+  Clamatius pays 2 [Credits] to use Carmen to break all 2 subroutines on Tithe.
+  Clamatius has no further action.
+  Clamatius passes Tithe protecting HQ at position 0.
+  Clamatius will continue the run.
+  Clamatius approaches HQ.
+  Clamatius uses Jailbreak to draw 1 card.
+  Clamatius breaches HQ.
+  Clamatius accesses Orbital Superiority from HQ.
+  Clamatius steals Orbital Superiority and gains 2 agenda points.
+  Clamatius accesses Manegarm Skunkworks from HQ.
+  Clamatius pays 3 [Credits] to trash Manegarm Skunkworks from HQ.
+  Clamatius spends [Click] and pays 0 [Credits] to play Jailbreak.
+  Clamatius uses Jailbreak to make a run on HQ.
+  yeah it's another jailbreak, in case you're wondering
+  :)
+  another feature for hitl would be post-tool-use sound alert or something because model turns are much slower than human. hrm
+  but here it seems more like a bug in wait
+  Clamatius approaches Tithe protecting HQ at position 0.
+  Clamatius encounters Tithe protecting HQ at position 0.
+  Clamatius pays 2 [Credits] to use Carmen to break all 2 subroutines on Tithe.
+  Clamatius has no further action.
+  Clamatius passes Tithe protecting HQ at position 0.
+  Clamatius will continue the run.
+  Clamatius approaches HQ.
+  Clamatius uses Jailbreak to draw 1 card.
+  Clamatius breaches HQ.
+  Clamatius accesses Seamless Launch from HQ.
+  Clamatius accesses Government Subsidy from HQ.
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius is ending their turn 4 with 3 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 5 with 14 [Credit] and 3 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+  ai-corp discards 1 card from HQ at end of turn.
+  ai-corp is ending their turn 5 with 15 [Credit] and 5 cards in HQ.
+  Clamatius started their turn 5 with 3 [Credit] and 5 cards in their Grip.
+  Clamatius uses Smartware Distributor to gain 1 [Credits].
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] and pays 1 [Credits] to install Leech.
+  Clamatius spends [Click] to make a run on Archives.
+  Clamatius will continue the run.
+  Clamatius approaches Archives.
+  Clamatius uses Leech to place 1 virus counter on itself.
+  Clamatius breaches Archives.
+  Clamatius accesses everything else in Archives.
+  Clamatius spends [Click] to use Smartware Distributor to place 3 [Credits].
+  Clamatius is ending their turn 5 with 3 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 6 with 15 [Credit] and 5 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] and pays 4 [Credits] to play Public Trail.
+  ai-corp uses Public Trail to give the runner 1 tag.
+  hi mum! I'm on tv!
+  ai-corp spends [Click] and pays 1 [Credits] to play Retribution.
+  :{
+  ai-corp uses Retribution to trash Carmen.
+  rude
+  ai-corp spends [Click] and pays 2 [Credits] to use Corp Basic Action Card to trash Smartware Distributor.
+  ai-corp is ending their turn 6 with 8 [Credit] and 4 cards in HQ.
+  Clamatius started their turn 6 with 3 [Credit] and 5 cards in their Grip.
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+  Clamatius spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+  Clamatius spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+  Clamatius discards Tread Lightly from their Grip at end of turn.
+  Clamatius is ending their turn 6 with 6 [Credit] and 5 cards in their Grip.
+  ai-corp started their turn 7 with 8 [Credit] and 4 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] to use Corp Basic Action Card to draw 1 card.
+  ai-corp spends [Click] to install facedown Superconducting Hub in the root of Server 2.
+  ai-corp discards 1 card from HQ at end of turn.
+  ai-corp is ending their turn 7 with 8 [Credit] and 5 cards in HQ.
+  Clamatius started their turn 7 with 6 [Credit] and 5 cards in their Grip.
+  Clamatius spends [Click] and pays 2 [Credits] to play Wildcat Strike.
+  ai-corp uses Wildcat Strike to force the Runner to gain 6 [Credits].
+  Clamatius spends [Click] to use Runner Basic Action Card to draw 1 card.
+  Clamatius spends [Click] and pays 2 [Credits] to use Runner Basic Action Card to remove 1 tag.
+  Clamatius spends [Click] and pays 1 [Credits] to play Creative Commission.
+  Clamatius uses Creative Commission to gain 5 [Credits].
+  Clamatius is ending their turn 7 with 12 [Credit] and 4 cards in their Grip.
+  ai-corp started their turn 8 with 8 [Credit] and 5 cards in HQ.
+  ai-corp makes their mandatory start of turn draw.
+  ai-corp spends [Click] and pays 1 [Credits] to play Seamless Launch.
+  ai-corp uses Seamless Launch to place 2 advancement counters on facedown Superconducting Hub in Server 2.
+  ai-corp spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 2.
+  ai-corp scores Superconducting Hub and gains 1 agenda point.
+  ai-corp uses Superconducting Hub to draw 2 cards.
+  ai-corp spends [Click] and pays 1 [Credits] to install facedown Funhouse protecting HQ.
+  ai-corp is ending their turn 8 with 5 [Credit] and 6 cards in HQ.
+  Clamatius started their turn 8 with 12 [Credit] and 4 cards in their Grip.
+  Clamatius spends [Click] and pays 3 [Credits] to install Unity.
+  Clamatius spends [Click] and pays 4 [Credits] to install Conduit.
+  Clamatius spends [Click] to make a run on R&D.
+  Clamatius approaches Diviner protecting R&D at position 0.
+  Clamatius encounters Diviner protecting R&D at position 0.
+  Clamatius spends 1 hosted virus counter from on Leech to use Leech to give -1 strength to Diviner.
+  Clamatius pays 2 [Credits] to increase the strength of Unity to 2 and break all  subroutines on Diviner.
+  Clamatius has no further action.
+  Clamatius passes Diviner protecting R&D at position 0.
+  Clamatius will continue the run.
+  Clamatius approaches R&D.
+  Clamatius uses Leech to place 1 virus counter on itself.
+  Clamatius breaches R&D.
+  Clamatius accesses an unseen card from R&D.
+  Clamatius steals Offworld Office and gains 2 agenda points.
+  Clamatius wins the game.
+  Clamatius uses Conduit to place 1 virus counter on itself.
+  gg wp
+  rough draw from the looks of it
+  GG! Well played — the Public Trail/Retribution rig wipe bought me three turns, but Unity+Conduit rebuilt faster than I could fortify R&D. 7-0, you swept the pair. (Also: two more wait-didn't-wake-on-run-start data points this game, plus your chat-wake and sound-alert notes — logging all three.)
+

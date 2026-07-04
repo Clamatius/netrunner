@@ -1,0 +1,229 @@
+📜 GAME LOG (last 300 entries)
+Clamatius has created the game.
+ai-runner joined the game.
+Clamatius joined the game as a spectator.
+
+Clamatius keeps their hand.
+ai-runner keeps their hand.
+Clamatius started their turn 1 with 5 [Credit] and 5 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 5 [Credits] to play Hedge Fund.
+Clamatius uses Hedge Fund to gain 9 [Credits].
+Clamatius spends [Click] and pays 0 [Credits] to install ice protecting R&D.
+Clamatius spends [Click] and pays 0 [Credits] to install ice protecting HQ.
+Clamatius is ending their turn 1 with 9 [Credit] and 3 cards in HQ.
+ai-runner started their turn 1 with 5 [Credit] and 5 cards in their Grip.
+ai-runner spends [Click] to make a run on R&D.
+ai-runner approaches ice protecting R&D at position 0.
+Clamatius pays 4 [Credits] to rez Karunā protecting R&D at position 0.
+Clamatius has no further action.
+ai-runner encounters Karunā protecting R&D at position 0.
+ai-runner indicates to fire all unbroken subroutines on Karunā.
+Clamatius uses Karunā to do 2 net damage.
+Clamatius trashes Mutual Favor and Overclock due to net damage.
+ai-runner uses Karunā to jack out.
+ai-runner jacks out.
+ai-runner spends [Click] and pays 1 [Credits] to play VRcation.
+ai-runner uses VRcation to draw 4 cards and lose [Click].
+ai-runner spends [Click] and pays 1 [Credits] to play Creative Commission.
+ai-runner uses Creative Commission to gain 5 [Credits].
+ai-runner is ending their turn 1 with 8 [Credit] and 5 cards in their Grip.
+Clamatius started their turn 2 with 5 [Credit] and 3 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 0 [Credits] to install ice protecting Server 1 (new remote).
+Clamatius spends [Click] to install a card in the root of Server 1.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius is ending their turn 2 with 4 [Credit] and 2 cards in HQ.
+ai-runner started their turn 2 with 8 [Credit] and 5 cards in their Grip.
+ai-runner spends [Click] to make a run on Server 1.
+ai-runner approaches ice protecting Server 1 at position 0.
+Clamatius pays 1 [Credits] to rez Tithe protecting Server 1 at position 0.
+Clamatius has no further action.
+ai-runner encounters Tithe protecting Server 1 at position 0.
+Clamatius uses Tithe to do 1 net damage.
+Clamatius trashes Conduit due to net damage.
+Clamatius uses Tithe to gain 1 [Credits].
+Clamatius resolves 2 unbroken subroutines on Tithe (\"[subroutine] Do 1 net damage\" and \"[subroutine] Gain 1 [Credits]\").
+ai-runner passes Tithe protecting Server 1 at position 0.
+ai-runner approaches Server 1.
+ai-runner breaches Server 1.
+ai-runner accesses Offworld Office from Server 1.
+ai-runner steals Offworld Office and gains 2 agenda points.
+ai-runner spends [Click] and pays 3 [Credits] to install Carmen.
+ai-runner spends [Click] and pays 0 [Credits] to play Jailbreak.
+ai-runner uses Jailbreak to make a run on R&D.
+Clamatius has no further action.
+ai-runner approaches Karunā protecting R&D at position 0.
+ai-runner encounters Karunā protecting R&D at position 0.
+ai-runner pays 4 [Credits] to increase the strength of Carmen to 5 and break all 2 subroutines on Karunā.
+ai-runner has no further action.
+ai-runner has no further action.
+ai-runner passes Karunā protecting R&D at position 0.
+ai-runner approaches R&D.
+ai-runner uses Jailbreak to draw 1 card.
+ai-runner breaches R&D.
+ai-runner accesses an unseen card from R&D.
+ai-runner accesses Tithe from R&D.
+ai-runner accesses an unseen card from R&D.
+ai-runner accesses Public Trail from R&D.
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner is ending their turn 2 with 2 [Credit] and 3 cards in their Grip.
+Clamatius started their turn 3 with 4 [Credit] and 2 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] to install a card in the root of Server 1.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 1.
+Clamatius spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+Clamatius is ending their turn 3 with 4 [Credit] and 2 cards in HQ.
+ai-runner started their turn 3 with 2 [Credit] and 3 cards in their Grip.
+ai-runner spends [Click] and pays 1 [Credits] to play VRcation.
+ai-runner uses VRcation to draw 4 cards and lose [Click].
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner spends [Click] to make a run on Server 1.
+ai-runner approaches Tithe protecting Server 1 at position 0.
+Clamatius has no further action.
+guessing that's a wait bug
+we'll want to implement a wakeup ping in chat anyway
+ai-runner encounters Tithe protecting Server 1 at position 0.
+ai-runner pays 2 [Credits] to use Carmen to break all 2 subroutines on Tithe.
+ai-runner has no further action.
+ai-runner has no further action.
+ai-runner passes Tithe protecting Server 1 at position 0.
+ai-runner approaches Server 1.
+ai-runner breaches Server 1.
+ai-runner accesses Urtica Cipher from Server 1.
+Clamatius uses Urtica Cipher to do 3 net damage.
+Clamatius trashes Overclock, Red Team, and Wildcat Strike due to net damage.
+ai-runner is ending their turn 3 with 0 [Credit] and 3 cards in their Grip.
+Clamatius started their turn 4 with 4 [Credit] and 2 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] to use Corp Basic Action Card to draw 1 card.
+Clamatius spends [Click] to install a card in the root of Server 1.
+Clamatius trashes a card in Server 1.
+Clamatius spends [Click] and pays 1 [Credits] to install ice protecting R&D.
+Clamatius is ending their turn 4 with 3 [Credit] and 2 cards in HQ.
+ai-runner started their turn 4 with 0 [Credit] and 3 cards in their Grip.
+ai-runner spends [Click] and pays 0 [Credits] to install Smartware Distributor.
+ai-runner spends [Click] to use Smartware Distributor to place 3 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner is ending their turn 4 with 1 [Credit] and 3 cards in their Grip.
+Clamatius pays 2 [Credits] to rez Nico Campaign in Server 1.
+Clamatius started their turn 5 with 1 [Credit] and 2 cards in HQ.
+Clamatius uses Nico Campaign to gain 3 [Credits].
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] to use Corp Basic Action Card to draw 1 card.
+Clamatius spends [Click] to use Corp Basic Action Card to draw 1 card.
+Clamatius spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+Clamatius is ending their turn 5 with 5 [Credit] and 5 cards in HQ.
+ai-runner started their turn 5 with 1 [Credit] and 3 cards in their Grip.
+ai-runner uses Smartware Distributor to gain 1 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner spends [Click] and pays 3 [Credits] to install Pennyshaver.
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner is ending their turn 5 with 0 [Credit] and 4 cards in their Grip.
+Clamatius started their turn 6 with 5 [Credit] and 5 cards in HQ.
+Clamatius uses Nico Campaign to gain 3 [Credits].
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 0 [Credits] to install ice protecting Server 2 (new remote).
+Clamatius spends [Click] and pays 1 [Credits] to install ice protecting Server 2.
+Clamatius spends [Click] to install a card in the root of Server 2.
+Clamatius is ending their turn 6 with 7 [Credit] and 3 cards in HQ.
+ai-runner started their turn 6 with 0 [Credit] and 4 cards in their Grip.
+ai-runner uses Smartware Distributor to gain 1 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to gain 1 [Credits].
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner is ending their turn 6 with 4 [Credit] and 5 cards in their Grip.
+Clamatius started their turn 7 with 7 [Credit] and 3 cards in HQ.
+Clamatius uses Nico Campaign to gain 3 [Credits].
+Clamatius trashes Nico Campaign and draws 1 card.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 2.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 2.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 2.
+Clamatius scores Superconducting Hub and gains 1 agenda point.
+Clamatius uses Superconducting Hub to draw 2 cards.
+Clamatius is ending their turn 7 with 7 [Credit] and 7 cards in HQ.
+ai-runner started their turn 7 with 4 [Credit] and 5 cards in their Grip.
+ai-runner uses Smartware Distributor to gain 1 [Credits].
+ai-runner spends [Click] and pays 5 [Credits] to play Sure Gamble.
+ai-runner uses Sure Gamble to gain 9 [Credits].
+ai-runner spends [Click] and pays 2 [Credits] to install Docklands Pass.
+ai-runner spends [Click] to make a run on HQ.
+ai-runner approaches ice protecting HQ at position 0.
+Clamatius pays 2 [Credits] to rez Diviner protecting HQ at position 0.
+Clamatius has no further action.
+ai-runner encounters Diviner protecting HQ at position 0.
+Clamatius uses Diviner to do 1 net damage.
+Clamatius trashes Leech due to net damage.
+Clamatius uses Diviner to end the run.
+Clamatius resolves 1 unbroken subroutine on Diviner (\"[subroutine] Do 1 net damage\").
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner is ending their turn 7 with 7 [Credit] and 3 cards in their Grip.
+Clamatius started their turn 8 with 5 [Credit] and 7 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 5 [Credits] to play Hedge Fund.
+Clamatius uses Hedge Fund to gain 9 [Credits].
+Clamatius spends [Click] to install a card in the root of Server 2.
+Clamatius spends [Click] and pays 1 [Credits] to use Corp Basic Action Card to advance a card in Server 2.
+Clamatius is ending their turn 8 with 8 [Credit] and 6 cards in HQ.
+ai-runner started their turn 8 with 7 [Credit] and 3 cards in their Grip.
+ai-runner spends [Click] and pays 5 [Credits] to play Sure Gamble.
+ai-runner uses Sure Gamble to gain 9 [Credits].
+ai-runner spends [Click] and pays 1 [Credits] to play Tread Lightly.
+ai-runner uses Tread Lightly to make a run on Server 2.
+ai-runner approaches ice protecting Server 2 at position 1.
+Clamatius pays 5 [Credits] to rez Diviner protecting Server 2 at position 1.
+Clamatius has no further action.
+ai-runner encounters Diviner protecting Server 2 at position 1.
+Clamatius uses Diviner to do 1 net damage.
+Clamatius trashes Smartware Distributor due to net damage.
+Clamatius resolves 1 unbroken subroutine on Diviner (\"[subroutine] Do 1 net damage\").
+ai-runner passes Diviner protecting Server 2 at position 1.
+ai-runner approaches ice protecting Server 2 at position 0.
+Clamatius has no further action.
+ai-runner passes ice protecting Server 2 at position 0.
+ai-runner will continue the run.
+ai-runner approaches Server 2.
+ai-runner uses Pennyshaver to place 1 [Credits].
+ai-runner breaches Server 2.
+ai-runner accesses Offworld Office from Server 2.
+ai-runner steals Offworld Office and gains 2 agenda points.
+was kinda hoping to move in there ngl
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner spends [Click] to use Runner Basic Action Card to draw 1 card.
+ai-runner is ending their turn 8 with 10 [Credit] and 2 cards in their Grip.
+Clamatius started their turn 9 with 3 [Credit] and 6 cards in HQ.
+Clamatius makes their mandatory start of turn draw.
+Clamatius spends [Click] and pays 0 [Credits] to play Predictive Planogram.
+Clamatius uses Predictive Planogram to gain 3 [Credits].
+Clamatius spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+Clamatius spends [Click] to use Corp Basic Action Card to gain 1 [Credits].
+Clamatius is ending their turn 9 with 8 [Credit] and 6 cards in HQ.
+ai-runner started their turn 9 with 10 [Credit] and 2 cards in their Grip.
+ai-runner spends [Click] and pays 3 [Credits] to install Unity.
+ai-runner spends [Click] and pays 0 [Credits] to play Jailbreak.
+ai-runner uses Jailbreak to make a run on HQ.
+Clamatius has no further action.
+ai-runner approaches Diviner protecting HQ at position 0.
+ai-runner encounters Diviner protecting HQ at position 0.
+ai-runner pays 2 [Credits] to increase the strength of Unity to 3 and break all  subroutines on Diviner.
+ai-runner has no further action.
+ai-runner has no further action.
+ai-runner passes Diviner protecting HQ at position 0.
+ai-runner approaches HQ.
+ai-runner uses Pennyshaver to place 1 [Credits].
+ai-runner uses Jailbreak to draw 1 card.
+ai-runner breaches HQ.
+ai-runner uses Docklands Pass to access 1 additional card from HQ.
+ai-runner accesses Palisade from HQ.
+ai-runner accesses Send a Message from HQ.
+ai-runner steals Send a Message and gains 3 agenda points.
+ai-runner wins the game.
+gg wp
+Clamatius uses Send a Message to rez Brân 1.0 protecting Server 2 at position 0 at no cost.
+ai-runner accesses Palisade from HQ.
+gg wp! Great game Michael — that Urtica got me good, but the Tread Lightly steal turn felt right. Thanks for the game!
+

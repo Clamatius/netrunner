@@ -7,8 +7,23 @@ NAN is a concise, human-readable, and machine-parsable format for recording Netr
 - The file consists of a series of turns.
 - Each turn starts with the player and turn number: `Player T#:`.
 - Optional score checkpoint in header: `Player T# [CorpScore-RunnerScore]:`.
+- Optional credit checkpoint in header: `Player T# [0-2] {C14 R10}:` — both
+  players' credit pools at the start of the turn (after the turn owner's
+  start-of-turn income/checkpoint).
 - Actions within a turn are separated by semicolons `;`.
 - The file ends with a newline.
+
+## Credit Annotations
+
+Actions that change a credit pool carry the acting side's *new total*:
+`credit →C6`, `Hedge Fund →C14`, `rez Karunā@0 R&D →C5` (a Corp rez during
+the Runner's turn shows the Corp total). Costs and payoffs on the same
+action fold together: `Sure Gamble →R9` is net (-5 play, +9 gain). A credit
+change with no rendered action (drip income, tag removal, subroutine
+credits) appears as a bare total: `→R7`. Totals are recomputed from log
+deltas and resynced against the authoritative "started/ending their turn
+with N [Credit]" log lines; disagreements are corrected and reported on
+stderr at generation time.
 
 ## Syntax
 
