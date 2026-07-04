@@ -1239,8 +1239,10 @@
    opponent run-transition; this predicate is the authoritative source
    of truth for the `wait` command (via `relevance-reason`)."
   [state side]
-  (let [my-side (keyword side)
-        active-player (get-in state [:game-state :active-player])
+  ;; nil-safe on side: in the lobby / pre-game the seat may have no :side yet,
+  ;; and `(name nil)` would NPE (#46). No side => not our turn.
+  (when-let [my-side (keyword side)]
+   (let [active-player (get-in state [:game-state :active-player])
         my-clicks (get-in state [:game-state my-side :click] 0)
         end-turn (get-in state [:game-state :end-turn])
         turn-number (get-in state [:game-state :turn] 0)]
@@ -1252,7 +1254,7 @@
       (and end-turn (not= (name my-side) active-player))
       ;; Turn 0 with 0 clicks = post-mulligan, Corp needs to start
       ;; (Corp always goes first)
-      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))
+      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp))))))
 
 (defn- turn-awaiting-start?
   "True when it's our turn at a boundary but the turn has NOT been started yet
@@ -1264,8 +1266,9 @@
    trying to act before starting (and so a boundary doesn't read like a stall).
    Both seats hit this confusion in the first rung-2 game (laundry-list #1)."
   [state side]
-  (let [my-side (keyword side)
-        active-player (get-in state [:game-state :active-player])
+  ;; nil-safe on side (see my-turn-to-act?): no side => no pending turn start.
+  (when-let [my-side (keyword side)]
+   (let [active-player (get-in state [:game-state :active-player])
         my-clicks (get-in state [:game-state my-side :click] 0)
         end-turn (get-in state [:game-state :end-turn])
         turn-number (get-in state [:game-state :turn] 0)]
@@ -1274,7 +1277,7 @@
            ;; Opponent ended their turn; active-player is still them until I start
            (and end-turn (not= (name my-side) active-player))
            ;; Post-mulligan turn 0: Corp goes first but hasn't started
-           (and (= 0 turn-number) (= my-side :corp))))))
+           (and (= 0 turn-number) (= my-side :corp)))))))
 
 (defn- ping-message?
   "Check if a log entry is a 'ping' wake signal.
@@ -1287,6 +1290,56 @@
     (when-let [msg-part (second (re-find #":\s*(.+)" text))]
       (= "ping" (clojure.string/lower-case (clojure.string/trim msg-part))))))
 
+(declare current-run-ice)
+
+(defn- in-active-game?
+  "True once a game has actually started: we hold a :side AND the game-state
+   reports an :active-player. False in the lobby / pre-game, where the seat may
+   have no :side yet and the turn predicates would `(name nil)` NPE (#46).
+   `wait` uses this to poll for game-start instead of crashing or steering off
+   nil turn data."
+  [state]
+  (boolean (and (:side state)
+                (get-in state [:game-state :active-player]))))
+
+(defn- runner-passed-encounter?
+  "True when the Runner has already passed priority in the current ICE
+   encounter — i.e. they have resolved their break/tank/jack-out choice and are
+   now waiting on the Corp to fire subs. The engine records encounter pass-state
+   on the current encounter, serialized to the client under
+   [:game-state :encounters :no-action]; the run also carries a SEPARATE
+   run-level :no-action for earlier phases. We check the encounter first and
+   fall back to run-level for wire-shape tolerance."
+  [state]
+  (let [enc-no-action (get-in state [:game-state :encounters :no-action])
+        run-no-action (get-in state [:game-state :run :no-action])]
+    (boolean (or (contains? #{:runner "runner"} enc-no-action)
+                 (contains? #{:runner "runner"} run-no-action)))))
+
+(defn- runner-encounter-decision-pending?
+  "True when the Runner is stopped at an ICE encounter that needs a break /
+   tank / jack-out decision from us, but which the engine did NOT surface as a
+   server :prompt — so `has-prompt?` misses it. Without this, a plain `wait`
+   sleeps the full timeout and the pending 'N unbroken sub(s) - authorization
+   required' only appears on the next `continue` (#47).
+
+   Wakes when: Runner side, encounter-ice phase, a rezzed current ICE with
+   unbroken+unfired subs, and the Runner has NOT already passed this encounter
+   (once we pass, the decision is made and we're merely waiting on the Corp to
+   fire — that is :waiting-for-opponent, not a pending decision). Strategy-level
+   pre-auth (:tank) is intentionally NOT consulted — `wait` carries no strategy,
+   and a live encounter is worth waking on regardless of how we'll resolve it."
+  [state side]
+  (boolean
+    (and (= (keyword side) :runner)
+         (= (run-phase state) "encounter-ice")
+         (let [current-ice (current-run-ice state)
+               subs (:subroutines current-ice)
+               unbroken (filter #(and (not (:broken %)) (not (:fired %))) subs)]
+           (and current-ice (:rezzed current-ice)
+                (seq unbroken)
+                (not (runner-passed-encounter? state)))))))
+
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
    Returns keyword indicating wake reason.
@@ -1295,6 +1348,9 @@
      :run-started        — a run started this poll cycle
      :has-prompt         — we have an actionable prompt (encounter, rez
                            window, paid-ability window, access decision)
+     :encounter-decision — Runner is at an ICE encounter with unbroken subs
+                           that needs a break/tank/jack-out call, but which the
+                           engine did NOT surface as a server prompt (#47)
      :run-ended          — a run that was in progress has ended
      :run-phase-change   — run still active but phase transitioned
                            (approach-ice → encounter-ice → movement →
@@ -1338,6 +1394,13 @@
        ;; We have a prompt to respond to
        has-actionable-prompt?
        :has-prompt
+
+       ;; Runner is at an ICE encounter with unbroken subs that needs our
+       ;; break/tank/jack-out decision, but which the engine did NOT model as a
+       ;; server :prompt. `has-prompt?` misses it, so wait would otherwise sleep
+       ;; through the whole encounter (#47). Ranks just below a real prompt.
+       (runner-encounter-decision-pending? state side)
+       :encounter-decision
 
        ;; Run just ended - might need cleanup
        (and initial-run-active? (not current-run-active?))
@@ -1391,9 +1454,13 @@
      (wait-for-relevant-diff {:since 847})     ;; cursor-based wait
 
    Returns a map with :status (:relevant-change | :ping | :already-advanced
-   | :timeout), :reason (keyword), :cursor (long), :run-active? (bool),
-   :has-prompt? (bool), and :new-log-entries (vector of log entries since
-   the wait began)."
+   | :timeout | :game-started), :reason (keyword), :cursor (long),
+   :run-active? (bool), :has-prompt? (bool), and :new-log-entries (vector of
+   log entries since the wait began).
+
+   Called in the lobby / pre-game (no active game yet) it polls for game-start
+   and returns :status :game-started, or :status :timeout with :reason :no-game
+   if the timeout expires still in the lobby (#46)."
   ([]
    (wait-for-relevant-diff 300))
   ([timeout-or-opts]
@@ -1405,6 +1472,42 @@
          current-cursor (state/get-cursor)
          side (:side @state/client-state)]
 
+     (cond
+       ;; Lobby / pre-game guard (#46). `wait` is often the first thing a seat
+       ;; calls after joining; if the game hasn't started there is no :side and
+       ;; the turn predicates used to `(name nil)` NPE. Honour the "wake me when
+       ;; something relevant happens" contract by polling for game-start (which
+       ;; IS the relevant event here) and waking with :game-started; if the
+       ;; timeout expires still in the lobby, return :timeout/:no-game cleanly.
+       (not (in-active-game? @state/client-state))
+       (let [deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))]
+         (when (:verbose opts)
+           (println (format "🕓 Not in an active game yet (lobby/pre-game) — waiting up to %ds for the game to start..."
+                            timeout-seconds)))
+         (loop []
+           (cond
+             (in-active-game? @state/client-state)
+             (do
+               (when (:verbose opts) (println "🎬 Game started."))
+               {:status :game-started
+                :reason :game-started
+                :cursor (state/get-cursor)
+                :new-log-entries []
+                :run-active? (run-active? @state/client-state)
+                :has-prompt? false})
+
+             (> (System/currentTimeMillis) deadline)
+             (do
+               (when (:verbose opts) (println "⏱️  Timeout - still in the lobby / no game started"))
+               {:status :timeout
+                :reason :no-game
+                :cursor (state/get-cursor)
+                :new-log-entries []})
+
+             :else
+             (do (Thread/sleep polling-delay) (recur)))))
+
+       :else
      ;; Fast path: if the cursor advanced past :since AND something we actually
      ;; care about already happened in the race window, return immediately. A
      ;; bare cursor advance with no relevant reason is NOT a wake — the cursor
@@ -1467,6 +1570,8 @@
                      (println (format "⚡ Woke up: %s" (name reason)))
                      (when (= reason :my-turn-start)
                        (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"))
+                     (when (= reason :encounter-decision)
+                       (println "   👉 ICE encounter with unbroken subs: `continue` to see options, then break / tank / jack-out"))
                      (when (= reason :game-over)
                        (let [winner (get-in current-state [:game-state :winner])]
                          (println (format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."
@@ -1524,7 +1629,7 @@
 
                ;; No change yet
                :else
-               (recur last-log-count))))))))))
+               (recur last-log-count)))))))))))
 
 ;; ============================================================================
 ;; Run Helper Functions

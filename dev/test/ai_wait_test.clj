@@ -137,3 +137,98 @@
           (is (= :already-advanced (:status result)))
           (is (= :game-over (:reason result))
               (str "expected :game-over, got: " result)))))))
+
+;; ---------------------------------------------------------------------------
+;; #46 — wait must not NPE in the lobby / pre-game (nil :side, no active game)
+;; ---------------------------------------------------------------------------
+
+(deftest test-wait-in-lobby-does-not-npe
+  ;; Repro for #46: calling `wait` after joining a lobby but before the game
+  ;; starts. client-state has no :side and no :game-state, so the turn
+  ;; predicates used to `(name nil)` and NPE. It must instead return cleanly.
+  (testing "wait in lobby (nil side, nil game-state) returns cleanly, no NPE"
+    (with-redefs [state/get-cursor (fn [] 0)]
+      (with-mock-state {:connected true :uid "test" :side nil :game-state nil}
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "lobby wait must not NPE, got: " result))
+          (is (= :no-game (:reason result))
+              (str "lobby timeout should be flagged :no-game, got: " result)))))))
+
+(deftest test-wait-not-in-game-when-active-player-absent
+  ;; A game-state exists but no :active-player yet (still resolving the lobby /
+  ;; pre-mulligan). Treat as not-yet-started rather than acting on nil turn data.
+  (testing "game-state present but no active-player -> lobby-safe :no-game"
+    (with-redefs [state/get-cursor (fn [] 0)]
+      (with-mock-state {:connected true :uid "test" :side "runner"
+                        :game-state {:turn 0}}
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result)))
+          (is (= :no-game (:reason result))))))))
+
+;; ---------------------------------------------------------------------------
+;; #47 — wait must wake on an already-pending encounter decision (unbroken subs
+;; requiring break/tank/jack-out) that is NOT modelled as a server prompt.
+;; ---------------------------------------------------------------------------
+
+(def ^:private encounter-game-state
+  {:active-player "runner" :turn 3
+   :runner {:click 0}
+   :run {:phase "encounter-ice" :position 1 :server ["remote1"]}
+   :corp {:click 0
+          :servers {:remote1 {:ices [{:title "Tithe" :rezzed true
+                                      :subroutines [{:broken false :fired false}
+                                                    {:broken false :fired false}]}]}}}})
+
+(deftest test-wait-wakes-on-runner-encounter-decision
+  ;; Repro for #47: Runner at encounter-ice with a rezzed ICE that still has
+  ;; unbroken subs. There is no server :prompt, so the old wait slept the full
+  ;; timeout; the very next `continue` surfaced "N unbroken subs - authorization
+  ;; required". wait must now wake immediately with :encounter-decision.
+  (testing "Runner encounter with unbroken subs wakes wait (#47)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" encounter-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :relevant-change (:status result))
+              (str "encounter decision must wake, not time out, got: " result))
+          (is (= :encounter-decision (:reason result))
+              (str "expected :encounter-decision, got: " result)))))))
+
+(deftest test-wait-no-encounter-wake-when-runner-passed
+  ;; Once the Runner has passed priority in the encounter (encounter
+  ;; :no-action = runner), the break/tank/jack-out choice is already made and we
+  ;; are merely waiting on the Corp to fire subs — waiting-for-opponent, NOT a
+  ;; pending Runner decision. Must not re-wake as :encounter-decision (Codex
+  ;; review catch: previously suppressed on the wrong side + wrong state path).
+  (testing "Runner already passed the encounter -> no wake, times out"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc encounter-game-state :encounters {:no-action "runner"}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "runner-passed encounter must not wake, got: " result)))))))
+
+(deftest test-wait-encounter-wake-when-corp-passed
+  ;; Corp passed first (encounter :no-action = corp) but the Runner has NOT — the
+  ;; Runner can still break before their own pass ends the encounter, so this is
+  ;; a live decision and must still wake. Regression guard against suppressing on
+  ;; the corp side (the pre-review behaviour, which was backwards).
+  (testing "Corp passed, Runner has not -> still wakes :encounter-decision"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc encounter-game-state :encounters {:no-action "corp"}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :encounter-decision (:reason result))
+              (str "corp-passed (runner active) must still wake, got: " result)))))))
+
+(deftest test-wait-no-encounter-wake-when-subs-broken
+  ;; All subs broken -> nothing to authorize. No wake.
+  (testing "all subs broken -> no encounter wake"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in encounter-game-state
+                                    [:corp :servers :remote1 :ices 0 :subroutines]
+                                    [{:broken true :fired false} {:broken true :fired false}]))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "all-broken encounter must not wake, got: " result)))))))
