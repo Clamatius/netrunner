@@ -90,10 +90,11 @@ class TestEndToEnd:
         nan = generate_dsl(parse_log_lines(lines))
         rows = nan.splitlines()
 
-        assert rows[0].startswith("Corp T1 [0-0]:")
+        assert rows[0].startswith("Corp T1 [0-0] {C5 R5}:")
         assert "ice S1" in rows[0]
-        assert rows[1].startswith("Runner T1 [0-0]:")
+        # Corp clicked for a credit on T1, reflected in the Runner T1 header.
+        assert rows[1].startswith("Runner T1 [0-0] {C6 R5}:")
         assert "run R&D" in rows[1] and "steal Hostile Takeover" in rows[1]
         # Runner stole 1 point on T1, so Corp's T2 checkpoint reflects 0-1.
-        assert rows[2].startswith("Corp T2 [0-1]:")
+        assert rows[2].startswith("Corp T2 [0-1] {C5 R5}:")
         assert "score Offworld Office" in rows[2]

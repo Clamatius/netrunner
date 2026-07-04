@@ -1,0 +1,16 @@
+Corp T1 [0-0] {C5 R5}: ice R&D; ice HQ; credit →C6
+Runner T1 [0-0] {C6 R5}: draw; draw; Sure Gamble →R9; Creative Commission →R13
+Corp T2 [0-0] {C6 R13}: install S1; rez Regolith Mining License S1 →C4; use Regolith Mining License →C7; use Regolith Mining License →C10
+Runner T2 [0-0] {C10 R13}: draw; run S1; breach S1; access Regolith Mining License; trash Regolith Mining License →R10; install Smartware Distributor; use Smartware Distributor
+Corp T3 [0-0] {C10 R10}: draw; Predictive Planogram; Hedge Fund →C14; discard 2 cards
+Runner T3 [0-0] {C14 R10}: →R11; run HQ; rez Tithe@0 HQ →C13; encounter Tithe@0; trash DZMZ Optimizer due to net damage; →C14; breach HQ; access Send a Message; steal Send a Message; rez Diviner@0 R&D; Mutual Favor; install Carmen →R8; run HQ; encounter Tithe@0; →R6; breach HQ; access Seamless Launch; VRcation →R5
+Corp T4 [0-3] {C14 R5}: draw; draw; ice S2; discard 1 card
+Runner T4 [0-3] {C14 R5}: →R6; Sure Gamble →R10; Jailbreak; run HQ; encounter Tithe@0; →R8; breach HQ; access Orbital Superiority; steal Orbital Superiority; access Manegarm Skunkworks; trash Manegarm Skunkworks →R5; Jailbreak; run HQ; encounter Tithe@0; →R3; breach HQ; access Seamless Launch; access Government Subsidy; draw
+Corp T5 [0-5] {C14 R3}: draw; draw; credit →C15; discard 1 card
+Runner T5 [0-5] {C15 R3}: →R4; draw; install Leech →R3; run Archives; breach Archives; use Smartware Distributor
+Corp T6 [0-5] {C15 R3}: Public Trail →C11; Retribution →C10; trash Carmen; trash Smartware Distributor →C8
+Runner T6 [0-5] {C8 R3}: draw; credit →R4; credit →R5; credit →R6
+Corp T7 [0-5] {C8 R6}: draw; draw; install S2; discard 1 card
+Runner T7 [0-5] {C8 R6}: Wildcat Strike →R10; draw; →R8; Creative Commission →R12
+Corp T8 [0-5] {C8 R12}: Seamless Launch →C7; advance S2 →C6; score Superconducting Hub; ice HQ →C5
+Runner T8 [1-5] {C5 R12}: install Unity →R9; install Conduit →R5; run R&D; encounter Diviner@0; →R3; breach R&D; access ?; steal Offworld Office
