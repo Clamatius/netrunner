@@ -232,7 +232,20 @@
                   "Runner uses Feedback Filter to prevent 1 net damage"]]
       (let [events (runs/extract-run-events [{:text "old"} {:text "old"} {:text line}])]
         (is (nil? (:tag-damage-event events))
-            (str "No damage was dealt: " line))))))
+            (str "No damage was dealt: " line)))))
+
+  (testing "The negation guard does NOT swallow a real ability whose effect is prevention"
+    ;; "uses <card> to prevent/avoid ..." is a genuine ability activation — the
+    ;; ability fired, so it must surface as :ability-event even though its text
+    ;; contains 'prevent'. The guard is scoped to state-change events only
+    ;; (Codex review of #54; EMP Device is a real run-gated ability).
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses EMP Device to prevent the Corp from rezzing more than 1 piece of ice for the remainder of the run"}])]
+      (is (some? (:ability-event events))
+          "Ability activation must survive even when its effect text negates something")
+      (is (nil? (:rez-event events))
+          "...and 'rezzing' in an ability effect line is not itself a rez event"))))
 
 ;; =============================================================================
 ;; Test: handle-events labels a fired subroutine as :subs-fired, not

@@ -395,16 +395,27 @@
   #"(?i)\bunbroken subroutine")
 (def ^:private tag-damage-event-re #"(?i)\btags?\b|\bdamage\b")
 (def ^:private event-negation-re
-  ;; A line that MENTIONS an event keyword but negates/prevents it — the event
-  ;; did not actually happen, so it must not pause the run. Real engine lines:
-  ;; "Corp does not do core damage with Zed 1.0", "prevent 1 meat damage",
-  ;; "is not forced to rez", "avoid 1 tag".
+  ;; A line that MENTIONS a STATE-CHANGE keyword but negates/prevents it — the
+  ;; state change did not happen, so it must not pause the run. Real engine
+  ;; lines: "Corp does not do core damage with Zed 1.0", "prevent 1 meat
+  ;; damage", "is not forced to rez", "avoid 1 tag".
+  ;;
+  ;; NB: applied to rez / fired / tag-damage ONLY, never to abilities. An
+  ;; ability's "uses <card> to <effect>" line legitimately contains these words
+  ;; when the effect IS a prevention (e.g. "uses EMP Device to prevent the Corp
+  ;; from rezzing ..."); the ability still fired, so guarding it there would
+  ;; drop real events (Codex review of #54).
   #"(?i)\bdoes not\b|\bdo not\b|\bcannot\b|\bprevents?\b|\bavoids?\b|\bimmune\b|\bnot forced\b")
 
 (defn- text-matches?
-  "True if entry's :text matches regex `re` and is not a negation/prevention
-   line (nil-:text safe). The negation guard stops 'does not do core damage' /
-   'prevent N damage' style no-ops from surfacing as real events (#54)."
+  "True if entry's :text matches regex `re` (nil-:text safe)."
+  [re entry]
+  (boolean (re-find re (str (:text entry)))))
+
+(defn- resolved-event-match?
+  "Like `text-matches?` but rejects negated/prevented no-op lines (see
+   `event-negation-re`). For STATE-CHANGE events (rez / fired / tag-damage)
+   whose keyword is what gets negated — NOT for abilities."
   [re entry]
   (let [text (str (:text entry))]
     (boolean (and (re-find re text)
@@ -412,9 +423,10 @@
 
 (defn get-rez-event
   "Find first rez event in log entries, or nil if none. nil-:text safe.
-   Word-boundaried so 'derez' / 'rez cost' lines don't count as a rez (#54)."
+   Word-boundaried so 'derez' / 'rez cost' / 'not forced to rez' lines don't
+   count as a rez (#54)."
   [log-entries]
-  (first (filter #(text-matches? rez-event-re %) log-entries)))
+  (first (filter #(resolved-event-match? rez-event-re %) log-entries)))
 
 (defn extract-run-events
   "Scan the most recent log entries for notable run events (rez / ability /
@@ -432,9 +444,10 @@
   [log]
   (let [recent-log (take 3 (reverse log))]
     {:rez-event (get-rez-event recent-log)
+     ;; ability un-guarded: "uses X to prevent/avoid ..." is a real activation.
      :ability-event (first (filter #(text-matches? ability-event-re %) recent-log))
-     :fired-event (first (filter #(text-matches? fired-event-re %) recent-log))
-     :tag-damage-event (first (filter #(text-matches? tag-damage-event-re %) recent-log))}))
+     :fired-event (first (filter #(resolved-event-match? fired-event-re %) recent-log))
+     :tag-damage-event (first (filter #(resolved-event-match? tag-damage-event-re %) recent-log))}))
 
 (defn normalize-side
   "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
