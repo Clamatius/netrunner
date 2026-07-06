@@ -245,7 +245,18 @@
       (is (some? (:ability-event events))
           "Ability activation must survive even when its effect text negates something")
       (is (nil? (:rez-event events))
-          "...and 'rezzing' in an ability effect line is not itself a rez event"))))
+          "...and 'rezzing' in an ability effect line is not itself a rez event")))
+
+  (testing "A fired sub whose EMBEDDED label contains a negation word still fires"
+    ;; The umbrella fired log embeds the subroutine labels (ice.clj), and real
+    ;; ICE labels contain 'cannot' (e.g. Whirlpool: 'The Runner cannot jack
+    ;; out...'). The sub really fired, so :fired-event must survive — the
+    ;; negation guard is NOT applied to fired subs (Codex review of #54).
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Corp resolves 1 unbroken subroutine on Whirlpool (\"[subroutine] The Runner cannot jack out for the remainder of this run\")"}])]
+      (is (some? (:fired-event events))
+          "A fired sub with 'cannot' in its embedded label must still surface"))))
 
 ;; =============================================================================
 ;; Test: handle-events labels a fired subroutine as :subs-fired, not

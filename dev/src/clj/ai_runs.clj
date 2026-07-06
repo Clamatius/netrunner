@@ -414,8 +414,12 @@
 
 (defn- resolved-event-match?
   "Like `text-matches?` but rejects negated/prevented no-op lines (see
-   `event-negation-re`). For STATE-CHANGE events (rez / fired / tag-damage)
-   whose keyword is what gets negated — NOT for abilities."
+   `event-negation-re`). Safe ONLY for events whose log line is a direct state
+   report that never embeds effect-description text: rez ('… is not forced to
+   rez X') and tag-damage ('… does not do core damage'). NOT for abilities
+   ('uses X to prevent …') or fired subs (the umbrella line embeds subroutine
+   labels like Whirlpool's '… cannot jack out …') — those legitimately contain
+   negation words while the event really happened (Codex review of #54)."
   [re entry]
   (let [text (str (:text entry))]
     (boolean (and (re-find re text)
@@ -444,9 +448,11 @@
   [log]
   (let [recent-log (take 3 (reverse log))]
     {:rez-event (get-rez-event recent-log)
-     ;; ability un-guarded: "uses X to prevent/avoid ..." is a real activation.
+     ;; ability + fired un-guarded: an ability's "uses X to prevent ..." effect
+     ;; and a fired sub's embedded label ("... cannot jack out ...") legitimately
+     ;; contain negation words while the event really fired.
      :ability-event (first (filter #(text-matches? ability-event-re %) recent-log))
-     :fired-event (first (filter #(resolved-event-match? fired-event-re %) recent-log))
+     :fired-event (first (filter #(text-matches? fired-event-re %) recent-log))
      :tag-damage-event (first (filter #(resolved-event-match? tag-damage-event-re %) recent-log))}))
 
 (defn normalize-side
