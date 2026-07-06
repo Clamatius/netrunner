@@ -169,15 +169,62 @@
     (let [ability (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
                     {:text "Corp uses Rototurret to trash a program"}])
+          ;; Real engine wording from resolve-unbroken-subs! (game/core/ice.clj):
+          ;; "resolves N unbroken subroutine on <ice> (...)" — the old matcher
+          ;; keyed on "fire", which the engine NEVER logs, so it caught this
+          ;; never (#54 false-negative).
           fired   (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
-                    {:text "Corp resolves 2 subroutines: fire End the run"}])
+                    {:text "Corp resolves 2 unbroken subroutines on Enigma (\"[subroutine] End the run\" and \"[subroutine] End the run\")"}])
           tag     (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
                     {:text "Runner takes 1 tag"}])]
       (is (some? (:ability-event ability)))
       (is (some? (:fired-event fired)))
       (is (some? (:tag-damage-event tag))))))
+
+;; =============================================================================
+;; Test: classifiers reject false positives (issue #54)
+;; =============================================================================
+;;
+;; #52 made the window live, which turned naive substring matching
+;; (includes? "rez"/"fire"/"tag"/"damage") into a false-positive hazard: card
+;; names and flavor text share those substrings. These pin the word-boundaried,
+;; engine-wording-anchored matchers against the concrete traps found in the
+;; engine card/log source.
+
+(deftest test-extract-run-events-rejects-false-positives
+  (testing "'derez' is not a rez event (word-boundaried, excludes de-rez)"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Corp uses Chief Slee to derez Ice Wall"}])]
+      (is (nil? (:rez-event events))
+          "'derez' must not count as a rez — old includes? \"rez\" matched it")))
+
+  (testing "A Runner BREAKING subs is not a subs-fired event"
+    ;; break-subroutines-msg logs "use Corroder to break 1 subroutine on X",
+    ;; which also contains 'subroutine' — but breaking PREVENTS firing, so it
+    ;; must not surface as :fired-event. Anchoring on 'unbroken subroutine'
+    ;; distinguishes the two.
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses Corroder to break 1 subroutine on Ice Wall (\"[subroutine] End the run\")"}])]
+      (is (nil? (:fired-event events))
+          "Breaking subroutines is the opposite of firing them")))
+
+  (testing "Card name 'Foxfire' does not trip the subs-fired classifier"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses Foxfire to trash a card"}])]
+      (is (nil? (:fired-event events))
+          "'Foxfire' contains 'fire' but is a card name, not a fired sub")))
+
+  (testing "Card name 'Donut Taganes' does not trip the tag classifier"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner installs Donut Taganes"}])]
+      (is (nil? (:tag-damage-event events))
+          "'Taganes' contains 'tag' as a substring but is not a tag event"))))
 
 (deftest test-extract-run-events-tolerates-nil-text
   (testing "A log entry with nil :text does not NPE (defensive, matches sibling fns)"
