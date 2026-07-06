@@ -169,15 +169,114 @@
     (let [ability (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
                     {:text "Corp uses Rototurret to trash a program"}])
+          ;; Real engine wording from resolve-unbroken-subs! (game/core/ice.clj):
+          ;; "resolves N unbroken subroutine on <ice> (...)" — the old matcher
+          ;; keyed on "fire", which the engine NEVER logs, so it caught this
+          ;; never (#54 false-negative).
           fired   (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
-                    {:text "Corp resolves 2 subroutines: fire End the run"}])
+                    {:text "Corp resolves 2 unbroken subroutines on Enigma (\"[subroutine] End the run\" and \"[subroutine] End the run\")"}])
           tag     (runs/extract-run-events
                    [{:text "old"} {:text "old"} {:text "old"}
                     {:text "Runner takes 1 tag"}])]
       (is (some? (:ability-event ability)))
       (is (some? (:fired-event fired)))
       (is (some? (:tag-damage-event tag))))))
+
+;; =============================================================================
+;; Test: classifiers reject false positives (issue #54)
+;; =============================================================================
+;;
+;; #52 made the window live, which turned naive substring matching
+;; (includes? "rez"/"fire"/"tag"/"damage") into a false-positive hazard: card
+;; names and flavor text share those substrings. These pin the word-boundaried,
+;; engine-wording-anchored matchers against the concrete traps found in the
+;; engine card/log source.
+
+(deftest test-extract-run-events-rejects-false-positives
+  (testing "'derez' is not a rez event (word-boundaried, excludes de-rez)"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Corp uses Chief Slee to derez Ice Wall"}])]
+      (is (nil? (:rez-event events))
+          "'derez' must not count as a rez — old includes? \"rez\" matched it")))
+
+  (testing "A Runner BREAKING subs is not a subs-fired event"
+    ;; break-subroutines-msg logs "use Corroder to break 1 subroutine on X",
+    ;; which also contains 'subroutine' — but breaking PREVENTS firing, so it
+    ;; must not surface as :fired-event. Anchoring on 'unbroken subroutine'
+    ;; distinguishes the two.
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses Corroder to break 1 subroutine on Ice Wall (\"[subroutine] End the run\")"}])]
+      (is (nil? (:fired-event events))
+          "Breaking subroutines is the opposite of firing them")))
+
+  (testing "Card name 'Foxfire' does not trip the subs-fired classifier"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses Foxfire to trash a card"}])]
+      (is (nil? (:fired-event events))
+          "'Foxfire' contains 'fire' but is a card name, not a fired sub")))
+
+  (testing "Card name 'Donut Taganes' does not trip the tag classifier"
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner installs Donut Taganes"}])]
+      (is (nil? (:tag-damage-event events))
+          "'Taganes' contains 'tag' as a substring but is not a tag event")))
+
+  (testing "A negated/prevented damage line is not a damage event"
+    ;; Real engine lines that mention 'damage' but deal none.
+    (doseq [line ["Corp does not do core damage with Zed 1.0"
+                  "Runner uses Feedback Filter to prevent 1 net damage"]]
+      (let [events (runs/extract-run-events [{:text "old"} {:text "old"} {:text line}])]
+        (is (nil? (:tag-damage-event events))
+            (str "No damage was dealt: " line)))))
+
+  (testing "The negation guard does NOT swallow a real ability whose effect is prevention"
+    ;; "uses <card> to prevent/avoid ..." is a genuine ability activation — the
+    ;; ability fired, so it must surface as :ability-event even though its text
+    ;; contains 'prevent'. The guard is scoped to state-change events only
+    ;; (Codex review of #54; EMP Device is a real run-gated ability).
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Runner uses EMP Device to prevent the Corp from rezzing more than 1 piece of ice for the remainder of the run"}])]
+      (is (some? (:ability-event events))
+          "Ability activation must survive even when its effect text negates something")
+      (is (nil? (:rez-event events))
+          "...and 'rezzing' in an ability effect line is not itself a rez event")))
+
+  (testing "A fired sub whose EMBEDDED label contains a negation word still fires"
+    ;; The umbrella fired log embeds the subroutine labels (ice.clj), and real
+    ;; ICE labels contain 'cannot' (e.g. Whirlpool: 'The Runner cannot jack
+    ;; out...'). The sub really fired, so :fired-event must survive — the
+    ;; negation guard is NOT applied to fired subs (Codex review of #54).
+    (let [events (runs/extract-run-events
+                  [{:text "old"} {:text "old"}
+                   {:text "Corp resolves 1 unbroken subroutine on Whirlpool (\"[subroutine] The Runner cannot jack out for the remainder of this run\")"}])]
+      (is (some? (:fired-event events))
+          "A fired sub with 'cannot' in its embedded label must still surface"))))
+
+;; =============================================================================
+;; Test: handle-events labels a fired subroutine as :subs-fired, not
+;;        :ability-used, when both co-occur in the window (issue #54)
+;; =============================================================================
+;;
+;; A firing subroutine and its own "uses <ice> to ..." effect line can both
+;; land in the recent window. :subs-fired is the more specific headline, so
+;; handle-events checks it before :ability-used. (All four event statuses pause
+;; identically downstream, so this only affects the label — never behaviour.)
+
+(deftest test-handle-events-fired-beats-ability
+  (testing "Fired subroutine wins the label over a co-occurring ability line"
+    (let [context {:rez-event nil
+                   :ability-event {:text "Corp uses Ice Wall to end the run"}
+                   :fired-event {:text "Corp resolves 1 unbroken subroutine on Ice Wall"}
+                   :tag-damage-event nil}
+          result (runs/handle-events context)]
+      (is (= :subs-fired (:status result))
+          "Subs-fired is more specific than the ability effect line it emits"))))
 
 (deftest test-extract-run-events-tolerates-nil-text
   (testing "A log entry with nil :text does not NPE (defensive, matches sibling fns)"

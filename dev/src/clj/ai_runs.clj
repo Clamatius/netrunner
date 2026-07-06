@@ -374,10 +374,63 @@
 
 ;; Use core/current-run-ice for ICE lookup (single source of truth)
 
+;; Run-event classifiers (#54). Naive substring matching (`includes? "rez"` etc.)
+;; had two failure modes now that #52 made the window live:
+;;   1. False POSITIVES — a card name / flavor line matched a bare substring
+;;      ("Foxfire" → "fire", "Donut Taganes" → "tag", "derez" → "rez").
+;;   2. A false NEGATIVE — the engine NEVER logs the word "fire" for a firing
+;;      subroutine; the real message is "resolves N unbroken subroutine on X"
+;;      (see resolve-unbroken-subs! in game/core/ice.clj), so the old `"fire"`
+;;      matcher caught real subs *never*.
+;; These regexes anchor on the actual engine wording with word boundaries.
+(def ^:private rez-event-re
+  ;; "X rezzes <ice>" (no cost) or "X spends N to rez <ice>" (with cost).
+  ;; Word-boundaried so it excludes "derez"/"derezzes"/"rez cost" chatter.
+  #"(?i)\brezzes\b|\bto rez\b")
+(def ^:private ability-event-re #"(?i)\buses\b|\btriggers\b")
+(def ^:private fired-event-re
+  ;; The umbrella fire message is "resolves N unbroken subroutine on X". Anchor
+  ;; on "unbroken subroutine" so a Runner BREAKING subs ("use Corroder to break
+  ;; 1 subroutine on X") — which also contains "subroutine" — does NOT misfire.
+  #"(?i)\bunbroken subroutine")
+(def ^:private tag-damage-event-re #"(?i)\btags?\b|\bdamage\b")
+(def ^:private event-negation-re
+  ;; A line that MENTIONS a STATE-CHANGE keyword but negates/prevents it — the
+  ;; state change did not happen, so it must not pause the run. Real engine
+  ;; lines: "Corp does not do core damage with Zed 1.0", "prevent 1 meat
+  ;; damage", "is not forced to rez", "avoid 1 tag".
+  ;;
+  ;; NB: applied to rez / fired / tag-damage ONLY, never to abilities. An
+  ;; ability's "uses <card> to <effect>" line legitimately contains these words
+  ;; when the effect IS a prevention (e.g. "uses EMP Device to prevent the Corp
+  ;; from rezzing ..."); the ability still fired, so guarding it there would
+  ;; drop real events (Codex review of #54).
+  #"(?i)\bdoes not\b|\bdo not\b|\bcannot\b|\bprevents?\b|\bavoids?\b|\bimmune\b|\bnot forced\b")
+
+(defn- text-matches?
+  "True if entry's :text matches regex `re` (nil-:text safe)."
+  [re entry]
+  (boolean (re-find re (str (:text entry)))))
+
+(defn- resolved-event-match?
+  "Like `text-matches?` but rejects negated/prevented no-op lines (see
+   `event-negation-re`). Safe ONLY for events whose log line is a direct state
+   report that never embeds effect-description text: rez ('… is not forced to
+   rez X') and tag-damage ('… does not do core damage'). NOT for abilities
+   ('uses X to prevent …') or fired subs (the umbrella line embeds subroutine
+   labels like Whirlpool's '… cannot jack out …') — those legitimately contain
+   negation words while the event really happened (Codex review of #54)."
+  [re entry]
+  (let [text (str (:text entry))]
+    (boolean (and (re-find re text)
+                  (not (re-find event-negation-re text))))))
+
 (defn get-rez-event
-  "Find first rez event in log entries, or nil if none. nil-:text safe."
+  "Find first rez event in log entries, or nil if none. nil-:text safe.
+   Word-boundaried so 'derez' / 'rez cost' / 'not forced to rez' lines don't
+   count as a rez (#54)."
   [log-entries]
-  (first (filter #(clojure.string/includes? (str (:text %)) "rez") log-entries)))
+  (first (filter #(resolved-event-match? rez-event-re %) log-entries)))
 
 (defn extract-run-events
   "Scan the most recent log entries for notable run events (rez / ability /
@@ -389,16 +442,18 @@
    `(take 3 log)`, which read the three OLDEST (game-start) entries, so recent
    events were never seen from continue-run!'s handler context.
 
-   nil / missing `:text` entries are tolerated (str-wrapped), matching the
-   defensive sibling predicates in this file."
+   Classification uses word-boundaried regexes against real engine wording
+   (#54), not bare substrings, so card names / flavor / derez / sub-breaking
+   don't misclassify. nil / missing `:text` entries are tolerated."
   [log]
-  (let [recent-log (take 3 (reverse log))
-        has? (fn [entry & subs]
-               (some #(clojure.string/includes? (str (:text entry)) %) subs))]
+  (let [recent-log (take 3 (reverse log))]
     {:rez-event (get-rez-event recent-log)
-     :ability-event (first (filter #(has? % "uses" "triggers") recent-log))
-     :fired-event (first (filter #(has? % "fire") recent-log))
-     :tag-damage-event (first (filter #(has? % "tag" "damage") recent-log))}))
+     ;; ability + fired un-guarded: an ability's "uses X to prevent ..." effect
+     ;; and a fired sub's embedded label ("... cannot jack out ...") legitimately
+     ;; contain negation words while the event really fired.
+     :ability-event (first (filter #(text-matches? ability-event-re %) recent-log))
+     :fired-event (first (filter #(text-matches? fired-event-re %) recent-log))
+     :tag-damage-event (first (filter #(resolved-event-match? tag-damage-event-re %) recent-log))}))
 
 (defn normalize-side
   "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
@@ -857,7 +912,12 @@
          :message reason}))))
 
 (defn handle-events
-  "Priority 4: Pause for important events (rez, abilities, subs, damage)"
+  "Priority 4: Pause for important events (rez, subs, abilities, damage).
+   Order is most-specific-first: a firing subroutine and its own 'uses <ice>
+   to ...' effect line can co-occur in the same window, so :subs-fired is
+   checked before :ability-used to label the headline event (#54). All four
+   statuses pause identically downstream (run-notable-event?), so the order
+   only affects the human-readable label, never behaviour."
   [{:keys [rez-event ability-event fired-event tag-damage-event]}]
   (cond
     rez-event
@@ -867,19 +927,19 @@
       (println "   → Use 'continue-run' again to proceed")
       {:status :ice-rezzed :wake-reason :ice-rezzed :event rez-event})
 
-    ability-event
-    (do
-      (println "⚠️  Run paused - ability triggered!")
-      (println (format "   %s" (:text ability-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :ability-used :wake-reason :ability-used :event ability-event})
-
     fired-event
     (do
       (println "⚠️  Run paused - subroutines fired!")
       (println (format "   %s" (:text fired-event)))
       (println "   → Use 'continue-run' again to proceed")
       {:status :subs-fired :wake-reason :subs-fired :event fired-event})
+
+    ability-event
+    (do
+      (println "⚠️  Run paused - ability triggered!")
+      (println (format "   %s" (:text ability-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :ability-used :wake-reason :ability-used :event ability-event})
 
     tag-damage-event
     (do
