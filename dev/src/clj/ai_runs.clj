@@ -375,9 +375,30 @@
 ;; Use core/current-run-ice for ICE lookup (single source of truth)
 
 (defn get-rez-event
-  "Find first rez event in log entries, or nil if none"
+  "Find first rez event in log entries, or nil if none. nil-:text safe."
   [log-entries]
-  (first (filter #(clojure.string/includes? (:text %) "rez") log-entries)))
+  (first (filter #(clojure.string/includes? (str (:text %)) "rez") log-entries)))
+
+(defn extract-run-events
+  "Scan the most recent log entries for notable run events (rez / ability /
+   subs-fired / tag-or-damage) and return them as a context map.
+
+   `log` is chronological, so we window the NEWEST entries via
+   `(take 3 (reverse log))` — the same idiom used elsewhere in this namespace
+   (see recently-passed detection ~line 749). The pre-#52 code used
+   `(take 3 log)`, which read the three OLDEST (game-start) entries, so recent
+   events were never seen from continue-run!'s handler context.
+
+   nil / missing `:text` entries are tolerated (str-wrapped), matching the
+   defensive sibling predicates in this file."
+  [log]
+  (let [recent-log (take 3 (reverse log))
+        has? (fn [entry & subs]
+               (some #(clojure.string/includes? (str (:text entry)) %) subs))]
+    {:rez-event (get-rez-event recent-log)
+     :ability-event (first (filter #(has? % "uses" "triggers") recent-log))
+     :fired-event (first (filter #(has? % "fire") recent-log))
+     :tag-damage-event (first (filter #(has? % "tag" "damage") recent-log))}))
 
 (defn normalize-side
   "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
@@ -958,16 +979,11 @@
         opp-prompt (get-in client-state [:game-state (keyword opp-side) :prompt-state])
         log (get-in client-state [:game-state :log])
 
-        ;; Check for new events in recent log (last 3 entries)
-        recent-log (take 3 log)
-        rez-event (get-rez-event recent-log)
-        ability-event (first (filter #(or (clojure.string/includes? (:text %) "uses")
-                                          (clojure.string/includes? (:text %) "triggers"))
-                                    recent-log))
-        fired-event (first (filter #(clojure.string/includes? (:text %) "fire") recent-log))
-        tag-damage-event (first (filter #(or (clojure.string/includes? (:text %) "tag")
-                                             (clojure.string/includes? (:text %) "damage"))
-                                       recent-log))
+        ;; Scan the NEWEST log entries for notable run events (#52: the window
+        ;; used to read the oldest 3, so recent rez/ability/subs/tag events
+        ;; never reached the handler context).
+        {:keys [rez-event ability-event fired-event tag-damage-event]}
+        (extract-run-events log)
 
         ;; Build context map for handlers
         context {:strategy strategy

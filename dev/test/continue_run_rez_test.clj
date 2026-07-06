@@ -144,6 +144,49 @@
           "Should return nil when no rez event"))))
 
 ;; =============================================================================
+;; Test: extract-run-events reads the NEWEST log entries (issue #52)
+;; =============================================================================
+;;
+;; `log` is chronological. The old code did `(take 3 log)` — the three OLDEST
+;; (game-start) entries — so any rez/ability/subs/tag event in the *recent* log
+;; was never seen from continue-run!'s handler context. These lock down that the
+;; window is the newest entries and is nil-:text safe.
+
+(deftest test-extract-run-events-reads-newest-not-oldest
+  (testing "A rez landing in the NEWEST log entries surfaces, despite older noise (#52)"
+    (let [log [{:text "Corp starts their turn"}       ; oldest — the old (take 3) window
+               {:text "Runner draws a card"}
+               {:text "Runner spends [Click] to run HQ"}
+               {:text "Approaching Tithe"}
+               {:text "Corp rezzes Tithe"}]            ; newest — the actual event
+          events (runs/extract-run-events log)]
+      (is (some? (:rez-event events))
+          "Rez in the newest entries must be detected (was missed when window took oldest 3)")
+      (is (= "Corp rezzes Tithe" (:text (:rez-event events)))))))
+
+(deftest test-extract-run-events-detects-ability-fired-tag
+  (testing "Ability / subs-fired / tag-damage events are all read from the newest window"
+    (let [ability (runs/extract-run-events
+                   [{:text "old"} {:text "old"} {:text "old"}
+                    {:text "Corp uses Rototurret to trash a program"}])
+          fired   (runs/extract-run-events
+                   [{:text "old"} {:text "old"} {:text "old"}
+                    {:text "Corp resolves 2 subroutines: fire End the run"}])
+          tag     (runs/extract-run-events
+                   [{:text "old"} {:text "old"} {:text "old"}
+                    {:text "Runner takes 1 tag"}])]
+      (is (some? (:ability-event ability)))
+      (is (some? (:fired-event fired)))
+      (is (some? (:tag-damage-event tag))))))
+
+(deftest test-extract-run-events-tolerates-nil-text
+  (testing "A log entry with nil :text does not NPE (defensive, matches sibling fns)"
+    (let [log [{:text nil} {:foo :bar} {:text "Corp rezzes Ice Wall"}]]
+      (is (= "Corp rezzes Ice Wall"
+             (:text (:rez-event (runs/extract-run-events log))))
+          "nil / missing :text entries are skipped, not fatal"))))
+
+;; =============================================================================
 ;; Test: Integration - Full Run with Rez Decision
 ;; =============================================================================
 
