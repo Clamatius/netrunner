@@ -394,11 +394,21 @@
   ;; 1 subroutine on X") — which also contains "subroutine" — does NOT misfire.
   #"(?i)\bunbroken subroutine")
 (def ^:private tag-damage-event-re #"(?i)\btags?\b|\bdamage\b")
+(def ^:private event-negation-re
+  ;; A line that MENTIONS an event keyword but negates/prevents it — the event
+  ;; did not actually happen, so it must not pause the run. Real engine lines:
+  ;; "Corp does not do core damage with Zed 1.0", "prevent 1 meat damage",
+  ;; "is not forced to rez", "avoid 1 tag".
+  #"(?i)\bdoes not\b|\bdo not\b|\bcannot\b|\bprevents?\b|\bavoids?\b|\bimmune\b|\bnot forced\b")
 
 (defn- text-matches?
-  "True if entry's :text matches regex `re` (nil-:text safe)."
+  "True if entry's :text matches regex `re` and is not a negation/prevention
+   line (nil-:text safe). The negation guard stops 'does not do core damage' /
+   'prevent N damage' style no-ops from surfacing as real events (#54)."
   [re entry]
-  (boolean (re-find re (str (:text entry)))))
+  (let [text (str (:text entry))]
+    (boolean (and (re-find re text)
+                  (not (re-find event-negation-re text))))))
 
 (defn get-rez-event
   "Find first rez event in log entries, or nil if none. nil-:text safe.
@@ -883,7 +893,12 @@
          :message reason}))))
 
 (defn handle-events
-  "Priority 4: Pause for important events (rez, abilities, subs, damage)"
+  "Priority 4: Pause for important events (rez, subs, abilities, damage).
+   Order is most-specific-first: a firing subroutine and its own 'uses <ice>
+   to ...' effect line can co-occur in the same window, so :subs-fired is
+   checked before :ability-used to label the headline event (#54). All four
+   statuses pause identically downstream (run-notable-event?), so the order
+   only affects the human-readable label, never behaviour."
   [{:keys [rez-event ability-event fired-event tag-damage-event]}]
   (cond
     rez-event
@@ -893,19 +908,19 @@
       (println "   → Use 'continue-run' again to proceed")
       {:status :ice-rezzed :wake-reason :ice-rezzed :event rez-event})
 
-    ability-event
-    (do
-      (println "⚠️  Run paused - ability triggered!")
-      (println (format "   %s" (:text ability-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :ability-used :wake-reason :ability-used :event ability-event})
-
     fired-event
     (do
       (println "⚠️  Run paused - subroutines fired!")
       (println (format "   %s" (:text fired-event)))
       (println "   → Use 'continue-run' again to proceed")
       {:status :subs-fired :wake-reason :subs-fired :event fired-event})
+
+    ability-event
+    (do
+      (println "⚠️  Run paused - ability triggered!")
+      (println (format "   %s" (:text ability-event)))
+      (println "   → Use 'continue-run' again to proceed")
+      {:status :ability-used :wake-reason :ability-used :event ability-event})
 
     tag-damage-event
     (do
