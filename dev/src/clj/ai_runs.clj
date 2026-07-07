@@ -455,6 +455,44 @@
      :fired-event (first (filter #(text-matches? fired-event-re %) recent-log))
      :tag-damage-event (first (filter #(resolved-event-match? tag-damage-event-re %) recent-log))}))
 
+(def ^:private run-terminal-re
+  ;; A log line that actually TERMINATES a run — the gate for #48's stale-menu
+  ;; explanation. Only two engine wordings end a run with their own log line:
+  ;;   - an end-the-run effect  "uses X to end the run" (game/cards/ice.clj)
+  ;;   - a jack out             "jacks out"             (game/core/runs.clj)
+  ;; A fired sub or a damage trash is NOT terminal on its own: a "do 1 net
+  ;; damage" sub (Neural Katana) resolves and the run continues. So those are
+  ;; used as CONTEXT (run-event-re below) only when a terminal line is present
+  ;; — otherwise a normally-completed run (access, no ETR) would be mislabeled
+  ;; "ended before your jack-out landed" (Codex review of #48).
+  #"(?i)\bto end the run\b|\bjacks out\b")
+
+(def ^:private run-event-re
+  ;; Terminal enders PLUS the context lines worth showing alongside them: the
+  ;; fired sub and the damage trash that led to the run ending. Word-boundaried
+  ;; on real engine wording (the #54 lesson): "unbroken subroutine" excludes a
+  ;; Runner BREAKING subs ("break 1 subroutine on X"); no bare "rez"/"tag".
+  #"(?i)\bunbroken subroutine\b|\bto end the run\b|\bjacks out\b|\bdue to (?:net|meat|brain|core) damage\b")
+
+(defn run-ending-log-lines
+  "When a run just ended, return the recent log lines explaining it (newest
+   window, chronological). Empty unless a TERMINAL run-ender ('to end the run'
+   / 'jacks out') appears in the last few entries — so the caller can tell
+   'the run ended out from under a stale encounter menu' (#48) from 'there was
+   never a run' (a typo) or a run that simply completed via access. nil-/
+   missing-:text safe.
+
+   Windowed to the last 5 entries (the #48 firing sequence sits at the tail,
+   sent right after the stale menu) so a *prior* run's end-the-run line, pushed
+   back by a few economy logs, is not resurfaced (Codex review of #48)."
+  [log]
+  (let [recent (take-last 5 log)]
+    (if (some #(re-find run-terminal-re (str (:text %))) recent)
+      (->> recent
+           (filter #(re-find run-event-re (str (:text %))))
+           (mapv #(str (:text %))))
+      [])))
+
 (defn normalize-side
   "Normalize a side value to string. Handles keywords, strings, booleans, and nil."
   [side-value]
