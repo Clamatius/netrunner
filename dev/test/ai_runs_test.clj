@@ -999,6 +999,87 @@
       (is (empty? lines) "the no-prompt path stays quiet (the fire line is printed by the caller)"))))
 
 ;; ============================================================================
+;; run-ending-log-lines (#48): explain a stale "not in a run" state
+;; ============================================================================
+;;
+;; #48: during an encounter the Runner client printed the tank/jack-out
+;; authorization menu, but the Corp fired the unbroken sub and ended the run
+;; before the Runner's `jack-out` landed — so jack-out replied a bare
+;; "Not in a run" with no hint that the run just ended out from under the menu.
+;; run-ending-log-lines lets jack-out surface WHAT happened instead.
+
+(deftest test-run-ending-log-lines-subs-fired-sequence
+  (testing "subs-fired + damage-trash + end-the-run are all returned, in log order"
+    (let [log [{:text "AI-runner encounters Diviner"}
+               {:text "Clamatius resolves 1 unbroken subroutine on Diviner (\"[subroutine] Do 1 net damage\")"}
+               {:text "Clamatius trashes Leech due to net damage"}
+               {:text "Clamatius uses Diviner to end the run"}]
+          lines (runs/run-ending-log-lines log)]
+      (is (= 3 (count lines)))
+      (is (= "Clamatius resolves 1 unbroken subroutine on Diviner (\"[subroutine] Do 1 net damage\")"
+             (first lines)))
+      (is (= "Clamatius uses Diviner to end the run" (last lines))))))
+
+(deftest test-run-ending-log-lines-jack-out
+  (testing "a 'jacks out' line counts as a run-ending signal"
+    (is (= ["AI-runner jacks out"]
+           (runs/run-ending-log-lines [{:text "AI-runner approaches HQ"}
+                                       {:text "AI-runner jacks out"}])))))
+
+(deftest test-run-ending-log-lines-none-when-no-run-signal
+  (testing "no run-ending signal (economy/access noise) → empty, so caller keeps the plain message"
+    (is (= [] (runs/run-ending-log-lines
+               [{:text "AI-corp uses Corp Basic Action Card to gain 1 [Credits]"}
+                {:text "AI-runner accesses an unseen card from R&D"}
+                {:text "AI-runner steals Offworld Office and gains 2 agenda points"}])))))
+
+(deftest test-run-ending-log-lines-ignores-breaking-and-derez
+  (testing "Runner BREAKING subs and derez chatter are not run-ending signals"
+    ;; 'break 1 subroutine' contains 'subroutine' but NOT 'unbroken subroutine';
+    ;; 'derez' must not read as a run end. (Same #54 substring traps.)
+    (is (= [] (runs/run-ending-log-lines
+               [{:text "AI-runner uses Corroder to break 1 subroutine on Ice Wall"}
+                {:text "AI-corp derezzes Ice Wall"}])))))
+
+(deftest test-run-ending-log-lines-nil-text-safe
+  (testing "nil / missing :text entries don't crash extraction"
+    (is (= ["Corp uses Palisade to end the run"]
+           (runs/run-ending-log-lines [{:text nil}
+                                       {}
+                                       {:text "Corp uses Palisade to end the run"}])))))
+
+(deftest test-run-ending-log-lines-windowed-to-recent
+  (testing "a run-ending line older than the recent window is not resurfaced"
+    ;; A previous run's ETR followed by a full turn of economy: jack-out now
+    ;; must NOT dredge up the stale end-the-run from the prior run.
+    (let [old-run {:text "Corp uses Ice Wall to end the run"}
+          noise (repeat 8 {:text "AI-corp uses Corp Basic Action Card to gain 1 [Credits]"})
+          log (vec (cons old-run noise))]
+      (is (= [] (runs/run-ending-log-lines log))))))
+
+(deftest test-run-ending-log-lines-non-terminal-sub-not-flagged
+  (testing "subs fired + damage trash WITHOUT a terminal ender do NOT read as run-ended (Codex #48)"
+    ;; Neural Katana's 'do 3 net damage' sub resolves and the run CONTINUES to
+    ;; access — no 'to end the run' / 'jacks out'. A later stray jack-out must
+    ;; not be told the run ended when it merely completed via access.
+    (is (= [] (runs/run-ending-log-lines
+               [{:text "Corp resolves 1 unbroken subroutine on Neural Katana (\"[subroutine] Do 3 net damage\")"}
+                {:text "Corp trashes Sure Gamble due to net damage"}
+                {:text "Runner accesses an unseen card from R&D"}])))))
+
+(deftest test-run-ending-log-lines-etr-drops-off-tightened-window
+  (testing "a prior-run ETR followed by 5 non-run logs falls out of the 5-line window (Codex #48)"
+    ;; Codex's finding-2 counterexample: the stale ETR is the 6th-from-newest
+    ;; entry, so a typo jack-out no longer gets the stale-menu explanation.
+    (is (= [] (runs/run-ending-log-lines
+               [{:text "Corp uses Ice Wall to end the run"}
+                {:text "Runner accesses an unseen card from R&D"}
+                {:text "Corp gains 1 [Credits]"}
+                {:text "Corp gains 1 [Credits]"}
+                {:text "Corp gains 1 [Credits]"}
+                {:text "Runner gains 1 [Credits]"}])))))
+
+;; ============================================================================
 
 (defn -main
   "Run continue-run! tests and report results"

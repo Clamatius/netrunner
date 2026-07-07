@@ -1121,6 +1121,7 @@ case "$COMMAND" in
         execute '(do
                   (require (quote [ai-state :as state]))
                   (require (quote [ai-websocket-client-v2 :as ws]))
+                  (require (quote [ai-runs :as runs]))
                   (let [s @state/client-state
                         gameid (:gameid s)
                         run-state (get-in s [:game-state :run])]
@@ -1134,7 +1135,18 @@ case "$COMMAND" in
                            :args nil})
                         (Thread/sleep 500)
                         (println "🚪 Jacked out of run"))
-                      (println "❌ Not in a run"))))'
+                      ;; No active run. Distinguish "the run ended out from under
+                      ;; a stale encounter menu" (#48) from a plain typo: if the
+                      ;; recent log shows run-ending events, surface them so the
+                      ;; seat is not left with a stale menu + bare error.
+                      (let [ended (runs/run-ending-log-lines (get-in s [:game-state :log]))]
+                        (if (seq ended)
+                          (do
+                            (println "❌ Not in a run — it ended before your jack-out landed.")
+                            (println "   What happened:")
+                            (doseq [l ended] (println (str "   • " l)))
+                            (println "   (Any tank/jack-out menu you saw is now stale — the run is over.)"))
+                          (println "❌ Not in a run"))))))'
         ;;
 
     tank)
