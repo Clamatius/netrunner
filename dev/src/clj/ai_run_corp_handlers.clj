@@ -435,9 +435,19 @@
                :phase run-phase})))))))
 
 (defn handle-corp-server-upgrade-decision
-  "Wake before access when an unrezzed upgrade in the attacked server may matter."
-  [{:keys [side state]}]
-  (when (= side "corp")
+  "Wake before access when an unrezzed upgrade in the attacked server may matter.
+
+   Respects --no-rez (#57): --no-rez is a standing 'decline every rez' commitment,
+   so at a pre-access upgrade window we fall through (return nil) and let the
+   normal empty-run-window auto-pass advance the run — exactly like an
+   approach-ice rez window under --no-rez. Without it we'd re-present the same
+   'Server upgrade decision' every iteration (only a raw pass advanced it), a
+   wedge risk for an autonomous Corp seat on `monitor-run --persistent --no-rez`.
+   With no decline commitment, still wake so a meaningful pre-access rez (e.g.
+   Manegarm Skunkworks, which must be rezzed BEFORE access) is never skipped."
+  [{:keys [side state strategy]}]
+  (when (and (= side "corp")
+             (not (:no-rez strategy)))
     (let [decision (decisions/corp-run-decision state)]
       (when (= :server-upgrade (:kind decision))
         (let [card-title (get-in decision [:card :title] "upgrade")

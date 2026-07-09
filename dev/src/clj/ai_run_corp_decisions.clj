@@ -203,7 +203,11 @@
     (let [title (get-in decision [:card :title] "upgrade")]
       [(format "Server upgrade decision: %s before access" title)
        (format "   rez \"%s\"  - rez it now" title)
-       "   continue      - decline for this window"])
+       ;; #57: bare `continue` re-wakes this same window (it re-hits this
+       ;; handler). `continue --no-rez` is the decline that actually passes
+       ;; priority — a standing "rez nothing" commitment, harmless here since
+       ;; every ICE has already been passed by pre-access.
+       "   continue --no-rez  - decline (pass priority for the rest of this run)"])
 
     :unsupported-prompt
     ["Unsupported Corp prompt during run"
