@@ -677,3 +677,102 @@
                   (str "a 'run'-type window must not be mistaken for a trigger decision, got: " result))
               (is (>= @calls 2)
                   "must recheck past the empty run-window wait to reach run-complete"))))))))
+
+;; =============================================================================
+;; Test: --no-rez must DECLINE the pre-access server-upgrade window instead of
+;; re-waking every iteration (#57, cross-model marquee g1, Opus Corp).
+;;
+;; At the pre-access "Server upgrade decision" window (an unrezzed Upgrade in the
+;; attacked server, e.g. Manegarm Skunkworks), handle-corp-server-upgrade-decision
+;; used to return :decision-required UNCONDITIONALLY — it never consulted the run
+;; strategy. So an autonomous Corp seat running `monitor-run --persistent --no-rez`
+;; (a standing "decline everything" commitment) got the identical window
+;; re-presented every iteration; only a raw pass advanced the run — a wedge risk
+;; in an un-babysat game. --no-rez must now fall through (nil) so the normal
+;; empty-run-window auto-pass advances past the upgrade, exactly like an
+;; approach-ice rez window under --no-rez. The default (no strategy) wake is
+;; preserved so a meaningful pre-access rez is never silently skipped.
+;; =============================================================================
+
+(defn- server-upgrade-ctx
+  "Handler context at a pre-access server-upgrade window (an unrezzed upgrade in
+   the attacked remote), carrying the given run strategy."
+  [strategy]
+  {:side "corp"
+   :strategy strategy
+   :state {:game-state
+           {:run {:phase "movement" :position 0 :server [:remote1]}
+            :corp {:prompt-state {:msg "You may use paid abilities"
+                                  :prompt-type "run" :choices [] :selectable []}
+                   :servers {:remote1 {:content [{:cid 10 :title "Manegarm Skunkworks"
+                                                  :type "Upgrade" :rezzed false}]}}}
+            :runner {:prompt-state nil}
+            :log []}}})
+
+(deftest server-upgrade-window-wakes-by-default
+  (testing "with no rez strategy, the pre-access upgrade window still wakes the seat (unchanged)"
+    (with-out-str
+      (let [r (corp-handlers/handle-corp-server-upgrade-decision (server-upgrade-ctx {}))]
+        (is (= :decision-required (:status r))
+            (str "an unrezzed pre-access upgrade must still wake by default, got: " r))
+        (is (= "Manegarm Skunkworks" (:card r))
+            "should name the upgrade the Corp must decide on")))))
+
+(deftest server-upgrade-window-no-rez-declines-instead-of-looping
+  (testing "--no-rez falls through (nil) so the normal auto-pass advances the run, not re-waking forever (#57)"
+    (with-out-str
+      (let [r (corp-handlers/handle-corp-server-upgrade-decision
+               (server-upgrade-ctx {:no-rez true}))]
+        (is (nil? r)
+            (str "--no-rez is a standing decline; the upgrade handler must fall through "
+                 "to the empty-window auto-pass, got: " r))))))
+
+;; Chain-level lock (Codex review of #57): the handler-in-isolation tests above
+;; prove it falls through, but the point of falling through is that the REST of
+;; the continue-run! chain then does the right thing in both priority states.
+;; These drive the full chain via ai/continue-run! "--no-rez" at the pre-access
+;; upgrade window:
+;;   (a) Runner has NOT yet passed (:no-action nil) → Corp must WAIT, not
+;;       auto-pass into access ahead of the Runner's own pre-access window.
+;;   (b) Runner HAS passed (:no-action "runner") → Corp auto-passes the empty
+;;       window, advancing the run — the actual decline that was looping (#57).
+
+(defn- upgrade-window-state
+  "Runner running a remote holding an unrezzed upgrade, parked at the pre-access
+   empty run window. :no-action controls who has already passed priority."
+  [no-action]
+  (mock-client-state
+   :side "corp"
+   :game-state
+   {:run (cond-> {:phase "movement" :position 0 :server [:remote1]}
+           no-action (assoc :no-action no-action))
+    :corp {:prompt-state {:msg "You may use paid abilities"
+                          :prompt-type "run" :choices [] :selectable []}
+           :servers {:remote1 {:content [{:cid 10 :title "Manegarm Skunkworks"
+                                          :type "Upgrade" :rezzed false}]}}}
+    :runner {:prompt-state nil}
+    :log []}))
+
+(deftest no-rez-upgrade-chain-waits-before-runner-passes
+  (testing "--no-rez at the upgrade window waits for the Runner (does not race ahead into access) when Runner hasn't passed (#57)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (upgrade-window-state nil)   ; fresh window, nobody passed
+          (with-out-str
+            (let [r (ai/continue-run! "--no-rez")]
+              (is (not= :decision-required (:status r))
+                  (str "must not re-present the upgrade decision under --no-rez, got: " r))
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "must NOT pass Corp priority before the Runner has passed its own pre-access window"))))))))
+
+(deftest no-rez-upgrade-chain-auto-passes-after-runner-passes
+  (testing "--no-rez at the upgrade window auto-passes once the Runner has passed, advancing the run (#57)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (upgrade-window-state "runner")   ; Runner already passed
+          (with-out-str
+            (let [r (ai/continue-run! "--no-rez")]
+              (is (= :action-taken (:status r))
+                  (str "Corp must auto-pass the empty upgrade window once it holds priority, got: " r))
+              (is (some #(= "continue" (:command %)) @sent)
+                  "the decline is a real priority pass — a continue must reach the engine"))))))))
