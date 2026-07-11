@@ -9,6 +9,7 @@
             [ai-actions :as ai]
             [ai-runs :as runs]
             [ai-core :as core]
+            [ai-state :as state]
             [ai-basic-actions :as basic]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
@@ -776,3 +777,60 @@
                   (str "Corp must auto-pass the empty upgrade window once it holds priority, got: " r))
               (is (some #(= "continue" (:command %)) @sent)
                   "the decline is a real priority pass — a continue must reach the engine"))))))))
+
+;; =============================================================================
+;; Test: monitor-run --persistent wakes on an explicit opponent `ping` chat
+;; nudge (#50 recovery net). `wait` (wait-for-relevant-diff) already wakes on a
+;; ping; the persistent defender loop must too, so a seat parked mid-run at an
+;; empty priority window the opponent believes is ours can be un-stalled by the
+;; opponent pinging. The ping returns control (:ping) — it does NOT auto-advance
+;; the run.
+;; =============================================================================
+
+(defn- continue-then-log
+  "continue-run! stand-in: on its FIRST call appends `chat-line` to the game log
+   (simulating an opponent chat message arriving during the wait) and reports an
+   empty opponent-priority wait; subsequent calls report run-complete so a loop
+   that does NOT wake on the message still terminates."
+  [chat-line call-count]
+  (fn [& _]
+    (let [i @call-count]
+      (swap! call-count inc)
+      (if (zero? i)
+        (do
+          (swap! state/client-state update-in [:game-state :log]
+                 (fnil conj []) {:text chat-line})
+          {:status :waiting-for-opponent :wake-reason :waiting-for-opponent})
+        {:status :run-complete :wake-reason :run-complete}))))
+
+(deftest persistent-monitor-wakes-on-opponent-ping
+  (testing "--persistent returns :ping when an opponent ping arrives during an empty priority-window wait (#50)"
+    (let [calls (atom 0)]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! (continue-then-log "AI_Runner: ping" calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :ping (:status result))
+                  (str "an opponent ping during a persistent wait must wake the loop, got: " result))
+              (is (= 1 @calls)
+                  "must return on the ping without rechecking into another continue-run! call"))))))))
+
+(deftest persistent-monitor-ignores-non-ping-chat
+  (testing "--persistent does NOT wake on ordinary opponent chit-chat — only a bare 'ping' (no #50 false positive)"
+    (let [calls (atom 0)]
+      (with-mock-state (run-active-corp-state)
+        (with-redefs [runs/continue-run! (continue-then-log "AI_Runner: good luck" calls)
+                      basic/check-auto-end-turn! (fn [] nil)
+                      runner-handlers/reset-state! (fn [] nil)
+                      core/quick-delay 0]
+          (with-out-str
+            (let [result (runs/auto-continue-loop! :persistent true
+                                                   :persistent-wait-delay-ms 0)]
+              (is (= :run-complete (:status result))
+                  (str "ordinary chat must be slept through to run end, not woken on, got: " result))
+              (is (>= @calls 2)
+                  "must recheck past the chat message to reach run-complete"))))))))

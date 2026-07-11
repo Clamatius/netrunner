@@ -1290,6 +1290,16 @@
     (when-let [msg-part (second (re-find #":\s*(.+)" text))]
       (= "ping" (clojure.string/lower-case (clojure.string/trim msg-part))))))
 
+(defn ping-since?
+  "True if any log entry at index `start-count` or later is an opponent `ping`
+   wake signal. Shared wake predicate so both surfaces react to an explicit chat
+   nudge: `wait-for-relevant-diff` (turn/boundary waits) and `monitor-run!`'s
+   persistent defender loop (empty run-priority windows). `start-count` is the
+   log length captured when the wait began, so only pings that arrive DURING the
+   wait wake it — a stale ping from before the wait started is ignored."
+  [log start-count]
+  (boolean (some ping-message? (drop start-count log))))
+
 (declare current-run-ice)
 
 (defn- in-active-game?
