@@ -183,7 +183,7 @@
               ;; runner to act'. (Michael forum [154]: surface waiting-on-X.)
               run-state
               (println "Status:" (run-status-headline
-                                  run-state (clojure.string/lower-case (or my-side "runner"))))
+                                  gs (clojure.string/lower-case (or my-side "runner"))))
 
               ;; End-turn was called, and it's my side's turn to start
               (and end-turn (not= my-side active-side))
@@ -1068,22 +1068,36 @@
       [(str "    ⏸️  " opp " (active player) has priority first here and hasn't passed yet.")
        (str "      → Your sub-step comes next: wait for the " opp " to 'continue', then you 'continue' to advance the run.")])))
 
+(defn effective-window-passer
+  "Normalized side (\"runner\"/\"corp\"/nil) that has passed the CURRENT run
+   priority window. During encounter-ice the passer lives on the current
+   encounter ([:encounters :no-action]) — the engine resets the run-level
+   :no-action on movement entry, so [:run :no-action] is stale there (engine
+   runs.clj `continue :encounter-ice`); every other window uses [:run
+   :no-action]. Mirrors the client's runner-passed-encounter? (ai-core). `gs` is
+   the [:game-state] map."
+  [gs]
+  (let [run (:run gs)
+        v   (if (= "encounter-ice" (:phase run))
+              (get-in gs [:encounters :no-action])
+              (:no-action run))]
+    (cond (keyword? v) (name v) (string? v) v :else nil)))
+
 (defn run-status-headline
   "One-line 'whose move is it now' summary for the active run's current priority
-   window, derived from public run state only: the `:no-action` passer plus the
-   rule invariant that the Runner is always the active player during a run
-   (memory run-priority-active-player-first). Pure. `run` is the [:game-state
-   :run] map; `my-side` is \"runner\"/\"corp\". Returns the string for the
-   top-level `Status:` line during a run.
+   window, derived from public run state only: the current-window passer (see
+   effective-window-passer) plus the rule invariant that the Runner is always the
+   active player during a run (memory run-priority-active-player-first). Pure.
+   `gs` is the [:game-state] map; `my-side` is \"runner\"/\"corp\". Returns the
+   string for the top-level `Status:` line during a run.
 
    Why this exists: the turn-level active-side ('it's the Runner's turn')
    misleads inside a run — the Corp still owns its rez / upgrade sub-steps — so a
    Corp seat running `status` at its own rez window used to read 'Waiting for
    runner to act'. Grounded in the SAME na/active logic as run-priority-hint-lines
    so the headline never contradicts the detailed run-window guidance below it."
-  [run my-side]
-  (let [na  (let [v (:no-action run)]
-              (cond (keyword? v) (name v) (string? v) v :else nil))
+  [gs my-side]
+  (let [na  (effective-window-passer gs)
         opp (if (= my-side "runner") "Corp" "Runner")]
     (cond
       ;; I have already passed this window — waiting on the opponent to pass.

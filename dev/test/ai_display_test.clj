@@ -576,7 +576,7 @@
   (testing "Corp, fresh window (nobody passed): active-player Runner acts first,
             so the Corp is waiting — NOT told it's its move"
     (let [line (display/run-status-headline
-                {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+                {:run {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}}
                 "corp")]
       (is (str/includes? line "Waiting on Runner"))
       (is (str/includes? line "active player acts first"))
@@ -585,7 +585,7 @@
 (deftest test-run-status-headline-runner-fresh-is-its-move
   (testing "Runner, fresh window: active player acts first -> it's the Runner's move"
     (let [line (display/run-status-headline
-                {:server ["rd"] :phase "movement" :position 0 :no-action nil}
+                {:run {:server ["rd"] :phase "movement" :position 0 :no-action nil}}
                 "runner")]
       (is (str/includes? line "Your move"))
       (is (str/includes? line "active player")))))
@@ -594,7 +594,7 @@
   (testing "Side that already passed is told it's waiting on the opponent, not that
             it's its move (mirrors run-priority-hint-lines' already-passed branch)"
     (let [line (display/run-status-headline
-                {:server ["hq"] :phase "movement" :position 0 :no-action "runner"}
+                {:run {:server ["hq"] :phase "movement" :position 0 :no-action "runner"}}
                 "runner")]
       (is (str/includes? line "Waiting on Corp"))
       (is (str/includes? line "you've passed"))
@@ -603,10 +603,49 @@
 (deftest test-run-status-headline-opponent-passed-is-my-move
   (testing "When the opponent has already passed, it's my move"
     (let [line (display/run-status-headline
-                {:server ["rd"] :phase "approach-server" :position 0 :no-action :runner}
+                {:run {:server ["rd"] :phase "approach-server" :position 0 :no-action :runner}}
                 "corp")]
       (is (str/includes? line "Your move"))
       (is (str/includes? line "Runner has passed")))))
+
+;; Encounter-ice regression (Codex/GPT-5.5 review of this change): during an
+;; encounter the passer is recorded on the CURRENT ENCOUNTER
+;; ([:encounters :no-action]), NOT [:run :no-action] — the engine resets the
+;; run-level field on movement entry (runs.clj `continue :encounter-ice`). Using
+;; the run-level field would tell the Corp 'Waiting on Runner' after the Runner
+;; has already passed the encounter and it is the Corp's window to fire subs / end
+;; the encounter.
+(deftest test-run-status-headline-encounter-runner-passed-is-corp-move
+  (testing "Encounter-ice, Runner passed the encounter -> it's the Corp's move,
+            read from [:encounters :no-action] not the stale run-level field"
+    (let [gs {:run {:server ["rd"] :phase "encounter-ice" :position 1 :no-action false}
+              :encounters {:no-action "runner"}}]
+      (is (str/includes? (display/run-status-headline gs "corp") "Your move")
+          "Corp: Runner has passed the encounter, Corp acts")
+      (let [runner-line (display/run-status-headline gs "runner")]
+        (is (str/includes? runner-line "Waiting on Corp"))
+        (is (str/includes? runner-line "you've passed"))))))
+
+(deftest test-run-status-headline-encounter-fresh-runner-acts
+  (testing "Encounter-ice, nobody passed yet: Runner (active) resolves the
+            encounter first; the Corp waits"
+    (let [gs {:run {:server ["rd"] :phase "encounter-ice" :position 1 :no-action false}
+              :encounters {:no-action nil}}]
+      (is (str/includes? (display/run-status-headline gs "runner") "Your move"))
+      (is (str/includes? (display/run-status-headline gs "corp") "Waiting on Runner")))))
+
+(deftest test-effective-window-passer-prefers-encounter-in-encounter-phase
+  (testing "effective-window-passer reads the encounter field during encounter-ice
+            and the run field otherwise"
+    ;; encounter-ice: encounter field wins over the stale run field
+    (is (= "runner" (display/effective-window-passer
+                     {:run {:phase "encounter-ice" :no-action false}
+                      :encounters {:no-action "runner"}})))
+    ;; non-encounter: run field is used (encounters ignored / absent)
+    (is (= "corp" (display/effective-window-passer
+                   {:run {:phase "movement" :no-action :corp}})))
+    (is (nil? (display/effective-window-passer
+               {:run {:phase "approach-ice" :no-action false}})))))
 
 ;; ============================================================================
 ;; print-run-window-priority! — shared 'whose move + what continue does' block,
