@@ -1219,6 +1219,8 @@
    - :run-complete - run finished successfully
    - :no-run - no active run
    - :waiting-for-corp-rez - runner waiting for corp (corp should call their loop)
+   - :ping - opponent sent a `ping` chat nudge during a persistent wait (#50
+     recovery net; returns control so the seat can act — does NOT auto-advance)
    - stuck in same state (5 consecutive :action-taken with same [phase position ice])
    - max iterations or timeout reached
 
@@ -1406,6 +1408,28 @@
                   (assoc result
                          :status :decision-required
                          :wake-reason :agenda-trigger-decision
+                         :iterations (inc iteration)
+                         :elapsed-ms (- (System/currentTimeMillis) start-time)))
+
+                ;; #50 recovery net: an explicit opponent `ping` chat nudge wakes
+                ;; the persistent defender loop, exactly as it wakes `wait`
+                ;; (wait-for-relevant-diff). This is the mid-run analog — a seat
+                ;; parked in monitor-run --persistent at an empty priority window
+                ;; that the OTHER seat believes is ours (an unowned both-pass
+                ;; window) can be un-stalled by the opponent pinging. Return
+                ;; control (`:ping`) so the seat re-evaluates and can act; this
+                ;; does NOT auto-advance the run (no priority passed), so it is a
+                ;; control/UX wake, not a run-advance change. Checked before the
+                ;; idle-sleep so a ping that lands during the wait is not slept
+                ;; through to the timeout.
+                (and persistent
+                     (core/ping-since? (get-in cur-state [:game-state :log]) start-log-count))
+                (do
+                  (print-while-you-slept! start-log-count)
+                  (println "🏓 Woke up: opponent ping — returning control so you can act.")
+                  (assoc result
+                         :status :ping
+                         :wake-reason :ping
                          :iterations (inc iteration)
                          :elapsed-ms (- (System/currentTimeMillis) start-time)))
 
