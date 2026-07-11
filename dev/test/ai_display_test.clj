@@ -564,6 +564,109 @@
       (is (str/includes? out "Your sub-step comes next")))))
 
 ;; ============================================================================
+;; run-status-headline — the top-level `Status:` line during a run. The
+;; turn-level active-side ('it's the Runner's turn') misleads inside a run: the
+;; Corp still owns its rez / upgrade sub-steps, so a Corp seat running `status`
+;; at its own rez window used to read 'Waiting for runner to act' (Michael forum
+;; [154]: surface waiting-on-X). Grounded purely in :no-action + the
+;; Runner-is-active invariant, so it never contradicts run-priority-hint-lines.
+;; ============================================================================
+
+(deftest test-run-status-headline-corp-fresh-waits-on-runner
+  (testing "Corp, fresh window (nobody passed): active-player Runner acts first,
+            so the Corp is waiting — NOT told it's its move"
+    (let [line (display/run-status-headline
+                {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+                "corp")]
+      (is (str/includes? line "Waiting on Runner"))
+      (is (str/includes? line "active player acts first"))
+      (is (not (str/includes? line "Your move"))))))
+
+(deftest test-run-status-headline-runner-fresh-is-its-move
+  (testing "Runner, fresh window: active player acts first -> it's the Runner's move"
+    (let [line (display/run-status-headline
+                {:server ["rd"] :phase "movement" :position 0 :no-action nil}
+                "runner")]
+      (is (str/includes? line "Your move"))
+      (is (str/includes? line "active player")))))
+
+(deftest test-run-status-headline-i-passed-waits-on-opponent
+  (testing "Side that already passed is told it's waiting on the opponent, not that
+            it's its move (mirrors run-priority-hint-lines' already-passed branch)"
+    (let [line (display/run-status-headline
+                {:server ["hq"] :phase "movement" :position 0 :no-action "runner"}
+                "runner")]
+      (is (str/includes? line "Waiting on Corp"))
+      (is (str/includes? line "you've passed"))
+      (is (not (str/includes? line "Your move"))))))
+
+(deftest test-run-status-headline-opponent-passed-is-my-move
+  (testing "When the opponent has already passed, it's my move"
+    (let [line (display/run-status-headline
+                {:server ["rd"] :phase "approach-server" :position 0 :no-action :runner}
+                "corp")]
+      (is (str/includes? line "Your move"))
+      (is (str/includes? line "Runner has passed")))))
+
+;; ============================================================================
+;; print-run-window-priority! — shared 'whose move + what continue does' block,
+;; now used by BOTH `prompt` and `status` (status previously showed only the
+;; ladder). Both-must-pass windows route through run-priority-hint-lines; other
+;; windows get the terse decline/continue guidance (spelled out for the Corp).
+;; ============================================================================
+
+(deftest test-run-window-priority-corp-approach-ice-is-rez-window
+  (testing "Corp at approach-ice: continue DECLINES (a rez), and the rez options
+            are spelled out — not routed through the movement hint lines"
+    (let [out (with-out-str
+                (display/print-run-window-priority!
+                 {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+                 "approach-ice" "corp"))]
+      (is (str/includes? out "DECLINE"))
+      (is (str/includes? out "ICE rez window"))
+      (is (str/includes? out "--no-rez")))))
+
+(deftest test-run-window-priority-movement-routes-through-hint-lines
+  (testing "Both-must-pass movement window routes through run-priority-hint-lines
+            (Runner told continuing yields its access)"
+    (let [out (with-out-str
+                (display/print-run-window-priority!
+                 {:server ["hq"] :phase "movement" :position 0 :no-action false}
+                 "movement" "runner"))]
+      (is (str/includes? out "active player goes first"))
+      (is (str/includes? out "breach HQ and access cards")))))
+
+(deftest test-run-window-priority-runner-approach-ice-passes-priority
+  (testing "Runner at approach-ice (not a both-pass window for the Runner) gets the
+            terse pass-priority line, no Corp rez phrasing"
+    (let [out (with-out-str
+                (display/print-run-window-priority!
+                 {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+                 "approach-ice" "runner"))]
+      (is (str/includes? out "pass priority"))
+      (is (not (str/includes? out "ICE rez window"))))))
+
+;; Integration: show-status must surface the run-window read in its headline,
+;; overriding the misleading turn-level line for the Corp mid-run.
+(deftest test-show-status-run-headline-overrides-turn-level
+  (testing "Corp seat during a run: headline reflects run-window priority, not the
+            turn-level 'Waiting for runner to act'"
+    (with-mock-state (mock-client-state
+                      :side "Corp"
+                      :game-state {:active-player "runner" :turn 5
+                                   :run {:server ["rd"] :phase "approach-ice"
+                                         :position 1 :no-action false}
+                                   :runner {:user {:username "ai-runner"}
+                                            :click 2 :credit 5 :hand [] :agenda-point 0 :rig {}}
+                                   :corp {:user {:username "ai-corp"}
+                                          :click 0 :credit 9 :hand [] :agenda-point 0 :servers {}}})
+      (let [out (with-out-str (display/show-status))]
+        (is (not (str/includes? out "Status: ⏳ Waiting for runner to act"))
+            (str "run must override turn-level status headline, got:\n" out))
+        (is (str/includes? out "Waiting on Runner")
+            (str "expected run-window priority headline, got:\n" out))))))
+
+;; ============================================================================
 ;; show-prompt-detailed with no prompt — turn-aware "what now?"
 ;; "No active prompt" alone misled at a turn boundary (reader concludes the game
 ;; isn't waiting on them when it's their turn to start). The no-prompt path now
