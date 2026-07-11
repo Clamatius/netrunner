@@ -18,6 +18,10 @@
 ;; their definitions.
 (declare run-server-display)
 (declare print-run-phase-ladder!)
+;; Run-window priority helpers (defined near run-priority-hint-lines) — used by
+;; the status displays above their definitions.
+(declare run-status-headline)
+(declare print-run-window-priority!)
 
 ;; ============================================================================
 ;; Status & Information
@@ -172,6 +176,15 @@
 
             ;; Active player / waiting status
             (cond
+              ;; During an active run, run-window priority is authoritative. The
+              ;; turn-level active-side ('it's the Runner's turn') misleads inside
+              ;; a run — the Corp still owns its rez / upgrade sub-steps — so a
+              ;; Corp seat at its own rez window would otherwise read 'Waiting for
+              ;; runner to act'. (Michael forum [154]: surface waiting-on-X.)
+              run-state
+              (println "Status:" (run-status-headline
+                                  gs (clojure.string/lower-case (or my-side "runner"))))
+
               ;; End-turn was called, and it's my side's turn to start
               (and end-turn (not= my-side active-side))
               (do
@@ -222,7 +235,12 @@
                           unbroken (count (filter #(not (:broken %)) subs))]
                       (println (format "  🧊 ICE: %s (str %s)" ice-title ice-str))
                       (println (format "     Type: %s" ice-subtypes))
-                      (println (format "     Subs: %d unbroken of %d" unbroken (count subs))))))))
+                      (println (format "     Subs: %d unbroken of %d" unbroken (count subs)))))))
+              ;; Whose move is it now + what 'continue' does (same guidance the
+              ;; `prompt` command shows) — status used to print only the ladder,
+              ;; leaving the seat to guess whose window it was.
+              (print-run-window-priority! run-state (:phase run-state)
+                                          (clojure.string/lower-case (or my-side "runner"))))
 
             (println "\n--- RUNNER ---")
             (let [hosted (state/runner-hosted-credits)]
@@ -1050,6 +1068,83 @@
       [(str "    ⏸️  " opp " (active player) has priority first here and hasn't passed yet.")
        (str "      → Your sub-step comes next: wait for the " opp " to 'continue', then you 'continue' to advance the run.")])))
 
+(defn effective-window-passer
+  "Normalized side (\"runner\"/\"corp\"/nil) that has passed the CURRENT run
+   priority window. During encounter-ice the passer lives on the current
+   encounter ([:encounters :no-action]) — the engine resets the run-level
+   :no-action on movement entry, so [:run :no-action] is stale there (engine
+   runs.clj `continue :encounter-ice`); every other window uses [:run
+   :no-action]. Mirrors the client's runner-passed-encounter? (ai-core). `gs` is
+   the [:game-state] map."
+  [gs]
+  (let [run (:run gs)
+        v   (if (= "encounter-ice" (:phase run))
+              (get-in gs [:encounters :no-action])
+              (:no-action run))]
+    (cond (keyword? v) (name v) (string? v) v :else nil)))
+
+(defn run-status-headline
+  "One-line 'whose move is it now' summary for the active run's current priority
+   window, derived from public run state only: the current-window passer (see
+   effective-window-passer) plus the rule invariant that the Runner is always the
+   active player during a run (memory run-priority-active-player-first). Pure.
+   `gs` is the [:game-state] map; `my-side` is \"runner\"/\"corp\". Returns the
+   string for the top-level `Status:` line during a run.
+
+   Why this exists: the turn-level active-side ('it's the Runner's turn')
+   misleads inside a run — the Corp still owns its rez / upgrade sub-steps — so a
+   Corp seat running `status` at its own rez window used to read 'Waiting for
+   runner to act'. Grounded in the SAME na/active logic as run-priority-hint-lines
+   so the headline never contradicts the detailed run-window guidance below it."
+  [gs my-side]
+  (let [na  (effective-window-passer gs)
+        opp (if (= my-side "runner") "Corp" "Runner")]
+    (cond
+      ;; I have already passed this window — waiting on the opponent to pass.
+      (= na my-side)
+      (str "⏳ Waiting on " opp " — you've passed this run window ('wait').")
+
+      ;; Opponent already passed — my move advances / decides the window.
+      (and na (not= na my-side))
+      (str "✅ Your move — " opp " has passed; act on the run window below.")
+
+      ;; Fresh window, I'm the Runner (active player acts first).
+      (= my-side "runner")
+      "✅ Your move (active player) — act on the run window below."
+
+      ;; Fresh window, I'm the Corp: my sub-step is second, Runner acts first.
+      :else
+      "⏳ Waiting on Runner — active player acts first; your sub-step is next.")))
+
+(defn print-run-window-priority!
+  "Print the 'whose move is it now + what continue does' guidance for the current
+   run window. Shared by the `prompt` and `status` commands so both surface the
+   same run-priority read (status previously printed only the timing ladder,
+   leaving the seat to guess whose window it was). Assumes the caller already
+   printed the phase ladder. `run` is [:game-state :run]; `run-phase` is
+   (:phase run); `my-side` is \"runner\"/\"corp\". Returns nil.
+
+   The both-must-pass windows (initiation for the Runner, movement/approach-server
+   for both) route through run-priority-hint-lines, which disambiguates the two
+   sub-steps and warns about the #31 stall. Other windows get the terse
+   decline/continue guidance — spelled out for the Corp (continue here DECLINES an
+   action, e.g. an ICE rez, rather than being forced)."
+  [run run-phase my-side]
+  (if (contains? (if (= my-side "runner")
+                   #{"initiation" "movement" "approach-server"}
+                   #{"movement" "approach-server"})
+                 run-phase)
+    (doseq [line (run-priority-hint-lines run my-side)]
+      (println line))
+    (if (= my-side "corp")
+      (do
+        (println "    → 'continue' passes priority here (you DECLINE to act this window).")
+        (println "    → Other options: rez a card / fire a paid ability if useful.")
+        (when (= run-phase "approach-ice")
+          (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
+      (println "    → Use 'continue' to pass priority (advance the run).")))
+  nil)
+
 (def ^:private run-ladder-rungs
   "Conceptual run-timing ladder (jinteki run structure), in order. Steps #2–#4
    repeat per piece of ICE; the live :phase + :position pick the current rung."
@@ -1210,34 +1305,9 @@
                 ;; During encounter-ice, show ICE and breaker info
                 (when (= run-phase "encounter-ice")
                   (show-encounter-ice-info state run my-side))
-                ;; Movement / approach-server are both-must-pass priority windows;
-                ;; spell out whose move it is and what continuing does, so neither
-                ;; seat assumes the run advances on its own (the symmetric
-                ;; 'pass priority' text deadlocked cross-model play).
-                ;; `initiation` is a both-must-pass window too (issue #31): the
-                ;; Runner routes through the already-passed-aware hint so a passed
-                ;; Runner is told to wait / jack-out rather than re-`continue` (a
-                ;; no-op loop). The Corp keeps its rich rez/decline guidance below.
-                (if (contains? (if (= my-side "runner")
-                                 #{"initiation" "movement" "approach-server"}
-                                 #{"movement" "approach-server"})
-                               run-phase)
-                  (doseq [line (run-priority-hint-lines run my-side)]
-                    (println line))
-                  ;; Other run windows (initiation / approach-ice / encounter).
-                  ;; "Use continue to pass priority" alone reads to the Corp as
-                  ;; "that's the only thing" — but continuing here is a CHOICE to
-                  ;; decline action. Spell out the rez / paid-ability options so a
-                  ;; passing Corp knows it passed up something, not that it was
-                  ;; forced. (re forum [093] — Corp told it can continue, not that
-                  ;; it has other options when nothing looks interesting.)
-                  (if (= my-side "corp")
-                    (do
-                      (println "    → 'continue' passes priority here (you DECLINE to act this window).")
-                      (println "    → Other options: rez a card / fire a paid ability if useful.")
-                      (when (= run-phase "approach-ice")
-                        (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
-                    (println "    → Use 'continue' to pass priority (advance the run)."))))
+                ;; Whose move is it now + what 'continue' does — shared with the
+                ;; `status` command so both surface the same run-priority read.
+                (print-run-window-priority! run run-phase my-side))
               ;; Not in a run. `continue` is RUN-ONLY (errors "No active run to
               ;; monitor") — never advertise it here. A "waiting" prompt means the
               ;; opponent is deciding (e.g. Wildcat Strike); the player takes no
