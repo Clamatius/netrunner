@@ -884,6 +884,33 @@
     (println "   → Auto-continuing through paid ability window")
     (send-continue! gameid)))
 
+(defn handle-initiation-auto-pass
+  "Priority 6 (before handle-auto-continue): auto-pass the run INITIATION window
+   when I am the active player (#31, step 1).
+
+   Initiation is a both-must-pass window with no run-start paid ability either
+   side uses in System Gateway. `run!` sends the Runner's first continue by
+   default, so the Runner passes (:no-action \"runner\"); the Corp then becomes
+   the active player at an EMPTY initiation window with NO prompt. Because
+   `can-auto-continue?` requires a \"run\" prompt, it never fires here — no
+   handler matches and continue-run! falls through to handle-unexpected-state,
+   returning a FALSE :waiting-for-opponent. Both seats then wait on each other:
+   the #31 initiation wedge.
+
+   Deterministic fix off `should-i-act?` (per michael-nr, forum ai-netrunner):
+   the active player passes its OWN initiation window. Symmetric — same logic
+   fires for the Runner at a fresh window and the Corp at the second pass. Never
+   sends a continue on the opponent's behalf and never advances a window I don't
+   hold priority in, so it cannot skip a real opponent decision. Scoped to
+   \"initiation\" only; the other both-pass windows (approach-ice / movement) keep
+   their board-aware guards and are a separate follow-on."
+  [{:keys [run-phase gameid side state my-prompt]}]
+  (when (and (= run-phase "initiation")
+             (should-i-act? state side)
+             (not (has-real-decision? my-prompt)))
+    (println "   → Auto-passing initiation window (no run-start decision)")
+    (send-continue! gameid)))
+
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
   [{:keys [my-prompt]}]
@@ -1136,6 +1163,7 @@
                   handle-access-display
                   handle-auto-choice
                   handle-recently-passed-in-log
+                  handle-initiation-auto-pass
                   handle-auto-continue
                   handle-run-complete
                   handle-no-run]]
