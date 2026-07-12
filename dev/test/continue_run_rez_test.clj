@@ -820,7 +820,7 @@
                   "must return on the ping without rechecking into another continue-run! call"))))))))
 
 (deftest persistent-monitor-ignores-non-ping-chat
-  (testing "--persistent does NOT wake on ordinary opponent chit-chat — only a bare 'ping' (no #50 false positive)"
+  (testing "--persistent does NOT wake on ordinary opponent chit-chat with no 'ping' token (no #50 false positive)"
     (let [calls (atom 0)]
       (with-mock-state (run-active-corp-state)
         (with-redefs [runs/continue-run! (continue-then-log "AI_Runner: good luck" calls)
