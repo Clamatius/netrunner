@@ -1281,14 +1281,21 @@
 
 (defn- ping-message?
   "Check if a log entry is a 'ping' wake signal.
-   Returns true for exact match 'ping' (case-insensitive, trimmed).
-   Used by AIs to wake each other without game state changes."
+   Returns true if the chat message body CONTAINS 'ping' (case-insensitive).
+   Loosened from exact-match per michael-nr (forum ai-netrunner [162]): a human
+   won't reliably send a bare 'ping' (he typed English and slept the seat in the
+   HITL game-5 wedge), so any chat mentioning 'ping' — 'ping', 'ping your turn',
+   'PING!' — now wakes. Still narrow enough that ordinary AI-vs-AI banter with no
+   'ping' token is ignored, and a false wake is cheap (loop re-checks, finds no
+   decision, sleeps again) while a MISSED wake is a silent wedge — so we bias
+   toward waking. Used by AIs to wake each other without game state changes."
   [entry]
   (let [text (or (:text entry) "")]
-    ;; Match chat messages that are just "ping" (with optional username prefix)
-    ;; Chat format is "Username: message" for player messages
+    ;; Match chat messages (format "Username: message") whose body mentions "ping".
+    ;; Capture only the body after the first colon so a 'ping' in the USERNAME
+    ;; (e.g. "Pingu: hello") does not spuriously wake.
     (when-let [msg-part (second (re-find #":\s*(.+)" text))]
-      (= "ping" (clojure.string/lower-case (clojure.string/trim msg-part))))))
+      (clojure.string/includes? (clojure.string/lower-case msg-part) "ping"))))
 
 (defn ping-since?
   "True if any log entry at index `start-count` or later is an opponent `ping`
@@ -1296,7 +1303,8 @@
    nudge: `wait-for-relevant-diff` (turn/boundary waits) and `monitor-run!`'s
    persistent defender loop (empty run-priority windows). `start-count` is the
    log length captured when the wait began, so only pings that arrive DURING the
-   wait wake it — a stale ping from before the wait started is ignored."
+   wait wake it — a stale ping from before the wait started is ignored. A `ping`
+   is any opponent chat mentioning the word (see `ping-message?`)."
   [log start-count]
   (boolean (some ping-message? (drop start-count log))))
 

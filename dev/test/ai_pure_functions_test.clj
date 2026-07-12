@@ -343,10 +343,18 @@
     (is (not (ping-message? {:text "Player: nice play!"})))))
 
 (deftest test-ping-message-contains-ping
-  (testing "messages containing 'ping' but not exact match don't trigger"
-    (is (not (ping-message? {:text "Player: ping pong"})))
-    (is (not (ping-message? {:text "Player: I'll ping you later"})))
-    (is (not (ping-message? {:text "Player: pinging..."})))))
+  (testing "messages CONTAINING 'ping' now wake (loosened per michael-nr [162])"
+    ;; A goldfish human types English around the word rather than a bare "ping".
+    (is (ping-message? {:text "Player: ping pong"}))
+    (is (ping-message? {:text "Player: I'll ping you later"}))
+    (is (ping-message? {:text "Player: pinging..."}))
+    (is (ping-message? {:text "Player: ping your turn"}))
+    (is (ping-message? {:text "Player: PING!"}))))
+
+(deftest test-ping-message-username-not-body
+  (testing "'ping' in the username alone does not wake — only the body counts"
+    (is (not (ping-message? {:text "Pingu: your turn"})))
+    (is (not (ping-message? {:text "PingBot: hello"})))))
 
 (deftest test-ping-message-nil-entry
   (testing "nil or missing text handled gracefully"
