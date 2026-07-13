@@ -66,6 +66,29 @@ assert_contains "symmetry-opponent-is-corp" "$OUT" "opponent (corp)"
 OUT=$(PEER_STALE_SECS=3600 "$SEND_CMD" corp peer-status 2>&1)
 assert_not_contains "threshold-respected" "$OUT" "SILENT"
 
+# 6. clear-heartbeats zeroes the liveness clock (fresh-game path). Without this, a
+#    heartbeat left over from a prior game (or a setup touch) reads as "alive" and
+#    masks a guest driver that never actually connected — a FALSE-alive at exactly
+#    the moment the sensor matters. reset.sh calls this so a new game starts honest.
+"$SEND_CMD" corp peer-status >/dev/null 2>&1   # ensure both sides have heartbeats
+"$SEND_CMD" runner peer-status >/dev/null 2>&1
+[[ -f "$HEARTBEAT_DIR/corp" && -f "$HEARTBEAT_DIR/runner" ]] \
+    && echo "ok   [pre-clear-heartbeats-exist]" \
+    || { echo "FAIL [pre-clear-heartbeats-exist]: heartbeat files missing before clear"; fails=$((fails+1)); }
+CLR=$("$SEND_CMD" clear-heartbeats 2>&1)
+assert_contains "clear-reports-done" "$CLR" "cleared"
+[[ ! -f "$HEARTBEAT_DIR/corp" && ! -f "$HEARTBEAT_DIR/runner" ]] \
+    && echo "ok   [post-clear-heartbeats-gone]" \
+    || { echo "FAIL [post-clear-heartbeats-gone]: heartbeat files still present after clear"; fails=$((fails+1)); }
+# After a clear, the opponent honestly reads as "not seen acting" (not a ghost alive).
+OUT=$("$SEND_CMD" corp peer-status 2>&1)
+assert_contains "post-clear-honest" "$OUT" "opponent (runner): no heartbeat yet"
+assert_not_contains "post-clear-not-ghost-alive" "$OUT" "opponent (runner): active"
+
+# 7. Wiring: the fresh-game path (reset.sh) actually clears heartbeats, else the
+#    primitive above is dead code and the false-alive survives in real games.
+assert_contains "reset-wires-clear" "$(cat "$SCRIPT_DIR/../reset.sh")" "clear-heartbeats"
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0
