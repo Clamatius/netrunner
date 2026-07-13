@@ -41,6 +41,7 @@ test-shell:
 	@echo "Running shell tests..."
 	@./dev/test/send_command_filter_test.sh
 	@./dev/test/ai_eval_charset_test.sh
+	@./dev/test/peer_status_test.sh
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:

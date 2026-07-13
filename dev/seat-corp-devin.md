@@ -9,6 +9,17 @@ the shell command `./dev/send_command corp <...>`. The local game server is
 already running and the game is set up at the mulligan phase. You take the Corp
 seat. **The Corp mulligans and starts FIRST.**
 
+**Mulligan heuristic — ICE first, economy second.** The single most important
+property of an opening hand is ICE. A hand with **zero ICE should almost always
+be mulliganed**, even if rich in economy — you cannot protect your servers, and
+you must top-deck several ICE *before* agendas arrive or you just lose (a naked
+server = free agenda access). Do NOT keep a 0-ICE hand on "money is threat" /
+"low agenda-flood" reasoning; a great economy you can't defend behind still
+loses. Rough guide: **0 ICE → mulligan**; **1 ICE → lean mulligan** unless the
+rest is strong with draw to find more; **2+ ICE + some economy → keep.** Agendas
+in the opener are fine (hold in HQ, install behind ICE later) — it's the absence
+of ICE, not the presence of an agenda, that makes a hand a throw.
+
 ## CRITICAL operating rules — read these first
 
 1. **Play the ENTIRE game to GAME-OVER. Do NOT stop after one turn.** This is a
@@ -89,6 +100,13 @@ it. The rule:
 - **TIMEOUT during an active run is normal pacing, not a stall** — just re-issue
   `monitor-run --persistent`. Only repeated timeouts with *zero* board movement
   across several re-issues is a possible genuine wedge (note it for your report).
+- **Slow-but-alive vs. dead opponent — check, don't guess.** A `wait` /
+  `monitor-run` return ends with a peer-liveness line; you can also run
+  `./dev/send_command corp peer-status` anytime. `opponent (runner): active Ns
+  ago` → still thinking, keep re-issuing (patience is correct). `opponent
+  (runner): SILENT … likely disconnected` → their process died; confirm
+  `game-over-status` and, if still IN-PROGRESS, report the dead peer and stop —
+  do not loop forever.
 - When a run ends, go back to the `wait` loop. **Several runs can happen in one
   Runner turn — after each run ends, return to `wait`, and re-arm `monitor-run
   --persistent` the moment the next run starts.** Never leave a gap between runs.
