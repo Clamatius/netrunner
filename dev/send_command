@@ -624,6 +624,17 @@ fi
 # "this side's process is really alive", not merely "was alive once".
 # Best-effort throughout: a heartbeat failure must never abort the real command
 # under `set -euo pipefail`.
+#
+# CRITICAL detail — the `>/dev/null 2>&1` on the subshell is load-bearing, not
+# tidiness. A background child INHERITS this script's stdout. Nearly every caller
+# reads send_command through command substitution (`OUT="$(send_command …)"`),
+# which blocks until EOF on that pipe — and EOF only arrives when the LAST writer
+# closes it. A toucher holding stdout open therefore made every single command
+# block for HEARTBEAT_TOUCH_SECS (measured: 60s for `peer-status`), which is far
+# worse than the stall this file exists to fix. Redirecting the subshell's stdio
+# detaches it from the pipe so the parent's exit is the EOF. (Caught in review;
+# the unit tests still "passed" — merely slowly — so only a timing assertion
+# guards it. See peer_status_test.sh.)
 if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
     _hb_parent=$$
     (
@@ -631,7 +642,7 @@ if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
             sleep "${HEARTBEAT_TOUCH_SECS:-60}"
             touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
         done
-    ) &
+    ) >/dev/null 2>&1 &
     _hb_toucher=$!
     trap 'kill "$_hb_toucher" 2>/dev/null || true' EXIT
 fi

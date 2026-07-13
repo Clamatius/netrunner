@@ -127,6 +127,27 @@ fi
 #    `kill -0`, not an EXIT trap, so it must not survive a kill -9 of the parent.
 assert_contains "toucher-bound-to-parent-liveness" "$SEND_SRC" 'kill -0 "$_hb_parent"'
 
+# 3. The toucher must NOT hold the caller's stdout pipe open.
+#    Nearly every caller reads send_command via command substitution, which blocks
+#    until EOF — and EOF needs the LAST writer to close. The first cut of the
+#    toucher inherited stdout, so `OUT="$(send_command corp peer-status)"` blocked
+#    for the full HEARTBEAT_TOUCH_SECS (measured: 60s) on EVERY command. The unit
+#    assertions above still passed — just slowly — so nothing but a TIMING check
+#    catches this. Uses the default touch interval on purpose: overriding it to
+#    something small is exactly what masked the bug.
+cs_start=$(date +%s)
+CS_OUT="$("$SEND_CMD" corp peer-status 2>&1)"
+cs_elapsed=$(( $(date +%s) - cs_start ))
+if [[ $cs_elapsed -lt 10 ]]; then
+    echo "ok   [cmd-substitution-not-blocked-by-toucher] (${cs_elapsed}s)"
+else
+    echo "FAIL [cmd-substitution-not-blocked-by-toucher]: took ${cs_elapsed}s"
+    echo "     The heartbeat toucher is holding stdout open — every send_command read"
+    echo "     via \$(...) blocks until it exits. Redirect the subshell's stdio."
+    fails=$((fails+1))
+fi
+assert_contains "cmd-substitution-still-works" "$CS_OUT" "you (corp): active"
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0

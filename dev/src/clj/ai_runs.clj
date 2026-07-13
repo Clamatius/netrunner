@@ -963,34 +963,76 @@
     (println "   → Auto-passing initiation window (no run-start decision)")
     (send-continue! gameid)))
 
+(def self-advance-grace-ms
+  "How long the opponent gets to answer a window before we treat it as ABANDONED
+   and advance it ourselves. See handle-stalled-window-self-advance."
+  5000)
+
+(defonce ^:private window-first-seen
+  ;; {[phase position no-action] first-seen-ms} — when did we first observe this
+  ;; exact stalled window? Reset per run by reset-window-grace!.
+  (atom {}))
+
+(defn reset-window-grace!
+  "Forget stalled-window timings (new run / new game)."
+  []
+  (reset! window-first-seen {}))
+
+(defn- window-stalled-for-ms
+  "Milliseconds since we FIRST saw this exact window in this exact state.
+   Records first sight on the way past, so the first call always returns 0."
+  [state]
+  (let [run (get-in state [:game-state :run])
+        k [(:phase run) (:position run) (normalize-side (:no-action run))]
+        now (System/currentTimeMillis)
+        first-seen (get (swap! window-first-seen update k #(or % now)) k now)]
+    (- now first-seen)))
+
 (defn handle-stalled-window-self-advance
-  "Issue #31 §1: advance a both-must-pass window the opponent PROVABLY cannot act
-   in — the residual stall left after #62 fixed initiation.
+  "Issue #31 §1: advance a both-must-pass window the opponent has ABANDONED —
+   the residual stall left after #62 fixed initiation.
 
-   Engine shape (verified in src/clj/game/core/runs.clj): the first `continue`
-   from EITHER side records `:run :no-action`; the SECOND `continue` advances the
-   phase, and the advance branch has NO side-check. So once I have passed, I can
-   advance the window myself. `continue-run!` normally refuses (`should-i-act?`
-   correctly says \"you already passed\") and returns :waiting-for-opponent — which
-   is right when the opponent owes a decision, and a DEADLOCK when they don't and
-   nobody is home on their seat.
+   TWO conditions, both required — this is a stall-BREAKER, not a window-skipper:
 
-   Guarded by `opponent-has-run-decision?`, which is conservative by construction:
-   we only advance when the board PROVES there is nothing to skip (approached ICE
-   already rezzed; no unrezzed upgrade in the attacked server root). An unrezzed
-   ICE is a live Corp rez choice and we keep waiting for it — the Corp's presence
-   at that window is Fix A's job (`monitor-run --persistent` park mode), not
-   something to paper over by skipping their decision.
+   1. The board proves the opponent has no REZ decision here
+      (`opponent-has-run-decision?`).
+   2. They have had `self-advance-grace-ms` to act and have not.
 
-   Runner-side only; never sends a continue on the opponent's behalf."
+   Condition 2 exists because condition 1 is not a complete proof. It shows the
+   opponent has no *rez* choice (the approached ICE is already rezzed; no unrezzed
+   card in the attacked root) — but the engine also permits paid abilities at these
+   windows, and the Runner client cannot see the Corp's prompt (fog of war), so
+   \"no rez choice\" cannot be strengthened into \"no choice at all\" from our seat.
+   Advancing on condition 1 alone would therefore risk skipping a real Corp paid
+   ability — the blunt `corp-auto-no-action` bug we rejected. (Our current Corp AI
+   only ever rezzes/fires, so it would not bite today; that is a property of our
+   bot, not of the rules, and it is not something to build on.)
+
+   Waiting out the grace removes that risk: a Corp that is present answers the
+   window in milliseconds — its monitor is a loop, not a model call — so anything
+   still unanswered after several seconds is a seat that is not at its post, and
+   the paid ability we might \"skip\" is one nobody was ever going to take. With
+   park mode (Fix A) keeping the Corp home, this should now essentially never fire;
+   it is the belt to park mode's braces.
+
+   Engine shape (verified in src/clj/game/core/runs.clj): the first `continue` from
+   EITHER side records `:run :no-action`; the SECOND advances the phase, and the
+   advance branch has NO side-check. So once I have passed, I can advance the
+   window myself. Runner-side only; never sends a continue on the opponent's
+   behalf."
   [{:keys [run-phase gameid side state my-prompt]}]
   (when (and (= side "runner")
              (contains? #{"approach-ice" "movement"} run-phase)
              (i-already-passed? state side)
              (not (opponent-has-run-decision? state side run-phase))
              (not (has-real-decision? my-prompt)))
-    (println "   → Opponent holds no decision at this window — self-advancing (#31)")
-    (send-continue! gameid)))
+    ;; Board says there's no rez decision here. Give the opponent the grace period
+    ;; anyway (see docstring) — only an ABANDONED window gets advanced.
+    (let [stalled-ms (window-stalled-for-ms state)]
+      (when (>= stalled-ms self-advance-grace-ms)
+        (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
+                         (/ stalled-ms 1000.0)))
+        (send-continue! gameid)))))
 
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
@@ -1624,13 +1666,21 @@
    :game-over — stop (parking through a finished game hangs the seat forever)
    :run       — a run is active: go own it
    :my-turn   — the opponent's turn ended: hand control back to the seat
-   :park      — opponent's turn, no run yet: STAY AT THE POST"
+   :park      — opponent's turn, no run yet: STAY AT THE POST
+   :no-run    — nothing to defend and nothing coming: don't park
+
+   Only the CORP parks. Runs happen exclusively on the Runner's turn, so a Runner
+   waiting for its opponent to start a run is waiting for something that cannot
+   happen: it would sit until timeout while the heartbeat keep-alive reported it
+   healthy — a wedged seat that looks fine. That is worse than the :no-run it used
+   to get, so the Runner keeps the old behaviour."
   [state side]
   (let [gs (:game-state state)]
     (cond
       (state/game-over? gs) :game-over
       (some? (:run gs)) :run
       (= (normalize-side (:active-player gs)) side) :my-turn
+      (not= side "corp") :no-run
       :else :park)))
 
 (defn- park-continuable?
@@ -1657,6 +1707,12 @@
   (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
                        :persistent (boolean (:persistent flags))))
 
+(defn park-sleep!
+  "One idle tick of the park loop. A seam: `Thread/sleep` is a Java static and
+   cannot be redefined, so tests drive the loop by redefining this."
+  []
+  (Thread/sleep 1000))
+
 (defn- park-and-monitor!
   "Persistent defender that owns the OPPONENT'S WHOLE TURN, not just one run.
 
@@ -1672,36 +1728,51 @@
    Parking makes the Corp's presence at the window independent of model latency:
    combined with a pre-committed --rez/--no-rez it answers windows instantly.
    Returns only on a real decision, the opponent's turn ending, game over, or
-   timeout."
+   timeout.
+
+   `deadline` bounds total IDLE parking for the WHOLE invocation and is threaded
+   through every re-entry — it is NOT restarted each time we return to the post,
+   or a Runner making runs at intervals shorter than the timeout would keep one
+   invocation alive indefinitely (and, with the heartbeat keep-alive below,
+   looking alive to the opponent indefinitely). An ACTIVE run is owned by
+   `auto-continue-loop!`, which is bounded by its own timeout and is making
+   progress, so it does not draw down the idle budget."
+  [flags deadline]
+  (println "🅿️  Parked — waiting for the opponent to start a run (persistent; owns the whole turn)")
+  (loop []
+    (if (> (System/currentTimeMillis) deadline)
+      (do (println "⚠️  Park stopped: idle timeout reached (re-issue monitor-run --persistent)")
+          {:status :timeout :wake-reason :timeout :cursor (state/get-cursor)})
+      (let [st @state/client-state
+            side (:side st)]
+        (case (park-wake-reason st side)
+          :game-over
+          (do (println "🏁 Game over — leaving the post")
+              {:status :game-over :wake-reason :game-over :cursor (state/get-cursor)})
+
+          :my-turn
+          (do (println "🔔 Opponent's turn ended — your move")
+              {:status :my-turn :wake-reason :my-turn :cursor (state/get-cursor)})
+
+          :run
+          (let [result (monitor-active-run! flags)]
+            (if (park-continuable? (:status result))
+              (do (println "🅿️  Run ended — back to the post (opponent's turn continues)")
+                  (recur))
+              (assoc result :cursor (state/get-cursor))))
+
+          :no-run
+          (do (println "⚠️  No active run to monitor (and none can start on this turn)")
+              {:status :no-run :wake-reason :no-run :cursor (state/get-cursor)})
+
+          :park
+          (do (park-sleep!)
+              (recur)))))))
+
+(defn- park-deadline
+  "One idle-park deadline per monitor-run! invocation."
   [flags]
-  (let [timeout-ms (or (:park-timeout-ms flags) 300000)
-        deadline (+ (System/currentTimeMillis) timeout-ms)]
-    (println "🅿️  Parked — waiting for the opponent to start a run (persistent; owns the whole turn)")
-    (loop []
-      (if (> (System/currentTimeMillis) deadline)
-        (do (println (format "⚠️  Park stopped: timeout (%dms) reached" timeout-ms))
-            {:status :timeout :wake-reason :timeout :cursor (state/get-cursor)})
-        (let [st @state/client-state
-              side (:side st)]
-          (case (park-wake-reason st side)
-            :game-over
-            (do (println "🏁 Game over — leaving the post")
-                {:status :game-over :wake-reason :game-over :cursor (state/get-cursor)})
-
-            :my-turn
-            (do (println "🔔 Opponent's turn ended — your move")
-                {:status :my-turn :wake-reason :my-turn :cursor (state/get-cursor)})
-
-            :run
-            (let [result (monitor-active-run! flags)]
-              (if (park-continuable? (:status result))
-                (do (println "🅿️  Run ended — back to the post (opponent's turn continues)")
-                    (recur))
-                (assoc result :cursor (state/get-cursor))))
-
-            :park
-            (do (Thread/sleep 1000)
-                (recur))))))))
+  (+ (System/currentTimeMillis) (or (:park-timeout-ms flags) 300000)))
 
 (defn monitor-run!
   "Corp command to enter auto-continue mode during a run.
@@ -1738,7 +1809,10 @@
   (let [{:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
         since-cursor (:since flags)
         current-cursor (state/get-cursor)
-        run (get-in @state/client-state [:game-state :run])]
+        run (get-in @state/client-state [:game-state :run])
+        ;; ONE idle-park budget for this whole invocation, shared by every
+        ;; re-entry to the post (see park-and-monitor!).
+        deadline (park-deadline flags)]
     (cond
       ;; --since fast-return: check if state already advanced
       (and since-cursor (> current-cursor since-cursor) (nil? run))
@@ -1763,7 +1837,7 @@
       ;; Hand-driven monitor-run keeps the old immediate :no-run return.
       (nil? run)
       (if (:persistent flags)
-        (park-and-monitor! flags)
+        (park-and-monitor! flags deadline)
         (do
           (println "⚠️  No active run to monitor")
           {:status :no-run
@@ -1780,7 +1854,7 @@
           ;; opponent's turn is still running and they may start another run.
           ;; (Re-arming per-run is exactly the gap that left windows unattended.)
           (if (and (:persistent flags) (park-continuable? (:status result)))
-            (park-and-monitor! flags)
+            (park-and-monitor! flags deadline)
             (assoc result :cursor (state/get-cursor))))))))
 
 ;; ============================================================================

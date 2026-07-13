@@ -92,24 +92,35 @@
 ;; B. The self-advance handler
 ;; =============================================================================
 
-(deftest self-advance-fires-when-opponent-has-no-decision
-  (testing "Runner already passed, ICE is rezzed -> send the 2nd continue to advance"
+(deftest self-advance-fires-only-after-the-grace-period
+  (testing "Stall-BREAKER, not window-skipper: the Corp gets self-advance-grace-ms
+            to answer. Present Corp answers in ms (its monitor is a loop); only an
+            ABANDONED window is advanced. First sight must NOT advance."
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (runs/reset-window-grace!)
         (let [st (runner-state :phase "approach-ice" :position 1 :no-action "runner"
                                :ices [{:cid 1 :title "Bran 1.0" :rezzed true}])
-              result (runs/handle-stalled-window-self-advance
-                      {:run-phase "approach-ice" :gameid "g1" :side "runner"
-                       :state st :my-prompt nil})]
-          (is (= :action-taken (:status result)) "Should advance the stalled window")
-          (is (= 1 (count @sent)) "Should send exactly one continue")
-          (is (= "continue" (:command (first @sent)))))))))
+              ctx {:run-phase "approach-ice" :gameid "g1" :side "runner"
+                   :state st :my-prompt nil}
+              first-look (runs/handle-stalled-window-self-advance ctx)]
+          (is (nil? first-look)
+              "Must give the Corp its window before advancing")
+          (is (empty? @sent))
+          ;; …but a window still unanswered after the grace is abandoned.
+          (with-redefs [runs/self-advance-grace-ms 0]
+            (let [result (runs/handle-stalled-window-self-advance ctx)]
+              (is (= :action-taken (:status result)) "Should advance the abandoned window")
+              (is (= 1 (count @sent)) "Should send exactly one continue")
+              (is (= "continue" (:command (first @sent)))))))))))
 
 (deftest self-advance-NEVER-skips-a-live-rez-decision
   (testing "SAFETY: unrezzed ICE = the Corp's rez decision. Self-advancing here
-            would be the blunt corp-auto-no-action bug. Must return nil."
+            would be the blunt corp-auto-no-action bug. Must return nil EVEN when
+            the window has been stalled long past the grace period."
     (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)
+                    runs/self-advance-grace-ms 0]
         (let [st (runner-state :phase "approach-ice" :position 1 :no-action "runner"
                                :ices [{:cid 1 :title "Whitespace" :rezzed false}])
               result (runs/handle-stalled-window-self-advance
@@ -122,7 +133,8 @@
   (testing "Fresh window (no-action nil) -> normal auto-continue owns the first
             pass; self-advance must not double-continue."
     (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)
+                    runs/self-advance-grace-ms 0]
         (let [st (runner-state :phase "approach-ice" :position 1 :no-action nil
                                :ices [{:cid 1 :title "Bran 1.0" :rezzed true}])
               result (runs/handle-stalled-window-self-advance
@@ -137,11 +149,12 @@
                   :choices [{:value "Yes"} {:value "No"}]}
           st (runner-state :phase "approach-ice" :position 1 :no-action "runner"
                            :ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
-                           :prompt prompt)
-          result (runs/handle-stalled-window-self-advance
-                  {:run-phase "approach-ice" :gameid "g1" :side "runner"
-                   :state st :my-prompt prompt})]
-      (is (nil? result)))))
+                           :prompt prompt)]
+      (with-redefs [runs/self-advance-grace-ms 0]
+        (let [result (runs/handle-stalled-window-self-advance
+                      {:run-phase "approach-ice" :gameid "g1" :side "runner"
+                       :state st :my-prompt prompt})]
+          (is (nil? result)))))))
 
 ;; =============================================================================
 ;; B. Integration through continue-run! — the actual marquee stall
@@ -151,7 +164,8 @@
   (testing "REGRESSION (marquee d6962df4): Runner passed, ICE rezzed, Corp silent.
             Old behavior: :waiting-for-opponent forever -> jack-out -> lose."
     (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)
+                    runs/self-advance-grace-ms 0]
         (with-mock-state
           (runner-state :phase "approach-ice" :position 1 :no-action "runner"
                         :ices [{:cid 1 :title "Bran 1.0" :rezzed true}])
@@ -197,12 +211,98 @@
               :game-state {:run nil :active-player "corp"})]
       (is (= :my-turn (runs/park-wake-reason st "corp"))))))
 
+(deftest runner-never-parks
+  (testing "Runs only happen on the Runner's turn, so a Runner parking for the
+            opponent to start a run waits for something that CANNOT happen — it
+            would wedge until timeout while the heartbeat reported it healthy."
+    (let [st (mock-client-state
+              :side "runner"
+              :game-state {:run nil :active-player "corp"})]
+      (is (= :no-run (runs/park-wake-reason st "runner"))))))
+
 (deftest park-returns-on-game-over
   (testing "Game over -> never park (would hang the seat forever)"
     (let [st (mock-client-state
               :side "corp"
               :game-state {:run nil :active-player "runner" :winner "runner"})]
       (is (= :game-over (runs/park-wake-reason st "corp"))))))
+
+;; =============================================================================
+;; A. Park mode through monitor-run! — the actual command behavior
+;;
+;; park-wake-reason above is pure classification; these drive monitor-run! itself,
+;; which is where the bug lived (it returned :no-run and left the post).
+;; =============================================================================
+
+(deftest monitor-run-persistent-does-not-abandon-the-post
+  (testing "THE BUG (#31 Fix A): --persistent with no run must PARK, not return
+            :no-run. Parks until a run appears, then owns it."
+    (let [ticks (atom 0)
+          st (mock-client-state
+              :side "corp"
+              :game-state {:run nil :active-player "runner"})]
+      (with-mock-state st
+        ;; After 2 park ticks a run appears; the parked monitor must pick it up.
+        (with-redefs [runs/monitor-active-run!
+                      (fn [_flags]
+                        ;; the run we picked up ends, and so does the Runner's turn
+                        (swap! state/client-state
+                               #(-> %
+                                    (assoc-in [:game-state :run] nil)
+                                    (assoc-in [:game-state :active-player] "corp")))
+                        {:status :run-complete})
+                      state/get-cursor (fn [] 1)
+                      runs/park-sleep! (fn []
+                                         (swap! ticks inc)
+                                         ;; a run starts on the 2nd idle tick
+                                         (when (= @ticks 2)
+                                           (swap! state/client-state
+                                                  assoc-in [:game-state :run]
+                                                  {:phase "initiation" :server [:hq]})))]
+          (let [result (runs/monitor-run! "--persistent")]
+            (is (not= :no-run (:status result))
+                "Must NOT abandon the post with :no-run")
+            (is (= :my-turn (:status result))
+                "Parks through the run, returns only when the opponent's turn ends")
+            (is (pos? @ticks) "Should actually have parked")))))))
+
+(deftest monitor-run-without-persistent-keeps-old-no-run
+  (testing "Hand-driven monitor-run is unchanged: no run -> :no-run immediately"
+    (with-mock-state
+      (mock-client-state :side "corp"
+                         :game-state {:run nil :active-player "runner"})
+      (let [result (runs/monitor-run!)]
+        (is (= :no-run (:status result)))))))
+
+(deftest monitor-run-persistent-returns-immediately-on-game-over
+  (testing "Never park through a finished game — that hangs the seat forever"
+    (with-mock-state
+      (mock-client-state :side "corp"
+                         :game-state {:run nil :active-player "runner" :winner "runner"})
+      (with-redefs [state/get-cursor (fn [] 1)]
+        (let [result (runs/monitor-run! "--persistent")]
+          (is (= :game-over (:status result))))))))
+
+(deftest monitor-run-persistent-returns-immediately-on-own-turn
+  (testing "Parking on my OWN turn would deadlock the game (I owe the moves)"
+    (with-mock-state
+      (mock-client-state :side "corp"
+                         :game-state {:run nil :active-player "corp"})
+      (with-redefs [state/get-cursor (fn [] 1)]
+        (let [result (runs/monitor-run! "--persistent")]
+          (is (= :my-turn (:status result))))))))
+
+(deftest park-idle-budget-is-not-reset-by-re-entry
+  (testing "One idle-park deadline per invocation: a Runner making runs faster
+            than the timeout must not keep the command (and its liveness) alive
+            forever. An ALREADY-EXPIRED deadline must time out at once."
+    (with-mock-state
+      (mock-client-state :side "corp"
+                         :game-state {:run nil :active-player "runner"})
+      (with-redefs [state/get-cursor (fn [] 1)]
+        (let [expired (- (System/currentTimeMillis) 1000)
+              result (#'runs/park-and-monitor! {} expired)]
+          (is (= :timeout (:status result))))))))
 
 ;; =============================================================================
 ;; C. Jack-out smell — stop coaching the losing move
