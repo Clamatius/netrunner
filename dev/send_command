@@ -613,7 +613,9 @@ peer_liveness_line() {
     [[ -z "$opp" ]] && return 0
     local hb="${HEARTBEAT_DIR}/${opp}"
     [[ -f "$hb" ]] || { echo "⏱  opponent (${opp}): no heartbeat yet (not seen acting this session)"; return 0; }
-    local mt; mt="$(file_mtime "$hb")"
+    # Guard: a failed stat (TOCTOU delete, perms, unsupported stat) must NOT abort
+    # the real command under set -e — peer liveness is strictly best-effort.
+    local mt; mt="$(file_mtime "$hb" 2>/dev/null || true)"
     [[ -z "$mt" ]] && return 0
     local now age; now="$(date +%s)"; age=$(( now - mt ))
     (( age < 0 )) && age=0
@@ -1293,7 +1295,8 @@ case "$COMMAND" in
         else
             SELF_HB="${HEARTBEAT_DIR}/${CLIENT_NAME}"
             if [[ -f "$SELF_HB" ]]; then
-                SELF_MT="$(file_mtime "$SELF_HB")"; SELF_AGE=$(( $(date +%s) - ${SELF_MT:-0} ))
+                SELF_MT="$(file_mtime "$SELF_HB" 2>/dev/null || true)"
+                SELF_AGE=$(( $(date +%s) - ${SELF_MT:-0} ))
                 echo "you (${CLIENT_NAME}): active $(fmt_age "$SELF_AGE") ago"
             fi
             peer_liveness_line
