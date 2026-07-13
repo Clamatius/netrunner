@@ -89,6 +89,14 @@ assert_not_contains "post-clear-not-ghost-alive" "$OUT" "opponent (runner): acti
 #    primitive above is dead code and the false-alive survives in real games.
 assert_contains "reset-wires-clear" "$(cat "$SCRIPT_DIR/../reset.sh")" "clear-heartbeats"
 
+# 8. Wiring: the `wait` handler suppresses the peer footer on a game-over wake, so
+#    the "alive, keep waiting" footer can't contradict the "stop acting" game-over
+#    line (verified behaviorally against a live game-over state; this guards the
+#    suppression against regression-by-deletion since the shell harness has no
+#    live in-progress game to drive a wait through).
+SEND_SRC="$(cat "$SEND_CMD")"
+assert_contains "wait-suppresses-footer-on-gameover" "$SEND_SRC" 'WAIT_OUT" != *"Game over"*'
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0
