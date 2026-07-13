@@ -116,6 +116,13 @@ else
     echo "✅ Game ID: $GAME_ID"
 fi
 
+# Zero the peer-liveness clock: a NEW game means neither driver has acted in it
+# yet. Clearing here (after the game-id verify above, which itself touches corp's
+# heartbeat) means peer-status honestly reads "no heartbeat yet" until a real
+# driver acts in THIS game — a stale heartbeat from a prior game (or a setup
+# touch) can no longer masquerade as a live opponent. Best-effort; never fatal.
+"$SCRIPT_DIR/send_command" clear-heartbeats >> "$LOG_FILE" 2>&1 || true
+
 # Show final status
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
