@@ -640,6 +640,12 @@ if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
     (
         while kill -0 "$_hb_parent" 2>/dev/null; do
             sleep "${HEARTBEAT_TOUCH_SECS:-60}"
+            # Only REFRESH an existing heartbeat; never resurrect a cleared one.
+            # `clear-heartbeats` (reset.sh) deletes these files precisely so a
+            # stale seat cannot read as live in a fresh game — a long-lived parked
+            # monitor from the OLD game would otherwise re-create its file and go
+            # on looking alive across the reset.
+            [[ -f "${HEARTBEAT_DIR}/${CLIENT_NAME}" ]] || break
             touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
         done
     ) >/dev/null 2>&1 &

@@ -651,13 +651,15 @@
   [state side]
   (= (normalize-side (get-in state [:game-state :run :no-action])) side))
 
-(defn- attacked-server-content
-  "Cards in the root of the server currently being run (upgrades/assets).
-   Face-down but VISIBLE to the Runner — no hidden info is used here, only
-   whether a root card is rezzed."
+(defn- attacked-server
+  "The server map for the server currently being run, or nil if we cannot resolve
+   it. Distinguishing \"server not found\" (unknown) from \"server found, root
+   empty\" matters: the wire omits empty collections, so a missing :content on a
+   server we CAN see proves an empty root, whereas a server we cannot see at all
+   proves nothing."
   [state]
   (let [server (get-in state [:game-state :run :server])]
-    (get-in state [:game-state :corp :servers (keyword (last server)) :content])))
+    (get-in state [:game-state :corp :servers (keyword (last server))])))
 
 (defn opponent-has-run-decision?
   "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
@@ -668,6 +670,19 @@
    'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
    real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
    So every case we cannot prove is conservatively `true`.
+
+   SCOPE — read this before widening the card pool. What is modelled here is
+   exactly ONE Corp decision: a REZ. That is the only run-window action the Corp
+   can take in the System Gateway pool we play. The engine permits more, and a
+   larger pool would break the equivalence: a rezzed Border Control's
+   `[trash]: End the run` is a live decision at movement even when every root card
+   is already rezzed, and this predicate would happily report 'no decision' and let
+   the Runner walk past it. That does not bite today, but it is a property of the
+   CARD POOL, not of this function, and it will not announce itself when the pool
+   changes. Widening the pool means extending this predicate (rezzed cards with
+   run-usable paid abilities) — not trusting it. The grace period in
+   `handle-stalled-window-self-advance` is what keeps the blast radius survivable
+   in the meantime: a Corp that is present still gets to take the action.
 
    Runner-side only. As Corp the opponent is the Runner, who always has live
    options at a window (jack out, break, paid abilities), so nothing is provable
@@ -686,13 +701,26 @@
     (case run-phase
       "initiation" false
 
+      ;; NOTE the nil handling in both branches. `current-run-ice` returns nil for
+      ;; "no run / position 0 / position out of bounds / no ICE on the server" —
+      ;; i.e. for every state in which we CANNOT SEE the approached ICE. Folding
+      ;; that into `false` would turn "I can't tell" into "the Corp has nothing to
+      ;; do", and we would skip a live rez window on the strength of a wire
+      ;; transient (a diff applied out of order, an ICE trashed mid-run: any
+      ;; disagreement between :position and the :ices vector). Absence of evidence
+      ;; is not evidence of absence: unknown ⇒ assume a decision ⇒ wait.
       "approach-ice"
       (let [ice (core/current-run-ice state)]
-        (boolean (and ice (not (:rezzed ice)))))
+        (if (nil? ice) true (not (:rezzed ice))))
 
       "movement"
       (if (zero? (or (get-in state [:game-state :run :position]) 0))
-        (boolean (some #(not (:rezzed %)) (attacked-server-content state)))
+        ;; Same asymmetry: if we cannot even resolve the attacked SERVER, we know
+        ;; nothing and must assume a decision. Only once the server is in hand does
+        ;; an empty/absent :content prove there is no root card to rez.
+        (if-let [server (attacked-server state)]
+          (boolean (some #(not (:rezzed %)) (:content server)))
+          true)
         true)
 
       ;; Anything else (encounter-ice, success, …): assume a real decision.
@@ -1663,11 +1691,25 @@
 (defn park-wake-reason
   "What should a PARKED persistent monitor do right now?
 
-   :game-over — stop (parking through a finished game hangs the seat forever)
-   :run       — a run is active: go own it
-   :my-turn   — the opponent's turn ended: hand control back to the seat
-   :park      — opponent's turn, no run yet: STAY AT THE POST
-   :no-run    — nothing to defend and nothing coming: don't park
+   :game-over          — stop (parking through a finished game hangs the seat forever)
+   :run                — a run is active: go own it
+   :decision-required  — I am holding a prompt only I can resolve: surface it
+   :my-turn            — the opponent's turn ended: hand control back to the seat
+   :park               — opponent's turn, no run yet: STAY AT THE POST
+   :no-run             — nothing to defend and nothing coming: don't park
+
+   :decision-required is not optional garnish — it is what keeps parking safe.
+   The flow park REPLACES was sitting in `wait`, which wakes on :has-prompt. A
+   park loop that watches only run-state is BLIND to a prompt of its own, and the
+   Corp can be prompted on the RUNNER'S turn with NO RUN ACTIVE: Wildcat Strike
+   (and ~30 other Runner cards carrying `:player :corp`) puts a two-choice prompt
+   on the Corp out of nowhere. A prompt-blind park sleeps through it while the
+   Runner is hard-blocked waiting for the answer, times out, and — per the seat
+   brief — re-parks. That is an unbreakable deadlock manufactured by the fix.
+   Checking it here also covers the re-park path: after a run ends we loop back
+   through this function, so a trigger prompt left over from the run (the #43
+   shape: a `select` with no valid targets, which `has-real-decision?` does not
+   consider real) is surfaced instead of being silently re-parked on.
 
    Only the CORP parks. Runs happen exclusively on the Runner's turn, so a Runner
    waiting for its opponent to start a run is waiting for something that cannot
@@ -1675,10 +1717,13 @@
    healthy — a wedged seat that looks fine. That is worse than the :no-run it used
    to get, so the Runner keeps the old behaviour."
   [state side]
-  (let [gs (:game-state state)]
+  (let [gs (:game-state state)
+        my-prompt (get-in gs [(keyword side) :prompt-state])]
     (cond
       (state/game-over? gs) :game-over
       (some? (:run gs)) :run
+      (or (seat-owns-trigger-decision? my-prompt)
+          (has-real-decision? my-prompt)) :decision-required
       (= (normalize-side (:active-player gs)) side) :my-turn
       (not= side "corp") :no-run
       :else :park)))
@@ -1750,9 +1795,24 @@
           (do (println "🏁 Game over — leaving the post")
               {:status :game-over :wake-reason :game-over :cursor (state/get-cursor)})
 
+          :decision-required
+          (let [my-prompt (get-in st [:game-state (keyword side) :prompt-state])]
+            (println "🛑 Decision required — you are holding a prompt only you can resolve")
+            (when-let [m (:msg my-prompt)] (println (format "   Prompt: %s" m)))
+            {:status :decision-required :wake-reason :decision-required
+             :prompt my-prompt :cursor (state/get-cursor)})
+
           :my-turn
-          (do (println "🔔 Opponent's turn ended — your move")
-              {:status :my-turn :wake-reason :my-turn :cursor (state/get-cursor)})
+          ;; DEBOUNCE. The briefs tell the seat to take its post "the instant you
+          ;; end your turn", but end-turn! returns before :active-player flips on
+          ;; the next diff — so a Corp that just ended its turn can momentarily
+          ;; still look like the active player and get told "your move" with 0
+          ;; clicks. Confirm the turn really has flipped before believing it.
+          (do (park-sleep!)
+              (if (= :my-turn (park-wake-reason @state/client-state side))
+                (do (println "🔔 Opponent's turn ended — your move")
+                    {:status :my-turn :wake-reason :my-turn :cursor (state/get-cursor)})
+                (recur)))
 
           :run
           (let [result (monitor-active-run! flags)]

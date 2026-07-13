@@ -174,15 +174,60 @@
                 "Must advance, not stall waiting on a Corp with nothing to decide")))))))
 
 (deftest continue-run-still-waits-when-corp-genuinely-must-rez
-  (testing "SAFETY: unrezzed ICE -> Corp is genuinely on the clock. Keep waiting."
-    (with-mock-state
-      (runner-state :phase "approach-ice" :position 1 :no-action "runner"
-                    :ices [{:cid 1 :title "Whitespace" :rezzed false}])
-      (let [result (runs/continue-run!)]
-        (is (contains? #{:waiting-for-corp-rez :waiting-for-opponent
-                         :waiting-for-opponent-paid-abilities}
-                       (:status result))
-            "Must still wait for a real Corp rez decision")))))
+  (testing "SAFETY: unrezzed ICE -> Corp is genuinely on the clock. Keep waiting,
+            and — the part that actually matters — send NO continue."
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)
+                    runs/self-advance-grace-ms 0]
+        (with-mock-state
+          (runner-state :phase "approach-ice" :position 1 :no-action "runner"
+                        :ices [{:cid 1 :title "Whitespace" :rezzed false}])
+          (let [result (runs/continue-run!)]
+            (is (contains? #{:waiting-for-corp-rez :waiting-for-opponent
+                             :waiting-for-opponent-paid-abilities}
+                           (:status result))
+                "Must still wait for a real Corp rez decision")
+            (is (empty? @sent)
+                "Must NOT send a continue — that would skip the Corp's rez window")))))))
+
+;; --- F2: the predicate must fail CLOSED on "I can't see it" -------------------
+
+(deftest predicate-fails-closed-when-ice-not-visible
+  (testing "current-run-ice returns nil for out-of-bounds position / missing ices —
+            i.e. for every state where we CANNOT SEE the approached ICE. Folding
+            that into 'no decision' would skip a live rez window on a wire
+            transient. Unknown must mean WAIT."
+    ;; position 3 but only 1 ICE on the server -> current-run-ice = nil
+    (let [st (runner-state :phase "approach-ice" :position 3 :no-action "runner"
+                           :ices [{:cid 1 :title "Whitespace" :rezzed false}])]
+      (is (true? (runs/opponent-has-run-decision? st "runner" "approach-ice"))
+          "Unknown ICE must be treated as a possible Corp decision"))))
+
+(deftest predicate-fails-closed-when-server-not-resolvable
+  (testing "If we cannot even resolve the attacked server, we know nothing — a
+            lookup miss must not read as 'the root is empty, skip the Corp'."
+    (let [st (mock-client-state
+              :side "runner"
+              :game-state
+              {:run {:phase "movement" :position 0 :no-action "runner"
+                     :server [:remote99]}          ; server not in :servers
+               :runner {:prompt-state nil}
+               :corp {:prompt-state nil :servers {:remote1 {:ices [] :content []}}}})]
+      (is (true? (runs/opponent-has-run-decision? st "runner" "movement"))
+          "Unresolvable server must be treated as a possible Corp decision"))))
+
+(deftest self-advance-does-not-fire-when-ice-not-visible
+  (testing "End to end: the fail-closed predicate must stop the handler"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)
+                    runs/self-advance-grace-ms 0]
+        (let [st (runner-state :phase "approach-ice" :position 3 :no-action "runner"
+                               :ices [{:cid 1 :title "Whitespace" :rezzed false}])
+              result (runs/handle-stalled-window-self-advance
+                      {:run-phase "approach-ice" :gameid "g1" :side "runner"
+                       :state st :my-prompt nil})]
+          (is (nil? result))
+          (is (empty? @sent)))))))
 
 ;; =============================================================================
 ;; A. Park mode — the Corp must be able to wait for a run to START
@@ -210,6 +255,40 @@
               :side "corp"
               :game-state {:run nil :active-player "corp"})]
       (is (= :my-turn (runs/park-wake-reason st "corp"))))))
+
+(deftest park-wakes-on-a-corp-prompt-with-no-run
+  (testing "F1 (CRITICAL): the Corp can be prompted on the RUNNER'S turn with NO
+            RUN ACTIVE — Wildcat Strike and ~30 other Runner cards carry
+            :player :corp. The flow park replaced (sitting in `wait`) woke on
+            :has-prompt. A prompt-blind park sleeps through it while the Runner is
+            hard-blocked, times out, and re-parks: an unbreakable deadlock."
+    (let [st (mock-client-state
+              :side "corp"
+              :game-state
+              {:run nil
+               :active-player "runner"
+               :corp {:prompt-state {:msg "Wildcat Strike: Corp chooses"
+                                     :prompt-type "choice"
+                                     :choices [{:value "Runner draws 4"}
+                                               {:value "Runner gains 6 credits"}]}}})]
+      (is (= :decision-required (runs/park-wake-reason st "corp"))
+          "Must surface the prompt, not sleep on it"))))
+
+(deftest park-wakes-on-leftover-trigger-prompt-after-run-end
+  (testing "F3: the #43 shape — a select with NO valid targets, which
+            has-real-decision? does not consider real. After a run ends the loop
+            re-enters park-wake-reason; this must be surfaced, not re-parked on,
+            or the opponent hard-blocks on 'waiting for Corp to resolve triggers'."
+    (let [st (mock-client-state
+              :side "corp"
+              :game-state
+              {:run nil
+               :active-player "runner"
+               :corp {:prompt-state {:msg "Select a card to rez"
+                                     :prompt-type "select"
+                                     :choices []
+                                     :selectable []}}})]
+      (is (= :decision-required (runs/park-wake-reason st "corp"))))))
 
 (deftest runner-never-parks
   (testing "Runs only happen on the Runner's turn, so a Runner parking for the
@@ -319,5 +398,7 @@
           text (clojure.string/join " " lines)]
       (is (not (re-find #"(?i)jack-out ends the run to recover" text))
           "Must not recommend jack-out as the stall escape hatch")
-      (is (re-find #"(?i)peer-status|keep waiting|wait" text)
-          "Should point at the patience/liveness signal instead"))))
+      (is (re-find #"(?i)peer-status" text)
+          "Should point at the patience/liveness signal instead")
+      (is (re-find #"(?i)smell" text)
+          "Should name jack-out as the smell it is"))))
