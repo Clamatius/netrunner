@@ -101,7 +101,8 @@ C=$(./dev/send_command corp get-cursor)        # capture cursor first
 ./dev/send_command corp wait --since "$C"       # blocks until something relevant
 ```
 
-When `wait` returns because a **run started**, participate:
+As soon as you end your turn, **take your post** — do not wait for a run to start
+first:
 
 ```
 ./dev/send_command corp monitor-run --persistent
@@ -111,13 +112,23 @@ When `wait` returns because a **run started**, participate:
 you, when you have a real decision** — typically a **rez** opportunity as the
 Runner approaches one of your ICE, or an unbroken-subroutine **fire** decision.
 
-**Always use `--persistent`.** Without it, `monitor-run` exits every time the
-Runner has priority (every "pass priority" window), and you'd have to re-issue
-it over and over — and because that window looks symmetric to both seats, it's
-exactly the spot where two models deadlock, each thinking it's waiting on the
-other. `--persistent` keeps your defender loop alive across those empty windows:
-**one command owns the whole run**, and it only returns to you for a real
-rez/fire decision or when the run ends. Read the decision:
+**Always use `--persistent`, and issue it immediately after ending your turn.**
+`--persistent` now **parks**: with no run yet active it waits at the post, and it
+**owns the Runner's whole turn** — across every run they make — returning only for
+a real rez/fire decision, when the Runner's turn ends (`my-turn`), or on game
+over. You no longer re-arm it per run.
+
+This matters more than it looks. A rez window is a *both-must-pass* window: if you
+are not at your post when the Runner arrives at your ICE, the run **stalls with
+nobody home**, and the Runner — who cannot act for you — eventually gives up. In
+marquee `d6962df4` that happened on nearly every run (5 jack-outs, 1 rez in the
+whole game) because the Corp's monitor kept exiting with "no active run" between
+runs. Parking is what keeps you present.
+
+**Pre-commit your rez policy** (`--rez "<ICE>"` / `--no-rez`) whenever you can: a
+pre-committed monitor answers the window *instantly*, whereas a window that has to
+wait for you to think is a window the Runner spends minutes staring at. Read the
+decision:
 
 ```
 ./dev/send_command corp prompt

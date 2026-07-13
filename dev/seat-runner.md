@@ -84,6 +84,15 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
 - If unsure what a prompt wants, read it with `prompt` and consult
   `./dev/send_command help --full`.
 
+**Jack-out is a smell.** The only tactically legitimate reasons to jack out are
+(1) you misjudged what it costs to get in, and (2) a Karunā jack-out subroutine
+(bail before the 4th net damage kills you). **Never jack out to unstick a run
+window** — it throws the whole run away (breakers paid, credits spent, access
+lost) and fixes nothing. If a window sits waiting on the Corp, check
+`peer-status`: alive ⇒ keep waiting. The client self-advances any window the Corp
+provably cannot act in, so a window that's genuinely waiting is one the Corp
+really does owe you.
+
 ## Between turns — wait, don't busy-poll
 
 The Corp's turn is played by the bot. Block until it's your turn (or a run/prompt

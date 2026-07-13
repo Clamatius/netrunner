@@ -607,6 +607,52 @@ if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
     touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
 fi
 
+# KEEP the clock ticking for the life of THIS invocation.
+#
+# The touch above fires once, at invocation. That was fine while every command
+# returned quickly, but a long-blocking command (`wait`, and now especially
+# `monitor-run --persistent`, which PARKS at its post for the opponent's whole
+# turn) holds one invocation open for minutes. A correctly-parked, perfectly
+# ALIVE driver would then age past PEER_STALE_SECS and be reported to the
+# opponent as "SILENT — likely disconnected" — a false dead-peer verdict telling
+# the opponent to abandon a live game. That is precisely the failure the sensor
+# exists to prevent, so the sensor must not manufacture it.
+#
+# The toucher is bound to this process's lifetime via `kill -0`: if the driver
+# dies — including SIGKILL, where no trap runs — the toucher exits within one
+# interval and the heartbeat goes stale as it should. So "alive" still means
+# "this side's process is really alive", not merely "was alive once".
+# Best-effort throughout: a heartbeat failure must never abort the real command
+# under `set -euo pipefail`.
+#
+# CRITICAL detail — the `>/dev/null 2>&1` on the subshell is load-bearing, not
+# tidiness. A background child INHERITS this script's stdout. Nearly every caller
+# reads send_command through command substitution (`OUT="$(send_command …)"`),
+# which blocks until EOF on that pipe — and EOF only arrives when the LAST writer
+# closes it. A toucher holding stdout open therefore made every single command
+# block for HEARTBEAT_TOUCH_SECS (measured: 60s for `peer-status`), which is far
+# worse than the stall this file exists to fix. Redirecting the subshell's stdio
+# detaches it from the pipe so the parent's exit is the EOF. (Caught in review;
+# the unit tests still "passed" — merely slowly — so only a timing assertion
+# guards it. See peer_status_test.sh.)
+if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
+    _hb_parent=$$
+    (
+        while kill -0 "$_hb_parent" 2>/dev/null; do
+            sleep "${HEARTBEAT_TOUCH_SECS:-60}"
+            # Only REFRESH an existing heartbeat; never resurrect a cleared one.
+            # `clear-heartbeats` (reset.sh) deletes these files precisely so a
+            # stale seat cannot read as live in a fresh game — a long-lived parked
+            # monitor from the OLD game would otherwise re-create its file and go
+            # on looking alive across the reset.
+            [[ -f "${HEARTBEAT_DIR}/${CLIENT_NAME}" ]] || break
+            touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
+        done
+    ) >/dev/null 2>&1 &
+    _hb_toucher=$!
+    trap 'kill "$_hb_toucher" 2>/dev/null || true' EXIT
+fi
+
 # peer_liveness_line — echo a one-line read of the OPPONENT's last activity, or
 # nothing if we can't tell (no side, no heartbeat yet). Used as a footer on the
 # waiting commands and by the `peer-status` command.
