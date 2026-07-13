@@ -44,6 +44,20 @@ Corp mulligans before the Runner. Make your call, then the Runner will mulligan:
 ./dev/send_command corp keep-hand    # or:  ./dev/send_command corp mulligan
 ```
 
+**Mulligan heuristic — ICE first, economy second.** The single most important
+property of an opening hand is **ICE**. A hand with **zero ICE should almost
+always be mulliganed**, even if it is rich in economy: you cannot protect your
+servers, and you have to top-deck several ICE *before* agendas start arriving or
+you simply lose (a naked server = free agenda access for the Runner). Do **not**
+talk yourself into keeping a 0-ICE hand on "money is threat" / "low agenda-flood"
+reasoning — a great economy you can't defend behind still loses. Rough guide:
+- **0 ICE → mulligan** (unless the hand is otherwise so degenerate that keeping is
+  a specific known line — rare; default to mulligan).
+- **1 ICE → lean mulligan** unless the rest is strong and you have draw to find more.
+- **2+ ICE + some economy → keep.**
+Agendas in the opener are fine to keep (hold them in HQ, install behind ICE later);
+it's the *absence of ICE*, not the presence of an agenda, that makes a hand a throw.
+
 ## Each of your turns
 
 You have 3 clicks. A rough loop (use `snapshot` to pull status + prompt + board +
