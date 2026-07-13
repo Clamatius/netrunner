@@ -290,6 +290,30 @@
                                      :selectable []}}})]
       (is (= :decision-required (runs/park-wake-reason st "corp"))))))
 
+(deftest park-does-not-bounce-the-corp-that-just-ended-its-turn
+  (testing "LIVE-CAUGHT: at a turn boundary the engine sets :end-turn and LEAVES
+            :active-player pointing at the player who just ended. Observed live:
+            {:active-player \"corp\" :end-turn true :corp-click 0} while
+            game-over-status read AWAITING-START next-player=runner. Reading
+            :active-player raw told a Corp that had JUST ENDED ITS TURN — exactly
+            when the brief says take your post — 'your move', bouncing it out of
+            the park it was entering. The Corp could never take its post at all."
+    (let [st (mock-client-state
+              :side "corp"
+              :game-state {:run nil :active-player "corp" :end-turn true
+                           :corp {:click 0} :runner {:click 0}})]
+      (is (= :park (runs/park-wake-reason st "corp"))
+          "Corp that just ended its turn must PARK, not be told 'your move'"))))
+
+(deftest park-returns-my-turn-when-opponent-ended-their-turn
+  (testing "The mirror: Runner ended, so :active-player is a stale \"runner\" with
+            :end-turn set. The Corp is the one who must act (start its turn)."
+    (let [st (mock-client-state
+              :side "corp"
+              :game-state {:run nil :active-player "runner" :end-turn true
+                           :corp {:click 0} :runner {:click 0}})]
+      (is (= :my-turn (runs/park-wake-reason st "corp"))))))
+
 (deftest runner-never-parks
   (testing "Runs only happen on the Runner's turn, so a Runner parking for the
             opponent to start a run waits for something that CANNOT happen — it

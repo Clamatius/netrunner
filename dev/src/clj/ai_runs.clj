@@ -1718,13 +1718,26 @@
    to get, so the Runner keeps the old behaviour."
   [state side]
   (let [gs (:game-state state)
-        my-prompt (get-in gs [(keyword side) :prompt-state])]
+        my-prompt (get-in gs [(keyword side) :prompt-state])
+        active (normalize-side (:active-player gs))
+        ;; :active-player is STALE at a turn boundary. When a player ends their
+        ;; turn the engine sets :end-turn and LEAVES :active-player pointing at
+        ;; them until the opponent actually calls start-turn (verified live:
+        ;; {:active-player "corp", :end-turn true, :corp-click 0} while
+        ;; game-over-status reads AWAITING-START next-player=runner). Reading
+        ;; :active-player raw therefore told a Corp that had *just ended its turn*
+        ;; — exactly when the brief tells it to take its post — "your move", and
+        ;; bounced it straight back out of the park it was trying to enter. So at
+        ;; a boundary the player to act is the OTHER one.
+        my-turn? (if (:end-turn gs)
+                   (= (core/other-side active) side)
+                   (= active side))]
     (cond
       (state/game-over? gs) :game-over
       (some? (:run gs)) :run
       (or (seat-owns-trigger-decision? my-prompt)
           (has-real-decision? my-prompt)) :decision-required
-      (= (normalize-side (:active-player gs)) side) :my-turn
+      my-turn? :my-turn
       (not= side "corp") :no-run
       :else :park)))
 
