@@ -834,3 +834,67 @@
                   (str "ordinary chat must be slept through to run end, not woken on, got: " result))
               (is (>= @calls 2)
                   "must recheck past the chat message to reach run-complete"))))))))
+
+;; =============================================================================
+;; Test: run-initiation both-pass window auto-advances (#31, step 1)
+;; =============================================================================
+;; The initiation window is a both-must-pass window with no run-start paid
+;; ability either side uses in System Gateway. `run!` sends the Runner's first
+;; continue by default, so the Runner passes (:no-action "runner"). The Corp
+;; then becomes the ACTIVE player at an empty initiation window with NO prompt —
+;; so `can-auto-continue?` (which requires a "run" prompt) never fires, no
+;; handler matches, and continue-run! falls through to handle-unexpected-state,
+;; returning a FALSE :waiting-for-opponent. Both seats then wait on each other:
+;; the #31 initiation wedge. The fix auto-passes the initiation window whenever
+;; the send_command seat is the active player (should-i-act?) with no real
+;; decision — it only ever passes its OWN window, never acts for the opponent.
+;; =============================================================================
+
+(defn- initiation-state
+  "A run parked at the initiation window. `no-action` controls who has already
+   passed priority. Neither side has a run prompt (initiation surfaces none)."
+  [side no-action]
+  (mock-client-state
+   :side side
+   :game-state
+   {:run (cond-> {:phase "initiation" :position 1 :server [:hq]}
+           no-action (assoc :no-action no-action))
+    :corp {:prompt-state nil}
+    :runner {:prompt-state nil}
+    :log []}))
+
+(deftest initiation-corp-active-auto-passes
+  (testing "Corp auto-passes the empty initiation window once it holds priority — the #31 wedge (Runner passed, Corp is active, no prompt)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (initiation-state "corp" "runner")   ; Runner already passed
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (= :action-taken (:status r))
+                  (str "Corp holds priority at an empty initiation window and must pass to advance, got: " r))
+              (is (some #(= "continue" (:command %)) @sent)
+                  "a real continue must reach the engine — this is the second pass that advances initiation"))))))))
+
+(deftest initiation-runner-active-auto-passes
+  (testing "Runner auto-passes a fresh initiation window (active player acts first, no prompt) — symmetric with the Corp path"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (initiation-state "runner" nil)   ; fresh window, nobody passed
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (= :action-taken (:status r))
+                  (str "Runner is the active player at a fresh initiation window and passes its own window, got: " r))
+              (is (some #(= "continue" (:command %)) @sent)
+                  "the Runner's first pass must reach the engine"))))))))
+
+(deftest initiation-already-passed-does-not-double-pass
+  (testing "The seat that has ALREADY passed initiation does not pass again — guards against double-continue"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (initiation-state "corp" "corp")   ; Corp already passed, waiting on Runner
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (not= :action-taken (:status r))
+                  (str "Corp already passed (no-action=corp); it must wait, not pass again, got: " r))
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "no second continue from the side that already passed"))))))))
