@@ -607,6 +607,35 @@ if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
     touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
 fi
 
+# KEEP the clock ticking for the life of THIS invocation.
+#
+# The touch above fires once, at invocation. That was fine while every command
+# returned quickly, but a long-blocking command (`wait`, and now especially
+# `monitor-run --persistent`, which PARKS at its post for the opponent's whole
+# turn) holds one invocation open for minutes. A correctly-parked, perfectly
+# ALIVE driver would then age past PEER_STALE_SECS and be reported to the
+# opponent as "SILENT — likely disconnected" — a false dead-peer verdict telling
+# the opponent to abandon a live game. That is precisely the failure the sensor
+# exists to prevent, so the sensor must not manufacture it.
+#
+# The toucher is bound to this process's lifetime via `kill -0`: if the driver
+# dies — including SIGKILL, where no trap runs — the toucher exits within one
+# interval and the heartbeat goes stale as it should. So "alive" still means
+# "this side's process is really alive", not merely "was alive once".
+# Best-effort throughout: a heartbeat failure must never abort the real command
+# under `set -euo pipefail`.
+if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
+    _hb_parent=$$
+    (
+        while kill -0 "$_hb_parent" 2>/dev/null; do
+            sleep "${HEARTBEAT_TOUCH_SECS:-60}"
+            touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
+        done
+    ) &
+    _hb_toucher=$!
+    trap 'kill "$_hb_toucher" 2>/dev/null || true' EXIT
+fi
+
 # peer_liveness_line — echo a one-line read of the OPPONENT's last activity, or
 # nothing if we can't tell (no side, no heartbeat yet). Used as a footer on the
 # waiting commands and by the `peer-status` command.

@@ -1038,14 +1038,24 @@
         [(str "    ⏸️  You have already passed priority here — waiting for " opp
               " to pass before the run advances.")
          (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)")]
-        ;; Stall recovery (issue #31): a both-must-pass window only advances once
-        ;; the opponent also passes. In cross-model play the opposing seat must be
-        ;; actively monitoring the run to pass an empty window; if it isn't, the
-        ;; run stalls here and 'wait' never resolves. The Runner can break out with
-        ;; 'jack-out' (the marquee g3 escape hatch — "only jack-out cleared it").
+        ;; Stall recovery (issue #31). We used to tell the Runner that 'jack-out
+        ;; ends the run to recover' here. That advice LOST marquee d6962df4:
+        ;; GPT-5.5 followed it 5 times, once abandoning a Brân it had just broken
+        ;; for 8 credits on the run that would have contested the winning agenda.
+        ;;
+        ;; Jack-out is a NETRUNNER SMELL (Michael): the only tactically legitimate
+        ;; reasons are (1) you misjudged what it costs to get in, and (2) Karuna's
+        ;; jack-out subroutine (bail before the 4th net damage kills you). A window
+        ;; the opponent hasn't answered is NEITHER — it is the opposing seat not
+        ;; being at its post, and throwing away the run does not fix that. Patience
+        ;; is the correct play; the peer-liveness signal (#63) tells you whether
+        ;; waiting is sane.
         (when (= my-side "runner")
-          [(str "      If " opp " isn't actively monitoring the run, it can stall here — "
-                "'jack-out' ends the run to recover.")]))
+          [(str "      Waiting is CORRECT here — " opp " owes a decision. Check `peer-status`: "
+                "alive ⇒ keep waiting.")
+           (str "      Do NOT 'jack-out' to unstick a window — it throws the run away. "
+                "Jack-out is a smell: the only real reasons are a misjudged entry cost "
+                "or a Karuna jack-out sub.")]))
 
       ;; Opponent already passed — my continue advances the run now.
       (and na (not= na my-side))

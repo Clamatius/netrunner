@@ -79,27 +79,33 @@ prior cross-model game lost a run to a **deadlock at the run-initiation window**
 because the Corp was not monitoring when the Runner started the run. Do not repeat
 it. The rule:
 
-- **The instant a `wait` wakes because a run started, issue
+- **The instant you end your turn, issue
   `./dev/send_command corp monitor-run --persistent` BEFORE doing anything else.**
-  Do not read the board first, do not deliberate first — get the persistent
-  monitor running, *then* read the decision it pauses on. A run-initiation window
-  left unattended wedges the Runner (it waits for your priority and cannot pass it
-  itself).
-- **Always `--persistent`.** One command owns the whole run; it auto-passes the
-  empty "pass priority" windows and only returns to you for a real **rez**,
-  **fire**, attacked-server **upgrade**, unsupported prompt, or run-end decision.
-  Without `--persistent` you'd exit on every symmetric window — exactly where two
-  models deadlock.
-- After a real decision, RE-ENTER the monitor (still `--persistent`) with your
-  choice: `--rez "<ICE name>"`, `--no-rez`, or `--fire-if-asked`. For an
-  attacked-server upgrade, use `rez "<upgrade>"` or `continue`, then re-enter the
-  monitor. Read any unclear decision with `./dev/send_command corp prompt` and
-  `./dev/send_command corp board`.
+  Do not wait for a run to start; do not read the board first; do not deliberate
+  first. Take your post, *then* read whatever decision it pauses on.
+- **Always `--persistent`. It PARKS.** With no run active it waits at the post, and
+  it **owns the Runner's entire turn** — every run they make — returning only for a
+  real **rez**, **fire**, attacked-server **upgrade**, unsupported prompt, the
+  Runner's turn ending (`my-turn`), or game over. **You do not re-arm it per run.**
+- **Why this is the whole ballgame.** A rez window is a *both-must-pass* window. If
+  you are not at your post when the Runner reaches your ICE, the run stalls with
+  **nobody home** — and the Runner cannot pass your priority for you. In marquee
+  `d6962df4` the Corp's monitor kept exiting with "no active run" in the gaps
+  between runs, so the Runner hit an unattended window on nearly every run: 5
+  jack-outs, 1 encounter, 1 rez in the entire game. Parking exists to close that.
+- **Pre-commit your rez policy whenever you can** (`--rez "<ICE name>"` /
+  `--no-rez` / `--fire-if-asked`). A pre-committed monitor answers the window
+  *instantly*; a window that must wait for you to think is a window the Runner
+  spends minutes staring at. After a real decision, RE-ENTER the monitor (still
+  `--persistent`) with your choice. For an attacked-server upgrade, use
+  `rez "<upgrade>"` or `continue`, then re-enter. Read unclear decisions with
+  `./dev/send_command corp prompt` and `./dev/send_command corp board`.
 - Treat raw `continue`, `continue-run`, `rez`, and `fire-subs` as low-level
   escape hatches. Most runs should be handled by `monitor-run --persistent`.
-- **TIMEOUT during an active run is normal pacing, not a stall** — just re-issue
-  `monitor-run --persistent`. Only repeated timeouts with *zero* board movement
-  across several re-issues is a possible genuine wedge (note it for your report).
+- **TIMEOUT is normal pacing, not a stall** — just re-issue `monitor-run
+  --persistent` (this re-parks you). Only repeated timeouts with *zero* board
+  movement across several re-issues is a possible genuine wedge (note it for your
+  report).
 - **Slow-but-alive vs. dead opponent — check, don't guess.** A `wait` /
   `monitor-run` return ends with a peer-liveness line; you can also run
   `./dev/send_command corp peer-status` anytime. `opponent (runner): active Ns
@@ -107,9 +113,8 @@ it. The rule:
   (runner): SILENT … likely disconnected` → their process died; confirm
   `game-over-status` and, if still IN-PROGRESS, report the dead peer and stop —
   do not loop forever.
-- When a run ends, go back to the `wait` loop. **Several runs can happen in one
-  Runner turn — after each run ends, return to `wait`, and re-arm `monitor-run
-  --persistent` the moment the next run starts.** Never leave a gap between runs.
+- When the monitor returns `my-turn`, the Runner's turn is over — take your turn,
+  then take your post again.
 
 ## DELIVERABLE — this is the point of the game
 

@@ -646,6 +646,58 @@
       ;; Fresh phase (nil or false) → active player acts first
       :else (= side active-player))))
 
+(defn- i-already-passed?
+  "True if :no-action records that I am the side that already passed this window."
+  [state side]
+  (= (normalize-side (get-in state [:game-state :run :no-action])) side))
+
+(defn- attacked-server-content
+  "Cards in the root of the server currently being run (upgrades/assets).
+   Face-down but VISIBLE to the Runner — no hidden info is used here, only
+   whether a root card is rezzed."
+  [state]
+  (let [server (get-in state [:game-state :run :server])]
+    (get-in state [:game-state :corp :servers (keyword (last server)) :content])))
+
+(defn opponent-has-run-decision?
+  "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
+
+   Board-derivable with NO hidden information (issue #31, §1). This is the
+   legitimacy test for self-advancing a stalled window: we may only advance past
+   the opponent when the board proves they have nothing to decide. Answering
+   'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
+   real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
+   So every case we cannot prove is conservatively `true`.
+
+   Runner-side only. As Corp the opponent is the Runner, who always has live
+   options at a window (jack out, break, paid abilities), so nothing is provable
+   and we never self-advance.
+
+   - initiation   : never a decision (no current ICE) — but that window is owned
+                    by `handle-initiation-auto-pass` (#62), not this predicate.
+   - approach-ice : a decision IFF the approached ICE is UNREZZED (Corp may rez).
+                    Rezzed ⇒ the rez choice for this ICE is already spent.
+   - movement     : at the server (position 0) a decision IFF an UNREZZED card
+                    sits in the attacked server's root (an upgrade Corp may rez).
+                    Mid-run movement (position > 0) is left conservative."
+  [state side run-phase]
+  (if-not (= side "runner")
+    true
+    (case run-phase
+      "initiation" false
+
+      "approach-ice"
+      (let [ice (core/current-run-ice state)]
+        (boolean (and ice (not (:rezzed ice)))))
+
+      "movement"
+      (if (zero? (or (get-in state [:game-state :run :position]) 0))
+        (boolean (some #(not (:rezzed %)) (attacked-server-content state)))
+        true)
+
+      ;; Anything else (encounter-ice, success, …): assume a real decision.
+      true)))
+
 (defn waiting-for-opponent?
   "True if my side is waiting for opponent to make a decision during a run.
    Uses the simple :no-action heuristic for reliability."
@@ -911,6 +963,35 @@
     (println "   → Auto-passing initiation window (no run-start decision)")
     (send-continue! gameid)))
 
+(defn handle-stalled-window-self-advance
+  "Issue #31 §1: advance a both-must-pass window the opponent PROVABLY cannot act
+   in — the residual stall left after #62 fixed initiation.
+
+   Engine shape (verified in src/clj/game/core/runs.clj): the first `continue`
+   from EITHER side records `:run :no-action`; the SECOND `continue` advances the
+   phase, and the advance branch has NO side-check. So once I have passed, I can
+   advance the window myself. `continue-run!` normally refuses (`should-i-act?`
+   correctly says \"you already passed\") and returns :waiting-for-opponent — which
+   is right when the opponent owes a decision, and a DEADLOCK when they don't and
+   nobody is home on their seat.
+
+   Guarded by `opponent-has-run-decision?`, which is conservative by construction:
+   we only advance when the board PROVES there is nothing to skip (approached ICE
+   already rezzed; no unrezzed upgrade in the attacked server root). An unrezzed
+   ICE is a live Corp rez choice and we keep waiting for it — the Corp's presence
+   at that window is Fix A's job (`monitor-run --persistent` park mode), not
+   something to paper over by skipping their decision.
+
+   Runner-side only; never sends a continue on the opponent's behalf."
+  [{:keys [run-phase gameid side state my-prompt]}]
+  (when (and (= side "runner")
+             (contains? #{"approach-ice" "movement"} run-phase)
+             (i-already-passed? state side)
+             (not (opponent-has-run-decision? state side run-phase))
+             (not (has-real-decision? my-prompt)))
+    (println "   → Opponent holds no decision at this window — self-advancing (#31)")
+    (send-continue! gameid)))
+
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
   [{:keys [my-prompt]}]
@@ -1149,6 +1230,12 @@
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
                   corp-handlers/handle-corp-server-upgrade-decision
+                  ;; #31 §1: MUST precede handle-paid-ability-window, the general
+                  ;; "I passed, now I wait for the opponent" handler — correct when
+                  ;; the opponent owes a decision, a DEADLOCK when they don't.
+                  ;; Sits after every real-decision handler above (corp rez/fire,
+                  ;; upgrade), so it can only fire when nothing else wants to act.
+                  handle-stalled-window-self-advance
                   corp-handlers/handle-paid-ability-window
                   runner-handlers/handle-auto-select-single-card
                   runner-handlers/handle-runner-approach-ice
@@ -1531,6 +1618,91 @@
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))))))))
 
+(defn park-wake-reason
+  "What should a PARKED persistent monitor do right now?
+
+   :game-over — stop (parking through a finished game hangs the seat forever)
+   :run       — a run is active: go own it
+   :my-turn   — the opponent's turn ended: hand control back to the seat
+   :park      — opponent's turn, no run yet: STAY AT THE POST"
+  [state side]
+  (let [gs (:game-state state)]
+    (cond
+      (state/game-over? gs) :game-over
+      (some? (:run gs)) :run
+      (= (normalize-side (:active-player gs)) side) :my-turn
+      :else :park)))
+
+(defn- park-continuable?
+  "Statuses that mean 'this run is over but the opponent's turn is not' — so a
+   parked monitor should return to its post rather than hand control back."
+  [status]
+  (contains? #{:run-complete :no-run} status))
+
+(defn- monitor-active-run!
+  "Own one active run: (re)apply the pre-committed strategy, then loop."
+  [flags]
+  (reset-strategy!)
+  (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
+    (when (seq strategy-flags)
+      (set-strategy! strategy-flags)
+      (println (format "🎯 Strategy: %s"
+                       (clojure.string/join
+                        ", " (map (fn [[k v]]
+                                    (if (set? v)
+                                      (str (name k) " " (clojure.string/join "," v))
+                                      (name k)))
+                                  strategy-flags))))))
+  (println "👁️  Monitoring run... (auto-passing boring windows)")
+  (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
+                       :persistent (boolean (:persistent flags))))
+
+(defn- park-and-monitor!
+  "Persistent defender that owns the OPPONENT'S WHOLE TURN, not just one run.
+
+   Issue #31, Fix A — the bug this exists to kill: `monitor-run!` used to return
+   :no-run the instant it was called with no run active, EVEN under --persistent.
+   So a Corp seat that armed its monitor a moment too early (or re-armed between
+   runs while the model was thinking) simply left the post. The Runner would then
+   start a run, arrive at a rez window with NOBODY HOME, wait, ping, and finally
+   jack out. In marquee d6962df4 that happened on every run: 5 jack-outs, 1
+   encounter, 1 rez — and the Corp seat's own report said the quiet part out loud:
+   \"the Runner jacked out before my monitor engaged ('no active run')\".
+
+   Parking makes the Corp's presence at the window independent of model latency:
+   combined with a pre-committed --rez/--no-rez it answers windows instantly.
+   Returns only on a real decision, the opponent's turn ending, game over, or
+   timeout."
+  [flags]
+  (let [timeout-ms (or (:park-timeout-ms flags) 300000)
+        deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (println "🅿️  Parked — waiting for the opponent to start a run (persistent; owns the whole turn)")
+    (loop []
+      (if (> (System/currentTimeMillis) deadline)
+        (do (println (format "⚠️  Park stopped: timeout (%dms) reached" timeout-ms))
+            {:status :timeout :wake-reason :timeout :cursor (state/get-cursor)})
+        (let [st @state/client-state
+              side (:side st)]
+          (case (park-wake-reason st side)
+            :game-over
+            (do (println "🏁 Game over — leaving the post")
+                {:status :game-over :wake-reason :game-over :cursor (state/get-cursor)})
+
+            :my-turn
+            (do (println "🔔 Opponent's turn ended — your move")
+                {:status :my-turn :wake-reason :my-turn :cursor (state/get-cursor)})
+
+            :run
+            (let [result (monitor-active-run! flags)]
+              (if (park-continuable? (:status result))
+                (do (println "🅿️  Run ended — back to the post (opponent's turn continues)")
+                    (recur))
+                (assoc result :cursor (state/get-cursor))))
+
+            :park
+            (do (Thread/sleep 1000)
+                (recur))))))))
+
 (defn monitor-run!
   "Corp command to enter auto-continue mode during a run.
 
@@ -1585,41 +1757,31 @@
          :cursor current-cursor
          :fast-return true})
 
-      ;; No active run
+      ;; No active run.
+      ;; --persistent PARKS here (owns the opponent's whole turn) instead of
+      ;; abandoning the post — see park-and-monitor! for why (#31 Fix A).
+      ;; Hand-driven monitor-run keeps the old immediate :no-run return.
       (nil? run)
-      (do
-        (println "⚠️  No active run to monitor")
-        {:status :no-run
-         :wake-reason :no-run
-         :cursor current-cursor})
+      (if (:persistent flags)
+        (park-and-monitor! flags)
+        (do
+          (println "⚠️  No active run to monitor")
+          {:status :no-run
+           :wake-reason :no-run
+           :cursor current-cursor}))
 
       ;; Normal monitoring flow
       :else
       (do
-        ;; Reset strategy at start of monitoring (Corp has separate atom from Runner)
-        ;; This prevents stale --rez sets from previous runs
-        (reset-strategy!)
-        ;; Apply new strategy flags. Exclude control flags that govern the loop
-        ;; itself (not the rez/fire strategy): :since (fast-return), :persistent
-        ;; and :return-on-signal (loop behavior) — so they don't pollute the
-        ;; 🎯 Strategy line or the run-strategy atom.
-        (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
-          (when (seq strategy-flags)
-            (set-strategy! strategy-flags)
-            (println (format "🎯 Strategy: %s"
-                            (clojure.string/join ", "
-                                                 (map (fn [[k v]]
-                                                        (if (set? v)
-                                                          (str (name k) " " (clojure.string/join "," v))
-                                                          (name k)))
-                                                      strategy-flags))))))
-        (println "👁️  Monitoring run... (auto-passing boring windows)")
         (when (:persistent flags)
-          (println "🔁 Persistent mode — staying in the loop across empty windows (wakes for decisions / run end)"))
-        (let [result (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
-                                          :persistent (boolean (:persistent flags)))]
-          ;; Include cursor in result for caller to track
-          (assoc result :cursor (state/get-cursor)))))))
+          (println "🔁 Persistent mode — owns the whole run (wakes for decisions / run end)"))
+        (let [result (monitor-active-run! flags)]
+          ;; A persistent monitor whose run just ENDED returns to the post: the
+          ;; opponent's turn is still running and they may start another run.
+          ;; (Re-arming per-run is exactly the gap that left windows unattended.)
+          (if (and (:persistent flags) (park-continuable? (:status result)))
+            (park-and-monitor! flags)
+            (assoc result :cursor (state/get-cursor))))))))
 
 ;; ============================================================================
 ;; Convenience Wrapper

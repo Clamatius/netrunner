@@ -40,6 +40,16 @@ already kept its hand. You take the Runner seat.
    Never conclude "the opponent is stuck / I should quit" off an empty `wait`
    alone — check `peer-status` first. An alive-but-slow Corp is the default.
 
+   **NEVER jack out to unstick a run.** A jack-out is a *netrunner smell*: the
+   only tactically legitimate reasons are (1) you misjudged what it costs to get
+   in, and (2) a Karunā jack-out subroutine (bail before the 4th net damage kills
+   you). "The window isn't advancing" is NOT one of them — jacking out throws the
+   whole run away (breakers paid, credits spent, access lost) and fixes nothing.
+   If a run window sits waiting on the Corp: `peer-status` → alive ⇒ **wait**. The
+   client now self-advances any window the Corp provably cannot act in, so a
+   window that is genuinely waiting is one the Corp really does owe you. Be
+   patient and let them answer it.
+
 3. **Isolation contract (hard rule):** ONLY ever run `./dev/send_command runner …`.
    NEVER run a `corp` command. Never try to inspect the Corp's hidden information
    (their HQ/hand, R&D order, facedown installs, pending rez). You only learn a

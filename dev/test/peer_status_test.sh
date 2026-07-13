@@ -97,6 +97,36 @@ assert_contains "reset-wires-clear" "$(cat "$SCRIPT_DIR/../reset.sh")" "clear-he
 SEND_SRC="$(cat "$SEND_CMD")"
 assert_contains "wait-suppresses-footer-on-gameover" "$SEND_SRC" 'WAIT_OUT" != *"Game over"*'
 
+# ── Keep-alive toucher (park mode, #31 Fix A) ────────────────────────────────
+# `monitor-run --persistent` now PARKS for the opponent's whole turn, so one
+# invocation can stay open for minutes. The heartbeat is touched at invocation,
+# so without a keep-alive an ALIVE parked driver would age past PEER_STALE_SECS
+# and be reported SILENT — a false dead-peer verdict telling the opponent to
+# abandon a live game. send_command therefore runs a background toucher for the
+# life of the invocation.
+#
+# The DANGEROUS failure mode of that toucher is the mirror image: if it outlives
+# its parent, it keeps a DEAD driver's heartbeat fresh forever and the sensor can
+# never report a real disconnect. It is bound to the parent via `kill -0`, which
+# holds even under SIGKILL (where no EXIT trap runs). Both are asserted here.
+
+# 1. No orphan: once the invocation exits, the heartbeat must STOP advancing.
+HEARTBEAT_TOUCH_SECS=1 "$SEND_CMD" corp peer-status >/dev/null 2>&1 || true
+before_mt="$(stat -f %m "$HEARTBEAT_DIR/corp" 2>/dev/null || stat -c %Y "$HEARTBEAT_DIR/corp" 2>/dev/null || echo 0)"
+sleep 3
+after_mt="$(stat -f %m "$HEARTBEAT_DIR/corp" 2>/dev/null || stat -c %Y "$HEARTBEAT_DIR/corp" 2>/dev/null || echo 0)"
+if [[ "$before_mt" == "$after_mt" ]]; then
+    echo "ok   [no-orphan-toucher-after-exit]"
+else
+    echo "FAIL [no-orphan-toucher-after-exit]: heartbeat kept advancing after send_command exited"
+    echo "     (an orphaned toucher would keep a DEAD driver looking alive forever)"
+    fails=$((fails+1))
+fi
+
+# 2. A SIGKILLed driver still goes stale: the toucher's parent-liveness guard is
+#    `kill -0`, not an EXIT trap, so it must not survive a kill -9 of the parent.
+assert_contains "toucher-bound-to-parent-liveness" "$SEND_SRC" 'kill -0 "$_hb_parent"'
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0
