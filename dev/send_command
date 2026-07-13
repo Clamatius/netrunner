@@ -26,7 +26,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -84,7 +84,7 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: continue  (pass priority in a run; or monitor-run to participate)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
-    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping keep-hand mulligan discard remove-tag game-over-status"
+    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
     local hits
     # `|| true`: grep exits non-zero on no match, which under `set -euo pipefail`
     # would abort the whole script *here* — silently swallowing both this hint and
@@ -275,6 +275,10 @@ ${GREEN}Waiting:${NC}
                               Default 300s timeout. Always pass --since
                               with the cursor you captured before acting.
   ping             Send 'ping' chat to wake opponent's wait
+  peer-status      Is my opponent alive? Shows how long since their driver last
+                   acted. Use when a wait keeps timing out empty: 'active Ns ago'
+                   = still thinking (keep waiting); 'SILENT / likely disconnected'
+                   = their process died — conclude, don't wait forever.
 
 ${GREEN}Lobby:${NC}
   create-game <title>   Create new game
@@ -564,11 +568,68 @@ else
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE" 2>/dev/null || true
 fi
 
+# ── Peer liveness / dead-peer detection ──────────────────────────────────────
+# Every send_command invocation from a side is a heartbeat: that side's DRIVER
+# (Claude / devin / any guest) is alive and acting. We touch a per-side file so
+# the OTHER side can tell "opponent still thinking" from "opponent process died"
+# — the gap that silently kills un-babysat cross-model games (a dead guest looks
+# identical to a slow one). Chokepoint design: instrumenting send_command means
+# every harness is covered without per-harness hooks. Because the 120s Bash tool
+# ceiling forces even a blocking `wait` to return every ~2min, an alive-but-
+# waiting driver re-touches within ~2min; only a genuinely dead driver goes
+# stale past the ~5min threshold. Best-effort — a heartbeat failure must never
+# abort the real command under `set -euo pipefail`.
+HEARTBEAT_DIR="${HEARTBEAT_DIR:-${NETRUNNER_ROOT}/logs/.heartbeats}"
+PEER_STALE_SECS="${PEER_STALE_SECS:-300}"   # opponent silent this long ⇒ likely disconnected
+
+opponent_of() {   # echo the other seat, or empty for non-corp/runner callers
+    case "$1" in
+        corp)   echo "runner" ;;
+        runner) echo "corp" ;;
+        *)      echo "" ;;
+    esac
+}
+
+file_mtime() {    # portable mtime epoch (darwin -f, linux -c)
+    stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+fmt_age() {       # seconds → "8s" / "6m 12s"
+    local s="$1"
+    if (( s < 60 )); then echo "${s}s"; else echo "$(( s / 60 ))m $(( s % 60 ))s"; fi
+}
+
+# Touch THIS side's heartbeat (driver is alive right now).
+if [[ "$CLIENT_NAME" == "corp" || "$CLIENT_NAME" == "runner" ]]; then
+    mkdir -p "$HEARTBEAT_DIR" 2>/dev/null || true
+    touch "${HEARTBEAT_DIR}/${CLIENT_NAME}" 2>/dev/null || true
+fi
+
+# peer_liveness_line — echo a one-line read of the OPPONENT's last activity, or
+# nothing if we can't tell (no side, no heartbeat yet). Used as a footer on the
+# waiting commands and by the `peer-status` command.
+peer_liveness_line() {
+    local opp; opp="$(opponent_of "$CLIENT_NAME")"
+    [[ -z "$opp" ]] && return 0
+    local hb="${HEARTBEAT_DIR}/${opp}"
+    [[ -f "$hb" ]] || { echo "⏱  opponent (${opp}): no heartbeat yet (not seen acting this session)"; return 0; }
+    local mt; mt="$(file_mtime "$hb")"
+    [[ -z "$mt" ]] && return 0
+    local now age; now="$(date +%s)"; age=$(( now - mt ))
+    (( age < 0 )) && age=0
+    if (( age >= PEER_STALE_SECS )); then
+        echo "⚠️  opponent (${opp}): SILENT $(fmt_age "$age") — likely disconnected (threshold ${PEER_STALE_SECS}s). Don't wait forever; verify game-over-status / conclude."
+    else
+        echo "⏱  opponent (${opp}): active $(fmt_age "$age") ago — alive, keep waiting if it's their move."
+    fi
+}
+
 # Help is pure text — it must work even when no REPL is running (e.g. after a
 # game times out and the REPLs get bounced). Everything else needs a live client.
 case "$COMMAND" in
-    help|--help|-h) ;;
-    *)              check_client ;;
+    help|--help|-h)  ;;
+    peer-status)     ;;   # reads local heartbeat files only — no REPL needed
+    *)               check_client ;;
 esac
 
 case "$COMMAND" in
@@ -1114,6 +1175,9 @@ case "$COMMAND" in
         info "Loop mode (monitor-run is alias for 'continue')..."
         execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
         show_last_log_if_enabled
+        # Peer-liveness footer: on a monitor-run timeout the seat must judge
+        # whether the opponent is thinking or gone before re-issuing.
+        PEER_LINE="$(peer_liveness_line)"; [[ -n "$PEER_LINE" ]] && echo "$PEER_LINE"
         ;;
 
     jack-out)
@@ -1210,11 +1274,30 @@ case "$COMMAND" in
             info "Waiting (timeout: ${TIMEOUT}s)..."
             execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
         fi
+        # Peer-liveness footer: a wait that returns empty is where a seat must
+        # decide "opponent thinking vs dead" — surface the opponent's heartbeat age.
+        PEER_LINE="$(peer_liveness_line)"; [[ -n "$PEER_LINE" ]] && echo "$PEER_LINE"
         ;;
 
     get-cursor)
         ensure_connection
         execute "(ai-actions/get-cursor)"
+        ;;
+
+    peer-status)
+        # Dead-peer check: how long since the OPPONENT's driver last acted (issued
+        # any send_command). No REPL needed — reads local heartbeat files only.
+        OPP="$(opponent_of "$CLIENT_NAME")"
+        if [[ -z "$OPP" ]]; then
+            echo "peer-status needs a side: ./dev/send_command <corp|runner> peer-status"
+        else
+            SELF_HB="${HEARTBEAT_DIR}/${CLIENT_NAME}"
+            if [[ -f "$SELF_HB" ]]; then
+                SELF_MT="$(file_mtime "$SELF_HB")"; SELF_AGE=$(( $(date +%s) - ${SELF_MT:-0} ))
+                echo "you (${CLIENT_NAME}): active $(fmt_age "$SELF_AGE") ago"
+            fi
+            peer_liveness_line
+        fi
         ;;
 
     # Lobby

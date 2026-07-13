@@ -100,6 +100,13 @@ it. The rule:
 - **TIMEOUT during an active run is normal pacing, not a stall** — just re-issue
   `monitor-run --persistent`. Only repeated timeouts with *zero* board movement
   across several re-issues is a possible genuine wedge (note it for your report).
+- **Slow-but-alive vs. dead opponent — check, don't guess.** A `wait` /
+  `monitor-run` return ends with a peer-liveness line; you can also run
+  `./dev/send_command corp peer-status` anytime. `opponent (runner): active Ns
+  ago` → still thinking, keep re-issuing (patience is correct). `opponent
+  (runner): SILENT … likely disconnected` → their process died; confirm
+  `game-over-status` and, if still IN-PROGRESS, report the dead peer and stop —
+  do not loop forever.
 - When a run ends, go back to the `wait` loop. **Several runs can happen in one
   Runner turn — after each run ends, return to `wait`, and re-arm `monitor-run
   --persistent` the moment the next run starts.** Never leave a gap between runs.

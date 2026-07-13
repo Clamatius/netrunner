@@ -152,6 +152,13 @@ return is normal pacing, NOT a stall and NOT a decision. Re-entering simply
 re-arms the defender loop where it left off. (Only treat repeated timeouts with
 *zero* board movement across several re-issues as a possible genuine wedge.)
 
+To tell a slow-but-alive opponent from a dead one, don't guess — a `wait` /
+`monitor-run` return ends with a peer-liveness line, and you can check anytime
+with `./dev/send_command corp peer-status`. `opponent (runner): active Ns ago`
+→ still thinking, keep re-issuing. `opponent (runner): SILENT … likely
+disconnected` → their process has died; confirm `game-over-status` and, if still
+IN-PROGRESS, report the dead peer and stop rather than looping forever.
+
 **Rez judgement:** rez when the ICE actually stops or taxes a run you care about
 (protecting an agenda/centrals you can't afford to lose), not reflexively — rezzing
 burns credits and reveals the card. A cheap ICE on a server with nothing worth

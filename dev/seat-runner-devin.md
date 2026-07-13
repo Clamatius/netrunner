@@ -28,6 +28,18 @@ already kept its hand. You take the Runner seat.
    A `wait` that wakes with reason `my-turn-start` means **start your turn** (run
    `start-turn`); it is NOT a stall. Reason `my-turn` (with clicks) means act now.
 
+   **Do NOT give up just because a `wait` times out empty.** A `wait` return now
+   ends with a peer-liveness line — and you can check any time with
+   `./dev/send_command runner peer-status`:
+   - `opponent (corp): active Ns ago — alive` → the Corp is **still thinking**.
+     Re-issue `wait` and keep going. This is the normal case; a slow model can
+     think for many minutes. Patience is correct play, not a stall.
+   - `opponent (corp): SILENT … — likely disconnected` → only THEN is the Corp
+     genuinely gone. Confirm with `game-over-status`; if still IN-PROGRESS, the
+     opponent's process has died and the game can't continue — report that and stop.
+   Never conclude "the opponent is stuck / I should quit" off an empty `wait`
+   alone — check `peer-status` first. An alive-but-slow Corp is the default.
+
 3. **Isolation contract (hard rule):** ONLY ever run `./dev/send_command runner …`.
    NEVER run a `corp` command. Never try to inspect the Corp's hidden information
    (their HQ/hand, R&D order, facedown installs, pending rez). You only learn a
