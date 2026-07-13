@@ -1274,14 +1274,21 @@ case "$COMMAND" in
         done
         if [[ -n "$SINCE" ]]; then
             info "Waiting (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
-            execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})"
+            WAIT_OUT="$(execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})" || true)"
         else
             info "Waiting (timeout: ${TIMEOUT}s)..."
-            execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)"
+            WAIT_OUT="$(execute "(ai-actions/wait-for-relevant-diff $TIMEOUT)" || true)"
         fi
+        printf '%s\n' "$WAIT_OUT"
         # Peer-liveness footer: a wait that returns empty is where a seat must
         # decide "opponent thinking vs dead" — surface the opponent's heartbeat age.
-        PEER_LINE="$(peer_liveness_line)"; [[ -n "$PEER_LINE" ]] && echo "$PEER_LINE"
+        # But SUPPRESS it on a game-over wake: there the "alive, keep waiting if
+        # it's their move" variant flatly contradicts the "stop acting" wake line
+        # printed just above (and at real game-end the loser just moved, so their
+        # heartbeat IS fresh — the contradictory variant is the normal outcome).
+        if [[ "$WAIT_OUT" != *"Game over"* && "$WAIT_OUT" != *"game-over"* && "$WAIT_OUT" != *"🏁"* ]]; then
+            PEER_LINE="$(peer_liveness_line)"; [[ -n "$PEER_LINE" ]] && echo "$PEER_LINE"
+        fi
         ;;
 
     get-cursor)
