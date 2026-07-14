@@ -840,6 +840,30 @@
                        (:title %)))
          first)))
 
+(defn find-selectable-card-by-cid
+  "Resolve a CID that came from a prompt's :selectable list to a card map.
+
+   Unlike find-card-by-cid, this does NOT require :title. At a multi-card remote
+   breach the engine lists FACE-DOWN Corp cards as selectable; in the Runner's
+   view those cards are legitimately title-less yet are real, pickable cards —
+   they carry :cid/:zone/:side/:type, which is all select-card! needs. A
+   title-less match must carry :zone AND :side — both present on a real board
+   card and among the fields select-card! consumes — so non-card maps that merely
+   carry a :cid (effects-registry entries, log refs) are still skipped. When
+   several maps share the CID, a named (:title) match is preferred so behavior for
+   ordinary visible cards is unchanged. (issue #70)
+
+   Returns nil if no card-shaped map matches."
+  [cid]
+  (let [gs (state/get-game-state)
+        matches (->> (tree-seq coll? seq gs)
+                     (filter #(and (map? %)
+                                   (= cid (:cid %))
+                                   (or (:title %) (and (:zone %) (:side %)))))
+                     seq)]
+    (or (some #(when (:title %) %) matches)
+        (first matches))))
+
 (defn resolve-selectable
   "Resolve a prompt's :selectable list, separating cards this seat can actually
    pick from PHANTOM entries — CIDs absent from the seat's visible game state
@@ -848,27 +872,34 @@
    {:pickable [{:idx <n> :card <map>} ...] :phantom [<idx> ...]}.
 
    Indices are the ORIGINAL positions in :selectable — choose-card resolves by
-   `(nth selectable index)`, so callers must never renumber the underlying list."
+   `(nth selectable index)`, so callers must never renumber the underlying list.
+
+   A CID string is resolved with find-selectable-card-by-cid, so a FACE-DOWN card
+   the seat is accessing at a breach (title-less but zone-resident) counts as
+   pickable rather than phantom. Card-shape is judged by :title OR :zone. (#70)"
   [selectable]
   (reduce
    (fn [acc [idx s]]
-     (let [card (if (string? s) (find-card-by-cid s) s)]
-       (if (and (map? card) (:title card))
+     (let [card (if (string? s) (find-selectable-card-by-cid s) s)]
+       (if (and (map? card) (or (:title card) (:zone card)))
          (update acc :pickable conj {:idx idx :card card})
          (update acc :phantom conj idx))))
    {:pickable [] :phantom []}
    (map-indexed vector selectable)))
 
 (defn format-selectable-card
-  "Format one resolved selectable card for display: title, type, zone, rez state."
+  "Format one resolved selectable card for display: title, type, zone, rez state.
+   A title-less card (e.g. a face-down Corp card being accessed at a breach) is
+   labelled 'face-down card' with its zone so the seat can still pick it. (#70)"
   [card]
-  (let [title (or (:title card) (:printed-title card) "?")
+  (let [named? (or (:title card) (:printed-title card))
+        title (or named? "face-down card")
         card-type (:type card)
         zone (:zone card)
         rezzed? (:rezzed card)]
     (str title
-         (when (seq (str card-type)) (str " [" card-type "]"))
-         (when (and (seq zone) (:title card))
+         (when (and named? (seq (str card-type))) (str " [" card-type "]"))
+         (when (seq zone)
            (str " (in " (str/join "/" (map name zone)) ")"))
          (when (some? rezzed?) (if rezzed? " (rezzed)" " (unrezzed)")))))
 
