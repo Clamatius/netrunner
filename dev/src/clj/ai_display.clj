@@ -1518,8 +1518,10 @@
   [card-name]
   (let [state @state/client-state
         side (:side state)
-        ;; Find card in appropriate location
-        card (if (= "Corp" side)
+        ;; Find card in appropriate location. Use core/side= — client-state stores
+        ;; :side lowercase ("corp"), so a strict (= "Corp" side) is always false
+        ;; and would search the Runner rig, missing every Corp card. (issue #69)
+        card (if (core/side= "Corp" side)
                (core/find-installed-corp-card card-name)
                (core/find-installed-card card-name))]
     (if card

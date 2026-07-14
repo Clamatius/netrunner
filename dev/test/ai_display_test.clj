@@ -969,3 +969,29 @@
             (str "should name the opponent we're waiting on:\n" out))
         (is (or (str/includes? out "wait") (str/includes? out "Other actions"))
             (str "should tell the player they can wait / still have actions:\n" out))))))
+
+;; ============================================================================
+;; show-card-abilities — Corp-seat card lookup (issue #69)
+;;
+;; Regression: `abilities` used a strict (= "Corp" side) check, but client-state
+;; stores :side lowercase ("corp"). So (= "Corp" "corp") was always false, the
+;; else branch searched the RUNNER rig, and every Corp card reported "Card not
+;; found installed" — even installed+rezzed assets whose abilities `use-ability`
+;; (which uses the normalizing core/side=) could fire fine. Must use side=.
+;; ============================================================================
+
+(deftest test-show-card-abilities-corp-seat-finds-corp-asset
+  (testing "abilities resolves a rezzed Corp asset for a Corp seat (:side is lowercase)"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :servers {:remote1 {:content [{:cid "reg-1"
+                                                     :title "Regolith Mining License"
+                                                     :type "Asset" :rezzed true
+                                                     :zone ["servers" "remote1" "content"]
+                                                     :abilities [{:label "Take 3 [Credits]"
+                                                                  :cost-label "[Click]"}]}]}})
+      (let [out (with-out-str (display/show-card-abilities "Regolith Mining License"))]
+        (is (not (str/includes? out "Card not found installed"))
+            (str "a Corp seat's own installed card must resolve:\n" out))
+        (is (str/includes? out "Take 3")
+            (str "should list the card's ability:\n" out))))))
