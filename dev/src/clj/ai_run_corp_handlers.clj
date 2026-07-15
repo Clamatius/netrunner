@@ -226,7 +226,12 @@
           current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
           subroutines (:subroutines current-ice)
-          unbroken-subs (filter #(not (:broken %)) subroutines)
+          ;; A :fired sub is RESOLVED, not fireable — exclude it, matching the
+          ;; engine's resolve-unbroken-subs! and the sibling fire handlers. Without
+          ;; this, a post-fire re-entry saw the fired sub as still fireable and
+          ;; (when :fired-at-position was stale) re-sent the fire command, firing
+          ;; the same sub twice. #71 (Diviner: 2 net damage from one subroutine).
+          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
           runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)]
       (cond
         already-fired-here? nil

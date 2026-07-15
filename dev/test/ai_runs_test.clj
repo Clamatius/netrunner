@@ -182,6 +182,58 @@
           (runs/reset-strategy!))))))
 
 ;; ============================================================================
+;; #71: Corp --fire-unbroken must not re-fire an already-fired subroutine.
+;;
+;; Diviner has ONE subroutine. In marquee 9242bc1b it fired TWICE (2 net damage,
+;; 2 cards trashed) because handle-corp-fire-unbroken's "unbroken subs" view
+;; filtered only :broken, not :fired — so on re-entry after the sub already
+;; fired it still saw the sub as fireable and (when the :fired-at-position guard
+;; was stale) re-sent the fire command. The engine's own resolve-unbroken-subs!
+;; excludes :fired; the client's view must match. A :fired sub is resolved, not
+;; fireable.
+;; ============================================================================
+
+(deftest test-corp-fire-unbroken-does-not-refire-fired-sub
+  (testing "Corp does NOT re-send the fire command for a subroutine already marked :fired"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "corp"
+         :run-phase "encounter-ice"
+         :position 1
+         :ice [{:title "Diviner" :rezzed true
+                ;; Post-fire state: the single sub has resolved (:fired true).
+                :subroutines [{:broken false :fired true}]}]
+         :log [{:text "ai-runner indicates to fire all unbroken subroutines on Diviner"}])
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          ;; :fired-at-position deliberately absent — simulate the stale re-entry
+          ;; that let the double-fire through. The sub-state guard must stand on
+          ;; its own, not lean on the position bookkeeping.
+          (runs/set-strategy! {:fire-unbroken true})
+          (runs/continue-run!)
+          (is (not-any? #(= "unbroken-subroutines" (get-in % [:data :command])) @sent)
+              (str "must NOT re-fire an already-fired sub, sent: " @sent))
+          (runs/reset-strategy!))))))
+
+(deftest test-corp-fire-unbroken-still-fires-genuinely-unfired-sub
+  (testing "Corp DOES fire when the sub is genuinely unbroken and unfired (fix doesn't over-suppress)"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "corp"
+         :run-phase "encounter-ice"
+         :position 1
+         :ice [{:title "Diviner" :rezzed true
+                :subroutines [{:broken false :fired false}]}]
+         :log [{:text "ai-runner indicates to fire all unbroken subroutines on Diviner"}])
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runs/set-strategy! {:fire-unbroken true})
+          (runs/continue-run!)
+          (is (some #(= "unbroken-subroutines" (get-in % [:data :command])) @sent)
+              (str "an unfired sub with the Runner's signal must still fire, sent: " @sent))
+          (runs/reset-strategy!))))))
+
+;; ============================================================================
 ;; Priority 2: Runner Waiting for Corp Rez
 ;; ============================================================================
 
