@@ -68,6 +68,18 @@ class TestExtractLog:
     def test_skips_empty_text(self):
         assert extract_log({"log": [_entry("")]}) == []
 
+    def test_object_user_coerced_to_username(self):
+        # A non-system entry (chat, ping) carries `user` as a full user object,
+        # not the "__system__" string. Before the fix the dict flowed straight
+        # into `actor`, and generate_dsl blew up using it as a dict hash key.
+        log = [{"user": {"username": "ai-runner", "emailhash": "deadbeef"},
+                "text": "ping", "timestamp": "2026-01-01T00:00:00Z"}]
+        lines = extract_log({"log": log})
+        assert lines[0] == "ai-runner"      # username pulled out of the object
+        assert isinstance(lines[0], str)
+        # And it must survive the full pipeline without raising.
+        generate_dsl(parse_log_lines(lines))
+
 
 class TestEndToEnd:
     def test_replay_log_to_nan(self):

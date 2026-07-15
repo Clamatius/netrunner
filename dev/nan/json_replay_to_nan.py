@@ -167,6 +167,12 @@ def extract_log(state):
         if not text:
             continue
         user = entry.get('user', 'Unknown')
+        # A non-system entry (chat, ping) carries `user` as either a bare
+        # username string or a full user object {username, emailhash, ...}.
+        # Coerce the object to its username so `actor` stays a hashable string
+        # (an unhashable dict actor blows up the side-mapping in generate_dsl).
+        if isinstance(user, dict):
+            user = user.get('username') or "__system__"
         if user and user != "__system__":
             actor = user
         else:
