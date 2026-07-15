@@ -246,14 +246,18 @@
             window). Old behavior returned :no-run and abandoned the post."
     (let [st (mock-client-state
               :side "corp"
-              :game-state {:run nil :active-player "runner"})]
+              :game-state {:run nil :active-player "runner"
+                           :turn 3 :corp {:click 0} :runner {:click 2}})]
       (is (= :park (runs/park-wake-reason st "corp"))))))
 
 (deftest park-returns-on-my-turn
-  (testing "Opponent's turn ended -> hand control back to the seat"
+  (testing "It IS the Corp's live turn (active + clicks in hand) -> hand control
+            back to the seat. (The turn-boundary variants — opponent ended, or
+            AWAITING-START — are covered by the dedicated tests below.)"
     (let [st (mock-client-state
               :side "corp"
-              :game-state {:run nil :active-player "corp"})]
+              :game-state {:run nil :active-player "corp"
+                           :turn 3 :corp {:click 2} :runner {:click 0}})]
       (is (= :my-turn (runs/park-wake-reason st "corp"))))))
 
 (deftest park-wakes-on-a-corp-prompt-with-no-run
@@ -301,7 +305,7 @@
     (let [st (mock-client-state
               :side "corp"
               :game-state {:run nil :active-player "corp" :end-turn true
-                           :corp {:click 0} :runner {:click 0}})]
+                           :turn 5 :corp {:click 0} :runner {:click 0}})]
       (is (= :park (runs/park-wake-reason st "corp"))
           "Corp that just ended its turn must PARK, not be told 'your move'"))))
 
@@ -311,8 +315,26 @@
     (let [st (mock-client-state
               :side "corp"
               :game-state {:run nil :active-player "runner" :end-turn true
-                           :corp {:click 0} :runner {:click 0}})]
+                           :turn 5 :corp {:click 0} :runner {:click 0}})]
       (is (= :my-turn (runs/park-wake-reason st "corp"))))))
+
+(deftest park-does-not-say-your-move-at-awaiting-start-boundary
+  (testing "#68 (LIVE-CAUGHT, marquee 14bb5405): the OTHER turn-boundary residual.
+            A parked Corp saw '🔔 Opponent's turn ended — your move' ~3x while
+            game-over-status authoritatively read AWAITING-START next-player=runner.
+            Repro'd live: {:active-player \"corp\" :end-turn FALSE :turn 1
+            :corp-click 0}. Unlike #31 the engine had NOT set :end-turn, so the old
+            bespoke my-turn? fell into its (= active side) branch and said 'your
+            move' — telling the Corp to leave the post while the Runner had not yet
+            started. next-player=runner means the Corp must stay at its post. Fixed
+            by deferring to core/my-turn-to-act? (the same predicate game-over-status
+            agrees with) instead of a second, divergent copy of boundary logic."
+    (let [st (mock-client-state
+              :side "corp"
+              :game-state {:run nil :active-player "corp" :end-turn false
+                           :turn 1 :corp {:click 0} :runner {:click 0}})]
+      (is (= :park (runs/park-wake-reason st "corp"))
+          "AWAITING-START next-player=runner: Corp parks, not 'your move'"))))
 
 (deftest runner-never-parks
   (testing "Runs only happen on the Runner's turn, so a Runner parking for the

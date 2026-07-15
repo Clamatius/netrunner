@@ -1719,19 +1719,22 @@
   [state side]
   (let [gs (:game-state state)
         my-prompt (get-in gs [(keyword side) :prompt-state])
-        active (normalize-side (:active-player gs))
-        ;; :active-player is STALE at a turn boundary. When a player ends their
-        ;; turn the engine sets :end-turn and LEAVES :active-player pointing at
-        ;; them until the opponent actually calls start-turn (verified live:
-        ;; {:active-player "corp", :end-turn true, :corp-click 0} while
-        ;; game-over-status reads AWAITING-START next-player=runner). Reading
-        ;; :active-player raw therefore told a Corp that had *just ended its turn*
-        ;; — exactly when the brief tells it to take its post — "your move", and
-        ;; bounced it straight back out of the park it was trying to enter. So at
-        ;; a boundary the player to act is the OTHER one.
-        my-turn? (if (:end-turn gs)
-                   (= (core/other-side active) side)
-                   (= active side))]
+        ;; Turn ownership at a boundary is subtle and the engine's raw fields lie
+        ;; about it in more than one way, so DON'T re-derive it here — defer to
+        ;; core/my-turn-to-act?, the single authoritative predicate that also
+        ;; backs `wait`/`relevance-reason` and agrees with game-over-status.
+        ;; A bespoke copy of this logic bit us twice:
+        ;;   #31 — a Corp that had JUST ENDED its turn (:end-turn set, but
+        ;;         :active-player still pointing at itself) read as active and got
+        ;;         told "your move", bouncing it out of the post it was entering.
+        ;;   #68 — a boundary where :end-turn was NOT set but :active-player was
+        ;;         still "corp" with 0 clicks (live: turn=1, game-over-status
+        ;;         AWAITING-START next-player=runner) fell into the raw
+        ;;         (= active side) branch and again said "your move" ~3x, telling
+        ;;         the Corp to leave before the Runner had even started.
+        ;; my-turn-to-act? gets both right (0 clicks + not-opponent-ended => not
+        ;; my turn), so there is no second copy left to drift.
+        my-turn? (core/my-turn-to-act? state side)]
     (cond
       (state/game-over? gs) :game-over
       (some? (:run gs)) :run
