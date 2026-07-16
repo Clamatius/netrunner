@@ -230,6 +230,36 @@
           (is (str/includes? out "choose")
               (str "should steer to choose, got: " out)))))))
 
+(deftest multi-choose-selects-facedown-remote-card-by-index
+  (testing "multi-choose by index index-selects a title-less face-down card, mirroring choose-card! (#70)"
+    ;; choose-card! got find-selectable-card-by-cid in the merged #70 fix, but
+    ;; multi-choose! still resolved CIDs with the title-gated find-card-by-cid —
+    ;; a GPT-5.5-review consistency catch. Not the realistic breach path (a breach
+    ;; is a run of single-selects), but the same latent trap on the multi-select
+    ;; surface.
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :game-state {:corp {:servers {:remote1 {:content
+                                       [{:cid "fd-1"
+                                         :zone ["servers" "remote1" "content"]
+                                         :side "Corp" :type "Card"}]}}}
+                                     :runner {:prompt-state
+                                       {:prompt-type "select" :eid "brh-9"
+                                        :msg "Click a card to access it."
+                                        :selectable ["fd-1"]}}
+                                     :active-player "runner"})
+        (with-redefs [ws/select-card! (fn [card _eid] (swap! sent conj (:cid card)) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+          (let [out (with-out-str
+                      (let [r (prompts/multi-choose! 0)]
+                        (is (= :success (:status r))
+                            (str "expected success selecting the face-down card, got: " r))))]
+            (is (= ["fd-1"] @sent)
+                (str "must index-select the face-down card, got: " @sent))
+            (is (not (str/includes? out "Could not resolve card at index"))
+                (str "must resolve the title-less selectable card, got: " out))))))))
+
 ;; ============================================================================
 ;; choose-card! — partial multi-select must not trigger the auto-end-turn hook
 ;;

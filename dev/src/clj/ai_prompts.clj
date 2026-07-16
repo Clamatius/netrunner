@@ -348,10 +348,14 @@
         (core/with-cursor {:status :error :reason "No cards specified"}))
 
       :else
-      (let [;; Resolve selectable CIDs to cards upfront for name matching
+      (let [;; Resolve selectable CIDs to cards upfront. Use the selectable-aware
+            ;; resolver so a title-less FACE-DOWN card at a breach still
+            ;; index-selects, mirroring choose-card! (#70). Name matching against
+            ;; such a card is impossible anyway (no title), so this only affects
+            ;; by-index selection, which is what we want.
             resolved-selectable (map (fn [cid-or-card]
                                        (if (string? cid-or-card)
-                                         (core/find-card-by-cid cid-or-card)
+                                         (core/find-selectable-card-by-cid cid-or-card)
                                          cid-or-card))
                                      selectable)
             ;; Track cards to select - find each referenced card
