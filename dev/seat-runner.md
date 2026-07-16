@@ -120,6 +120,41 @@ game sits at `AWAITING-START next-player=corp` / your turn for ~10s+), simply
 settled it will cleanly re-send and the Corp will pick up. Retry it 2–3 times,
 ~3s apart, before deciding it's a genuine Corp-side stall.
 
+## If you suspect a wedge — raise your hand to the umpire (don't spin)
+
+You cannot tell "slow opponent" from "the harness is wedged" from your own seat — it
+is genuinely undecidable from one side. So don't silently burn 10 minutes re-sending
+a command that isn't advancing (and **don't jack out to escape it** — that throws the
+run away and fixes nothing). There is an **umpire**: a supervisor who can
+legitimately see BOTH seats' public status, there for exactly this.
+
+**Escalate when ANY of these holds:**
+- you've re-sent the same advancing command (`start-turn`, `continue`,
+  `smart-end-turn`) **~3×** with **no state change**; or
+- you've waited **> ~5 min** with no progress AND `peer-status` says the Corp is
+  still **alive** (not a dead peer — smells like a boundary wedge); or
+- a run window sits waiting on the Corp and won't advance, and `peer-status` says
+  the Corp is alive.
+
+**How — ping, then poll for the reply (bounded), then follow it:**
+```
+./dev/umpire-ping runner "what I tried + what I see"
+for i in $(seq 1 20); do ./dev/umpire-check runner && break; sleep 15; done
+```
+If ~5 min pass with **no** reply (umpire may be away), re-ping **once** with
+`--wake` (this pages the human): `./dev/umpire-ping runner --wake "still stuck, no umpire reply"`.
+Then fall back to the **safe default: keep waiting — do nothing destructive** (do
+NOT jack out, do NOT end the game).
+
+**HARD RULE — harness state ONLY, and assume the opponent can read your ping.** Say
+only what command you ran, how many times, and the **shape** of what you see
+(clicks, phase, prompt *type*, `peer-status`) — e.g. "run stuck at approach-server,
+`continue` no-op 3×, peer alive." **NEVER** state the prompt's *contents*, your grip,
+your rig plan, or your read of the Corp. The mailbox is shared, so a contents leak
+reaches the Corp and blows the fog-of-war premise. Ask "am I wedged?", never "what
+should I do?" — the umpire will refuse any strategy question. Do **not** read the
+other seat's files. Escalating when stuck is the correct move, not a failure.
+
 ## Knowing when to stop
 
 After each of your turns, check:

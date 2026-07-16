@@ -153,6 +153,34 @@ Corp hasn't started after a `wait` (~10s+), simply re-run
 `./dev/send_command runner smart-end-turn`. Retry 2–3 times, ~3s apart, before
 deciding it's a genuine Corp-side stall.
 
+### If you suspect a wedge — raise your hand to the umpire (do NOT exit)
+You cannot tell "slow opponent" from "harness wedged" from your own seat. There is
+an **umpire** — a supervisor who can see BOTH sides' public status — for exactly
+this. **You stay alive during this whole session, so escalate and WAIT for the
+reply; do NOT quit the session.** Quitting strands the game.
+
+**Escalate when ANY holds:** you've re-sent the same advancing command
+(`start-turn`, `continue`, `smart-end-turn`) **~3×** with no state change; OR waited
+**> ~5 min** with no progress AND `peer-status` says the Corp is **alive**; OR a run
+window won't advance while the Corp is alive. (Do NOT jack out to escape it.)
+
+**How — ping, then poll the reply file until it answers (this file poll IS the
+reply channel — nobody can inject a message into your session):**
+```
+./dev/umpire-ping runner "what I tried + what I see"
+for i in $(seq 1 20); do ./dev/umpire-check runner && break; sleep 15; done
+```
+Follow the reply exactly. If ~5 min pass with no reply, re-ping **once** with
+`--wake` (pages the human): `./dev/umpire-ping runner --wake "still stuck, no umpire reply"`,
+then fall back to the safe default: **keep waiting — do nothing destructive** (do
+NOT jack out, do NOT exit the session).
+
+**HARD RULE — harness state ONLY, and assume the Corp can read your ping.** Report
+only the command you ran, how many times, and the **shape** of what you see (clicks,
+phase, prompt *type*, `peer-status`) — never the prompt's *contents*, your grip, or
+your plan. The mailbox is shared; a contents leak blows fog-of-war. Ask "am I
+wedged?", never "what should I do?". Do not read the Corp's files.
+
 ### Knowing when to stop
 After each of your turns:
 ```

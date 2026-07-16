@@ -157,6 +157,34 @@ Also useful:
 - `./dev/send_command corp abilities "<name>"` — an installed card's numbered
   abilities for `use-ability`.
 
+## If you suspect a wedge — raise your hand to the umpire (do NOT exit)
+You cannot tell "slow opponent" from "harness wedged" from your own seat. There is
+an **umpire** — a supervisor who can see BOTH sides' public status — for exactly
+this. **You stay alive during this whole session, so escalate and WAIT for the
+reply; do NOT quit.** (`seat-corp.md` describes this too, but its live-message
+fallback is for Claude seats — for you the file poll below IS the reply channel.)
+
+**Escalate when ANY holds:** you've re-sent the same advancing command
+(`start-turn`, `continue`, `monitor-run --persistent`, `smart-end-turn`) **~3×**
+with no state change; OR waited **> ~5 min** with no progress AND `peer-status` says
+the Runner is **alive**; OR a run window won't advance while the Runner is alive.
+
+**How — ping, then poll the reply file until it answers:**
+```
+./dev/umpire-ping corp "what I tried + what I see"
+for i in $(seq 1 20); do ./dev/umpire-check corp && break; sleep 15; done
+```
+Follow the reply exactly. If ~5 min pass with no reply, re-ping **once** with
+`--wake` (pages the human): `./dev/umpire-ping corp --wake "still stuck, no umpire reply"`,
+then fall back to the safe default: **keep waiting at your post — do nothing
+destructive.**
+
+**HARD RULE — harness state ONLY, and assume the Runner can read your ping.** Report
+only the command, how many times, and the **shape** of what you see (clicks, phase,
+prompt *type*, `peer-status`) — never the prompt's *contents*, your hand/R&D, an
+unrezzed card, or your plan. The mailbox is shared; a contents leak blows fog-of-war.
+Ask "am I wedged?", never "what should I do?". Do not read the Runner's files.
+
 ## Don'ts
 - Don't modify game/AI code — you're a player this session, not a dev.
 - Don't touch the Runner seat or its REPL (port 7889).

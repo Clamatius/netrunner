@@ -123,6 +123,11 @@ fi
 # touch) can no longer masquerade as a live opponent. Best-effort; never fatal.
 "$SCRIPT_DIR/send_command" clear-heartbeats >> "$LOG_FILE" 2>&1 || true
 
+# Clear the seat→umpire mailbox (issue #20): a NEW game means any ping/reply from a
+# prior game is stale. Leaving it would let umpire-watch's catch-up surface a dead
+# game's unanswered ping, or a seat's first umpire-check claim a prior reply.
+rm -rf "$SCRIPT_DIR/.umpire" >> "$LOG_FILE" 2>&1 || true
+
 # Show final status
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

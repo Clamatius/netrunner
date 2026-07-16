@@ -1,0 +1,35 @@
+#!/bin/bash
+# umpire-check — seat claims the umpire's reply to its ping (issue #20).
+#
+# Consume-on-read: a reply is shown ONCE, then claimed (renamed away) so the next
+# check won't re-surface it — that is what makes a poll loop terminate on a NEW
+# reply and never act on a stale one from a prior ping/game.
+#   0  a fresh reply existed (printed + claimed it)
+#   3  no fresh reply yet (keep waiting)
+#
+# BOUNDED poll — do NOT wait forever (an absent umpire would just relocate the
+# wedge onto this channel). Bound it, then escalate / fall back:
+#   ./dev/umpire-ping runner "start-turn no-op 3x, still awaiting-start, peer alive"
+#   for i in $(seq 1 20); do ./dev/umpire-check runner && break; sleep 15; done
+#   # ~5 min elapsed with no reply → re-ping with --wake (pages the human), then
+#   # fall back to the safe default in your seat brief (keep waiting; nothing
+#   # destructive — never jack out / exit to "unstick").
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAILBOX_DIR="$SCRIPT_DIR/.umpire"
+
+[ "$#" -lt 1 ] && { echo "usage: $0 <corp|runner>" >&2; exit 64; }
+SIDE="$1"
+case "$SIDE" in corp|runner) ;; *) echo "❌ first arg must be 'corp' or 'runner'." >&2; exit 64 ;; esac
+
+REPLY_FILE="$MAILBOX_DIR/reply-$SIDE.txt"
+SEEN_FILE="$MAILBOX_DIR/reply-$SIDE.seen"
+
+# Atomically CLAIM the reply (rename), so a reply arriving mid-read isn't lost and
+# the same reply is never shown twice.
+if [ -f "$REPLY_FILE" ] && mv "$REPLY_FILE" "$SEEN_FILE" 2>/dev/null; then
+  echo "📩 umpire → $SIDE:  $(cat "$SEEN_FILE")"
+  exit 0
+fi
+echo "…no new reply yet ($SIDE) — the umpire hasn't answered since your last check."
+exit 3

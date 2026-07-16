@@ -1,0 +1,62 @@
+#!/bin/bash
+# umpire-ping — seat→umpire escalation (issue #20).
+#
+# A seat raises its hand when it suspects a wedge instead of burning 10+ min in a
+# silent spin. Appends a structured line to the shared mailbox that the umpire is
+# Monitoring (dev/umpire-watch.sh), and optionally pages Michael via ntfy.
+#
+# HARD CONSTRAINT — TOOLING CHANNEL ONLY, NEVER STRATEGY. Report harness state only
+# ("sent continue 3x, prompt unchanged, am I wedged?"). NEVER mention your hand,
+# your plan, or the opponent — the umpire sees both hands and a leak blows the
+# fog-of-war premise. The umpire will refuse a strategy question.
+#
+# Deliberately a standalone script (not a send_command subcommand): a seat needs to
+# escalate exactly when its REPL is wedged, so the channel must not depend on it.
+#
+# Usage:  ./dev/umpire-ping <corp|runner> [--wake] "<what I tried / what I see>"
+#   --wake   also fire ntfy to page Michael house-wide (for a HARD stall). Default
+#            off — the umpire's Monitor is the normal wake path.
+#
+# After pinging, read the reply with:  ./dev/umpire-check <corp|runner>
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAILBOX_DIR="$SCRIPT_DIR/.umpire"
+MAILBOX="$MAILBOX_DIR/mailbox.log"
+NTFY_TOPIC="ai-netrunner-qualified-animal"
+
+usage() { echo "usage: $0 <corp|runner> [--wake] \"<harness state — what you tried / what you see>\"" >&2; exit 64; }
+
+SIDE=""; WAKE=0; MSG=""
+for arg in "$@"; do
+  case "$arg" in
+    --wake) WAKE=1 ;;
+    corp|runner) if [ -z "$SIDE" ]; then SIDE="$arg"; else MSG="${MSG:+$MSG }$arg"; fi ;;
+    *) MSG="${MSG:+$MSG }$arg" ;;
+  esac
+done
+[ -z "$SIDE" ] && { echo "❌ first arg must be 'corp' or 'runner'." >&2; usage; }
+[ -z "${MSG// }" ] && { echo "❌ empty message — say what you tried and what you see." >&2; usage; }
+
+mkdir -p "$MAILBOX_DIR"
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Collapse newlines so one ping = one greppable line.
+LINE_MSG=$(printf '%s' "$MSG" | tr '\n' ' ')
+printf '%s  PING   %-6s %s\n' "$TS" "$SIDE" "$LINE_MSG" >> "$MAILBOX"
+
+echo "📨 Pinged umpire ($SIDE): $LINE_MSG"
+if [ "$WAKE" -eq 1 ]; then
+  # Debounce: --wake pages Michael house-wide, so suppress a repeat within 120s
+  # (a polling seat could otherwise page him every escalation-ladder retry).
+  WAKE_STAMP="$MAILBOX_DIR/.last-wake"
+  NOW=$(date +%s); LAST=$(cat "$WAKE_STAMP" 2>/dev/null || echo 0)
+  case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+  if [ $((NOW - LAST)) -lt 120 ]; then
+    echo "🔕 --wake suppressed (paged < 120s ago; umpire Monitor still got the ping)."
+  elif curl -fsS -m 8 -d "🎮 seat wedge? [$SIDE] $LINE_MSG" "ntfy.sh/$NTFY_TOPIC" >/dev/null 2>&1; then
+    printf '%s' "$NOW" > "$WAKE_STAMP"
+    echo "🔔 ntfy sent (paged Michael)."
+  else
+    echo "⚠️  ntfy send failed (umpire Monitor still got the ping)." >&2
+  fi
+fi
+echo "→ now poll for the umpire's reply:  ./dev/umpire-check $SIDE"

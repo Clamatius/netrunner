@@ -186,6 +186,40 @@ Runner hasn't started after a `wait` (~10s+), simply re-run
 `./dev/send_command corp smart-end-turn`. Retry 2–3 times, ~3s apart, before
 deciding it's a genuine Runner-side stall.
 
+## If you suspect a wedge — raise your hand to the umpire (don't spin)
+
+You cannot tell "slow opponent" from "the harness is wedged" from your own seat —
+it is genuinely undecidable from one side. So don't silently burn 10 minutes
+re-sending a command that isn't advancing. There is an **umpire**: a supervisor who
+can legitimately see BOTH seats' public status, there for exactly this.
+
+**Escalate when ANY of these holds:**
+- you've re-sent the same advancing command (`start-turn`, `continue`,
+  `monitor-run --persistent`, `smart-end-turn`) **~3×** with **no state change**; or
+- you've waited **> ~5 min** with no progress AND `peer-status` says the opponent is
+  still **alive** (so it's not a dead peer — smells like a boundary wedge); or
+- a run window won't advance and the documented recoveries above (re-issue
+  `monitor-run`, re-send `end-turn`) haven't moved it.
+
+**How — ping, then poll for the reply (bounded), then follow it:**
+```
+./dev/umpire-ping corp "what I tried + what I see"
+for i in $(seq 1 20); do ./dev/umpire-check corp && break; sleep 15; done
+```
+If ~5 min pass with **no** reply (umpire may be away), re-ping **once** with
+`--wake` (this pages the human): `./dev/umpire-ping corp --wake "still stuck, no umpire reply"`.
+Then fall back to the **safe default: keep waiting at your post — do nothing
+destructive.** Never end the game, never abandon your defender loop to "unstick" it.
+
+**HARD RULE — harness state ONLY, and assume the opponent can read your ping.** Say
+only what command you ran, how many times, and the **shape** of what you see
+(clicks, phase, prompt *type*, `peer-status`) — e.g. "select prompt, 3 choices,
+unchanged 5 min." **NEVER** state the prompt's *contents*, your hand, your R&D, an
+unrezzed card, or your plan. The mailbox is shared, so a contents leak reaches the
+Runner and blows the fog-of-war premise. Ask "am I wedged?", never "what should I
+do?" — the umpire will refuse any strategy question. Do **not** read the other
+seat's files. Escalating when stuck is the correct move, not a failure.
+
 ## Knowing when to stop
 
 After each of your turns (and after a Runner turn where they may have scored),
