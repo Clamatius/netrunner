@@ -236,11 +236,17 @@
 
       :else
       (let [cid-or-card (nth selectable index)
-            ;; Selectable can be CID strings or card maps - resolve CIDs to cards
+            ;; Selectable can be CID strings or card maps - resolve CIDs to cards.
+            ;; Use the selectable-aware resolver so a FACE-DOWN card at a breach
+            ;; (title-less in the Runner's view) still resolves — the title-gated
+            ;; find-card-by-cid dropped it and wedged multi-card remote breaches. (#70)
             card (if (string? cid-or-card)
-                   (core/find-card-by-cid cid-or-card)
+                   (core/find-selectable-card-by-cid cid-or-card)
                    cid-or-card)]
-        (if card
+        ;; Card-shape guard mirrors resolve-selectable: a real pick has :title OR
+        ;; :zone. This keeps a raw junk map that the engine might drop directly
+        ;; into :selectable from reaching select-card! by index. (#70 review)
+        (if (and (map? card) (or (:title card) (:zone card)))
           ;; Don't claim success before the prompt confirms registration: print
           ;; the confirmation only AFTER the prompt moves. A non-select prompt
           ;; that doesn't move means choose-card was the WRONG verb (the engine

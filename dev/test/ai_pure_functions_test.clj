@@ -712,7 +712,64 @@
                                          :zone ["servers" "hq" "ices"] :rezzed false})))
     (is (= "Eli 1.0 [ICE] (in servers/rd/ices) (rezzed)"
            (core/format-selectable-card {:title "Eli 1.0" :type "ICE"
-                                         :zone ["servers" "rd" "ices"] :rezzed true})))))
+                                         :zone ["servers" "rd" "ices"] :rezzed true}))))
+  (testing "a title-less face-down card reads as 'face-down card' with its zone (#70)"
+    (is (= "face-down card (in servers/remote1/content)"
+           (core/format-selectable-card {:type "Card"
+                                         :zone ["servers" "remote1" "content"]})))))
+
+;; ============================================================================
+;; find-selectable-card-by-cid / face-down access at a remote breach (issue #70)
+;;
+;; BLOCKER regression: at a multi-card remote breach the engine sends :selectable
+;; as CID strings for FACE-DOWN Corp cards. In the Runner's view those cards carry
+;; :cid/:zone/:side/:type but NO :title. find-card-by-cid filters on :title, so it
+;; returned nil, choose-card rejected the pick as "hidden/opponent (not in your
+;; view)", and the breach — the exact game-winning access — could not be resolved
+;; except via the eval escape hatch. A title-less card genuinely present in the
+;; seat's game state (it lives in a :zone) must resolve; non-card junk that merely
+;; carries a :cid (effects-registry entries, log refs — no :zone) must not.
+;; ============================================================================
+
+(defn- facedown-breach-state
+  "Game state with a face-down Corp card (no :title) in a remote server root,
+   as the Runner sees it at a breach."
+  [cid]
+  {:corp {:servers {:remote1 {:content [{:cid cid
+                                         :zone ["servers" "remote1" "content"]
+                                         :side "Corp" :type "Card"}]}}}
+   :runner {}
+   :active-player "runner"})
+
+(deftest test-resolve-selectable-facedown-cid-pickable
+  (testing "a face-down CID at a breach is PICKABLE, not phantom (issue #70)"
+    (with-mock-state (mock-client-state :game-state (facedown-breach-state "fd-9"))
+      (let [{:keys [pickable phantom]} (core/resolve-selectable ["fd-9"])]
+        (is (empty? phantom)
+            "the face-down card must NOT be treated as a phantom/hidden CID")
+        (is (= [0] (map :idx pickable)))
+        (is (= "fd-9" (:cid (:card (first pickable)))))))))
+
+(deftest test-find-selectable-card-by-cid
+  (testing "a title-less face-down card present in state resolves by cid"
+    (with-mock-state (mock-client-state :game-state (facedown-breach-state "fd-1"))
+      (let [card (core/find-selectable-card-by-cid "fd-1")]
+        (is (some? card) "face-down card must resolve (was nil under the :title filter)")
+        (is (= "fd-1" (:cid card)))
+        (is (nil? (:title card))))))
+  (testing "find-card-by-cid (title-gated) is unchanged — still nil for the same card"
+    (with-mock-state (mock-client-state :game-state (facedown-breach-state "fd-1"))
+      (is (nil? (core/find-card-by-cid "fd-1")))))
+  (testing "a named card still resolves and is preferred over any junk sharing its cid"
+    (with-mock-state (mock-client-state
+                      :game-state {:runner {:rig {:program [{:cid "p-1" :title "Corroder"
+                                                             :zone ["rig" "program"]}]}}})
+      (is (= "Corroder" (:title (core/find-selectable-card-by-cid "p-1"))))))
+  (testing "non-card junk sharing a :cid (no :title, no :zone) does not resolve"
+    (with-mock-state (mock-client-state
+                      :game-state {:effects [{:cid "fx-1" :duration :end-of-turn}]})
+      (is (nil? (core/find-selectable-card-by-cid "fx-1"))
+          "effects-registry entries carry :cid but no :zone — must stay unresolved"))))
 
 ;; ============================================================================
 ;; new-prompt? / classify-ability-result (ai-core) -- eid-aware prompt detection
