@@ -70,6 +70,36 @@ Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
   `./dev/watch_game.sh corp` / `./dev/watch_game.sh runner` (Monitor tool).
 - Each seat checks its own `game-over-status`; you do too, to know when to harvest.
 
+## Umpire escalation channel (issue #20) — you adjudicate wedges
+A seat that suspects a wedge pings you out of band instead of spinning silently.
+Take the umpire post for the whole game:
+```
+Monitor({command:"./dev/umpire-watch.sh", description:"seat escalations", persistent:true})
+```
+The watcher wakes you on each seat PING (and, on (re)start, replays any still-
+unanswered ping). On a ping:
+1. Read BOTH sides' **public** status only — `game-over-status`, `peer-status`,
+   `prompt` per side — and decide wedged-or-not. (You may look at both; that's the
+   whole point of the umpire seat. Do NOT relay what you see.)
+2. Answer: `./dev/umpire-reply <side> "<harness-state answer>"`. The seat is polling
+   `umpire-check` and will pick it up.
+3. If genuinely wedged, apply the documented recovery yourself where you can
+   (re-send end-turn, clear a stuck `:turn-started`, etc.) or `--wake`/ntfy Michael.
+
+**HARD CONSTRAINT (you see both hands — do not blow fog-of-war):** reply about
+harness/tooling state ONLY. Keep recoveries **command-only and card-name-free**
+(don't name an unrezzed ICE). If a seat asks a strategy question, refuse and
+redirect. The mailbox is opponent-readable, so a leak in YOUR reply is as bad as one
+in a seat's ping. Canned replies to prefer (bland by design):
+- `not wedged — opponent has an open decision window, keep waiting`
+- `not wedged — opponent is mid-turn, keep waiting`
+- `wedged — re-send your last end-turn once, then resume the wait loop`
+- `harness channel only — I can't advise on play; re-ask about tooling state`
+
+**One umpire per match dir.** Two sessions Monitoring the same mailbox will both
+reply and step on each other. If you're supervising, you're the only umpire.
+(`reset.sh` clears `dev/.umpire/` on a fresh game, so stale pings don't carry over.)
+
 ## Known gotchas
 - **Corp `--persistent` is now the default** in `seat-corp.md` — one `monitor-run`
   owns the whole Runner run; it wakes only for rez/fire/access/run-end. On a

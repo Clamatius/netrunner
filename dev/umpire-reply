@@ -1,0 +1,42 @@
+#!/bin/bash
+# umpire-reply — umpire→seat adjudication (issue #20).
+#
+# The umpire (the only party that can legitimately see BOTH sides' public status)
+# answers a seat's ping. Writes the seat's reply file (which the seat claims once,
+# via umpire-check) and appends an audit line to the mailbox.
+#
+# HARD CONSTRAINT — HARNESS STATE ONLY. Answer only about tooling/wedge state.
+# You can see both hands: NEVER leak the opponent's hidden info, NEVER give
+# game/strategy advice. Keep recoveries COMMAND-ONLY and CARD-NAME-FREE (naming an
+# unrezzed ICE in a "re-send continue" reply leaks it to the other seat, who can
+# read this mailbox). Prefer a canned, bland form:
+#   "not wedged — opponent has an open decision window, keep waiting"
+#   "not wedged — opponent is mid-turn, keep waiting"
+#   "wedged — re-send your last end-turn once, then resume the wait loop"
+#   "harness channel only — I can't advise on play; re-ask about tooling state"
+#
+# Usage:  ./dev/umpire-reply <corp|runner> "<harness-state answer>"
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAILBOX_DIR="$SCRIPT_DIR/.umpire"
+MAILBOX="$MAILBOX_DIR/mailbox.log"
+
+[ "$#" -lt 2 ] && { echo "usage: $0 <corp|runner> \"<harness-state answer>\"" >&2; exit 64; }
+SIDE="$1"; shift
+case "$SIDE" in corp|runner) ;; *) echo "❌ first arg must be 'corp' or 'runner'." >&2; exit 64 ;; esac
+MSG="$*"
+[ -z "${MSG// }" ] && { echo "❌ empty reply." >&2; exit 64; }
+
+mkdir -p "$MAILBOX_DIR"
+REPLY_FILE="$MAILBOX_DIR/reply-$SIDE.txt"
+LINE_MSG=$(printf '%s' "$MSG" | tr '\n' ' ')
+
+# Atomic publish: write a temp then rename, so a polling seat never reads a
+# half-written reply. "Latest wins" — a new reply overwrites an unread one.
+TMP="$MAILBOX_DIR/.reply-$SIDE.tmp.$$"
+printf '%s\n' "$LINE_MSG" > "$TMP"
+mv -f "$TMP" "$REPLY_FILE"
+
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s  REPLY  %-6s %s\n' "$TS" "$SIDE" "$LINE_MSG" >> "$MAILBOX"
+echo "✅ replied to $SIDE: $LINE_MSG"
