@@ -1299,7 +1299,11 @@
                   corp-handlers/handle-corp-fire-decision
                   corp-handlers/handle-corp-all-subs-resolved
                   corp-handlers/handle-corp-waiting-after-subs-fired
-                  corp-handlers/handle-corp-server-upgrade-decision
+                  (fn [ctx]  ; Wrapper: mark an upgrade rez attempt (cid-keyed) so a failed (unaffordable) rez isn't retried forever
+                    (when-let [result (corp-handlers/handle-corp-server-upgrade-decision ctx)]
+                      (when-let [cid (:upgrade-rez-attempted result)]
+                        (set-strategy! {:upgrade-rez-attempted cid}))
+                      result))
                   ;; #31 §1: MUST precede handle-paid-ability-window, the general
                   ;; "I passed, now I wait for the opponent" handler — correct when
                   ;; the opponent owes a decision, a DEADLOCK when they don't.

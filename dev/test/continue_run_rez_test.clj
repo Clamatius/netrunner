@@ -898,3 +898,112 @@
                   (str "Corp already passed (no-action=corp); it must wait, not pass again, got: " r))
               (is (not-any? #(= "continue" (:command %)) @sent)
                   "no second continue from the side that already passed"))))))))
+
+;; =============================================================================
+;; Test: --rez "<upgrade>" auto-rezzes an approach-triggered upgrade at the
+;; pre-approach-server window (issue #67).
+;;
+;; Manegarm Skunkworks fires "whenever the Runner approaches this server", which
+;; the engine resolves at the movement/position-0 window (proven in
+;; game.ai-upgrade-rez-timing-test). handle-corp-rez-strategy only auto-rezzes
+;; ICE at approach-ice, so before this an autonomous Corp that committed
+;; `--rez "Manegarm Skunkworks"` never actually rezzed it — the window just
+;; surfaced and paused. The upgrade handler now honours the --rez list at the
+;; pre-access window (with a cid-keyed wedge guard, since position is always 0
+;; here so the ICE's position key cannot disambiguate a failed retry).
+;; =============================================================================
+
+(defn- upgrade-decision-ctx
+  "Context for handle-corp-server-upgrade-decision at movement/pos-0 with an
+   unrezzed upgrade in the attacked remote. Defaults to the realistic window where
+   the Runner has already passed (:no-action \"runner\"), i.e. the Corp holds
+   priority — the only state in which the Corp actually gets the empty-run-window
+   prompt at movement/pos-0 (verified live). Pass :no-action to override."
+  [strategy & {:keys [no-action] :or {no-action "runner"}}]
+  {:side "corp"
+   :run-phase "movement"
+   :strategy strategy
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000003")
+   :state {:game-state
+           {:run {:phase "movement" :position 0 :server [:remote1] :no-action no-action}
+            :corp {:prompt-state {:msg "You may use paid abilities"
+                                  :prompt-type "run" :choices [] :selectable []}
+                   :servers {:remote1 {:content [{:cid 77 :title "Manegarm Skunkworks"
+                                                  :type "Upgrade" :rezzed false
+                                                  :zone ["servers" "remote1" "content"]
+                                                  :side "Corp"}]}}}
+            :runner {:prompt-state nil}
+            :log []}}})
+
+(deftest upgrade-rez-strategy-auto-rezzes-listed-upgrade
+  (testing "--rez <upgrade> sends a rez at the pre-access window and marks the cid"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [result (corp-handlers/handle-corp-server-upgrade-decision
+                        (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"}}))]
+            (is (= :action-taken (:status result)))
+            (is (= :auto-rezzed-upgrade (:action result)))
+            (is (= 77 (:upgrade-rez-attempted result))
+                "must report the upgrade cid so the wrapper can persist the attempt")
+            (is (some #(= "rez" (:command %)) @sent)
+                "should send a rez command for the listed upgrade")))))))
+
+(deftest upgrade-rez-strategy-unaffordable-declines-instead-of-looping
+  (testing "second pass with the upgrade still unrezzed declines (can't afford) rather than re-rezzing"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (let [out (with-out-str
+                    (let [result (corp-handlers/handle-corp-server-upgrade-decision
+                                  ;; prior attempt already recorded for this cid
+                                  (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"}
+                                                         :upgrade-rez-attempted 77}))]
+                      (is (= :upgrade-rez-failed-declined (:action result))
+                          (str "must gracefully decline (continue), not re-rez, got: " result))))]
+          (is (not-any? #(= "rez" (:command %)) @sent)
+              "must NOT re-send a rez command when the prior attempt failed")
+          (is (some #(= "continue" (:command %)) @sent)
+              "should continue past the unrezzed upgrade so the run proceeds")
+          (is (re-find #"(?i)can't afford|did not take" out)
+              (str "should explain why it declined, got: " out)))))))
+
+(deftest upgrade-rez-failed-does-not-pass-when-not-corp-priority
+  ;; Guard for the one priority-ADVANCING action this handler can take (guest
+  ;; review, #67). A failed/unaffordable upgrade rez must NOT send `continue`
+  ;; unless the Corp actually holds priority (Runner has passed, :no-action
+  ;; "runner"). Otherwise a stale/transient empty-run prompt seen at a fresh
+  ;; window could make the Corp pass on the Runner's behalf and skip the Runner's
+  ;; pre-access window. It must also never fall through to a re-rez.
+  (testing "already-attempted upgrade at a window the Corp doesn't own sends neither continue nor rez"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [result (corp-handlers/handle-corp-server-upgrade-decision
+                        (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"}
+                                               :upgrade-rez-attempted 77}
+                                              :no-action false))]  ; fresh window, Runner active
+            (is (nil? result)
+                (str "not our priority → hold, don't act, got: " result))
+            (is (not-any? #(= "continue" (:command %)) @sent)
+                "must NOT pass on the Runner's behalf at a window the Corp doesn't own")
+            (is (not-any? #(= "rez" (:command %)) @sent)
+                "must NOT re-rez a failed attempt")))))))
+
+(deftest upgrade-not-in-rez-list-still-surfaces-decision
+  (testing "an upgrade the Corp hasn't --rez-listed still pauses for a decision (not auto-rezzed, not silently passed)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [result (corp-handlers/handle-corp-server-upgrade-decision
+                        (upgrade-decision-ctx {:rez #{"Palisade"}}))]
+            (is (= :decision-required (:status result)))
+            (is (not-any? #(= "rez" (:command %)) @sent)
+                "must not rez an upgrade that isn't in the --rez list")))))))
+
+(deftest upgrade-no-strategy-surfaces-decision
+  (testing "with no --rez/--no-rez strategy the pre-access upgrade window still surfaces for a decision"
+    (with-redefs [ws/send-message! (fn [_evt _data] true)]
+      (with-out-str
+        (let [result (corp-handlers/handle-corp-server-upgrade-decision
+                      (upgrade-decision-ctx {}))]
+          (is (= :decision-required (:status result))))))))

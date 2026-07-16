@@ -440,34 +440,104 @@
                :phase run-phase})))))))
 
 (defn handle-corp-server-upgrade-decision
-  "Wake before access when an unrezzed upgrade in the attacked server may matter.
+  "Wake (or auto-rez) at the pre-approach-server window when an unrezzed upgrade in
+   the attacked server may matter.
 
-   Respects --no-rez (#57): --no-rez is a standing 'decline every rez' commitment,
-   so at a pre-access upgrade window we fall through (return nil) and let the
-   normal empty-run-window auto-pass advance the run — exactly like an
-   approach-ice rez window under --no-rez. Without it we'd re-present the same
-   'Server upgrade decision' every iteration (only a raw pass advanced it), a
-   wedge risk for an autonomous Corp seat on `monitor-run --persistent --no-rez`.
-   With no decline commitment, still wake so a meaningful pre-access rez (e.g.
-   Manegarm Skunkworks, which must be rezzed BEFORE access) is never skipped."
-  [{:keys [side state strategy]}]
+   This window is movement/position-0 — the Corp's LAST chance to rez an
+   APPROACH-triggered upgrade (Manegarm Skunkworks: \"whenever the Runner
+   approaches this server\") so that its ability actually fires. The engine
+   resolves :approach-server on the way out of this window; by the \"success\"
+   phase it is too late (proven in game.ai-upgrade-rez-timing-test), which is why
+   ai-run-corp-decisions/current-checkpoint no longer treats success as a rez
+   window (issue #67).
+
+   --no-rez (#57): a standing 'decline every rez' commitment — fall through
+   (return nil) and let the normal empty-run-window auto-pass advance the run,
+   exactly like an approach-ice rez window under --no-rez. Without it we'd
+   re-present the same 'Server upgrade decision' every iteration (only a raw pass
+   advanced it), a wedge risk for `monitor-run --persistent --no-rez`.
+
+   --rez \"<upgrade>\": honour the whitelist HERE the way handle-corp-rez-strategy
+   honours it for ICE at approach-ice — auto-rez the listed upgrade so an
+   autonomous Corp that committed `--rez \"Manegarm Skunkworks\"` actually rezzes
+   it at the only window where the ability fires. Guarded by cid (position is
+   always 0 here, so the ICE handler's position key cannot tell a retry from a
+   failed unaffordable rez): once we have attempted this cid and it is still
+   unrezzed, decline and pass rather than re-sending the rez forever.
+
+   With no whitelist (or an upgrade not on it), surface the decision so a
+   human/policy can rez or pass."
+  [{:keys [side state strategy gameid]}]
   (when (and (= side "corp")
              (not (:no-rez strategy)))
     (let [decision (decisions/corp-run-decision state)]
       (when (= :server-upgrade (:kind decision))
         (let [card-title (get-in decision [:card :title] "upgrade")
-              status-key [:corp-server-upgrade-decision (:server decision) card-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (doseq [line (decisions/present-corp-run-decision decision)]
-              (println line)))
-          {:status :decision-required
-           :wake-reason (:wake-reason decision)
-           :decision decision
-           :message (format "Corp must decide: rez %s before access or continue" card-title)
-           :card card-title
-           :server (:server decision)})))))
+              upgrade (first (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)))
+                                     (decisions/attacked-server-content state)))
+              cid (:cid upgrade)
+              should-rez? (and (:rez strategy)
+                               (contains? (:rez strategy) card-title))
+              rez-already-attempted? (and cid (= (:upgrade-rez-attempted strategy) cid))]
+          (cond
+            ;; --rez listed, already tried this cid, still unrezzed → the rez did
+            ;; not take (almost always unaffordable). NEVER re-rez (that is the
+            ;; wedge this guard exists to prevent): either pass so the run proceeds,
+            ;; or, if it is not yet our priority, hold. This clause MUST precede the
+            ;; auto-rez clause so a failed attempt can't fall through to a re-rez.
+            (and should-rez? rez-already-attempted?)
+            ;; Only pass when the Corp actually holds priority (Runner has passed
+            ;; this window). In practice the empty-run-window that reaches this
+            ;; handler at movement/pos-0 always implies the Runner has already
+            ;; passed (verified live: the Corp gets no run prompt during the
+            ;; Runner's active sub-step). But this decline is the one priority-
+            ;; ADVANCING action the handler can take, so guard it explicitly:
+            ;; without the guard a stale/transient empty-run prompt seen at a fresh
+            ;; window (:no-action false/nil) could make the Corp pass on the
+            ;; Runner's behalf and skip the Runner's pre-access window. If it is not
+            ;; our priority, return nil and let the waiting/priority handlers run.
+            (when (= "runner" (normalize-side (get-in state [:game-state :run :no-action])))
+              (let [credits (get-in state [:game-state :corp :credit] 0)
+                    status-key [:corp-upgrade-rez-failed cid]
+                    already-printed? (= @last-waiting-status status-key)]
+                (when-not already-printed?
+                  (reset! last-waiting-status status-key)
+                  (println (format "   ⚠️  Rez of %s did not take — likely can't afford it (Corp has %d). Declining."
+                                   card-title credits)))
+                (merge (send-continue! gameid)
+                       {:action :upgrade-rez-failed-declined
+                        :card card-title})))
+
+            ;; --rez listed and not yet attempted → rez it now (the only window
+            ;; where an approach-triggered ability fires).
+            should-rez?
+            (do
+              (println (format "   Strategy: --rez, rezzing %s (pre-approach-server window)" card-title))
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "rez"
+                                 :args {:card (core/create-card-ref upgrade)}})
+              {:status :action-taken
+               :action :auto-rezzed-upgrade
+               :card card-title
+               ;; Persisted by the wrapper in ai_runs so a failed (unaffordable)
+               ;; rez is detected next pass instead of retried forever.
+               :upgrade-rez-attempted cid})
+
+            ;; No whitelist commitment for this upgrade → surface for a decision.
+            :else
+            (let [status-key [:corp-server-upgrade-decision (:server decision) card-title]
+                  already-printed? (= @last-waiting-status status-key)]
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (doseq [line (decisions/present-corp-run-decision decision)]
+                  (println line)))
+              {:status :decision-required
+               :wake-reason (:wake-reason decision)
+               :decision decision
+               :message (format "Corp must decide: rez %s before access or continue" card-title)
+               :card card-title
+               :server (:server decision)})))))))
 
 ;; ============================================================================
 ;; General Priority Passing

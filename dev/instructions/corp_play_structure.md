@@ -161,16 +161,21 @@ see them surfaced by `monitor-run` when the run pauses. Two patterns:
   letting the Runner access. Use `use-ability` in the paid-ability window
   before `continue`-ing the run.
 - **Upgrade rez on server approach** (e.g., Manegarm Skunkworks): you
-  must rez during the *approach-to-server* window, not during ICE
-  encounters. If you're using `monitor-run --fire-if-asked` with no
-  `--rez <upgrade>` pre-specified, the loop will silently auto-pass that
-  window and you LOSE the rez opportunity. Always pre-specify upgrade
-  rezzes you might want, e.g.:
+  must rez during the *approach-to-server* window (engine `movement`
+  phase, position 0), **not** at access. Manegarm triggers "whenever the
+  Runner approaches this server"; by the time you access, the engine has
+  already resolved that approach and the rez is a dead no-op (issue #67).
+  The monitor now surfaces the upgrade rez decision at the correct
+  pre-approach-server window, and `--rez "<upgrade>"` **auto-rezzes it
+  there** — so an autonomous seat that commits the whitelist actually
+  gets the tax:
   ```bash
   ./dev/send_command corp monitor-run --fire-if-asked --rez "Manegarm Skunkworks"
   ```
-  Or skip `--fire-if-asked` and handle the run manually with `continue
-  --rez "Manegarm Skunkworks"` at the approach-to-server window.
+  Without `--rez`, the monitor pauses at that window so you can `continue
+  --rez "Manegarm Skunkworks"` (or decline). Pre-rezzing Manegarm on your
+  own turn also works and is the most robust option (it's what won marquee
+  `14bb5405`), at the cost of telegraphing the threat and paying early.
 
 ---
 

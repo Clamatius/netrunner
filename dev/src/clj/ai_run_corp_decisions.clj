@@ -83,8 +83,16 @@
         phase (:phase run)
         position (:position run)]
     (cond
+      ;; movement/position-0 is the pre-approach-server window: the Corp's last
+      ;; chance to rez an upgrade so that an APPROACH-triggered ability (Manegarm
+      ;; Skunkworks: "whenever the Runner approaches this server") actually fires.
       (and (= "movement" phase) (zero? (or position 0))) :pre-access
-      (= "success" phase) :pre-access
+      ;; "success" is POST-approach-server (issue #67): the engine has already
+      ;; queued/resolved :approach-server, so rezzing an approach-triggered upgrade
+      ;; here is too late — its ability never fires (proven in
+      ;; game.ai-upgrade-rez-timing-test). It is NOT a pre-access rez window; treat it
+      ;; as access so we don't lure the Corp into a dead no-op rez.
+      (= "success" phase) :access
       (= "access" phase) :access
       :else (some-> phase keyword))))
 

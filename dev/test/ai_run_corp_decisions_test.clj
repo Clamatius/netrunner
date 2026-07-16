@@ -134,6 +134,24 @@
       (is (= :server-upgrade (:kind decision)))
       (is (= "Manegarm Skunkworks" (get-in decision [:card :title]))))))
 
+(deftest success-phase-upgrade-does-not-wake
+  ;; Issue #67. The engine's "success" phase is AFTER approach-server has fired,
+  ;; so rezzing an approach-triggered upgrade (Manegarm Skunkworks: "whenever the
+  ;; Runner approaches this server") there is TOO LATE — its ability never fires
+  ;; (proven at the engine level in manegarm_timing_scratch_test). Surfacing a
+  ;; "rez before access" upgrade window at success is therefore a dead window that
+  ;; lures the Corp into a no-op rez. The only effective rez window is
+  ;; movement/position-0 (pre-approach-server), covered above. Success must NOT be
+  ;; classified as a pre-access upgrade decision.
+  (testing "unrezzed upgrade at success does NOT wake (approach-server has passed)"
+    (let [decision (decisions/corp-run-decision
+                    (state :phase "success"
+                           :position 0
+                           :server [:remote1]
+                           :servers {:remote1 {:content [(upgrade)]}}))]
+      (is (not= :server-upgrade (:kind decision))
+          "success is post-approach-server; rezzing there is too late to fire the approach ability"))))
+
 (deftest other-server-upgrade-does-not-wake
   (testing "upgrade on another server does not wake for this run"
     (let [decision (decisions/corp-run-decision
