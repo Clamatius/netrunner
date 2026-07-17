@@ -121,26 +121,33 @@
     ;; must not print before we know. Only run the auto-end hook if the prompt
     ;; actually moved (see choose-card!).
     (if (wait-for-prompt-change! old-eid)
-      (do
+      ;; Capture the revealed prompt BEFORE the auto-end hook runs (guest
+      ;; review): the hook can itself advance state, and duplicate detection
+      ;; must observe the prompt the choice immediately revealed.
+      (let [new-prompt (state/get-prompt)
+            ;; Duplicate-instance detection (#75): the engine can mint STACKED
+            ;; copies of the same prompt (marquee g2: five Manegarm 'Choose one'
+            ;; prompts from Corp continue-spam). Resolving one pops it and an
+            ;; identical-looking next instance surfaces (same msg + card, new
+            ;; eid). Without saying so, the seat reads the stack as a no-op loop
+            ;; and gives up — g2 was abandoned one answer short of draining it.
+            ;; Fingerprint requires a PRESENT msg and card cid (guest review):
+            ;; nil = nil must not identify two different card-less prompts that
+            ;; share a generic msg like "Choose one".
+            duplicate? (and new-prompt
+                            (not= (:eid new-prompt) old-eid)
+                            (some? old-msg)
+                            (= (:msg new-prompt) old-msg)
+                            (some? old-cid)
+                            (= (get-in new-prompt [:card :cid]) old-cid))]
         (maybe-auto-end-turn-after-prompt!)
         (println (str "✅ Chose: " (core/format-choice choice)))
-        ;; Duplicate-instance detection (#75): the engine can mint STACKED
-        ;; copies of the same prompt (marquee g2: five Manegarm 'Choose one'
-        ;; prompts from Corp continue-spam). Resolving one pops it and an
-        ;; identical-looking next instance surfaces (same msg + card, new eid).
-        ;; Without saying so, the seat reads the stack as a no-op loop and gives
-        ;; up — g2 was abandoned one answer short of draining it.
-        (let [new-prompt (state/get-prompt)
-              duplicate? (and new-prompt
-                              (not= (:eid new-prompt) old-eid)
-                              (= (:msg new-prompt) old-msg)
-                              (= (get-in new-prompt [:card :cid]) old-cid))]
-          (when duplicate?
-            (println (str "ℹ️  Your choice RESOLVED, but an identical duplicate prompt "
-                          "appeared (new instance of the same card prompt — the engine "
-                          "minted copies). Answer it again to drain the stack.")))
-          (core/with-cursor (cond-> {:status :success :choice choice}
-                              duplicate? (assoc :duplicate-prompt true)))))
+        (when duplicate?
+          (println (str "ℹ️  Your choice RESOLVED, but an identical duplicate prompt "
+                        "appeared (new instance of the same card prompt — the engine "
+                        "minted copies). Answer it again to drain the stack.")))
+        (core/with-cursor (cond-> {:status :success :choice choice}
+                            duplicate? (assoc :duplicate-prompt true))))
       (do
         (println (str "⚠️  Choice sent but the prompt did not change — NOT treating as "
                       "resolved: " (core/format-choice choice)))

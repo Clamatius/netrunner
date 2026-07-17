@@ -1162,3 +1162,67 @@
                   "no continue may be sent while our own live prompt is a waiting prompt")
               (is (not= :action-taken (:status r))
                   (str "must not claim an action was taken, got: " r)))))))))
+
+;; =============================================================================
+;; Review findings on the #75 fix (panel: Claude + GPT-5.5/Devin):
+;; the SAME duplicate-continue spam class existed mirrored on the Runner seat.
+;; handle-runner-pass-fired-ice had no pass-once guard (unlike its sibling
+;; handle-runner-pass-broken-ice), so while the Corp's window stayed open the
+;; subs-resolved log heuristic stayed true and the Runner re-sent continue every
+;; loop iteration; and the runner-handlers copy of send-continue! had no
+;; waiting-prompt chokepoint.
+;; =============================================================================
+
+(defn- pass-fired-ice-ctx
+  "Runner at encounter-ice with the ICE's subs all fired and the log recording
+   the resolution — the state handle-runner-pass-fired-ice keys on."
+  []
+  {:side "runner"
+   :run-phase "encounter-ice"
+   :strategy {}
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000076")
+   :my-prompt {:msg "You may use paid abilities" :prompt-type "run" :choices [] :selectable []}
+   :state {:game-state
+           {:run {:phase "encounter-ice" :position 1 :server [:hq]}
+            :corp {:servers {:hq {:ices [{:cid 31 :title "Tithe" :rezzed true
+                                          :subroutines [{:label "Do 1 net damage" :fired true}
+                                                        {:label "Gain 1 credit" :fired true}]}]}}}
+            :runner {:prompt-state {:msg "You may use paid abilities"
+                                    :prompt-type "run" :choices [] :selectable []}}
+            :log [{:text "Corp resolves 2 unbroken subroutines on Tithe"}]}}})
+
+(deftest pass-fired-ice-passes-at-most-once
+  (testing "handle-runner-pass-fired-ice sends ONE continue then waits — no re-send while the Corp's window is open (#75 review finding)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (runner-handlers/reset-state!)
+        (with-out-str
+          (let [r1 (runner-handlers/handle-runner-pass-fired-ice (pass-fired-ice-ctx))
+                r2 (runner-handlers/handle-runner-pass-fired-ice (pass-fired-ice-ctx))]
+            (is (= :action-taken (:status r1))
+                (str "first pass is legitimate, got: " r1))
+            (is (= :waiting-for-opponent (:status r2))
+                (str "second pass at the same [position ice] is spam; must wait, got: " r2))))
+        (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+            "exactly one continue may reach the engine for this window")
+        (runner-handlers/reset-state!)))))
+
+(deftest runner-send-continue-chokepoint-suppresses-on-live-waiting-prompt
+  (testing "the runner-handlers copy of send-continue! suppresses while the LIVE state shows a waiting prompt (#75 review finding)"
+    (let [sent (atom [])
+          live (mock-client-state
+                :side "runner"
+                :game-state (assoc-in (get-in (pass-fired-ice-ctx) [:state :game-state])
+                                      [:runner :prompt-state]
+                                      {:msg "Waiting for Corp to make a decision"
+                                       :prompt-type "waiting" :choices [] :selectable []}))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (runner-handlers/reset-state!)
+        (with-mock-state live
+          (with-out-str
+            (let [r (runner-handlers/handle-runner-pass-fired-ice (pass-fired-ice-ctx))]
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "no continue may be sent while our own live prompt is a waiting prompt")
+              (is (= :waiting-for-opponent (:status r))
+                  (str "suppressed continue reports an opponent wait, got: " r)))))
+        (runner-handlers/reset-state!)))))

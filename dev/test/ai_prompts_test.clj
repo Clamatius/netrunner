@@ -535,3 +535,30 @@
           (is (not (:duplicate-prompt @result)))
           (is (str/includes? out "✅ Chose:")
               (str "normal resolution keeps the success line, got: " out)))))))
+
+;; Review-panel tightening of the duplicate fingerprint (#75): nil = nil must
+;; not identify two DIFFERENT prompts. Only a present msg AND present card cid
+;; that both match may flag a duplicate.
+
+(deftest choose-option-nil-fingerprint-is-not-a-duplicate
+  (testing "two card-less prompts sharing only a nil/generic identity do not false-flag as duplicates"
+    (let [old-prompt {:msg "Choose one" :prompt-type "other" :eid {:eid 200}
+                      :choices [{:uuid "a1" :value "Yes" :idx 0}
+                                {:uuid "a2" :value "No" :idx 1}]}
+          ;; different prompt, also card-less, same generic msg, new eid
+          next-prompt {:msg "Choose one" :prompt-type "other" :eid {:eid 201}
+                       :choices [{:uuid "b1" :value "Left" :idx 0}
+                                 {:uuid "b2" :value "Right" :idx 1}]}]
+      (with-mock-state (mock-client-state :side "runner" :prompt old-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] next-prompt)
+                        true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [result (atom nil)]
+            (with-out-str (reset! result (prompts/choose-option! 0)))
+            (is (= :success (:status @result)))
+            (is (not (:duplicate-prompt @result))
+                "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))

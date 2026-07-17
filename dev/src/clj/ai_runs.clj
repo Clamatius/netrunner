@@ -840,6 +840,9 @@
       (println "⚠️  WARNING: --force is for AI-vs-AI testing ONLY!")
       (println "⚠️  In HITL games, this WILL break game state by passing")
       (println "⚠️  when you should wait for opponent.")
+      (println "⚠️  At a checkpoint blocked on an opponent prompt, a forced")
+      (println "⚠️  continue can re-fire the checkpoint and mint DUPLICATE")
+      (println "⚠️  prompts (#75/#77) — the normal path suppresses this.")
       (println ""))
     (let [run (get-in state [:game-state :run])]
       (if (nil? run)
