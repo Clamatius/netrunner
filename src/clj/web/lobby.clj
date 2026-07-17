@@ -84,6 +84,13 @@
             (timbre/info "all pools are tidy!"))))))
 
 (defonce lobby-pool (cp/threadpool 1 {:name "lobbies-thread"}))
+
+;; #76: a websocket close is routed into handle-leave-lobby, which dissocs the lobby
+;; once the last *player* leaves - so both seats dropping (exactly what ai-bounce.sh
+;; does) destroys a live game, and neither :game/resync nor :lobby/join can recover it.
+;; Set from :web/lobby config; defaults to false so prod/upstream behaviour is unchanged.
+;; See retain-lobby-on-disconnect? below (defined next to player?, which it needs).
+(defonce keep-started-lobbies-on-disconnect? (atom false))
 (defmacro lobby-thread [& expr] `(cp/future lobby-pool ~@expr))
 (defmacro game-thread
   "Note: if the lobby isn't actually real, or has been nulled somehow, executing on the lobby thread is safe"
@@ -424,6 +431,27 @@
   [uid lobby]
   (or (player? uid lobby)
       (spectator? uid lobby)))
+
+(defn retain-lobby-on-disconnect?
+  "True when a dropped socket should leave lobby membership untouched (#76).
+
+  Three conditions, all required:
+  - the flag is on (dev only; prod/upstream keeps the old leave-on-close behaviour)
+  - the lobby is *started* - an unstarted lobby is a waiting room, where leaving on
+    disconnect is correct
+  - the uid is a *player* - spectators are removed as usual. Retaining a spectator
+    would buy nothing (handle-leave-lobby only counts players when deciding whether
+    to keep the lobby) while leaving stale entries in :spectators forever.
+
+  Because the sente uid is the stable username, keeping a player seated means
+  `in-lobby?` still holds on reconnect, so :game/resync works immediately without a
+  rejoin dance, and the player count can never fall to zero and delete the game.
+  Explicit leaves (:lobby/leave, concede, save-replay teardown) do not come through
+  here and still close the lobby, so stats and replays continue to flush."
+  [uid lobby]
+  (boolean (and @keep-started-lobbies-on-disconnect?
+                (:started lobby)
+                (player? uid lobby))))
 
 (defn handle-set-last-update [lobbies gameid uid]
   (let [lobby (get lobbies gameid)]

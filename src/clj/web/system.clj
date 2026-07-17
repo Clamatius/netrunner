@@ -81,8 +81,11 @@
 (defmethod ig/init-key :web/auth [_ settings]
   settings)
 
-(defmethod ig/init-key :web/lobby [_ {:keys [interval mongo time-inactive]}]
+(defmethod ig/init-key :web/lobby [_ {:keys [interval mongo time-inactive keep-lobbies-on-disconnect?]}]
   (let [db (:db mongo)]
+    ;; #76: dev-only. Keeps a started lobby alive when a socket drops, so a client
+    ;; bounce can't destroy the game. clear-inactive-lobbies still reaps it later.
+    (reset! lobby/keep-started-lobbies-on-disconnect? (boolean keep-lobbies-on-disconnect?))
     [(tick #(lobby/clear-inactive-lobbies db time-inactive) interval)
      #_(tick #(angel-arena/check-for-inactivity db) interval)]))
 

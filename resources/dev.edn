@@ -16,7 +16,12 @@
                      :max-age 5184000}}
  :web/lobby {:interval 1000
              :mongo #ig/ref :mongodb/connection
-             :time-inactive 172800}  ; 2 days (was 600s/10min)
+             :time-inactive 172800  ; 2 days (was 600s/10min)
+             ;; #76: don't let a dropped socket destroy a started game. Without this,
+             ;; bouncing both AI clients (make resume) deletes the lobby outright and
+             ;; resync can never recover it. Localhost dev only - upstream/prod default
+             ;; is false. Abandoned lobbies are still reaped by :time-inactive above.
+             :keep-lobbies-on-disconnect? true}
  :web/chat {:max-length 144
             ;; sliding window size in seconds
             :rate-window 60

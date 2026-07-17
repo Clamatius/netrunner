@@ -84,18 +84,27 @@ if [ -n "$GAME_ID" ]; then
   echo "🎮 Reconnecting to game: $GAME_ID"
   echo ""
 
-  # Resync both clients
+  # Resync both clients. Do NOT swallow failures (#76): these used to be `|| true`,
+  # so a resync that timed out still printed "✅ Reconnected to game!".
+  RESYNC_FAILED=false
+
   echo "   Resyncing Runner..."
-  TIMEOUT=10 "$SCRIPT_DIR/send_command" runner resync "$GAME_ID" || true
+  TIMEOUT=10 "$SCRIPT_DIR/send_command" runner resync "$GAME_ID" || RESYNC_FAILED=true
 
   sleep 2
 
   echo "   Resyncing Corp..."
-  TIMEOUT=10 "$SCRIPT_DIR/send_command" corp resync "$GAME_ID" || true
+  TIMEOUT=10 "$SCRIPT_DIR/send_command" corp resync "$GAME_ID" || RESYNC_FAILED=true
 
   sleep 2
 
   echo ""
+  if [ "$RESYNC_FAILED" = true ]; then
+    echo "❌ Resync failed - the clients are NOT back in the game."
+    echo "   Check the game still exists: ./dev/send_command runner list-game-ids"
+    echo "   If it is gone, start fresh: ./dev/reset.sh"
+    exit 1
+  fi
   echo "✅ Reconnected to game!"
   echo ""
   echo "Check status:"
