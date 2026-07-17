@@ -1007,3 +1007,158 @@
         (let [result (corp-handlers/handle-corp-server-upgrade-decision
                       (upgrade-decision-ctx {}))]
           (is (= :decision-required (:status result))))))))
+
+;; =============================================================================
+;; Test: Corp continue-spam at a blocked checkpoint must not happen (#75).
+;;
+;; Marquee g2 (GPT-5.6-Terra Corp vs Opus Runner) wedged unrecoverably: at
+;; movement/pos-0 the Runner passed, the Corp's continue triggered the
+;; :approach-server checkpoint and the engine BLOCKED on the Runner's Manegarm
+;; Skunkworks "Choose one" prompt — run phase stays "movement", :no-action stays
+;; "runner", and the Corp's own prompt becomes prompt-type "waiting". The engine
+;; has no in-flight guard: each additional Corp `continue` re-fired approach-server
+;; and minted a FRESH duplicate Manegarm prompt (replay frames 255-259: five
+;; stacked prompts, five "approaches Server 1" log lines). The Runner paid the
+;; top one, stole, and was left draining no-op duplicates — game lost to tooling.
+;;
+;; Client-side rule: a seat holding a "waiting" prompt must NEVER send continue —
+;; the engine is mid-checkpoint on the opponent. Guarded in three layers:
+;;   (a) --fire-if-asked's empty-window auto-continue requires a "run"-type
+;;       prompt (a waiting prompt has empty :choices/:selectable and matched);
+;;   (b) handle-corp-all-subs-resolved must not RE-pass after the Corp already
+;;       passed (the earlier burst, frames 248-252);
+;;   (c) belt-and-braces: send-continue! itself suppresses when the live state
+;;       shows our own prompt is a waiting prompt.
+;; =============================================================================
+
+(defn- fire-if-asked-blocked-checkpoint-ctx
+  "Corp --fire-if-asked at movement/pos-0 where the engine is blocked on the
+   Runner's Manegarm prompt: Corp holds the mirrored 'waiting' prompt, run
+   :no-action still says 'runner'. Exactly the #75 wedge window."
+  []
+  {:side "corp"
+   :run-phase "movement"
+   :strategy {:fire-if-asked true}
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000075")
+   :my-prompt {:msg "Waiting for Runner to make a decision"
+               :prompt-type "waiting" :choices [] :selectable []}
+   :state {:game-state
+           {:run {:phase "movement" :position 0 :server [:remote1] :no-action "runner"}
+            :corp {:prompt-state {:msg "Waiting for Runner to make a decision"
+                                  :prompt-type "waiting" :choices [] :selectable []}
+                   :servers {:remote1 {:content [{:cid 11 :title "Manegarm Skunkworks"
+                                                  :type "Upgrade" :rezzed true}]}}}
+            :runner {:prompt-state {:msg "Choose one" :prompt-type "other"
+                                    :choices [{:uuid "u0" :value "Spend [Click][Click]"}
+                                              {:uuid "u1" :value "End the run"}]}}
+            :log []}}})
+
+(deftest fire-if-asked-does-not-continue-on-waiting-prompt
+  (testing "--fire-if-asked must NOT auto-continue while holding a 'waiting' prompt — each continue re-fires the blocked approach-server checkpoint and mints a duplicate upgrade prompt (#75)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [r (corp-handlers/handle-corp-fire-if-asked
+                   (fire-if-asked-blocked-checkpoint-ctx))]
+            (is (not-any? #(= "continue" (:command %)) @sent)
+                "a continue here re-fires approach-server and mints a duplicate Manegarm prompt")
+            (is (not= :action-taken (:status r))
+                (str "must not claim an action was taken at a blocked checkpoint, got: " r))))))))
+
+(deftest fire-if-asked-still-continues-empty-run-window
+  (testing "--fire-if-asked still auto-continues a genuine empty 'run'-type paid-ability window (no over-blocking)"
+    (let [sent (atom [])
+          ctx (-> (fire-if-asked-blocked-checkpoint-ctx)
+                  (assoc :my-prompt {:msg "You may use paid abilities"
+                                     :prompt-type "run" :choices [] :selectable []})
+                  (assoc-in [:state :game-state :corp :prompt-state]
+                            {:msg "You may use paid abilities"
+                             :prompt-type "run" :choices [] :selectable []}))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [r (corp-handlers/handle-corp-fire-if-asked ctx)]
+            (is (some #(= "continue" (:command %)) @sent)
+                "an empty run-type window is exactly what --fire-if-asked should sleep through")
+            (is (= :action-taken (:status r)))))))))
+
+(defn- all-subs-resolved-ctx
+  "Corp at encounter-ice with every Palisade sub broken. :no-action controls
+   whether the Corp has already passed this window."
+  [no-action]
+  {:side "corp"
+   :run-phase "encounter-ice"
+   :strategy {}
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000075")
+   :my-prompt {:msg "You may use paid abilities" :prompt-type "run" :choices [] :selectable []}
+   :state {:game-state
+           {:run (cond-> {:phase "encounter-ice" :position 1 :server [:remote1]}
+                   no-action (assoc :no-action no-action))
+            :corp {:prompt-state {:msg "You may use paid abilities"
+                                  :prompt-type "run" :choices [] :selectable []}
+                   :servers {:remote1 {:ices [{:cid 21 :title "Palisade" :rezzed true
+                                               :subroutines [{:label "End the run" :broken true}]}]}}}
+            :runner {:prompt-state nil}
+            :log []}}})
+
+(deftest all-subs-resolved-does-not-repass-after-corp-passed
+  (testing "handle-corp-all-subs-resolved must not RE-send continue after the Corp already passed (:no-action corp) — the frames-248-252 spam burst of #75"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [r (corp-handlers/handle-corp-all-subs-resolved (all-subs-resolved-ctx "corp"))]
+            (is (not-any? #(= "continue" (:command %)) @sent)
+                "the Corp already passed this window; a second continue is spam the engine may amplify")
+            (is (not= :action-taken (:status r))
+                (str "must not claim an action, got: " r))))))))
+
+(deftest all-subs-resolved-still-passes-fresh-window
+  (testing "handle-corp-all-subs-resolved still passes a window the Corp hasn't passed yet (no over-blocking)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-out-str
+          (let [r (corp-handlers/handle-corp-all-subs-resolved (all-subs-resolved-ctx nil))]
+            (is (some #(= "continue" (:command %)) @sent)
+                "all subs broken and Corp hasn't spoken — passing is correct")
+            (is (= :action-taken (:status r)))))))))
+
+(deftest send-continue-chokepoint-suppresses-on-live-waiting-prompt
+  (testing "belt-and-braces: even when a handler's own ctx qualifies, send-continue! consults the LIVE state and refuses to send while our prompt is a waiting prompt (#75)"
+    (let [sent (atom [])
+          ;; ctx satisfies all-subs-resolved (fresh window, subs broken), but the
+          ;; LIVE mirror — refreshed after the ctx snapshot was taken — shows the
+          ;; engine has since blocked on the Runner (Corp prompt went 'waiting').
+          ctx (all-subs-resolved-ctx nil)
+          live (mock-client-state
+                :side "corp"
+                :game-state (assoc-in (get-in ctx [:state :game-state])
+                                      [:corp :prompt-state]
+                                      {:msg "Waiting for Runner to make a decision"
+                                       :prompt-type "waiting" :choices [] :selectable []}))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-all-subs-resolved ctx)]
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "the live waiting prompt is the engine saying 'opponent is deciding' — no continue may be sent")
+              (is (= :waiting-for-opponent (:status r))
+                  (str "suppressed continue should report an opponent wait so loops idle instead of spinning, got: " r)))))))))
+
+(deftest ai-runs-send-continue-chokepoint-suppresses-on-live-waiting-prompt
+  (testing "the ai-runs copy of send-continue! has the same waiting-prompt chokepoint — via handle-initiation-auto-pass with a live waiting prompt (#75)"
+    (let [sent (atom [])
+          live (mock-client-state
+                :side "corp"
+                :game-state
+                {:run {:phase "initiation" :position 1 :server [:hq] :no-action "runner"}
+                 :corp {:prompt-state {:msg "Waiting for Runner to make a decision"
+                                       :prompt-type "waiting" :choices [] :selectable []}}
+                 :runner {:prompt-state nil}
+                 :log []})]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "no continue may be sent while our own live prompt is a waiting prompt")
+              (is (not= :action-taken (:status r))
+                  (str "must not claim an action was taken, got: " r)))))))))

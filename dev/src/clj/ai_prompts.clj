@@ -108,16 +108,45 @@
         side-kw (when side (keyword (clojure.string/lower-case side)))
         gameid (:gameid client-state)
         prompt (get-in client-state [:game-state side-kw :prompt-state])
-        old-eid (:eid prompt)]
-    (println (str "✅ Chose: " (core/format-choice choice)))
+        old-eid (:eid prompt)
+        old-msg (:msg prompt)
+        old-cid (get-in prompt [:card :cid])]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"
                        :args {:choice {:uuid (:uuid choice)}}})
-    ;; Only run the auto-end hook if the prompt actually moved (see choose-card!).
-    (when (wait-for-prompt-change! old-eid)
-      (maybe-auto-end-turn-after-prompt!))
-    (core/with-cursor {:status :success :choice choice})))
+    ;; Report what actually happened, not what we attempted (#75): a choice the
+    ;; engine rejects (e.g. an unpayable cost) or silently swallows leaves the
+    ;; prompt unchanged — that must NOT read as success, and the success line
+    ;; must not print before we know. Only run the auto-end hook if the prompt
+    ;; actually moved (see choose-card!).
+    (if (wait-for-prompt-change! old-eid)
+      (do
+        (maybe-auto-end-turn-after-prompt!)
+        (println (str "✅ Chose: " (core/format-choice choice)))
+        ;; Duplicate-instance detection (#75): the engine can mint STACKED
+        ;; copies of the same prompt (marquee g2: five Manegarm 'Choose one'
+        ;; prompts from Corp continue-spam). Resolving one pops it and an
+        ;; identical-looking next instance surfaces (same msg + card, new eid).
+        ;; Without saying so, the seat reads the stack as a no-op loop and gives
+        ;; up — g2 was abandoned one answer short of draining it.
+        (let [new-prompt (state/get-prompt)
+              duplicate? (and new-prompt
+                              (not= (:eid new-prompt) old-eid)
+                              (= (:msg new-prompt) old-msg)
+                              (= (get-in new-prompt [:card :cid]) old-cid))]
+          (when duplicate?
+            (println (str "ℹ️  Your choice RESOLVED, but an identical duplicate prompt "
+                          "appeared (new instance of the same card prompt — the engine "
+                          "minted copies). Answer it again to drain the stack.")))
+          (core/with-cursor (cond-> {:status :success :choice choice}
+                              duplicate? (assoc :duplicate-prompt true)))))
+      (do
+        (println (str "⚠️  Choice sent but the prompt did not change — NOT treating as "
+                      "resolved: " (core/format-choice choice)))
+        (core/with-cursor {:status :waiting-input
+                           :choice choice
+                           :reason "Prompt unchanged after choice — it may have been rejected (e.g. unpayable cost) or swallowed"})))))
 
 (defn choose-option!
   "Choose from prompt by index (side-aware).
