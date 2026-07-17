@@ -787,17 +787,28 @@
 
 (defn- send-continue!
   "Helper to send continue command and return action-taken result.
-   Waits briefly for state to sync via WebSocket."
+   Waits briefly for state to sync via WebSocket.
+
+   Chokepoint guard (#75): if the LIVE state shows our own prompt is a
+   'waiting' prompt, the engine is mid-checkpoint on the OPPONENT and a
+   continue from us re-fires that checkpoint (duplicate-prompt minting — the
+   marquee-g2 Manegarm wedge). Suppress and report an opponent wait instead.
+   Same guard as the ai-run-corp-handlers copy."
   [gameid]
-  (ws/send-message! :game/action
-                   {:gameid gameid
-                    :command "continue"
-                    :args nil})
-  ;; Brief wait for WebSocket state update to arrive
-  ;; Without this, caller may see stale state on next read
-  (Thread/sleep 100)
-  {:status :action-taken
-   :action :sent-continue})
+  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-waiting-prompt
+     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+    (do
+      (ws/send-message! :game/action
+                        {:gameid gameid
+                         :command "continue"
+                         :args nil})
+      ;; Brief wait for WebSocket state update to arrive
+      ;; Without this, caller may see stale state on next read
+      (Thread/sleep 100)
+      {:status :action-taken
+       :action :sent-continue})))
 
 (defn- send-choice!
   "Helper to send choice command and return action-taken result.
@@ -829,6 +840,9 @@
       (println "⚠️  WARNING: --force is for AI-vs-AI testing ONLY!")
       (println "⚠️  In HITL games, this WILL break game state by passing")
       (println "⚠️  when you should wait for opponent.")
+      (println "⚠️  At a checkpoint blocked on an opponent prompt, a forced")
+      (println "⚠️  continue can re-fire the checkpoint and mint DUPLICATE")
+      (println "⚠️  prompts (#75/#77) — the normal path suppresses this.")
       (println ""))
     (let [run (get-in state [:game-state :run])]
       (if (nil? run)

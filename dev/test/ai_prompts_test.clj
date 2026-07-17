@@ -461,3 +461,104 @@
             ;; Pressed the Mulligan button (option 1).
             (is (= {:choice {:uuid "mull-uuid"}} (:args @sent)))
             (is (not (str/includes? out "No mulligan prompt active")))))))))
+
+;; ============================================================================
+;; press-choice! honesty (#75, marquee g2 Manegarm wedge)
+;;
+;; press-choice! used to print "✅ Chose:" BEFORE sending and return
+;; {:status :success} unconditionally — a choice the engine rejected or
+;; swallowed still reported success (misleading-output class). And when the
+;; engine has minted DUPLICATE prompt instances (g2: five stacked Manegarm
+;; "Choose one" prompts from Corp continue-spam), resolving one pops it and
+;; reveals an identical-looking next instance; without surfacing "your choice
+;; resolved, but an identical duplicate appeared", the seat reads the stack as
+;; a no-op loop and gives up — that is exactly how g2 was abandoned one answer
+;; short of draining the stack.
+;; ============================================================================
+
+(def manegarm-prompt
+  {:msg "Choose one" :prompt-type "other" :eid {:eid 100}
+   :card {:cid "mane-1" :title "Manegarm Skunkworks" :side "Corp"}
+   :choices [{:uuid "u-pay" :value "Spend [Click][Click]" :idx 0}
+             {:uuid "u-etr" :value "End the run" :idx 1}]})
+
+(deftest choose-option-unchanged-prompt-is-not-success
+  (testing "a choice after which the prompt does NOT move must not report :success (#75)"
+    (with-mock-state (mock-client-state :side "runner" :prompt manegarm-prompt)
+      (with-redefs [ws/send-message! (fn [_evt _data] true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] false)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (let [result (atom nil)
+              out (with-out-str (reset! result (prompts/choose-option! 1)))]
+          (is (not= :success (:status @result))
+              (str "prompt unchanged ⇒ the choice may have been rejected/swallowed; got: " @result))
+          (is (not (str/includes? out "✅"))
+              (str "must not print a success checkmark for an unresolved choice, got: " out)))))))
+
+(deftest choose-option-duplicate-prompt-instance-is-surfaced
+  (testing "a choice that resolves but reveals an IDENTICAL duplicate prompt (new eid, same msg+card) says so (#75)"
+    (let [duplicate (assoc manegarm-prompt :eid {:eid 101}
+                           :choices [{:uuid "u-pay2" :value "Spend [Click][Click]" :idx 0}
+                                     {:uuid "u-etr2" :value "End the run" :idx 1}])]
+      (with-mock-state (mock-client-state :side "runner" :prompt manegarm-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        ;; the engine pops the answered instance and the next
+                        ;; stacked duplicate surfaces in its place
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] duplicate)
+                        true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (prompts/choose-option! 1)))]
+            (is (= :success (:status @result))
+                (str "the choice itself resolved — success, got: " @result))
+            (is (:duplicate-prompt @result)
+                "must flag the duplicate so a seat/bot can drain the stack instead of reading it as a no-op")
+            (is (str/includes? out "identical")
+                (str "must tell the seat an identical duplicate appeared, got: " out))))))))
+
+(deftest choose-option-normal-resolution-unchanged
+  (testing "a normally-resolving choice still reports plain :success with no duplicate flag"
+    (with-mock-state (mock-client-state :side "runner" :prompt manegarm-prompt)
+      (with-redefs [ws/send-message! (fn [_evt _data] true)
+                    prompts/wait-for-prompt-change!
+                    (fn [_eid & _]
+                      (swap! state/client-state assoc-in
+                             [:game-state :runner :prompt-state] nil)
+                      true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (let [result (atom nil)
+              out (with-out-str (reset! result (prompts/choose-option! 1)))]
+          (is (= :success (:status @result)))
+          (is (not (:duplicate-prompt @result)))
+          (is (str/includes? out "✅ Chose:")
+              (str "normal resolution keeps the success line, got: " out)))))))
+
+;; Review-panel tightening of the duplicate fingerprint (#75): nil = nil must
+;; not identify two DIFFERENT prompts. Only a present msg AND present card cid
+;; that both match may flag a duplicate.
+
+(deftest choose-option-nil-fingerprint-is-not-a-duplicate
+  (testing "two card-less prompts sharing only a nil/generic identity do not false-flag as duplicates"
+    (let [old-prompt {:msg "Choose one" :prompt-type "other" :eid {:eid 200}
+                      :choices [{:uuid "a1" :value "Yes" :idx 0}
+                                {:uuid "a2" :value "No" :idx 1}]}
+          ;; different prompt, also card-less, same generic msg, new eid
+          next-prompt {:msg "Choose one" :prompt-type "other" :eid {:eid 201}
+                       :choices [{:uuid "b1" :value "Left" :idx 0}
+                                 {:uuid "b2" :value "Right" :idx 1}]}]
+      (with-mock-state (mock-client-state :side "runner" :prompt old-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] next-prompt)
+                        true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [result (atom nil)]
+            (with-out-str (reset! result (prompts/choose-option! 0)))
+            (is (= :success (:status @result)))
+            (is (not (:duplicate-prompt @result))
+                "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))

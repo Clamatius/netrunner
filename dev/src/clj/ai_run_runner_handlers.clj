@@ -10,6 +10,7 @@
    - Returns result map {:status ... :action ...} to stop handler chain"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
+            [ai-state :as state]
             [ai-card-actions :as actions]
             [ai-run-tactics :as tactics]))
 
@@ -30,15 +31,26 @@
     :else (str side-value)))
 
 (defn- send-continue!
-  "Helper to send continue command and return action-taken result."
+  "Helper to send continue command and return action-taken result.
+
+   Chokepoint guard (#75): never send while the LIVE state shows our own prompt
+   is a 'waiting' prompt — the engine is mid-checkpoint on the OPPONENT and a
+   continue from us re-fires that checkpoint, minting duplicate opponent
+   prompts (the marquee-g2 wedge, mirrored to the Runner seat). Same guard as
+   the ai-runs and ai-run-corp-handlers copies."
   [gameid]
-  (ws/send-message! :game/action
-                    {:gameid gameid
-                     :command "continue"
-                     :args nil})
-  (Thread/sleep 100)
-  {:status :action-taken
-   :action :sent-continue})
+  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-waiting-prompt
+     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+    (do
+      (ws/send-message! :game/action
+                        {:gameid gameid
+                         :command "continue"
+                         :args nil})
+      (Thread/sleep 100)
+      {:status :action-taken
+       :action :sent-continue})))
 
 (defn- filter-meaningful-log-entries
   "Filter log entries to exclude 'no further action' spam."
@@ -468,7 +480,15 @@
               (send-continue! gameid))))))))
 
 (defn handle-runner-pass-fired-ice
-  "Priority 2.7: Runner at encounter-ice after subs have fired."
+  "Priority 2.7: Runner at encounter-ice after subs have fired.
+
+   Passes AT MOST ONCE per [position ice] (#75, review finding): the
+   subs-resolved? log heuristic stays true after our pass, so without the
+   pass-once guard this handler re-sent continue every loop iteration while the
+   Corp's window was still open — the same duplicate-continue spam class that
+   minted the g2 Manegarm prompt stack, mirrored to the Runner seat. Shares
+   `passed-ice-position` with handle-runner-pass-broken-ice: either path
+   passing this ICE at this position means our priority here is spent."
   [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "encounter-ice")
@@ -479,6 +499,8 @@
              (not (has-real-decision? my-prompt)))
     (let [current-ice (core/current-run-ice state)
           ice-title (:title current-ice "ICE")
+          position (get-in state [:game-state :run :position])
+          pass-key [position ice-title]
           log (get-in state [:game-state :log])
           meaningful-log (filter-meaningful-log-entries (reverse log))
           recent-log (take 20 meaningful-log)
@@ -486,5 +508,18 @@
                                          (str (:text %)))
                                recent-log)]
       (when (and current-ice (:rezzed current-ice) subs-resolved?)
-        (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
-        (send-continue! gameid)))))
+        (if (= @passed-ice-position pass-key)
+          ;; Already passed our priority here - wait for Corp, don't re-send.
+          (let [status-key [:passed-fired-ice pass-key]]
+            (when-not (= @last-waiting-status status-key)
+              (reset! last-waiting-status status-key)
+              (println (format "⏸️  Passed %s (subs fired), waiting for Corp to pass priority" ice-title)))
+            {:status :waiting-for-opponent
+             :wake-reason :waiting-for-opponent
+             :message (format "Waiting for Corp to pass priority after %s" ice-title)
+             :ice ice-title
+             :position position})
+          (do
+            (reset! passed-ice-position pass-key)
+            (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
+            (send-continue! gameid)))))))

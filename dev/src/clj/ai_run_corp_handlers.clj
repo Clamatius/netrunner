@@ -30,15 +30,28 @@
     :else (str side-value)))
 
 (defn- send-continue!
-  "Helper to send continue command and return action-taken result."
+  "Helper to send continue command and return action-taken result.
+
+   Chokepoint guard (#75): consult the LIVE state at send time — if our own
+   prompt is a 'waiting' prompt, the engine is mid-checkpoint on the OPPONENT
+   (e.g. blocked on the Runner's Manegarm Skunkworks 'Choose one' at
+   :approach-server) and a continue from us is never legitimate. The engine has
+   no in-flight guard there: each duplicate continue re-fires the checkpoint and
+   mints a duplicate opponent prompt (marquee g2 wedge — five stacked Manegarm
+   prompts). Suppress and report an opponent wait so loops idle instead of spin."
   [gameid]
-  (ws/send-message! :game/action
-                    {:gameid gameid
-                     :command "continue"
-                     :args nil})
-  (Thread/sleep 100)
-  {:status :action-taken
-   :action :sent-continue})
+  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-waiting-prompt
+     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+    (do
+      (ws/send-message! :game/action
+                        {:gameid gameid
+                         :command "continue"
+                         :args nil})
+      (Thread/sleep 100)
+      {:status :action-taken
+       :action :sent-continue})))
 
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
@@ -375,29 +388,39 @@
              :ice ice-title
              :position position}))
 
-        ;; Other phases with prompt but no real decision - auto-continue
-        ;; BUT NOT during success/access phases where Runner is active and Corp just waits
+        ;; Other phases with an EMPTY RUN paid-ability window - auto-continue.
+        ;; BUT NOT during success/access phases where Runner is active and Corp just waits,
+        ;; and ONLY for a "run"-type prompt (mirrors can-auto-continue?): a
+        ;; 'waiting' prompt also has empty :choices/:selectable, and continuing
+        ;; on one re-fires the checkpoint the engine is blocked on — the #75
+        ;; Manegarm duplicate-prompt wedge (this branch was the spam source at
+        ;; movement/pos-0, five continues → five stacked Runner prompts).
         (and my-prompt
+             (= "run" (:prompt-type my-prompt))
              (empty? (:choices my-prompt))
              (empty? (:selectable my-prompt))
              (not (#{"success" "access"} run-phase)))
-        (do
-          (ws/send-message! :game/action
-                           {:gameid gameid
-                            :command "continue"
-                            :args nil})
-          (Thread/sleep 100)
-          {:status :action-taken
-           :action :auto-continue-fire-if-asked})
+        ;; Route through send-continue! so the #75 waiting-prompt chokepoint
+        ;; also covers this send (belt to the prompt-type guard above).
+        (let [r (send-continue! gameid)]
+          (if (= :action-taken (:status r))
+            (assoc r :action :auto-continue-fire-if-asked)
+            r))
 
         ;; Default - don't handle, let other handlers run
         :else nil))))
 
 (defn handle-corp-all-subs-resolved
-  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired)."
+  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired).
+
+   Passes AT MOST ONCE per window: if :no-action already records the Corp's pass,
+   fall through instead of re-sending — the condition (all subs resolved) stays
+   true after the pass, so without the guard this handler re-continued every loop
+   iteration until the stuck-detector tripped (the frames-248-252 burst of #75)."
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "corp")
-             (= run-phase "encounter-ice"))
+             (= run-phase "encounter-ice")
+             (not= side (normalize-side (get-in state [:game-state :run :no-action]))))
     (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
