@@ -182,28 +182,30 @@ echo "🔍 Verifying reconnection..." | tee -a "$LOG_FILE"
 RUNNER_CONNECTED=false
 CORP_CONNECTED=false
 
-# Check runner
-RUNNER_GID=$(TIMEOUT=5 "$SCRIPT_DIR/send_command" runner eval \
-    '(str (:gameid @ai-state/client-state))' 2>/dev/null \
-    | tail -1 | tr -d '"' | tr -d '\n' || echo "")
+# Verify each seat by asking for the gameid the SERVER sent us in :game-state, not the
+# :gameid the client set locally before any round-trip (#76: the old check compared that
+# local value and so passed even when the resync timed out and no state ever arrived).
+verify_seat() {
+    local side="$1"
+    local gid
+    gid=$(TIMEOUT=5 "$SCRIPT_DIR/send_command" "$side" eval \
+        '(str (:gameid (:game-state @ai-state/client-state)))' 2>/dev/null \
+        | tail -1 | tr -d '"' | tr -d '\n' || echo "")
+    [ "$gid" = "$GAME_ID" ]
+}
 
-if [ "$RUNNER_GID" = "$GAME_ID" ]; then
-    echo "✅ Runner reconnected" | tee -a "$LOG_FILE"
+if verify_seat runner; then
+    echo "✅ Runner reconnected (server state received)" | tee -a "$LOG_FILE"
     RUNNER_CONNECTED=true
 else
-    echo "⚠️  Runner connection uncertain (gameid: $RUNNER_GID)" | tee -a "$LOG_FILE"
+    echo "❌ Runner did NOT resync - no game state from server" | tee -a "$LOG_FILE"
 fi
 
-# Check corp
-CORP_GID=$(TIMEOUT=5 "$SCRIPT_DIR/send_command" corp eval \
-    '(str (:gameid @ai-state/client-state))' 2>/dev/null \
-    | tail -1 | tr -d '"' | tr -d '\n' || echo "")
-
-if [ "$CORP_GID" = "$GAME_ID" ]; then
-    echo "✅ Corp reconnected" | tee -a "$LOG_FILE"
+if verify_seat corp; then
+    echo "✅ Corp reconnected (server state received)" | tee -a "$LOG_FILE"
     CORP_CONNECTED=true
 else
-    echo "⚠️  Corp connection uncertain (gameid: $CORP_GID)" | tee -a "$LOG_FILE"
+    echo "❌ Corp did NOT resync - no game state from server" | tee -a "$LOG_FILE"
 fi
 
 echo "" | tee -a "$LOG_FILE"

@@ -450,11 +450,17 @@
   (app-state/deregister-user! uid)
   (lobby/lobby-thread
    (let [{:keys [started state] :as lobby} (app-state/uid->lobby uid)]
-     (when (and started state)
-       ;; The game will not exist if this is the last player to leave.
-       (when-let [lobby? (lobby/leave-lobby! db user uid nil lobby)]
-         (handle-message-and-send-diffs!
-          lobby? nil nil (str (:username user) " has left the game.")))))
+     (if (lobby/retain-lobby-on-disconnect? uid lobby)
+       ;; #76: a dropped socket is not a player quitting. Keep the seat so the game
+       ;; survives both clients bouncing and the player can simply resync back in.
+       (timbre/info (str "Socket closed for " (:username user)
+                         " in started game " (:gameid lobby)
+                         " - keeping seat (keep-lobbies-on-disconnect?)"))
+       (when (and started state)
+         ;; The game will not exist if this is the last player to leave.
+         (when-let [lobby? (lobby/leave-lobby! db user uid nil lobby)]
+           (handle-message-and-send-diffs!
+            lobby? nil nil (str (:username user) " has left the game."))))))
    (lobby/broadcast-lobby-list)
    (when ?reply-fn (?reply-fn true))
    (lobby/log-delay! timestamp id)))

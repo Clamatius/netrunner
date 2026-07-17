@@ -45,7 +45,16 @@ make watch-runner       # Stream runner game events (for Monitor)
 4. Test with `./dev/send_command`
 5. Repeat
 
-**Games may timeout** - server purges inactive games. If resume fails with "no active games", use `make reset`.
+**Games may timeout** - the server reaps lobbies idle longer than `:time-inactive`
+(`resources/dev.edn`, currently 2 days). If resume fails with "no active games", use `make reset`.
+
+**Note (#76):** "no active games" after a bounce used to be blamed on that purge. It wasn't.
+A websocket close unseats the player, and the *last* player leaving made the server delete the
+lobby outright - so `make resume`, which stops both clients first, destroyed the very game it
+was resuming (and then reported success anyway). `:keep-lobbies-on-disconnect?` in
+`resources/dev.edn` now keeps a *started* lobby alive across a socket drop; the seat stays
+seated, so resync works. Explicit leaves (concede, `save-replay.sh`) still close the lobby,
+so stats/replays still flush.
 
 ## Key Commands
 
