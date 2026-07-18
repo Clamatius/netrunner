@@ -103,22 +103,22 @@ C=$(./dev/send_command runner get-cursor)          # capture cursor first
 ./dev/send_command runner wait --since "$C"        # blocks until something relevant
 ```
 
-### ⚠️ If the game won't advance after you end your turn — re-send end-turn
+### ⛔ NEVER re-send end-turn. If the game won't advance, call the umpire.
 
-There is a known rough edge: when you end your turn right after a **last-click
-action whose resolution is still settling** (a run/access that just finished, or
-an event that made the Corp choose something like Wildcat Strike), the engine can
-**roll your end-turn back** on a resync. The symptom is sneaky: `smart-end-turn`
-reports success and `game-over-status` shows `AWAITING-START next-player=corp`,
-**but the Corp never starts** — because your end-turn never actually landed
-server-side. Do NOT conclude "Corp bot stalled" from this alone.
+**Do not re-send `end-turn`/`smart-end-turn` to unstick anything, ever.** An
+end-turn that lands when it isn't your turn ends your OPPONENT's turn and is
+logged under your name. No game has ever been recovered from it. This destroyed
+game 02995207 at turn 8 — the seat was following earlier advice in this very
+document to "retry 2–3 times", which is why that advice is gone.
 
-**Recovery (do this before reporting any post-turn stall):** if you've ended your
-turn and the Corp hasn't started after a `wait` (you're still at 0 clicks and the
-game sits at `AWAITING-START next-player=corp` / your turn for ~10s+), simply
-**re-run `./dev/send_command runner smart-end-turn`.** Once the rollback has
-settled it will cleanly re-send and the Corp will pick up. Retry it 2–3 times,
-~3s apart, before deciding it's a genuine Corp-side stall.
+The client now refuses off-turn end-turns outright (`⛔ Refusing end-turn: it is
+not your turn`). If you see that message, you are about to break the game:
+**stop and escalate.** Do not look for a way around it.
+
+Symptom you may still hit: `smart-end-turn` reports success and
+`game-over-status` shows `AWAITING-START next-player=corp`, **but the Corp never
+starts**. Do NOT conclude "Corp bot stalled", and do NOT re-send. Wait once, then
+escalate to the umpire.
 
 ## If you suspect a wedge — raise your hand to the umpire (don't spin)
 

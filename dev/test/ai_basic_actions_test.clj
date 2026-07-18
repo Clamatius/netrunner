@@ -382,3 +382,82 @@
         (binding [*out* out]
           (basic/repeat-action! 3 (fn [] {:status :success}) "clicks"))
         (is (not (re-find #"only 0 click" (str out))))))))
+
+;; ---------------------------------------------------------------------------
+;; Off-turn end-turn guard (game 02995207, turn 8)
+;;
+;; An end-turn sent while we are NOT the active player ends the OPPONENT's turn
+;; and is logged under OUR name, leaving no "<opponent> is ending" line. Turn
+;; state derived from the log then permanently disagrees with :end-turn and the
+;; match wedges. These tests assert NOTHING IS SENT — asserting only on the
+;; returned :status would stay green on a client that still transmits, which is
+;; the whole failure mode.
+;; ---------------------------------------------------------------------------
+
+(defn- off-turn-state
+  "Runner at 0 clicks during the CORP's turn, with the runner's own 'is ending'
+   line already scrolled out of the 3-entry window that already-ended-this-turn?
+   inspects — i.e. exactly the state at the wedge."
+  []
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 0}
+                :corp {:click 0 :credit 12 :hand []}
+                :turn 8
+                :active-player "corp"
+                :log [{:text "ai-runner is ending their turn 7 with 0 [Credit] and 5 cards in their Grip."}
+                      {:text "ai-corp started their turn 8 with 12 [Credit] and 3 cards in HQ."}
+                      {:text "ai-corp spends [Click] to install a card in the root of Server 1."}
+                      {:text "ai-corp spends [Click] and pays 1 [Credits] to advance a card in Server 1."}]}))
+
+(deftest end-turn-refuses-off-turn-and-sends-nothing
+  (testing "end-turn! must not transmit while the opponent is the active player"
+    (let [sent (atom [])]
+      (with-mock-state (off-turn-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (binding [*out* (java.io.StringWriter.)] (basic/end-turn!))]
+            (is (= :error (:status result)))
+            (is (= :not-my-turn (:reason result)))
+            (is (empty? @sent)
+                "MUST NOT SEND — an off-turn end-turn ends the opponent's turn")))))))
+
+(deftest smart-end-turn-refuses-off-turn-and-sends-nothing
+  (testing "smart-end-turn! mirrors the guard, so its self-heal can never
+            re-send into the opponent's turn"
+    (let [sent (atom [])]
+      (with-mock-state (off-turn-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (binding [*out* (java.io.StringWriter.)] (basic/smart-end-turn!))]
+            (is (= :error (:status result)))
+            (is (= :not-my-turn (:reason result)))
+            (is (empty? @sent))))))))
+
+(deftest off-turn-guard-survives-the-log-window-scrolling
+  (testing "The pre-existing duplicate guard scans only the last 3 log entries, so
+            our own 'is ending' line scrolls out once the opponent acts and the
+            guard goes blind. The off-turn guard keys on :active-player, which does
+            not scroll — this is the case that actually wedged game 02995207."
+    (let [sent (atom [])]
+      (with-mock-state (off-turn-state)
+        ;; Precondition: the old guard IS blind here. If this ever goes false the
+        ;; test has stopped covering the real bug.
+        (is (not (#'basic/already-ended-this-turn? @state/client-state))
+            "precondition: the 3-entry duplicate guard cannot see our end-turn")
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (binding [*out* (java.io.StringWriter.)] (basic/end-turn!))
+          (is (empty? @sent) "off-turn guard must cover what the log-scan guard misses"))))))
+
+(deftest end-turn-still-works-on-our-own-turn
+  (testing "The guard must not block a legitimate end-turn (active-player = us)"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 0}
+                                     :corp {:click 0 :credit 12 :hand []}
+                                     :turn 8
+                                     :active-player "runner"
+                                     :log [{:text "ai-runner spends [Click] to make a run on R&D."}]})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (binding [*out* (java.io.StringWriter.)] (basic/end-turn!))]
+            (is (= :success (:status result)))
+            (is (= 1 (count @sent)) "legitimate end-turn must still be sent")))))))

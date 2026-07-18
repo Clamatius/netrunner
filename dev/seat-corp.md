@@ -175,16 +175,22 @@ IN-PROGRESS, report the dead peer and stop rather than looping forever.
 burns credits and reveals the card. A cheap ICE on a server with nothing worth
 stealing is often a decline.
 
-### ⚠️ If the game won't advance after you end your turn — re-send end-turn
+### ⛔ NEVER re-send end-turn. If the game won't advance, call the umpire.
 
-Known rough edge: ending your turn right after a **last-click action whose
-resolution is still settling** can get **rolled back** on a resync. Symptom:
-`smart-end-turn` reports success and `game-over-status` shows
-`AWAITING-START next-player=runner`, **but the Runner never starts**. Do NOT
-conclude "Runner stalled" from this alone. **Recovery:** if you've ended and the
-Runner hasn't started after a `wait` (~10s+), simply re-run
-`./dev/send_command corp smart-end-turn`. Retry 2–3 times, ~3s apart, before
-deciding it's a genuine Runner-side stall.
+**Do not re-send `end-turn`/`smart-end-turn` to unstick anything, ever.** An
+end-turn that lands when it isn't your turn ends your OPPONENT's turn and is
+logged under your name. No game has ever been recovered from it. This destroyed
+game 02995207 at turn 8 — the seat was following earlier advice in this very
+document to "retry 2–3 times", which is why that advice is gone.
+
+The client now refuses off-turn end-turns outright (`⛔ Refusing end-turn: it is
+not your turn`). If you see that message, you are about to break the game:
+**stop and escalate.** Do not look for a way around it.
+
+Symptom you may still hit: `smart-end-turn` reports success and
+`game-over-status` shows `AWAITING-START next-player=runner`, **but the Runner
+never starts**. Do NOT conclude "Runner stalled", and do NOT re-send. Wait once,
+then escalate to the umpire.
 
 ## If you suspect a wedge — raise your hand to the umpire (don't spin)
 
@@ -193,13 +199,20 @@ it is genuinely undecidable from one side. So don't silently burn 10 minutes
 re-sending a command that isn't advancing. There is an **umpire**: a supervisor who
 can legitimately see BOTH seats' public status, there for exactly this.
 
+**DEFAULT POSTURE: if something weird happened, or the game might be broken, or
+the opponent might be stuck — ESCALATE. Do not try to fix it by re-sending.**
+Re-sending is how a recoverable oddity becomes an unrecoverable one. The umpire
+is cheap; a broken game costs the whole match.
+
 **Escalate when ANY of these holds:**
-- you've re-sent the same advancing command (`start-turn`, `continue`,
-  `monitor-run --persistent`, `smart-end-turn`) **~3×** with **no state change**; or
+- anything looks wrong, out of order, or contradictory — including a command whose
+  output disagrees with `game-over-status`, `prompt`, or the log; or
+- you've issued the same advancing command (`start-turn`, `continue`,
+  `monitor-run --persistent`) **twice** with **no state change** — do not go to a
+  third; or
 - you've waited **> ~5 min** with no progress AND `peer-status` says the opponent is
   still **alive** (so it's not a dead peer — smells like a boundary wedge); or
-- a run window won't advance and the documented recoveries above (re-issue
-  `monitor-run`, re-send `end-turn`) haven't moved it.
+- a run window won't advance and re-issuing `monitor-run` hasn't moved it.
 
 **How — ping, then poll for the reply (bounded), then follow it:**
 ```

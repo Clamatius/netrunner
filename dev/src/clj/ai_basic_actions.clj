@@ -700,8 +700,30 @@
         clicks (get-in client-state [:game-state side-kw :click])
         hand-size (count (get-in client-state [:game-state side-kw :hand]))
         max-hand-size (get-in client-state [:game-state side-kw :hand-size :total] 5)
-        gameid (:gameid client-state)]
+        gameid (:gameid client-state)
+        active-player (get-in client-state [:game-state :active-player])
+        ;; nil active-player = pre-game / unpopulated mock; don't refuse on it.
+        my-turn? (or (nil? active-player)
+                     (= (str/lower-case (name side-kw))
+                        (str/lower-case active-player)))]
     (cond
+      ;; OFF-TURN GUARD (game 02995207, turn 8). An end-turn sent while we are NOT
+      ;; the active player ends the OPPONENT's turn, and the engine logs it under
+      ;; OUR name — leaving no "<opponent> is ending" line at all. Every consumer
+      ;; that derives turn state from the log then disagrees with :end-turn, and
+      ;; the match wedges permanently. No game has ever been recovered from it.
+      ;;
+      ;; The Bug #2 guard below cannot catch this: it scans only the last 3 log
+      ;; entries, so once the opponent takes a couple of actions our own "is ending"
+      ;; line scrolls out of the window and the guard goes blind. This check keys on
+      ;; :active-player instead, which does not scroll.
+      (not my-turn?)
+      (do
+        (println "⛔ Refusing end-turn: it is not your turn.")
+        (println (format "   Active player is %s; ending a turn you don't own corrupts engine state." active-player))
+        (println "   If the game looks stuck, escalate to the umpire — do NOT re-send.")
+        (core/with-cursor {:status :error :reason :not-my-turn :active-player active-player}))
+
       ;; Bug #2 guard: refuse to double-end the turn. The engine treats a
       ;; second end-turn message as state corruption and deadlocks the next
       ;; turn cycle (Run #4 1:11:32). Detected via our own recent log line.
@@ -865,6 +887,12 @@
         ;; Check if we've actually started our turn
         turn-started? (turn-started-since-last-opp-end?)
 
+        ;; Off-turn guard input (see the cond's first branch).
+        active-player (get-in client-state [:game-state :active-player])
+        my-turn? (or (nil? active-player)
+                     (= (str/lower-case (name side))
+                        (str/lower-case active-player)))
+
         ;; Turn number at entry, so the self-heal re-read can detect a real
         ;; transition (:turn advanced) vs a rolled-back end-turn.
         turn (get-in client-state [:game-state :turn] 0)
@@ -889,6 +917,16 @@
                               (vals installed))]
 
     (cond
+      ;; OFF-TURN GUARD — mirrors end-turn!'s. Checked FIRST so the self-heal
+      ;; below can never re-send into the opponent's turn. See end-turn! for why
+      ;; this is fatal and why the log-scan guards cannot catch it.
+      (not my-turn?)
+      (do
+        (println "⛔ Refusing end-turn: it is not your turn.")
+        (println (format "   Active player is %s." active-player))
+        (println "   If the game looks stuck, escalate to the umpire — do NOT re-send.")
+        (core/with-cursor {:status :error :reason :not-my-turn :active-player active-player}))
+
       ;; Can't end: Turn hasn't started yet
       (not turn-started?)
       (do

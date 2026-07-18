@@ -143,15 +143,25 @@ C=$(./dev/send_command runner get-cursor)
 ./dev/send_command runner wait --since "$C"
 ```
 
-### ⚠️ If the game won't advance after you end your turn — re-send end-turn
-Known rough edge: when you end your turn right after a last-click action whose
-resolution is still settling, the engine can roll your end-turn back on a resync.
-Symptom: `smart-end-turn` reports success and `game-over-status` shows
-`AWAITING-START next-player=corp`, but the Corp never starts. Do NOT conclude
-"Corp stalled" from this alone. **Recovery:** if you've ended your turn and the
-Corp hasn't started after a `wait` (~10s+), simply re-run
-`./dev/send_command runner smart-end-turn`. Retry 2–3 times, ~3s apart, before
-deciding it's a genuine Corp-side stall.
+### ⛔ NEVER re-send end-turn. If the game won't advance, call the umpire.
+**Do not re-send `end-turn`/`smart-end-turn` to unstick anything, ever.** An
+end-turn that lands when it isn't your turn ends your OPPONENT's turn and is
+logged under your name. No game has ever been recovered from it. This destroyed
+game 02995207 at turn 8 — the seat was following earlier advice in this very
+document to "retry 2–3 times", which is why that advice is gone.
+
+The client now refuses off-turn end-turns outright (`⛔ Refusing end-turn: it is
+not your turn`). If you see that, you are about to break the game: stop and
+escalate. Do not look for a way around it.
+
+Symptom you may still hit: `smart-end-turn` reports success and
+`game-over-status` shows `AWAITING-START next-player=corp`, but the Corp never
+starts. Do NOT conclude "Corp stalled", and do NOT re-send. Wait once, then
+escalate to the umpire.
+
+**DEFAULT POSTURE: something weird happened, or the game might be broken, or the
+opponent might be stuck → ESCALATE.** Do not try to fix it by re-sending;
+re-sending is how a recoverable oddity becomes an unrecoverable one.
 
 ### If you suspect a wedge — raise your hand to the umpire (do NOT exit)
 You cannot tell "slow opponent" from "harness wedged" from your own seat. There is
