@@ -83,8 +83,13 @@ unanswered ping). On a ping:
    whole point of the umpire seat. Do NOT relay what you see.)
 2. Answer: `./dev/umpire-reply <side> "<harness-state answer>"`. The seat is polling
    `umpire-check` and will pick it up.
-3. If genuinely wedged, apply the documented recovery yourself where you can
-   (re-send end-turn, clear a stuck `:turn-started`, etc.) or `--wake`/ntfy Michael.
+3. If genuinely wedged, apply the documented recovery yourself where you can — but
+   **NEVER re-send an end-turn, and never instruct a seat to.** An off-turn end-turn
+   ends the opponent's turn and is logged under the sender's name; no game has ever
+   been recovered from it (it killed game 02995207). The client now refuses off-turn
+   end-turns, so treat that refusal as correct and look elsewhere. If you can't
+   recover without one, the game is dead — abandon it and `--wake`/ntfy Michael
+   rather than "fixing" it into an unrecoverable state.
 
 **HARD CONSTRAINT (you see both hands — do not blow fog-of-war):** reply about
 harness/tooling state ONLY. Keep recoveries **command-only and card-name-free**
@@ -93,7 +98,7 @@ redirect. The mailbox is opponent-readable, so a leak in YOUR reply is as bad as
 in a seat's ping. Canned replies to prefer (bland by design):
 - `not wedged — opponent has an open decision window, keep waiting`
 - `not wedged — opponent is mid-turn, keep waiting`
-- `wedged — re-send your last end-turn once, then resume the wait loop`
+- `wedged — hold position, do not re-send anything; I am investigating`
 - `harness channel only — I can't advise on play; re-ask about tooling state`
 
 **One umpire per match dir.** Two sessions Monitoring the same mailbox will both
@@ -105,9 +110,13 @@ reply and step on each other. If you're supervising, you're the only umpire.
   owns the whole Runner run; it wakes only for rez/fire/access/run-end. On a
   **timeout** during an active run the seat re-issues `monitor-run --persistent`
   (normal pacing vs a slow opponent — not a stall).
-- **End-turn rollback:** an end-turn right after a last-click action can be rolled
-  back on resync. Recovery: re-run `smart-end-turn` 2–3× ~3s apart before
-  concluding a genuine opponent stall. (Both seat briefs document this.)
+- **NEVER re-send end-turn** (this replaces the old "retry 2–3×" advice, which
+  killed game 02995207). An end-turn landing off-turn ends the OPPONENT's turn and
+  is logged under the sender's name, leaving no `<opponent> is ending` line — after
+  which log-derived turn state permanently disagrees with `:end-turn` and the match
+  wedges. The client now refuses off-turn end-turns; if a seat reports
+  `⛔ Refusing end-turn`, that guard is doing its job. A seat that thinks the game
+  won't advance should escalate, not retry.
 - **Symmetric priority window** (the original deadlock) is now side/priority-aware
   in the prompt (`013469b09`) AND auto-passed by the persistent Corp loop — this
   game is the test that those two fixes together let the models self-resolve.
