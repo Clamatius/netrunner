@@ -93,6 +93,8 @@
   [state phase]
   (swap! state assoc-in [:run :phase] phase)
   (swap! state dissoc-in [:run :next-phase])
+  ;; The movement->approach-server transition (if any) has landed; let continue through.
+  (swap! state dissoc-in [:run :approaching-server])
   (swap! state assoc-in [:run :no-action] false)
   phase)
 
@@ -509,10 +511,22 @@
 
 (defmethod continue :movement
   [state side _]
-  (if-not (get-in @state [:run :no-action])
+  (cond
+    ;; The movement->approach-server transition is already under way and is suspended
+    ;; awaiting a decision (e.g. an :approach-server upgrade prompt). approach-server
+    ;; sets no phase of its own, so without this guard the run still looks like
+    ;; {:phase :movement, :no-action <side>, :position 0} - the very state that made us
+    ;; advance - and every further continue would re-fire :approach-server, re-announce
+    ;; the approach and stack another prompt on the defender.
+    (get-in @state [:run :approaching-server])
+    nil
+
+    (not (get-in @state [:run :no-action]))
     (do (swap! state assoc-in [:run :no-action] side)
         (when (= :runner side)
           (system-msg state side "will continue the run")))
+
+    :else
     (let [eid (make-phase-eid state nil)]
       (cond (or (check-for-empty-server state)
                 (:ended (:end-run @state)))
@@ -520,7 +534,12 @@
             (pos? (get-in @state [:run :position]))
             (do (set-next-phase state :approach-ice)
                 (start-next-phase state side eid))
-            :else (approach-server state side eid)))))
+            ;; Mark the transition in-flight *synchronously*, before any awaited work,
+            ;; the way continue :approach-ice marks itself with set-next-phase. Cleared
+            ;; by set-phase when the run reaches its next phase (or discarded wholesale
+            ;; by run-cleanup if the run ends here).
+            :else (do (swap! state assoc-in [:run :approaching-server] true)
+                      (approach-server state side eid))))))
 
 (defmethod start-next-phase :success
   [state side _]
@@ -788,6 +807,10 @@
     (queue-event state :end-of-encounter {:ice (get-current-ice state)}))
   (let [marked? (is-mark? state (get-in @state [:run :server 0]))
         run (if marked? (assoc (:run @state) :marked-server true) (:run @state))
+        ;; :approaching-server is an internal in-flight marker for the movement->
+        ;; approach-server transition; it is not part of the run's public record, so
+        ;; keep it out of :last-run and the :run-ends payload.
+        run (dissoc run :approaching-server)
         run-eid (:eid run)]
     (swap! state assoc-in [:runner :register :last-run] run)
     (swap! state update-in [:runner :credit] - (get-in @state [:runner :run-credit]))
