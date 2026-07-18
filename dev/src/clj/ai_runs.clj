@@ -256,6 +256,8 @@
 
 (declare continue-run!)
 (declare auto-continue-loop!)
+(declare reset-window-grace!)
+(declare reset-reported-events!)
 
 ;; ============================================================================
 ;; Run Initiation
@@ -304,6 +306,14 @@
 
       ;; Reset and set strategy for this run
       (reset-strategy!)
+      ;; Per-run scratch state. reset-window-grace! had NO production caller at
+      ;; all — window-first-seen persisted across runs, so a repeat window
+      ;; ([phase position no-action] collides readily) could look instantly
+      ;; stale and self-advance without ever granting the grace period.
+      ;; NB reported-events is deliberately NOT reset here: it is game-scoped,
+      ;; and a per-run reset would re-report a previous run's tail event if it
+      ;; were still inside the newest-3 window (a duplicate stale pause).
+      (reset-window-grace!)
       (set-strategy! (dissoc flags :no-continue))  ; Store all except :no-continue
 
       ;; Provide feedback if we normalized the input
@@ -446,7 +456,16 @@
    (#54), not bare substrings, so card names / flavor / derez / sub-breaking
    don't misclassify. nil / missing `:text` entries are tolerated."
   [log]
-  (let [recent-log (take 3 (reverse log))]
+  (let [n (count log)
+        ;; Tag each entry with its INDEX in the append-only log. This is the
+        ;; event's real identity: `handle-events` dedupes on it, and text +
+        ;; timestamp alone cannot distinguish a genuine repeat (same card used
+        ;; twice) from a re-read of the same entry. Index is stable across a
+        ;; resync (the server log is authoritative), and if the log were ever
+        ;; truncated the shifted key fails toward re-reporting — i.e. toward
+        ;; pausing, never toward going blind. (Guest review of the #31 fix.)
+        recent-log (map-indexed (fn [i e] (assoc e ::log-index (- n 1 i)))
+                                (take 3 (reverse log)))]
     {:rez-event (get-rez-event recent-log)
      ;; ability + fired un-guarded: an ability's "uses X to prevent ..." effect
      ;; and a fired sub's embedded label ("... cannot jack out ...") legitimately
@@ -1141,42 +1160,86 @@
          :wake-reason :waiting-for-opponent
          :message reason}))))
 
+(defonce ^:private reported-events
+  ;; {:gameid <the game these belong to> :events #{event-key ...}}
+  ;; Log entries we have ALREADY paused the seat on. See handle-events for why
+  ;; this must exist.
+  ;;
+  ;; Scoped to the GAME, not the run. Event identity is the log INDEX, and a new
+  ;; game restarts the log at 0 — so entries from a previous game would collide
+  ;; with the new game's first entries and silently suppress them. Per-RUN reset
+  ;; would be wrong in the other direction: a seat re-issues `monitor-run`
+  ;; repeatedly within one run, and clearing on each re-issue would re-report the
+  ;; same event every time — the #31 latch again, one grain coarser. Keying on
+  ;; gameid is self-healing across new game, resync and reconnect alike, with no
+  ;; reset call to forget. (Guest review of the #31 fix.)
+  (atom {:gameid nil :events #{}}))
+
+(defn reset-reported-events!
+  "Forget which events we have reported."
+  []
+  (reset! reported-events {:gameid nil :events #{}}))
+
+(defn- reported-set
+  "The reported-event keys for the CURRENT game, dropping another game's."
+  []
+  (let [gameid (:gameid @state/client-state)
+        {:keys [events] :as cur} @reported-events]
+    (if (= gameid (:gameid cur))
+      events
+      (:events (reset! reported-events {:gameid gameid :events #{}})))))
+
+(defn- event-key
+  "Identity of a log entry for dedupe purposes. Index first (see
+   extract-run-events); timestamp and text keep it stable if an entry is ever
+   offered without an index (hand-built contexts, tests)."
+  [entry]
+  [(::log-index entry) (:timestamp entry) (:text entry)])
+
+(defn- unreported?
+  "True if `entry` exists and we have not already paused the seat on it."
+  [entry]
+  (boolean (and entry (not (contains? (reported-set) (event-key entry))))))
+
 (defn handle-events
   "Priority 4: Pause for important events (rez, subs, abilities, damage).
    Order is most-specific-first: a firing subroutine and its own 'uses <ice>
    to ...' effect line can co-occur in the same window, so :subs-fired is
    checked before :ability-used to label the headline event (#54). All four
-   statuses pause identically downstream (run-notable-event?), so the order
-   only affects the human-readable label, never behaviour."
+   statuses pause identically downstream (run-notable-event?), so within a
+   single call the order only affects the human-readable label, never
+   behaviour. ACROSS calls it now also affects how many pauses one physical
+   exchange produces: the old cond suppressed a co-occurring lower-priority
+   entry forever, whereas per-entry dedupe surfaces each DISTINCT co-window
+   entry on successive calls (a fired-sub line, then its companion 'uses <ice>
+   to ...' line). That direction is safe — more pauses, never fewer — but a
+   hand-driven seat will occasionally see two pauses for one exchange. A
+   single entry matching several categories still reports once, since the
+   dedupe key is the entry.
+
+   Reports each event EXACTLY ONCE (#31, game 4a6aef71). `extract-run-events`
+   is a pure function of the newest 3 log entries, so without a memory of what
+   has already been reported this handler LATCHES: it sits ahead of every pass
+   handler in the chain, so pausing here stops the run advancing, a stalled run
+   stops the log moving, and an unchanged log re-produces the same event on the
+   next call — forever. Three live `continue --single` calls each re-printed the
+   same 7-minute-old Overclock line (which by then was not even the newest
+   entry) while :no-action sat at false. The pause is a feature; the latch is
+   the bug. Dedupe is per-ENTRY, not a global mute, so a genuinely new rez still
+   stops the Runner."
   [{:keys [rez-event ability-event fired-event tag-damage-event]}]
-  (cond
-    rez-event
-    (do
-      (println "⚠️  Run paused - ICE rezzed!")
-      (println (format "   %s" (:text rez-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :ice-rezzed :wake-reason :ice-rezzed :event rez-event})
-
-    fired-event
-    (do
-      (println "⚠️  Run paused - subroutines fired!")
-      (println (format "   %s" (:text fired-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :subs-fired :wake-reason :subs-fired :event fired-event})
-
-    ability-event
-    (do
-      (println "⚠️  Run paused - ability triggered!")
-      (println (format "   %s" (:text ability-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :ability-used :wake-reason :ability-used :event ability-event})
-
-    tag-damage-event
-    (do
-      (println "⚠️  Run paused - tag or damage!")
-      (println (format "   %s" (:text tag-damage-event)))
-      (println "   → Use 'continue-run' again to proceed")
-      {:status :tag-or-damage :wake-reason :tag-or-damage :event tag-damage-event})))
+  (when-let [[status headline event]
+             (cond
+               (unreported? rez-event)        [:ice-rezzed   "ICE rezzed!"        rez-event]
+               (unreported? fired-event)      [:subs-fired   "subroutines fired!" fired-event]
+               (unreported? ability-event)    [:ability-used "ability triggered!" ability-event]
+               (unreported? tag-damage-event) [:tag-or-damage "tag or damage!"    tag-damage-event])]
+    (reported-set)  ; ensure the set belongs to the current game before adding
+    (swap! reported-events update :events conj (event-key event))
+    (println (format "⚠️  Run paused - %s" headline))
+    (println (format "   %s" (:text event)))
+    (println "   → Use 'continue-run' again to proceed")
+    {:status status :wake-reason status :event event}))
 
 (defn handle-unexpected-state
   "Fallback: Unknown state - wait and retry rather than give up"
@@ -1557,7 +1620,14 @@
                 ;; run-event run (Jailbreak/Conduit) that enters via continue-run!
                 ;; would otherwise inherit stale [position ice] keys and skip a
                 ;; needed pass-continue.
-                (runner-handlers/reset-state!))
+                (runner-handlers/reset-state!)
+                ;; Same third-path hazard for the self-advance grace timer: a
+                ;; stale [phase position no-action] key (these collide readily)
+                ;; would make a card-initiated run's first window look instantly
+                ;; abandoned and self-advance with ZERO grace, skipping the
+                ;; fog-of-war paid-ability window the grace exists to protect.
+                ;; Run END is the boundary that covers every entry path.
+                (reset-window-grace!))
               (assoc result
                      :iterations (inc iteration)
                      :elapsed-ms (- (System/currentTimeMillis) start-time)))
@@ -1772,6 +1842,11 @@
   "Own one active run: (re)apply the pre-committed strategy, then loop."
   [flags]
   (reset-strategy!)
+  ;; Per-run scratch state, same as run! — the CORP seat never calls run!, it
+  ;; only ever enters a run through here. NB reported-events is deliberately NOT
+  ;; reset here: it is game-scoped, and clearing it on each monitor-run re-issue
+  ;; would re-report the same event every time. (Guest review of #31.)
+  (reset-window-grace!)
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
     (when (seq strategy-flags)
       (set-strategy! strategy-flags)

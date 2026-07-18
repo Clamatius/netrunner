@@ -15,6 +15,12 @@
             [ai-run-corp-handlers :as corp-handlers]
             [ai-websocket-client-v2 :as ws]))
 
+;; `handle-events` keeps a per-game memory of already-reported log entries
+;; (#31), so it is no longer a pure function. Without this fixture the
+;; event-labeling tests below pass on a fresh JVM and FAIL on a second run in
+;; the same REPL, because their entries are already marked as reported.
+(use-fixtures :each (fn [t] (runs/reset-reported-events!) (t)))
+
 ;; =============================================================================
 ;; Test: Waiting for Opponent's Rez Decision
 ;; =============================================================================
