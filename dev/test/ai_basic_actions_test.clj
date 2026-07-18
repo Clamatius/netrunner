@@ -362,3 +362,23 @@
           (is (= :error (:status result)))
           (is (= 0 (get-in result [:data :times])) "Zero actions actually landed")
           (is (not (re-find #"Completed 3" (str out)))))))))
+
+(deftest repeat-action-warns-when-count-exceeds-clicks
+  (testing "Say up front that the count exceeds the clicks in hand, rather than
+            discovering it N-1 actions in. (Michael's review of the count arg.)"
+    (with-mock-state (clicking-state 2)
+      (let [out (java.io.StringWriter.)]
+        (binding [*out* out]
+          (basic/repeat-action! 5 (fn [] {:status :success}) "clicks"))
+        (is (re-find #"only 2 click" (str out))
+            "Must warn before starting, naming the real ceiling")))))
+
+(deftest repeat-action-does-not-warn-at-zero-clicks
+  (testing "0 clicks cannot distinguish 'spent' from 'turn not started yet', and
+            the actions auto-start the turn — warning there would be noise on
+            the first action of every turn."
+    (with-mock-state (clicking-state 0)
+      (let [out (java.io.StringWriter.)]
+        (binding [*out* out]
+          (basic/repeat-action! 3 (fn [] {:status :success}) "clicks"))
+        (is (not (re-find #"only 0 click" (str out))))))))

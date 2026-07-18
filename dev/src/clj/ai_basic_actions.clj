@@ -424,6 +424,35 @@
   (let [s @state/client-state]
     (get-in s [:game-state (keyword (:side s)) :click])))
 
+(defn- my-vitals
+  "[credits clicks hand-size] for my side — the cheap observable proof that an
+   action actually did something."
+  []
+  (let [s @state/client-state
+        side (keyword (:side s))]
+    [(get-in s [:game-state side :credit])
+     (get-in s [:game-state side :click])
+     (count (get-in s [:game-state side :hand]))]))
+
+(defn- wait-for-vitals-change!
+  "Poll until my vitals differ from `before`, or the timeout expires. Returns
+   true if something moved.
+
+   Replaces a bare `(Thread/sleep medium-delay)` + compare. That pattern cannot
+   tell 'the engine refused this' from 'the state diff has not landed yet': the
+   client applies each diff atomically via differ/patch, so a not-yet-arrived
+   update leaves EVERY field at its old value, which is indistinguishable from a
+   refusal by inspection. Waiting for a change and only then concluding
+   'refused' makes the negative meaningful — and it also returns as soon as the
+   diff lands, so the happy path gets faster, not slower."
+  [before timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond
+        (not= before (my-vitals)) true
+        (>= (System/currentTimeMillis) deadline) false
+        :else (do (Thread/sleep 50) (recur))))))
+
 (defn repeat-action!
   "Run a click action up to `n` times, stopping early on failure or when the
    clicks run out.
@@ -440,6 +469,15 @@
    turn. The clicks check is skipped before the first action because the turn may
    legitimately not be started yet (the actions auto-start it)."
   [n action! label]
+  ;; Pre-flight: say up front that the count exceeds the clicks in hand, rather
+  ;; than discovering it N-1 actions in. Only when the turn is already started
+  ;; (clicks > 0) — at 0 clicks we cannot distinguish 'spent' from 'not started
+  ;; yet', and the actions auto-start the turn, so refusing there would break
+  ;; the first action of a turn.
+  (let [avail (clicks-left)]
+    (when (and (some? avail) (pos? avail) (> n avail))
+      (println (format "⚠️  Asked for %d %s but only %d click(s) in hand — will stop at %d"
+                       n label avail avail))))
   (loop [done 0]
     (cond
       (>= done n)
@@ -470,12 +508,13 @@
           side (:side client-state)
           before-credits (get-in client-state [:game-state (keyword side) :credit])
           before-clicks (get-in client-state [:game-state (keyword side) :click])
+          vitals-before (my-vitals)
           gameid (:gameid client-state)]
       (ws/send-message! :game/action
                         {:gameid gameid
                          :command "credit"
                          :args nil})
-      (Thread/sleep core/medium-delay)
+      (wait-for-vitals-change! vitals-before core/action-timeout)
       (let [client-state @state/client-state
             side (:side client-state)
             after-credits (get-in client-state [:game-state (keyword side) :credit])
@@ -521,12 +560,13 @@
           side (:side client-state)
           before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
           before-clicks (get-in client-state [:game-state (keyword side) :click])
+          vitals-before (my-vitals)
           gameid (:gameid client-state)]
       (ws/send-message! :game/action
                         {:gameid gameid
                          :command "draw"
                          :args nil})
-      (Thread/sleep core/medium-delay)
+      (wait-for-vitals-change! vitals-before core/action-timeout)
       (let [client-state @state/client-state
             side (:side client-state)
             hand (get-in client-state [:game-state (keyword side) :hand])
