@@ -981,10 +981,19 @@
             (when (seq playable-breakers)
               (println "  💪 Icebreakers with playable abilities:")
               (doseq [b playable-breakers]
-                (let [playable-abs (filter :playable (:abilities b))]
+                ;; keep-indexed, NOT filter: `use-ability` takes the index into
+                ;; the card's FULL :abilities vector, so the position within a
+                ;; filtered playable-only list is the wrong number — printing it
+                ;; would be worse than printing nothing. Emitting the whole
+                ;; invocation is the point: the command log had abilities ->
+                ;; use-ability at P=0.59 (n=68), a round-trip that existed only
+                ;; to look this index up.
+                (let [playable-abs (keep-indexed (fn [i ab] (when (:playable ab) [i ab]))
+                                                 (:abilities b))]
                   (println (format "     • %s (str %s)" (:title b) (or (:current-strength b) (:strength b))))
-                  (doseq [ab playable-abs]
-                    (println (format "       → %s" (:label ab)))))))))))))
+                  (doseq [[idx ab] playable-abs]
+                    (println (format "       → %s" (:label ab)))
+                    (println (format "         use-ability \"%s\" %d" (:title b) idx))))))))))))
 
 (defn run-server-display
   "Human-readable name for a run's target server, given the last element of the
@@ -1368,6 +1377,31 @@
 
           :else
           (println (format "ℹ️  %s" (:status-text ts))))))))
+
+(defn show-prompt-if-any
+  "Append the current prompt to an action's output — or print NOTHING if there
+   isn't one.
+
+   Exists because the command log says the single most common thing a seat does
+   after changing the game state is ask what the state now is: continue→prompt
+   ran P=0.48 (n=186 in the marquee era alone), with the same shape at
+   score→prompt (0.40), choose-card→prompt (0.33) and run→prompt (0.27). Roughly
+   half of all `prompt` calls are a round-trip the acting command could have
+   answered itself. It is also the misleading-output failure surface: a seat that
+   cannot see the outcome of its own action re-issues it (Terra looped `continue`
+   three times off a misread phase in marquee g1).
+
+   Silence when there is no prompt is the whole contract — this runs after EVERY
+   action, so a 'No active prompt' line would be pure noise on the majority of
+   commands and would train seats to stop reading the tail of the output.
+
+   A passive waiting prompt is rendered as one line rather than the full block:
+   it carries no choices, and the useful information is just 'not your move'."
+  []
+  (when-let [prompt (state/get-prompt)]
+    (if (state/waiting-prompt-type? (:prompt-type prompt))
+      (println (format "\n⏳ %s" (or (:msg prompt) "Waiting for opponent")))
+      (show-prompt-detailed))))
 
 (defn show-snapshot
   "One-shot per-decision snapshot: compact status, the current prompt (only when

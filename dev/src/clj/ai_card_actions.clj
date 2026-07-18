@@ -691,6 +691,19 @@
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))
                     (flush))))))))))))
 
+(defn advance-card-times!
+  "Advance `card-name` up to `n` times, stopping early on failure or when the
+   clicks run out.
+
+   Advancing is the burstiest command in the log: 74 back-to-back repeats at a
+   1s median, and `advance` is followed by `score` P=0.33 (n=45) — the whole
+   sequence is one intent — get this to scorable — typed one click at a time.
+   Overadvance protection still applies per step via advance-card!, so a count
+   cannot push a card past its requirement unless {:overadvance true} is set."
+  ([card-name n] (advance-card-times! card-name n {}))
+  ([card-name n opts]
+   (basic/repeat-action! n #(advance-card! card-name opts) "advancements")))
+
 (defn score-agenda!
   "Score an installed agenda (Corp only)
    Agenda must have enough advancement counters to be scored

@@ -418,10 +418,53 @@
                        :command "indicate-action"
                        :args nil})))
 
+(defn- clicks-left
+  "Clicks remaining for my side, or nil if unknown."
+  []
+  (let [s @state/client-state]
+    (get-in s [:game-state (keyword (:side s)) :click])))
+
+(defn repeat-action!
+  "Run a click action up to `n` times, stopping early on failure or when the
+   clicks run out.
+
+   The command log showed these arrive in BURSTS, not as deliberate repeats:
+   take-credit ran back-to-back 125 times at a 2s median (98% inside 5s),
+   advance 74 times at 1s, draw 56 times. That is one intent typed N times
+   because the command took no count. (Contrast `status`, which repeats at a
+   15s median — that is a seat waiting, a different problem.)
+
+   Stopping on click exhaustion is load-bearing, not defensive: the underlying
+   actions call check-auto-end-turn!, so the click that empties the pool can END
+   THE TURN mid-loop. Continuing would then fire actions into the opponent's
+   turn. The clicks check is skipped before the first action because the turn may
+   legitimately not be started yet (the actions auto-start it)."
+  [n action! label]
+  (loop [done 0]
+    (cond
+      (>= done n)
+      (do (when (> n 1) (println (format "✅ Completed %d %s" done label)))
+          (core/with-cursor {:status :success :data {:times done :requested n}}))
+
+      (and (pos? done) (some? (clicks-left)) (not (pos? (clicks-left))))
+      (do (println (format "⏹️  Stopped after %d of %d %s — no clicks left" done n label))
+          (core/with-cursor {:status :partial :data {:times done :requested n}}))
+
+      :else
+      (let [r (action!)]
+        (if (= :success (:status r))
+          (recur (inc done))
+          (do (when (pos? done)
+                (println (format "⏹️  Stopped after %d of %d %s" done n label)))
+              (update r :data merge {:times done :requested n})))))))
+
 (defn take-credit!
   "Click for credit (shows before/after).
-   Auto-starts turn if needed (opponent has ended and we haven't started yet)."
-  []
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
+
+   With `n`, clicks for credit up to n times (stops early if clicks run out)."
+  ([n] (repeat-action! n take-credit! "credit clicks"))
+  ([]
   (if (ensure-turn-started!)
     (let [client-state @state/client-state
           side (:side client-state)
@@ -439,22 +482,40 @@
             after-clicks (get-in client-state [:game-state (keyword side) :click])]
         (core/show-before-after "💰 Credits" before-credits after-credits)
         (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-        ;; Show turn indicator only if we won't auto-end (which shows its own)
-        (when (> after-clicks 0)
-          (core/show-turn-indicator))
-        (check-auto-end-turn!)
-        (core/with-cursor
-          {:status :success
-           :data {:before-credits before-credits
-                  :after-credits after-credits
-                  :before-clicks before-clicks
-                  :after-clicks after-clicks}})))
-    (core/with-cursor {:status :error :reason "Failed to start turn"})))
+        ;; NEITHER credits NOR clicks moved => the engine refused the action
+        ;; (e.g. clicking for credit during a run). Reporting :success here is
+        ;; the misleading-output bug: `take-credit` mid-run printed
+        ;; "💰 Credits: 2 → 2" and still claimed success. Harmless-looking alone,
+        ;; but a count argument then repeats the no-op and cheerfully reports
+        ;; "Completed 2 credit clicks". Both signals together, because a state
+        ;; sync arriving late could leave one of them briefly stale.
+        (if (and (= before-credits after-credits)
+                 (= before-clicks after-clicks))
+          (do (println "❌ No credit gained — action was refused (in a run? not your turn?)")
+              (core/with-cursor {:status :error
+                                 :reason "Credit action had no effect"
+                                 :data {:before-credits before-credits
+                                        :before-clicks before-clicks}}))
+          (do
+            ;; Show turn indicator only if we won't auto-end (which shows its own)
+            (when (> after-clicks 0)
+              (core/show-turn-indicator))
+            (check-auto-end-turn!)
+            (core/with-cursor
+              {:status :success
+               :data {:before-credits before-credits
+                      :after-credits after-credits
+                      :before-clicks before-clicks
+                      :after-clicks after-clicks}})))))
+    (core/with-cursor {:status :error :reason "Failed to start turn"}))))
 
 (defn draw-card!
   "Draw a card (shows before/after).
-   Auto-starts turn if needed (opponent has ended and we haven't started yet)."
-  []
+   Auto-starts turn if needed (opponent has ended and we haven't started yet).
+
+   With `n`, draws up to n times (stops early if clicks run out)."
+  ([n] (repeat-action! n draw-card! "draws"))
+  ([]
   (if (ensure-turn-started!)
     (let [client-state @state/client-state
           side (:side client-state)
@@ -475,12 +536,23 @@
             new-card (last hand)
             card-title (get new-card :title "Unknown")]
         (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
-        (println (str "   Drew: " card-title))
-        (core/show-card-on-first-sight! card-title)
-        (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
-        (check-auto-end-turn!)
-        (core/with-cursor {:status :success :card-drawn card-title})))
-    (core/with-cursor {:status :error :reason "Failed to start turn"})))
+        ;; Same no-op guard as take-credit!, and sharper here: "Drew: X" reads
+        ;; the LAST card in hand, so a refused draw doesn't just claim success —
+        ;; it names a card that was already there as the one just drawn.
+        (if (and (= before-hand after-hand)
+                 (= before-clicks after-clicks))
+          (do (println "❌ No card drawn — action was refused (in a run? not your turn? deck empty?)")
+              (core/with-cursor {:status :error
+                                 :reason "Draw action had no effect"
+                                 :data {:before-hand before-hand
+                                        :before-clicks before-clicks}}))
+          (do
+            (println (str "   Drew: " card-title))
+            (core/show-card-on-first-sight! card-title)
+            (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
+            (check-auto-end-turn!)
+            (core/with-cursor {:status :success :card-drawn card-title})))))
+    (core/with-cursor {:status :error :reason "Failed to start turn"}))))
 
 (defn- burn-clicks-for-credits!
   "Spend all remaining clicks taking credits. Used by force-end-turn.

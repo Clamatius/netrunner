@@ -245,3 +245,120 @@
             (is (= :already-ended (:status result)) "must report already-ended")
             (is (empty? @sent)
                 "opponent took over -> must NOT re-send (avoid corrupting double-end)")))))))
+
+;; =============================================================================
+;; repeat-action! — count arguments for burst commands
+;; =============================================================================
+;;
+;; The command log showed take-credit/advance/draw arriving in BURSTS (125/74/56
+;; back-to-back repeats at a 1-2s median), i.e. one intent typed N times because
+;; the command took no count. These pin the loop's stopping rules — especially
+;; click exhaustion, which is load-bearing rather than defensive: the underlying
+;; actions call check-auto-end-turn!, so the click that empties the pool can END
+;; THE TURN mid-loop, and continuing would fire actions into the opponent's turn.
+
+(defn- clicking-state
+  "Client state whose click count decrements on each successful action."
+  [clicks]
+  (mock-client-state :side "runner"
+                     :game-state {:runner {:click clicks :credit 5 :hand []}
+                                  :corp {:click 0 :credit 5 :hand []}
+                                  :turn 5 :active-player "Runner" :log []}))
+
+(deftest repeat-action-runs-exactly-n-times
+  (testing "A count does what typing it N times did"
+    (with-mock-state (clicking-state 4)
+      (let [calls (atom 0)
+            result (basic/repeat-action! 3 (fn [] (swap! calls inc) {:status :success}) "things")]
+        (is (= 3 @calls))
+        (is (= :success (:status result)))
+        (is (= 3 (get-in result [:data :times])))))))
+
+(deftest repeat-action-stops-when-clicks-run-out
+  (testing "CRITICAL: the click that empties the pool can auto-end the turn, so
+            the loop must stop rather than act into the opponent's turn."
+    (with-mock-state (clicking-state 2)
+      (let [calls (atom 0)
+            action (fn []
+                     (swap! calls inc)
+                     ;; mimic the real actions: each one spends a click
+                     (swap! state/client-state update-in [:game-state :runner :click] dec)
+                     {:status :success})
+            result (basic/repeat-action! 5 action "clicks")]
+        (is (= 2 @calls) "Must spend only the clicks actually available")
+        (is (= :partial (:status result)) "and report the shortfall, not claim success")
+        (is (= 2 (get-in result [:data :times])))
+        (is (= 5 (get-in result [:data :requested])))))))
+
+(deftest repeat-action-stops-on-first-failure
+  (testing "A failed step aborts the rest — never plough on through an error"
+    (with-mock-state (clicking-state 4)
+      (let [calls (atom 0)
+            action (fn []
+                     (swap! calls inc)
+                     (if (= 2 @calls)
+                       {:status :error :reason "blocked"}
+                       {:status :success}))
+            result (basic/repeat-action! 4 action "things")]
+        (is (= 2 @calls) "Stops at the failure, does not attempt 3 or 4")
+        (is (= :error (:status result)) "and surfaces the failure, not a success")
+        (is (= 1 (get-in result [:data :times])) "reporting how many DID land")))))
+
+(deftest repeat-action-first-call-is-not-blocked-by-zero-clicks
+  (testing "The turn may legitimately not be started yet (the actions auto-start
+            it), so the clicks guard must not fire before the first action."
+    (with-mock-state (clicking-state 0)
+      (let [calls (atom 0)
+            result (basic/repeat-action! 1 (fn [] (swap! calls inc) {:status :success}) "things")]
+        (is (= 1 @calls) "Must still attempt the first action at 0 clicks")
+        (is (= :success (:status result)))))))
+
+;; =============================================================================
+;; No-op detection — the misleading-output class
+;; =============================================================================
+;;
+;; Found by smoke-testing the count argument: `take-credit 2` during a run
+;; printed "💰 Credits: 2 → 2", "⏱️  Clicks: 3 → 3" and then "✅ Completed 2
+;; credit clicks". The engine had refused both actions. The count argument did
+;; not cause this — it AMPLIFIED a pre-existing lie (same no-op seen in marquee
+;; g1) into a confident summary, which is what made it visible.
+
+(defn- no-op-state []
+  (mock-client-state :side "runner"
+                     :game-state {:runner {:click 3 :credit 2 :hand [{:cid 1 :title "Sure Gamble"}]}
+                                  :corp {:click 0 :credit 5 :hand []}
+                                  :turn 5 :active-player "Runner"
+                                  :run {:phase "encounter-ice"} :log []}))
+
+(deftest take-credit-reports-error-when-nothing-changed
+  (testing "Refused action (neither credits NOR clicks moved) must not claim success"
+    (with-mock-state (no-op-state)
+      (with-redefs [ws/send-message! (fn [_ _] true)
+                    basic/ensure-turn-started! (fn [] true)]
+        (let [result (basic/take-credit!)]
+          (is (= :error (:status result))
+              "A no-op that reports :success is how a seat ends up repeating it")
+          (is (re-find #"no effect" (str (:reason result)))))))))
+
+(deftest draw-reports-error-when-nothing-changed
+  (testing "A refused draw must not name the pre-existing last card as 'Drew:'"
+    (with-mock-state (no-op-state)
+      (with-redefs [ws/send-message! (fn [_ _] true)
+                    basic/ensure-turn-started! (fn [] true)]
+        (let [out (java.io.StringWriter.)
+              result (binding [*out* out] (basic/draw-card!))]
+          (is (= :error (:status result)))
+          (is (not (re-find #"Drew:" (str out)))
+              "Must not claim to have drawn a card it did not draw"))))))
+
+(deftest repeat-action-does-not-amplify-a-no-op
+  (testing "The count must stop on the refusal rather than repeat it N times
+            and summarise with a confident '✅ Completed N'."
+    (with-mock-state (no-op-state)
+      (with-redefs [ws/send-message! (fn [_ _] true)
+                    basic/ensure-turn-started! (fn [] true)]
+        (let [out (java.io.StringWriter.)
+              result (binding [*out* out] (basic/take-credit! 3))]
+          (is (= :error (:status result)))
+          (is (= 0 (get-in result [:data :times])) "Zero actions actually landed")
+          (is (not (re-find #"Completed 3" (str out)))))))))

@@ -84,6 +84,7 @@
 (def show-archives display/show-archives)
 (def show-heap display/show-heap)
 (def show-prompt-detailed display/show-prompt-detailed)
+(def show-prompt-if-any display/show-prompt-if-any)
 (def show-card-text display/show-card-text)
 (def show-cards display/show-cards)
 (def show-hand-cards display/show-hand-cards)
@@ -104,6 +105,7 @@
 (def indicate-action! basic/indicate-action!)
 (def take-credit! basic/take-credit!)
 (def draw-card! basic/draw-card!)
+(def repeat-action! basic/repeat-action!)
 (def end-turn! basic/end-turn!)
 (def check-auto-end-turn! basic/check-auto-end-turn!)
 (def smart-end-turn! basic/smart-end-turn!)
@@ -152,6 +154,7 @@
 (def toggle-auto-no-action! cards/toggle-auto-no-action!)
 (def fire-unbroken-subs! cards/fire-unbroken-subs!)
 (def advance-card! cards/advance-card!)
+(def advance-card-times! cards/advance-card-times!)
 (def score-agenda! cards/score-agenda!)
 
 ;; ============================================================================

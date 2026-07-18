@@ -516,7 +516,14 @@ execute() {
         # Check if result is at least 2 chars (quoted)
         if [[ ${#RESULT} -ge 2 ]]; then
             LEN=$((${#RESULT}-2))
-            echo -e "${RESULT:1:$LEN}"
+            # echo -e expands \n and \t but leaves \" backslashed, so any quote
+            # a display fn printed came out as \" — which matters now that the
+            # prompt emits copy-pasteable commands like use-ability "Cleaver" 1.
+            # Unescape quotes (and literal backslashes) so printed text matches
+            # what a seat must actually type.
+            UNQUOTED="${RESULT:1:$LEN}"
+            UNQUOTED="${UNQUOTED//\\\"/\"}"
+            echo -e "$UNQUOTED"
         else
             echo "$RESULT"
         fi
@@ -547,6 +554,30 @@ show_last_log_if_enabled() {
         echo ""
         echo -e "${BLUE}--- Last Log Entry ---${NC}"
         execute "(ai-actions/show-log 1)"
+    fi
+    return $RET
+}
+
+# Post-action hook: show the last log entry (if enabled) AND the resulting
+# prompt, if there is one. Prints nothing extra when there is no prompt.
+#
+# The command log showed the commonest thing a seat does after changing state is
+# ask what the state now is (continue->prompt P=0.48, n=186; score->prompt 0.40;
+# choose-card->prompt 0.33). Answering it in the acting command's own output
+# removes that round-trip — and removes the misleading-output trap where a seat
+# that can't see its action's outcome just re-issues it.
+#
+# Set NR_NO_AUTO_PROMPT=1 to suppress (for scripts that parse output strictly).
+after_action() {
+    local RET=$?
+    show_last_log_if_enabled
+    if [[ "${NR_NO_AUTO_PROMPT:-0}" != "1" ]]; then
+        # Capture rather than print directly: with-out-str of a silent fn yields
+        # an empty string, which would still echo a stray blank line after every
+        # single action. True silence is the contract.
+        local out
+        out=$(execute "(ai-actions/show-prompt-if-any)")
+        [[ -n "${out//[[:space:]]/}" ]] && echo "$out"
     fi
     return $RET
 }
@@ -798,7 +829,7 @@ case "$COMMAND" in
         ensure_connection
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
-        show_last_log_if_enabled
+        after_action
         ;;
 
     indicate-action)
@@ -809,14 +840,30 @@ case "$COMMAND" in
 
     take-credit)
         ensure_connection
-        info "Taking credit..."
-        execute '(ai-actions/take-credit!)'
+        COUNT="${1:-1}"
+        [[ ! "$COUNT" =~ ^[0-9]+$ ]] && error "Usage: send_command take-credit [count]"
+        if [[ "$COUNT" -gt 1 ]]; then
+            info "Taking $COUNT credits..."
+            execute "(ai-actions/take-credit! $COUNT)"
+        else
+            info "Taking credit..."
+            execute '(ai-actions/take-credit!)'
+        fi
+        after_action
         ;;
 
     draw)
         ensure_connection
-        info "Drawing card..."
-        execute '(ai-actions/draw-card!)'
+        COUNT="${1:-1}"
+        [[ ! "$COUNT" =~ ^[0-9]+$ ]] && error "Usage: send_command draw [count]"
+        if [[ "$COUNT" -gt 1 ]]; then
+            info "Drawing $COUNT cards..."
+            execute "(ai-actions/draw-card! $COUNT)"
+        else
+            info "Drawing card..."
+            execute '(ai-actions/draw-card!)'
+        fi
+        after_action
         ;;
 
     end-turn)
@@ -840,6 +887,7 @@ case "$COMMAND" in
         ensure_connection
         info "Smart end-turn (auto-detects if safe)..."
         execute '(ai-actions/smart-end-turn!)'
+        after_action
         ;;
 
     # Tag and Virus actions
@@ -911,12 +959,14 @@ case "$COMMAND" in
         ensure_connection
         info "Keeping hand..."
         execute '(ai-actions/keep-hand)'
+        after_action
         ;;
 
     mulligan)
         ensure_connection
         info "Taking mulligan..."
         execute '(ai-actions/mulligan)'
+        after_action
         ;;
 
     discard)
@@ -970,7 +1020,7 @@ case "$COMMAND" in
             info "Playing card: $CARD_NAME"
             execute "(ai-actions/play-card! \"$CARD_NAME\")"
         fi
-        show_last_log_if_enabled
+        after_action
         ;;
 
     play-index)
@@ -980,7 +1030,7 @@ case "$COMMAND" in
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
         info "Playing card at index $INDEX"
         execute "(ai-actions/play-card! $INDEX)"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     # Running
@@ -999,7 +1049,7 @@ case "$COMMAND" in
 
         info "Running on $SERVER..."
         execute "(ai-actions/run! \"$SERVER\"$FLAGS_ARGS)"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     # Card abilities
@@ -1012,6 +1062,7 @@ case "$COMMAND" in
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
         execute "(ai-actions/use-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        after_action
         ;;
 
     use-runner-ability)
@@ -1023,6 +1074,7 @@ case "$COMMAND" in
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
         info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
         execute "(ai-actions/use-runner-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        after_action
         ;;
 
     # Trash installed card
@@ -1032,6 +1084,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command trash <card-name>"
         info "Trashing $CARD_NAME..."
         execute "(ai-actions/trash-installed! \"$CARD_NAME\")"
+        after_action
         ;;
 
     # Rez Corp card
@@ -1041,6 +1094,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command rez <card-name>"
         info "Rezzing $CARD_NAME..."
         execute "(ai-actions/rez-card! \"$CARD_NAME\")"
+        after_action
         ;;
 
     # Fire ICE subroutines
@@ -1073,20 +1127,29 @@ case "$COMMAND" in
         ensure_connection
         CARD_NAME="${1:-}"
         OVERADVANCE=false
+        COUNT=1
         shift 2>/dev/null || true
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --overadvance) OVERADVANCE=true ;;
+                [0-9]*) COUNT="$1" ;;
             esac
             shift
         done
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name> [--overadvance]"
-        info "Advancing $CARD_NAME..."
-        if [[ "$OVERADVANCE" == "true" ]]; then
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name> [count] [--overadvance]"
+        OPTS="{}"
+        [[ "$OVERADVANCE" == "true" ]] && OPTS="{:overadvance true}"
+        if [[ "$COUNT" -gt 1 ]]; then
+            info "Advancing $CARD_NAME x$COUNT..."
+            execute "(ai-actions/advance-card-times! \"$CARD_NAME\" $COUNT $OPTS)"
+        elif [[ "$OVERADVANCE" == "true" ]]; then
+            info "Advancing $CARD_NAME..."
             execute "(ai-actions/advance-card! \"$CARD_NAME\" {:overadvance true})"
         else
+            info "Advancing $CARD_NAME..."
             execute "(ai-actions/advance-card! \"$CARD_NAME\")"
         fi
+        after_action
         ;;
 
     # Score agenda
@@ -1096,6 +1159,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command score <card-name>"
         info "Scoring $CARD_NAME..."
         execute "(ai-actions/score-agenda! \"$CARD_NAME\")"
+        after_action
         ;;
 
     # Prompts
@@ -1106,6 +1170,7 @@ case "$COMMAND" in
         [[ ! "$CHOICE" =~ ^[0-9]+$ ]] && error "Choice must be a number"
         info "Choosing option $CHOICE..."
         execute "(ai-actions/choose-option! $CHOICE)"
+        after_action
         ;;
 
     choose-value)
@@ -1114,6 +1179,7 @@ case "$COMMAND" in
         [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
         info "Choosing option matching: $VALUE..."
         execute "(ai-actions/choose-by-value! \"$VALUE\")"
+        after_action
         ;;
 
     choose-card)
@@ -1123,6 +1189,7 @@ case "$COMMAND" in
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
         info "Choosing card at index $INDEX..."
         execute "(ai-actions/choose-card! $INDEX)"
+        after_action
         ;;
 
     multi-choose)
@@ -1159,6 +1226,7 @@ case "$COMMAND" in
             done
             execute "(ai-actions/multi-choose!$ARGS_STR)"
         fi
+        after_action
         ;;
 
     continue)
@@ -1199,7 +1267,7 @@ case "$COMMAND" in
             info "Continuing until decision required..."
             execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
         fi
-        show_last_log_if_enabled
+        after_action
         ;;
 
     continue-run)
@@ -1212,7 +1280,7 @@ case "$COMMAND" in
         done
         info "Single-step mode (continue-run is alias for 'continue --single')..."
         execute "(ai-actions/continue-run!$FLAGS_ARGS)"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     monitor-run)
@@ -1225,7 +1293,7 @@ case "$COMMAND" in
         done
         info "Loop mode (monitor-run is alias for 'continue')..."
         execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
-        show_last_log_if_enabled
+        after_action
         # Peer-liveness footer: on a monitor-run timeout the seat must judge
         # whether the opponent is thinking or gone before re-issuing.
         PEER_LINE="$(peer_liveness_line)"; [[ -n "$PEER_LINE" ]] && echo "$PEER_LINE"
@@ -1280,7 +1348,7 @@ case "$COMMAND" in
                     (runs/set-strategy! {:tank (conj current-tank ice-name)})
                     (println (format \"✅ Authorized tank on: %s\" ice-name))
                     (runs/continue-run!)))"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     concede)
@@ -1534,7 +1602,7 @@ case "$COMMAND" in
             info "Installing card: $CARD_NAME"
             execute "(ai-actions/install-card! \"$CARD_NAME\")"
         fi
-        show_last_log_if_enabled
+        after_action
         ;;
 
     install-index)
@@ -1550,7 +1618,7 @@ case "$COMMAND" in
             info "Installing card at index $INDEX"
             execute "(ai-actions/install-card! $INDEX)"
         fi
-        show_last_log_if_enabled
+        after_action
         ;;
 
     # Advanced
@@ -1658,7 +1726,7 @@ case "$COMMAND" in
         execute "(do
                    (require (quote [$BOT_NS :as bot]))
                    (bot/play-turn))"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     bot-turn)
@@ -1667,7 +1735,7 @@ case "$COMMAND" in
         execute "(do
                    (require (quote [$BOT_NS :as bot]))
                    (bot/play-full-turn))"
-        show_last_log_if_enabled
+        after_action
         ;;
 
     bot-status)
@@ -1750,7 +1818,7 @@ case "$COMMAND" in
         execute '(do
                    (require (quote [ai-heuristic-corp :as bot]))
                    (bot/respond-to-run!))'
-        show_last_log_if_enabled
+        after_action
         ;;
 
     bot-watch)
