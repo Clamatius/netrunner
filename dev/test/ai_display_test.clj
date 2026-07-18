@@ -995,3 +995,44 @@
             (str "a Corp seat's own installed card must resolve:\n" out))
         (is (str/includes? out "Take 3")
             (str "should list the card's ability:\n" out))))))
+
+;; ============================================================================
+;; show-prompt-if-any — collapse the "act, then ask what happened" round-trip
+;; ============================================================================
+;;
+;; Command-log evidence: continue->prompt ran P=0.48 (n=186 in the marquee era),
+;; with the same shape at score->prompt (0.40), choose-card->prompt (0.33) and
+;; run->prompt (0.27). Roughly half of all `prompt` calls were a round-trip the
+;; acting command could have answered itself. This runs after EVERY action, so
+;; silence-when-there-is-nothing is the load-bearing part of the contract.
+
+(defn- prompt-state [prompt]
+  (mock-client-state :side "runner"
+                     :game-state {:runner {:prompt-state prompt}
+                                  :corp {} :log []}))
+
+(deftest show-prompt-if-any-is-silent-with-no-prompt
+  (testing "Runs after every action — a 'No active prompt' line would be noise on
+            the majority of commands and would train seats to stop reading the
+            tail of the output."
+    (with-mock-state (prompt-state nil)
+      (is (= "" (with-out-str (display/show-prompt-if-any)))))))
+
+(deftest show-prompt-if-any-renders-a-real-prompt
+  (testing "A decision must appear in the acting command's own output"
+    (with-mock-state (prompt-state {:prompt-type "select"
+                                    :msg "Choose a card to trash"
+                                    :choices [{:value "Yes"} {:value "No"}]})
+      (let [out (with-out-str (display/show-prompt-if-any))]
+        (is (str/includes? out "Choose a card to trash"))
+        (is (str/includes? out "Yes"))))))
+
+(deftest show-prompt-if-any-collapses-a-waiting-prompt-to-one-line
+  (testing "A passive wait carries no choices — the useful content is just
+            'not your move', so it must not print the full decision block."
+    (with-mock-state (prompt-state {:prompt-type "waiting"
+                                    :msg "Waiting for Corp to rez"})
+      (let [out (with-out-str (display/show-prompt-if-any))]
+        (is (str/includes? out "Waiting for Corp to rez"))
+        (is (< (count (str/split-lines (str/trim out))) 3)
+            "One line, not the full prompt block")))))
