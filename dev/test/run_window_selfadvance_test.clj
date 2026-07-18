@@ -32,8 +32,8 @@
 
 (defn- runner-state
   "Runner-side client state at a run window."
-  [& {:keys [phase position no-action ices content prompt]
-      :or {phase "approach-ice" position 1 ices [] content []}}]
+  [& {:keys [phase position no-action ices content prompt log]
+      :or {phase "approach-ice" position 1 ices [] content [] log []}}]
   (mock-client-state
    :side "runner"
    :game-state
@@ -41,6 +41,7 @@
           :position position
           :no-action no-action
           :server [:remote1]}
+    :log log
     :runner {:prompt-state prompt}
     :corp {:prompt-state nil
            :servers {:remote1 {:ices ices :content content}}}}))
@@ -448,3 +449,178 @@
           "Should point at the patience/liveness signal instead")
       (is (re-find #"(?i)smell" text)
           "Should name jack-out as the smell it is"))))
+
+;; =============================================================================
+;; D. THE EVENT-PAUSE LATCH — the real #31 (game 4a6aef71, 2026-07-18)
+;; =============================================================================
+;;
+;; The both-pass handlers above (initiation auto-pass, self-advance) are correct
+;; and were never the problem: they are simply NEVER REACHED. `handle-events`
+;; sits ahead of them in the chain and is a pure function of the newest 3 log
+;; entries, with no memory of what it has already reported. So when the run
+;; stops advancing, the log stops moving, and the same event re-fires forever:
+;;
+;;   pause on event -> nothing passes -> log frozen -> same newest-3 -> pause ...
+;;
+;; A latch that manufactures the very condition that sustains it. The printed
+;; advice ("use continue-run again to proceed") is precisely what cannot work.
+;;
+;; Why the suite stayed green through two #31 fixes: every test above builds a
+;; state with NO :log, so extract-run-events finds nothing and handle-events
+;; never fires. The tests omitted the one field the bug lives in.
+
+(def ^:private overclock-entry
+  {:user "__system__"
+   :text "ai-runner uses Overclock to make a run on R&D."
+   :timestamp "2026-07-18T04:13:59.335700Z"})
+
+(def ^:private wedged-log
+  ;; Verbatim newest-3 from the wedged marquee game. Note the latched event is
+  ;; NOT even the newest line — the run had visibly moved past it.
+  [{:user "__system__" :text "ai-runner spends [Click] and pays 1 [Credits] to play Overclock."
+    :timestamp "2026-07-18T04:13:52.187223Z"}
+   overclock-entry
+   {:user "__system__" :text "ai-runner approaches Brân 1.0 protecting R&D at position 1."
+    :timestamp "2026-07-18T04:20:30.132582Z"}])
+
+(defn- wedged-state []
+  (runner-state :phase "approach-ice" :position 2 :no-action false
+                :ices [{:cid 1 :title "Brân 1.0" :rezzed true}]
+                :prompt {:prompt-type "run" :msg "You are running on R&D" :selectable []}
+                :log wedged-log))
+
+(deftest event-pause-reports-each-event-exactly-once
+  (testing "An event pauses the seat ONCE. Offered the same entry again, the
+            handler must yield so the pass handlers behind it get their turn."
+    (runs/reset-reported-events!)
+    (let [ctx {:ability-event overclock-entry}]
+      (is (= :ability-used (:status (runs/handle-events ctx)))
+          "First sight: pause and tell the seat")
+      (is (nil? (runs/handle-events ctx))
+          "Second sight: same entry, already reported -> must NOT re-latch"))))
+
+(deftest a-genuinely-new-event-still-pauses
+  (testing "SAFETY: dedupe must be per-entry, not a global mute. A real rez
+            arriving later must still stop the Runner."
+    (runs/reset-reported-events!)
+    (is (= :ability-used (:status (runs/handle-events {:ability-event overclock-entry}))))
+    (let [rez {:user "__system__" :text "ai-corp rezzes Brân 1.0 protecting R&D."
+               :timestamp "2026-07-18T04:21:00.000000Z"}]
+      (is (= :ice-rezzed (:status (runs/handle-events {:rez-event rez})))
+          "A new entry is a new event and must still pause"))))
+
+(deftest reset-reported-events-rearms-the-pause
+  (testing "A fresh run starts with a clean slate (run! resets)."
+    (runs/reset-reported-events!)
+    (is (= :ability-used (:status (runs/handle-events {:ability-event overclock-entry}))))
+    (is (nil? (runs/handle-events {:ability-event overclock-entry})))
+    (runs/reset-reported-events!)
+    (is (= :ability-used (:status (runs/handle-events {:ability-event overclock-entry})))
+        "After reset the event is reportable again")))
+
+(deftest continue-run-passes-the-window-after-reporting-the-event
+  (testing "THE MARQUEE REPRO (game 4a6aef71): Runner holds priority at a
+            both-pass approach-ice window, ICE already rezzed, decision-free run
+            prompt — i.e. can-auto-continue? is TRUE. Observed live: three
+            consecutive `continue --single` calls each re-printed the same
+            7-minute-old Overclock line and no-action stayed false forever.
+            After the fix the event is reported once, then the window is PASSED."
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (runs/reset-reported-events!)
+        (with-mock-state (wedged-state)
+          (let [first-call (runs/continue-run!)]
+            (is (= :ability-used (:status first-call))
+                "First call may pause to report the event — that is the feature")
+            (is (empty? @sent) "Reporting an event sends nothing")
+            (let [second-call (runs/continue-run!)]
+              (is (= :action-taken (:status second-call))
+                  "Second call MUST pass the window instead of re-latching (#31)")
+              (is (= 1 (count @sent)) "Exactly one continue")
+              (is (= "continue" (:command (first @sent)))))))))))
+
+(deftest a-decision-arriving-after-an-event-is-reported-still-blocks-the-pass
+  (testing "SAFETY, in the order that can actually bite. handle-real-decision
+            sits AHEAD of handle-events (chain ~1399/1400), so while I hold a
+            decision the event is never even reached — asserting that proves
+            nothing. The dangerous sequence is the reverse: an ICE rezzes at a
+            window where I hold NOTHING (event reported, entry now deduped),
+            and only THEN does the break decision appear. On that second call
+            handle-events is silent, so nothing stops fall-through to
+            handle-auto-continue except the decision itself."
+    (let [sent (atom [])
+          rez-log [{:text "ai-corp rezzes Bran 1.0 protecting R&D." :timestamp "T1"}]
+          break-prompt {:prompt-type "select" :msg "Break subroutine?"
+                        :choices [{:value "Yes"} {:value "No"}]}]
+      (runs/reset-reported-events!)
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state
+          (runner-state :phase "encounter-ice" :position 1 :no-action false
+                        :ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
+                        :prompt nil :log rez-log)
+          ;; 1. Rez lands while I hold nothing -> reported, entry now deduped.
+          (is (= :ice-rezzed (:status (runs/continue-run!)))
+              "The rez must stop me the first time")
+          (is (nil? (runs/handle-events (runs/extract-run-events rez-log)))
+              "…and is now deduped, so it can no longer block anything")
+          ;; 2. NOW the break decision appears on the same (deduped) log.
+          (swap! state/client-state assoc-in
+                 [:game-state :runner :prompt-state] break-prompt)
+          (let [second-call (runs/continue-run!)]
+            (is (not= :action-taken (:status second-call))
+                "My decision must block the pass even with the event spent")
+            (is (empty? @sent)
+                "and no continue may be sent while I hold a real decision")))))))
+
+
+;; --- Event identity: the two failure modes the guest review flagged ----------
+
+(deftest the-same-text-twice-is-two-events
+  (testing "IDENTITY: a repeated action (same card, same engine wording) must
+            pause BOTH times. Dedupe is per log ENTRY, not per message text —
+            otherwise the client goes blind to a genuine second occurrence."
+    (runs/reset-reported-events!)
+    (let [line "ai-corp rezzes Brân 1.0 protecting R&D."
+          log-after-first  [{:text "x"} {:text line :timestamp "T1"}]
+          log-after-second [{:text "x"} {:text line :timestamp "T1"}
+                            {:text "y"} {:text line :timestamp "T1"}]]
+      ;; Identical text AND identical timestamp — the worst case for a
+      ;; [timestamp text] key. Distinct log positions make them distinct events.
+      (is (= :ice-rezzed (:status (runs/handle-events (runs/extract-run-events log-after-first)))))
+      (is (nil? (runs/handle-events (runs/extract-run-events log-after-first)))
+          "Same entry re-read -> no re-latch")
+      (is (= :ice-rezzed (:status (runs/handle-events (runs/extract-run-events log-after-second))))
+          "A SECOND occurrence is a new event and must pause again"))))
+
+(deftest entries-without-timestamps-still-dedupe-and-still-distinguish
+  (testing "IDENTITY: the engine always stamps log entries (say.clj defaults
+            :timestamp), but the key must not depend on that to stay correct."
+    (runs/reset-reported-events!)
+    (let [line "ai-runner uses Overclock to make a run on R&D."
+          log1 [{:text line}]
+          log2 [{:text line} {:text "z"} {:text line}]]
+      (is (= :ability-used (:status (runs/handle-events (runs/extract-run-events log1)))))
+      (is (nil? (runs/handle-events (runs/extract-run-events log1)))
+          "No timestamp -> still deduped, no latch")
+      (is (= :ability-used (:status (runs/handle-events (runs/extract-run-events log2))))
+          "No timestamp -> distinct occurrences still distinguished"))))
+
+(deftest reported-events-are-scoped-to-the-game-not-the-run
+  (testing "A new game restarts the log at index 0, so a previous game's keys
+            would collide with the new game's first entries and silently
+            suppress them. Scoping to gameid is self-healing. Conversely the set
+            must SURVIVE within a game: a seat re-issues monitor-run repeatedly
+            during one run, and forgetting on each re-issue would re-report the
+            same event every time — the #31 latch, one grain coarser.
+            (Guest review of #31.)"
+    (runs/reset-reported-events!)
+    (let [log [{:text "ai-corp rezzes Bran 1.0 protecting R&D." :timestamp "T1"}]]
+      (with-mock-state
+        (assoc (mock-client-state :side "corp" :game-state {:log log}) :gameid "game-A")
+        (is (= :ice-rezzed (:status (runs/handle-events (runs/extract-run-events log)))))
+        (is (nil? (runs/handle-events (runs/extract-run-events log)))
+            "WITHIN a game the report must stick across re-issues"))
+      (with-mock-state
+        (assoc (mock-client-state :side "corp" :game-state {:log log}) :gameid "game-B")
+        (is (= :ice-rezzed (:status (runs/handle-events (runs/extract-run-events log))))
+            "A DIFFERENT game must start from a clean slate")))))
