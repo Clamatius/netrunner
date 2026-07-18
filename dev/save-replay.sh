@@ -17,6 +17,14 @@
 #   - game was created with :save-replay true (send_command create-game default)
 #   - game reached GAME-OVER (concede, agenda, decking, ...)
 #   - mongod running on localhost:27017
+#   - the game-server nREPL (7888) is up — mongo is reached THROUGH it
+#
+# NOTE: this script used to shell out to `mongosh`, with `2>/dev/null` on every
+# call. `mongosh` is not installed here, so every probe returned empty, which
+# has_replay read as "no" — the script reported "❌ No replay persisted" for
+# replays that were sitting in mongo intact, and we wrote off at least one
+# marquee game as lost on its say-so. Going through the server REPL means we use
+# the connection the server itself uses, and a missing dependency fails loudly.
 #
 # Usage:
 #   ./dev/save-replay.sh                 # uses the corp client's current gameid
@@ -50,9 +58,35 @@ if [[ ! "$GAMEID" =~ ^[0-9a-fA-F-]+$ ]]; then
     exit 1
 fi
 
+# Eval a Clojure form in the game-server REPL and echo its stdout.
+# Errors are NOT swallowed: if the REPL is down or the form throws, callers see
+# it (the old mongosh path hid exactly this and produced false "no replay").
+repl_eval() {
+    TIMEOUT=60 "$SCRIPT_DIR/ai-lein-eval.sh" server 7888 "$1" 2>&1
+}
+
+MONGO_PRELUDE='(require (quote [monger.core :as mg]) (quote [monger.collection :as mc]) (quote [clojure.java.io :as io]))'
+DBCONN='(:db (mg/connect-via-uri "mongodb://localhost/'"$DB"'"))'
+
+# Fail loudly if we cannot reach mongo through the server at all, rather than
+# letting an infrastructure failure masquerade as "this game has no replay".
+# NB on marker style: ai-lein-eval.sh ECHOES the form back before printing its
+# output, so a bare literal marker matches the echo and every check passes
+# vacuously. Each marker below is `NAME <computed-value>` — the two only appear
+# adjacent in real output, never in the echoed source.
+if ! repl_eval "(do $MONGO_PRELUDE (let [db $DBCONN] (println \"MONGOCOUNT\" (mc/count db \"game-logs\"))))" | grep -qE "MONGOCOUNT [0-9]+"; then
+    echo "❌ Can't reach mongo through the game-server REPL (port 7888)." >&2
+    echo "   Is the server up? Replay state is UNKNOWN — do not assume it is lost." >&2
+    exit 1
+fi
+
 # Returns "yes" once the server has written the replay for this gameid.
 has_replay() {
-    mongosh --quiet --eval 'const G="'"$GAMEID"'"; const d=db.getSiblingDB("'"$DB"'")["game-logs"].findOne({gameid:G},{"has-replay":1}); print(d && d["has-replay"]===true ? "yes" : "no");' 2>/dev/null
+    if repl_eval "(do $MONGO_PRELUDE (let [db $DBCONN d (mc/find-one-as-map db \"game-logs\" {:gameid \"$GAMEID\"})] (println \"HASREPLAY\" (boolean (:has-replay d)))))" | grep -q "HASREPLAY true"; then
+        echo "yes"
+    else
+        echo "no"
+    fi
 }
 
 if [[ "$(has_replay)" != "yes" ]]; then
@@ -85,15 +119,17 @@ fi
 mkdir -p "$OUTDIR"
 OUT="$OUTDIR/$GAMEID.json"
 
-# Mark shared so the local replay viewer serves it without a logged-in player.
-mongosh --quiet --eval 'const G="'"$GAMEID"'"; db.getSiblingDB("'"$DB"'")["game-logs"].updateOne({gameid:G},{$set:{"replay-shared":true}});' >/dev/null 2>&1
-
-# Dump the replay JSON ({metadata, history:[...frames]}) for writeups.
-# The replay is stored as a JSON string, so emit it as-is (don't re-encode).
-mongosh --quiet --eval 'const G="'"$GAMEID"'"; const d=db.getSiblingDB("'"$DB"'")["game-logs"].findOne({gameid:G},{replay:1}); print(typeof d.replay==="string" ? d.replay : JSON.stringify(d.replay));' 2>/dev/null > "$OUT"
+# Mark shared (so the local viewer serves it without a logged-in player) and
+# write the replay straight to disk from the server — same filesystem, and it
+# keeps a 150KB+ payload out of the REPL's stdout.
+# The replay is stored as a JSON string, so spit it as-is (don't re-encode).
+repl_eval "(do $MONGO_PRELUDE (let [db $DBCONN] (mc/update db \"game-logs\" {:gameid \"$GAMEID\"} {\"\$set\" {:replay-shared true}}) (let [d (mc/find-one-as-map db \"game-logs\" {:gameid \"$GAMEID\"}) r (:replay d)] (io/make-parents \"$OUT\") (spit \"$OUT\" (if (string? r) r (str r))) (println \"WROTEBYTES\" (.length (io/file \"$OUT\"))))))" | grep -qE "WROTEBYTES [1-9][0-9]*" || {
+    echo "❌ Failed to write a non-empty replay to $OUT (see REPL output above)." >&2
+    exit 1
+}
 
 BYTES=$(wc -c < "$OUT" | tr -d ' ')
-FRAMES=$(mongosh --quiet --eval 'const G="'"$GAMEID"'"; const d=db.getSiblingDB("'"$DB"'")["game-logs"].findOne({gameid:G},{replay:1}); const r=(typeof d.replay==="string")?JSON.parse(d.replay):d.replay; print(Array.isArray(r.history)?r.history.length:"?");' 2>/dev/null)
+FRAMES=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(len(d.get("history",[])) if isinstance(d,dict) else "?")' "$OUT" 2>/dev/null || echo "?")
 
 echo "✅ Replay saved: $OUT (${BYTES} bytes, ${FRAMES} frames, open information)"
 echo "   Browser view:  http://localhost:${WEB_PORT}/replay/${GAMEID}"
