@@ -1,0 +1,22 @@
+credit drift: Runner computed 3, log says 5 (ai-runner is ending their turn 6 with 5 [Credit] and 5 cards in their Grip.[hr])
+Corp T1 [0-0] {C5 R5}: ice R&D; ice HQ; Predictive Planogram →C8
+Runner T1 [0-0] {C8 R5}: Sure Gamble →R9; Jailbreak; run R&D; rez Whitespace@0 R&D →C6; encounter Whitespace@0; →R6; Wildcat Strike →R4; install Telework Contract →R3
+Corp T2 [0-0] {C6 R3}: Predictive Planogram; install S1; rez Nico Campaign S1 →C4; install S1
+Runner T2 [0-0] {C4 R3}: use Telework Contract →R6; install Pennyshaver →R3; run S1; rez Manegarm Skunkworks S1 →C2; draw
+Corp T3 [0-0] {C2 R3}: →C5; install S1; trash Nico Campaign in Server 1; advance S1 →C4; advance S1 →C3
+Runner T3 [0-0] {C3 R3}: use Telework Contract →R6; Sure Gamble →R10; run S1; →R5; breach S1; access Offworld Office; steal Offworld Office; access Manegarm Skunkworks; trash Manegarm Skunkworks →R2; Mutual Favor
+Corp T4 [0-2] {C3 R2}: ice S2; draw; credit →C4
+Runner T4 [0-2] {C4 R2}: use Telework Contract →R5; trash Telework Contract; draw; credit →R6; install Unity →R3
+Corp T5 [0-2] {C4 R3}: credit →C5; credit →C6; credit →C7; discard 1 card
+Runner T5 [0-2] {C7 R3}: credit →R4; run R&D; encounter Whitespace@0; →R2; breach R&D; access ?; VRcation →R1
+Corp T6 [0-2] {C7 R1}: credit →C8; credit →C9; credit →C10; discard 1 card
+Runner T6 [0-2] {C10 R1}: Overclock →R0; run R&D; encounter Whitespace@0; →R-2; breach R&D; access ?; draw; use Pennyshaver →R2; credit →R3
+Corp T7 [0-2] {C10 R5}: Government Subsidy →C15; draw; ice S2 →C14
+Runner T7 [0-2] {C14 R5}: Overclock →R4; run R&D; encounter Whitespace@0; →R3; breach R&D; access ?; install DZMZ Optimizer →R1; use Pennyshaver →R3; credit →R4
+Corp T8 [0-2] {C14 R4}: install S2; advance S2 →C13; Public Trail →C9
+Runner T8 [0-2] {C9 R4}: →R2; use Pennyshaver →R3; credit →R4; install Cleaver →R2
+Corp T9 [0-2] {C9 R2}: Seamless Launch →C8; advance S2 →C7; score Orbital Superiority; Hedge Fund →C11
+Runner T9 [2-2] {C11 R2}: run R&D; encounter Whitespace@0; →R0; breach R&D; access ?; draw; use Pennyshaver →R2; Creative Commission →R6
+Corp T10 [2-2] {C11 R6}: ice S2 →C9; install S2; advance S2 →C8
+Runner T10 [2-2] {C8 R6}: run R&D; encounter Whitespace@0; →R4; breach R&D; access ?; trash Regolith Mining License →R1; use Pennyshaver →R3; draw; credit →R4
+Corp T11 [2-2] {C8 R4}: advance S2 →C7; advance S2 →C6; advance S2 →C5; score Orbital Superiority; trash Conduit, Mayfly, and Unity due to meat damage; flatline
