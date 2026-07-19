@@ -105,6 +105,18 @@ in a seat's ping. Canned replies to prefer (bland by design):
 reply and step on each other. If you're supervising, you're the only umpire.
 (`reset.sh` clears `dev/.umpire/` on a fresh game, so stale pings don't carry over.)
 
+**⛔ NEVER run `./dev/umpire-check <side>` as the umpire.** It is the SEAT's
+consumption endpoint and it is a **destructive read**: it marks the pending reply
+seen (`dev/.umpire/reply-<side>.seen`), so the seat never receives it. Doing this
+silently swallowed an answer mid-match — the seat re-pinged "still no reply" four
+seconds after the reply had been written, and the only fix was to re-send it.
+To inspect the channel, read the log directly:
+```bash
+tail -20 dev/.umpire/mailbox.log      # safe: pings AND replies, non-destructive
+```
+Rule of thumb: `umpire-ping`/`umpire-check` belong to the seats, `umpire-reply`
+and reading the mailbox belong to you.
+
 ## Known gotchas
 - **Corp `--persistent` is now the default** in `seat-corp.md` — one `monitor-run`
   owns the whole Runner run; it wakes only for rez/fire/access/run-end. On a
