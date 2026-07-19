@@ -1,0 +1,18 @@
+Corp T1 [0-0] {C5 R5}: ice R&D; credit →C6; credit →C7
+Runner T1 [0-0] {C7 R5}: install Smartware Distributor; run R&D; rez Whitespace@0 R&D →C5; encounter Whitespace@0; →R2; Wildcat Strike →R6; VRcation →R5
+Corp T2 [0-0] {C5 R5}: ice S1; credit →C6; credit →C7
+Runner T2 [0-0] {C7 R5}: Jailbreak; run HQ; breach HQ; access Seamless Launch; access Funhouse; Mutual Favor; install Unity →R2; run HQ; breach HQ; access Funhouse; run HQ; breach HQ; access Government Subsidy
+Corp T3 [0-0] {C7 R2}: install S1; rez Regolith Mining License S1 →C5; use Regolith Mining License →C8; use Regolith Mining License →C11
+Runner T3 [0-0] {C11 R2}: use Smartware Distributor; credit →R3; credit →R4; credit →R5
+Corp T4 [0-0] {C11 R5}: ice S1 →C10; use Regolith Mining License →C13; install S1; trash Regolith Mining License in Server 1
+Runner T4 [0-0] {C13 R5}: →R6; install Conduit →R2; run R&D; encounter Whitespace@0; →R0; credit →R1; credit →R2
+Corp T5 [0-0] {C13 R2}: Seamless Launch →C12; advance S1 →C11; advance S1 →C10
+Runner T5 [0-0] {C10 R2}: →R3; draw; draw; draw; credit →R4
+Corp T6 [0-0] {C10 R4}: advance S1 →C9; score Send a Message; rez Brân 1.0@0 S1; credit →C10; Government Subsidy →C15
+Runner T6 [3-0] {C15 R4}: →R5; install Red Team →R0; run HQ; →R3; breach HQ; access AMAZE Amusements; trash AMAZE Amusements →R0; run Archives; →R3; breach Archives; install Pennyshaver →R0
+Corp T7 [3-0] {C15 R0}: install S1; rez Manegarm Skunkworks S1 →C13; install S1; advance S1 →C12
+Runner T7 [3-0] {C12 R0}: run HQ; →R3; breach HQ; access Funhouse; run Archives; →R6; trash Red Team; breach Archives; use Pennyshaver →R9; credit →R10
+Corp T8 [3-0] {C12 R10}: advance S1 →C11; advance S1 →C10; advance S1 →C9
+Runner T8 [3-0] {C9 R10}: run R&D; encounter Whitespace@0; →R7; breach R&D; access ?; run HQ; breach HQ; access Funhouse; run HQ; breach HQ; access Offworld Office; steal Offworld Office; run HQ; breach HQ; access Nico Campaign; trash Nico Campaign →R5
+Corp T9 [3-2] {C9 R5}: score Offworld Office; →C16; Public Trail →C12; trash Smartware Distributor →C10; ice R&D →C9
+Runner T9 [5-2] {C9 R5}: use Pennyshaver →R10; credit →R11; run R&D; rez Funhouse@1 R&D →C4; encounter Funhouse@1
