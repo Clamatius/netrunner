@@ -461,6 +461,76 @@
               "a rezzed ICE the Corp isn't rezzing should pass priority and proceed"))))))
 
 ;; =============================================================================
+;; Test: `continue` is refused at an unbroken-sub encounter — the invariant the
+;; #92 display fix relies on. The prompt/diagnose surfaces now steer a Runner
+;; with unbroken subs to break/tank/jack-out instead of `continue`; those hints
+;; are only truthful if the seat's `continue` genuinely cannot pass here.
+;;
+;; This also FALSIFIES a plausible review finding (GPT-5.6 Sol, #92 panel) that
+;; the decline hint is wrong once the Corp has passed the encounter: the AI
+;; seat's refusal is decided by handle-runner-encounter-ice, which reads
+;; RUN-level :no-action — and set-phase (engine runs.clj:98) resets that to false
+;; on entering encounter-ice, while `continue :encounter-ice` (runs.clj:426) only
+;; ever writes the ENCOUNTER-level passer. So corp-passed? is false throughout an
+;; encounter and `continue` is refused regardless of the encounter-level passer.
+;; The hint is correct in every state the seat can actually reach.
+;; =============================================================================
+
+(defn- runner-encounter-ctx-state
+  "Runner mid-encounter on rezzed R&D ICE with `subs`. `encounter-passer` sets
+   the ENCOUNTER-level passer ([:encounters :no-action]) — the field the engine
+   actually tracks during an encounter (runs.clj:426). Run-level :no-action is
+   held false, as the engine keeps it (set-phase resets it on phase entry)."
+  [subs encounter-passer]
+  {:connected true
+   :uid "test-user"
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+   :side "runner"
+   :game-state {:active-player "runner"
+                :encounters {:no-action encounter-passer}
+                :run {:phase "encounter-ice" :position 1
+                      :server [:rd] :no-action false}
+                :runner {:credit 5 :click 2
+                         :prompt-state {:msg "You are encountering Whitespace"
+                                        :prompt-type "run"}}
+                :corp {:credit 5
+                       :servers {:rd {:ices [{:cid 55 :title "Whitespace" :rezzed true
+                                              :subroutines subs}]}}}}})
+
+(def ^:private two-unbroken-subs
+  [{:label "Make the Runner lose 3 [Credits]" :broken false :fired false}
+   {:label "End the run if the Runner has 6 [Credits] or less" :broken false :fired false}])
+
+(deftest encounter-with-unbroken-subs-refuses-continue
+  (testing "at an encounter with unbroken subs, continue-run! surfaces a fire
+            decision and sends NO continue — the #92 decline hint is truthful"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs nil)
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (= :fire-decision-required (:status r))
+                  (str "continue must be refused (a break/tank decision), got: " r))))
+          (is (not-any? #(= "continue" (:command %)) @sent)
+              "no continue may reach the engine while unbroken subs remain"))))))
+
+(deftest encounter-refuses-continue-even-when-corp-passed-the-window
+  (testing "FALSIFIES the corp-passed review finding (#92 panel): with the Corp
+            recorded as the encounter passer, the AI seat STILL cannot pass with
+            continue — handle-runner-encounter-ice gates on RUN-level :no-action
+            (held false all encounter), so it refuses regardless of the
+            encounter-level passer. The decline hint is correct in this state too."
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
+          (with-out-str
+            (let [r (ai/continue-run!)]
+              (is (= :fire-decision-required (:status r))
+                  (str "continue must still be refused when Corp passed the encounter, got: " r))))
+          (is (not-any? #(= "continue" (:command %)) @sent)
+              "the seat must not silently pass an unbroken-sub encounter"))))))
+
+;; =============================================================================
 ;; Test: monitor-run --persistent must NOT drop the defender loop after a rez
 ;; commit (#36, cross-model marquee g1).
 ;;
