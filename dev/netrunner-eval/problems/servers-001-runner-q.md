@@ -1,6 +1,6 @@
 # Problem: servers-001-runner [Medium]
 
-> **Note:** Tutorial games are played to **6 points** (not the standard 7).
+> **Note:** Games are played to **7 points**.
 
 ## Context
 

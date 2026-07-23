@@ -18,7 +18,7 @@ Runner is on click 4, mid-Sneakdoor run. Ichi's trace is firing. Runner has Plas
 
 Runner has $8. They easily pay $1 to beat trace of 1.
 
-**Result:** No tag, no core damage. Runner accesses HQ, might steal an agenda (40% chance: ABT or NAPD), goes to 6 points.
+**Result:** No tag, no core damage. Runner accesses HQ, might steal an agenda (40% chance: ABT or NAPD), goes to 6 points (game point at the 7-point threshold).
 
 ---
 

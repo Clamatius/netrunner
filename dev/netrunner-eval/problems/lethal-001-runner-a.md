@@ -71,6 +71,23 @@ Access: Agenda (guaranteed). WIN.
 
 **Total cost:** $3 + $4 + $3 + $3 = **exactly $13**
 
+### Click 1: Archives vs R&D
+
+Any free successful run enables the Carmen discount; the line above uses Archives.
+Which unprotected central is *correct* is a judgment call worth naming:
+
+- **Archives is the zero-variance choice** — nothing in this cardpool can fire from
+  Archives, and you have verified the HQ win, so there is nothing to gain and
+  (in richer cardpools: Shock!-style access punishers) something to lose.
+- **R&D is the practical-play choice** — in this cardpool it is equally safe, adds a
+  free random access at 5 points (an outright steal ends the game before you spend a
+  credit), and — honestly — insures you against an off-by-one somewhere in the $13
+  arithmetic. In a real game that insurance is usually worth more than zero variance.
+
+Either run earns full credit. What is *not* optional is making some free successful
+run before installing Carmen — without the discount the guaranteed line doesn't fit
+in $13.
+
 ---
 
 ## Why This Works

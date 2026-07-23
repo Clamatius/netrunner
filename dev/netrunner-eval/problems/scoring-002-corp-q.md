@@ -1,6 +1,6 @@
 # Problem: scoring-002-corp [Medium]
 
-> **Note:** Tutorial games are played to **6 points** (not the standard 7).
+> **Note:** Games are played to **7 points**.
 
 ## Context
 
@@ -11,7 +11,7 @@ You are the Corp, 3 clicks remaining at the start of your turn (after mandatory 
 ```yaml
 corp:
   credits: 5
-  points: 3
+  points: 4
   clicks: 3    # after mandatory draw
   HQ:
     ice:
@@ -35,7 +35,7 @@ corp:
 
 runner:
   credits: 2
-  points: 3
+  points: 4
   grip:
     - {card: Unknown, rezzed: false}
     - {card: Unknown, rezzed: false}

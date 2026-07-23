@@ -64,7 +64,7 @@ The key insight: **cards in HQ are shields for Send a Message**.
 1. **Hub is protected.** Runner can't afford to break Brân, clicking through costs 4 clicks total.
 
 2. **If Hub scores next turn:**
-   - Gain 1 point (Corp to 4)
+   - Gain 1 point (Corp to 5)
    - Draw 2 cards (HQ goes from 3 → 5)
    - SaM now 1 in 5 instead of 1 in 3
 
@@ -78,7 +78,7 @@ The key insight: **cards in HQ are shields for Send a Message**.
    - $12 is plenty to advance Hub next turn
    - Don't need $15 right now
 
-**Next turn:** Advance Hub 3 times, score. Draw 2. Now at 4 points with a fuller hand protecting SaM.
+**Next turn:** Advance Hub 3 times, score. Draw 2. Now at 5 points with a fuller hand protecting SaM.
 
 ---
 
@@ -102,7 +102,7 @@ Hedge Fund ($15), install Hub, advance.
 ### The "All-In Bluff" Trap
 
 Install Urtica in Server 1, advance, advance.
-- Runner must check (you're at 3 points)
+- Runner must check (you're at 4 points — if this were Send a Message, scoring it ends the game)
 - They eat 4 damage (2 base + 2 from advancements)
 - But now you have no trap threat remaining
 - Brân alone doesn't protect real agendas long-term

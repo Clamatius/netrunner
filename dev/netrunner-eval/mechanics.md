@@ -5,11 +5,11 @@ Android: Netrunner is an asymmetric two-player card game. The **Corporation (Cor
 ## Win Conditions
 
 **Corp wins by:**
-- Scoring 7 agenda points (6 in tutorial games)
+- Scoring 7 agenda points
 - Flatline: Dealing damage when Runner has no cards in hand (grip)
 
 **Runner wins by:**
-- Stealing 7 agenda points (6 in tutorial games)
+- Stealing 7 agenda points
 - Corp drawing from empty deck (R&D)
 
 ## Resources

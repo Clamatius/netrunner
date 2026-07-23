@@ -1,6 +1,6 @@
 # Problem: window-001-corp [Medium]
 
-> **Note:** Tutorial games are played to **6 points** (not the standard 7).
+> **Note:** Games are played to **7 points**.
 
 ## Context
 
@@ -11,7 +11,7 @@ You are the Corp, 3 clicks remaining at the start of your turn. The Runner has b
 ```yaml
 corp:
   credits: 11
-  points: 3
+  points: 4
   clicks: 3
   HQ:
     ice:
@@ -29,7 +29,7 @@ corp:
     root: null  # empty
 runner:
   credits: 7
-  points: 2
+  points: 3
   grip:
     - {card: Unknown, rezzed: false}
     - {card: Unknown, rezzed: false}

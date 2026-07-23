@@ -1,8 +1,10 @@
 # Problem: score-001-corp [Easy]
 
+> **Note:** Games are played to **7 points**.
+
 ## Situation
 Turn 9. You're Corp.
-Score: Corp 5, Runner 4
+Score: Corp 6, Runner 5
 ID: Pravdivost Consulting (no special ability, 45 card min)
 
 ## Board State
@@ -10,7 +12,7 @@ ID: Pravdivost Consulting (no special ability, 45 card min)
 ```yaml
 corp:
   credits: 12
-  points: 5
+  points: 6
   HQ:
     ice:
       - {card: Tithe, rezzed: true}       # outer
@@ -32,7 +34,7 @@ corp:
 
 runner:
   credits: 4
-  points: 4
+  points: 5
   grip:
     - {card: Unknown, rezzed: false}
   rig:
