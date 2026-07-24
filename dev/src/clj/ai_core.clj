@@ -1365,6 +1365,63 @@
     (boolean (or (contains? #{:runner "runner"} enc-no-action)
                  (contains? #{:runner "runner"} run-no-action)))))
 
+(defn- run-pass-window?
+  "Run phases whose advance is a PRIORITY PASS via `continue` (not an encounter
+   break/tank decision — that is runner-encounter-decision-pending?'s job, and
+   'success'/access is the Runner acting on access, not a pass). These are the
+   windows where a seat must `continue` to advance the run.
+
+   Exactly the set the seat's own run loop acts on (ai-runs `should-i-act?` /
+   `advance-abandoned-window`, #{\"approach-ice\" \"movement\"}), so a :my-run-window
+   wake always coincides with the seat deciding to act — that is what keeps it from
+   spinning. NB the display's 'approach-server' is NOT a wire phase: the engine only
+   ever set-phases :approach-ice / :encounter-ice / :movement / :success / :initiation
+   (game.core.runs), and the approach-server window is {:phase \"movement\" :position 0}
+   — covered here by \"movement\"."
+  [phase]
+  (contains? #{"approach-ice" "movement"} phase))
+
+(defn- run-window-owner
+  "Who owns the FIRST un-passed pass at the current run pass-window, or nil when it
+   is not a pass window or both seats have already passed. Ownership is read from
+   run-level :no-action, the SAME source of truth as the seat's own `should-i-act?`:
+     nil/false → active player (the Runner) owes the first pass
+     :runner   → Runner passed; the Corp owes the second
+     :corp     → Corp passed (e.g. corp-auto-no-action pressed it first); Runner owes it
+   The check is deliberately order-AGNOSTIC (it asks who has *actually* passed, not
+   who 'should' go first), so it is correct whether the Runner or an auto-no-action
+   Corp passed first. This is the run-window analogue of the turn-boundary ownership
+   my-turn-to-act? tracks — see #91: without it a seat that ACQUIRES priority at a new
+   window is never woken, so a blocked `wait` sleeps through its own move and the
+   un-babysat game deadlocks.
+
+   Caveat: run-level :no-action is single-valued — it records only the FIRST passer,
+   and the second `continue` advances the phase (set-phase resets it to false). So a
+   transient 'both passed, advance in flight' is indistinguishable from 'second passer
+   still owes' and would name the second passer as owner. That is safe here because the
+   side that has already passed is driving the run via auto-continue-loop / park (whose
+   own wake is park-wake-reason, not this), never sitting in a bare `wait` — so
+   relevance-reason is not what advances it. Do not lean on :no-action to mean 'the
+   only un-passed side' beyond that."
+  [state]
+  (when (run-pass-window? (run-phase state))
+    (let [no-action (get-in state [:game-state :run :no-action])
+          runner-passed? (contains? #{:runner "runner"} no-action)
+          corp-passed?   (contains? #{:corp "corp"} no-action)]
+      (cond
+        (not runner-passed?) :runner   ; nobody (or corp-only) has passed: Runner owes the first pass
+        (not corp-passed?)   :corp     ; Runner passed, Corp owes the second
+        :else nil))))                  ; both passed — window is closing, nothing to own
+
+(defn- my-run-window?
+  "True when THIS side currently owns the un-passed pass at an active run window.
+   Waking on this is safe from the old :run-active spin (see relevance-reason): a
+   side owns the window only while it still owes its pass, so it wakes once, passes
+   (flipping :no-action), and then sleeps until it acquires the NEXT window."
+  [state side]
+  (boolean (and (run-active? state)
+                (= (some-> (run-window-owner state) name) (name (keyword side))))))
+
 (defn- runner-encounter-decision-pending?
   "True when the Runner is stopped at an ICE encounter that needs a break /
    tank / jack-out decision from us, but which the engine did NOT surface as a
@@ -1409,14 +1466,22 @@
      :my-turn-start      — it's our turn at a boundary; we must call start-turn
                            before acting (we hold 0 clicks until we do)
      :my-turn            — it's our turn and we have clicks; act now
+     :my-run-window      — we own the un-passed pass at an active run window
+                           (approach-ice / movement / approach-server) and
+                           my-turn-to-act? did NOT already cover it (0 clicks
+                           left, spent on the run). #91: a seat that had passed a
+                           PREVIOUS window otherwise sleeps through the new window
+                           it now owns and the game deadlocks.
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
    run produces a prompt for our side (:has-prompt) or transitions on/off
-   (:run-started / :run-ended) or moves between phases. Otherwise we sit
-   silently. The earlier :run-active behaviour caused
-   wait-for-relevant-diff to return after one polling tick during every
-   opponent run, defeating the wait.
+   (:run-started / :run-ended) or moves between phases, or when a pass window
+   becomes OURS to act in (:my-run-window). Otherwise we sit silently. The
+   earlier :run-active behaviour caused wait-for-relevant-diff to return after
+   one polling tick during every opponent run, defeating the wait; :my-run-window
+   avoids that by firing only for the side that currently owes the pass, never
+   for the side merely waiting on the opponent to pass.
 
    The 4-arg form (with initial-run-phase) enables :run-phase-change
    detection. The 3-arg form retains the old behavior for callers (mostly
@@ -1470,6 +1535,17 @@
        (my-turn-to-act? state side)
        (if (turn-awaiting-start? state side) :my-turn-start :my-turn)
 
+       ;; We ACQUIRED priority at a run pass-window we own (#91). Ranks below
+       ;; my-turn-to-act? on purpose: when we have clicks that already wakes us
+       ;; (:my-turn); this catches the deadlock case where the window is ours but
+       ;; my-turn-to-act? is false — 0 clicks left (spent on the run) at an empty
+       ;; run window that is not an actionable :has-prompt. Without it a seat that
+       ;; had correctly passed a PREVIOUS window sleeps through the new window it now
+       ;; owns. It does not spin: we own the window only until we pass it, and it
+       ;; never fires for the side that is merely waiting on the opponent to pass.
+       (my-run-window? state side)
+       :my-run-window
+
        ;; Nothing relevant
        :else nil))))
 
@@ -1483,6 +1559,7 @@
      - a run that was in progress ends (:run-ended)
      - it becomes our turn at a boundary, start-turn needed (:my-turn-start)
      - it becomes our turn to act with clicks in hand (:my-turn)
+     - we acquire priority at a run pass-window we own (:my-run-window)
      - the opponent sends a 'ping' chat message (:ping wake — escape hatch
        for when an external observer wants to nudge us)
      - the timeout expires (:timeout)

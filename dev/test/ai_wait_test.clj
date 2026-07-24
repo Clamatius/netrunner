@@ -232,3 +232,98 @@
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :timeout (:status result))
               (str "all-broken encounter must not wake, got: " result)))))))
+
+;; ---------------------------------------------------------------------------
+;; #91: `wait` must wake a seat that ACQUIRES priority at a run pass-window it
+;; owns. Repro: Runner runs server A, passes, waits on Corp; the run advances to
+;; a pass window the Runner owns first — but with 0 clicks (spent on the run)
+;; my-turn-to-act? is false, an empty run window is not an actionable prompt, and
+;; if the wait began at that phase there is no phase-change. relevance-reason
+;; returned nil → the seat slept through its own move → permanent deadlock
+;; (confirmed on BOTH seats, marquee G2 turn 7).
+;;
+;; NB the "approach-server" the seats SEE is a display label, not a wire phase:
+;; the engine set-phases only :approach-ice/:encounter-ice/:movement/:success/
+;; :initiation, and the approach-server window is {:phase "movement" :position 0}.
+;; These fixtures use that real wire shape (an earlier draft used a fictional
+;; :phase "approach-server" — caught in review before it could "verify" #91
+;; against a state that never occurs).
+;; ---------------------------------------------------------------------------
+
+(def ^:private approach-server-game-state
+  "The real approach-server window — {:phase \"movement\" :position 0} — with the
+   run active, Runner owning the first pass, holding 0 clicks (spent on the run)."
+  {:active-player "runner" :turn 7
+   :runner {:click 0
+            :prompt-state {:prompt-type "run" :choices [] :selectable []}}
+   :corp {:click 0}
+   :run {:phase "movement" :position 0 :server ["archives"] :no-action false}})
+
+(deftest test-wait-runner-owns-approach-server-window-wakes
+  (testing "#91: Runner owning the un-passed approach-server window (movement/pos-0)
+            wakes :my-run-window instead of sleeping through its own move"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" approach-server-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :relevant-change (:status result))
+              (str "owned run window must wake, not time out, got: " result))
+          (is (= :my-run-window (:reason result))
+              (str "expected :my-run-window, got: " result)))))))
+
+(deftest test-wait-runner-inter-ice-movement-window-wakes
+  (testing "#91: an inter-ice movement window (position > 0) is also Runner-owned"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in approach-server-game-state [:run :position] 1))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "expected :my-run-window at inter-ice movement, got: " result)))))))
+
+(deftest test-wait-runner-owns-approach-ice-window-wakes
+  (testing "#91: the approach-ice pass window is owned by the Runner first too"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              (assoc-in [:run :phase] "approach-ice")
+                              (assoc-in [:run :position] 1)))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "expected :my-run-window at approach-ice, got: " result)))))))
+
+(deftest test-wait-runner-does-not-wake-after-passing
+  (testing "#91 no-spin: once the Runner has passed (run :no-action = runner) it
+            owns nothing and must sleep, waiting on the Corp"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in approach-server-game-state [:run :no-action] "runner"))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "a passed Runner must not re-wake on its own window, got: " result)))))))
+
+(deftest test-wait-corp-wakes-after-runner-passes
+  (testing "#91 symmetry: once the Runner has passed, the Corp OWNS the second
+            pass and must wake to advance the run"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                          (assoc-in approach-server-game-state [:run :no-action] "runner"))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "Corp owning the second pass must wake, got: " result)))))))
+
+(deftest test-wait-corp-does-not-wake-before-runner-passes
+  (testing "#91 no-spurious-wake: while the Runner still owes the first pass, the
+            Corp does not own the window and must keep waiting"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" approach-server-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "Corp must not wake before the Runner passes, got: " result)))))))
+
+(deftest test-wait-encounter-ice-not-treated-as-pass-window
+  (testing "#91 non-interference: encounter-ice is handled by :encounter-decision,
+            not :my-run-window (the break/tank flow must be untouched)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" encounter-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :encounter-decision (:reason result))
+              (str "encounter-ice must stay :encounter-decision, got: " result)))))))
