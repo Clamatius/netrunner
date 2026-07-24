@@ -239,7 +239,7 @@
               ;; Whose move is it now + what 'continue' does (same guidance the
               ;; `prompt` command shows) — status used to print only the ladder,
               ;; leaving the seat to guess whose window it was.
-              (print-run-window-priority! run-state (:phase run-state)
+              (print-run-window-priority! @state/client-state run-state (:phase run-state)
                                           (clojure.string/lower-case (or my-side "runner"))))
 
             (println "\n--- RUNNER ---")
@@ -1135,32 +1135,79 @@
       :else
       "⏳ Waiting on Runner — active player acts first; your sub-step is next.")))
 
+(defn runner-encounter-unbroken-count
+  "Count of subroutines on the current encounter ICE that the Runner has neither
+   broken nor already fired — i.e. the subs still pending a break/tank decision.
+   Mirrors handle-runner-encounter-ice's own filter (ai-run-runner-handlers), the
+   authority on whether `continue` will pass or be refused here. `state` is the
+   full client-state map. Returns 0 when there is no rezzed current ICE."
+  [state]
+  (let [ice (core/current-run-ice state)]
+    (if (and ice (:rezzed ice))
+      (count (filter #(and (not (:broken %)) (not (:fired %)))
+                     (:subroutines ice)))
+      0)))
+
+(defn runner-encounter-decline-hint-lines
+  "Guidance for a Runner at an encounter it owns with unbroken subroutines it is
+   NOT breaking. `continue` is REFUSED here — handle-runner-encounter-ice returns
+   a fire-decision, never a pass — so the generic run-window steer ('use continue
+   to pass priority') is a lie that deadlocked marquee G2 for ~20 min (#92). The
+   Runner's real options are: break with an icebreaker, `tank` to decline and let
+   the subs fire, or `jack-out`. Pure; returns a vector of lines to println.
+   `ice-title` is the encounter ICE; `unbroken-count` is the pending-sub count."
+  [ice-title unbroken-count]
+  [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
+           unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
+   "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
+   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances, OR" ice-title)
+   ;; Keep the jack-out smell caveat (matches run-priority-hint-lines): a run
+   ;; you can't profitably break is one of the few legitimate jack-out cases.
+   "      • jack-out  — end the run now (a smell unless entry cost was misjudged or a Karunā sub)."])
+
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
    run window. Shared by the `prompt` and `status` commands so both surface the
    same run-priority read (status previously printed only the timing ladder,
    leaving the seat to guess whose window it was). Assumes the caller already
-   printed the phase ladder. `run` is [:game-state :run]; `run-phase` is
+   printed the phase ladder. `state` is the full client-state (needed to read the
+   encounter ICE's subs); `run` is [:game-state :run]; `run-phase` is
    (:phase run); `my-side` is \"runner\"/\"corp\". Returns nil.
 
    The both-must-pass windows (initiation for the Runner, movement/approach-server
    for both) route through run-priority-hint-lines, which disambiguates the two
-   sub-steps and warns about the #31 stall. Other windows get the terse
-   decline/continue guidance — spelled out for the Corp (continue here DECLINES an
-   action, e.g. an ICE rez, rather than being forced)."
-  [run run-phase my-side]
-  (if (contains? (if (= my-side "runner")
+   sub-steps and warns about the #31 stall. A Runner mid-encounter with UNBROKEN
+   subs it is not breaking routes through runner-encounter-decline-hint-lines:
+   `continue` is refused there, so steering to it is the #92 lie. Other windows
+   get the terse decline/continue guidance — spelled out for the Corp (continue
+   here DECLINES an action, e.g. an ICE rez, rather than being forced)."
+  [state run run-phase my-side]
+  (let [runner-unbroken (when (and (= my-side "runner") (= run-phase "encounter-ice"))
+                          (runner-encounter-unbroken-count state))]
+    (cond
+      (contains? (if (= my-side "runner")
                    #{"initiation" "movement" "approach-server"}
                    #{"movement" "approach-server"})
                  run-phase)
-    (doseq [line (run-priority-hint-lines run my-side)]
-      (println line))
-    (if (= my-side "corp")
+      (doseq [line (run-priority-hint-lines run my-side)]
+        (println line))
+
+      ;; Runner at an encounter with subs still to break/tank: `continue` is
+      ;; refused (#92). Name the real options instead of the impossible pass.
+      (and runner-unbroken (pos? runner-unbroken))
+      (doseq [line (runner-encounter-decline-hint-lines
+                    (:title (core/current-run-ice state) "this ICE") runner-unbroken)]
+        (println line))
+
+      (= my-side "corp")
       (do
         (println "    → 'continue' passes priority here (you DECLINE to act this window).")
         (println "    → Other options: rez a card / fire a paid ability if useful.")
         (when (= run-phase "approach-ice")
           (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
+
+      :else
+      ;; Runner with all subs broken (or no rezzed ICE): `continue` DOES pass.
       (println "    → Use 'continue' to pass priority (advance the run).")))
   nil)
 
@@ -1326,7 +1373,7 @@
                   (show-encounter-ice-info state run my-side))
                 ;; Whose move is it now + what 'continue' does — shared with the
                 ;; `status` command so both surface the same run-priority read.
-                (print-run-window-priority! run run-phase my-side))
+                (print-run-window-priority! state run run-phase my-side))
               ;; Not in a run. `continue` is RUN-ONLY (errors "No active run to
               ;; monitor") — never advertise it here. A "waiting" prompt means the
               ;; opponent is deciding (e.g. Wildcat Strike); the player takes no
@@ -1815,22 +1862,40 @@
       ;; branch above and told the seat to `choose`, contradicting what `prompt`
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
       (and (:in-run? ts) prompt (not waiting?))
-      (do
+      (let [runner-unbroken (when (and (= my-side-lc "runner") (= run-phase "encounter-ice"))
+                              (runner-encounter-unbroken-count @state/client-state))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
-        (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
         ;; `initiation` is a both-must-pass window too (engine: continue :initiation
         ;; needs BOTH sides), but only the Runner gets the already-passed-aware hint
         ;; here — once it has passed, "use continue" is a no-op loop (issue #31 / g3).
         ;; The Corp keeps the generic continue/monitor-run steer at initiation (it
         ;; may still want to rez/fire a paid ability there).
-        (if (contains? (if (= my-side-lc "runner")
-                         #{"initiation" "movement" "approach-server"}
-                         #{"movement" "approach-server"})
-                       run-phase)
-          (doseq [line (run-priority-hint-lines run my-side-lc)]
-            (println line))
-          (println "   → Use: continue (to pass priority) — or monitor-run to participate in the run.")))
+        (cond
+          (contains? (if (= my-side-lc "runner")
+                       #{"initiation" "movement" "approach-server"}
+                       #{"movement" "approach-server"})
+                     run-phase)
+          (do
+            (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
+            (doseq [line (run-priority-hint-lines run my-side-lc)]
+              (println line)))
+
+          ;; Runner mid-encounter with unbroken subs it is not breaking: `continue`
+          ;; is refused (#92), so naming it here (as this branch used to) is the lie
+          ;; that agreed with the prompt display and deadlocked marquee G2.
+          (and runner-unbroken (pos? runner-unbroken))
+          (do
+            (println "   → Owner: YOU — a break/tank decision, not a both-pass window.")
+            (doseq [line (runner-encounter-decline-hint-lines
+                          (:title (core/current-run-ice @state/client-state) "this ICE")
+                          runner-unbroken)]
+              (println line)))
+
+          :else
+          (do
+            (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
+            (println "   → Use: continue (to pass priority) — or monitor-run to participate in the run."))))
 
       ;; Waiting prompt — blocked on the opponent, NOT a stall.
       (and prompt waiting?)

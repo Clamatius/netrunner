@@ -8,6 +8,7 @@
   (:require [clojure.test :refer :all]
             [clojure.string :as str]
             [test-helpers :refer [mock-client-state with-mock-state]]
+            [ai-state :as ai-state]
             [ai-display :as display]))
 
 ;; ============================================================================
@@ -657,10 +658,10 @@
 (deftest test-run-window-priority-corp-approach-ice-is-rez-window
   (testing "Corp at approach-ice: continue DECLINES (a rez), and the rez options
             are spelled out — not routed through the movement hint lines"
-    (let [out (with-out-str
+    (let [run {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+          out (with-out-str
                 (display/print-run-window-priority!
-                 {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
-                 "approach-ice" "corp"))]
+                 {:game-state {:run run}} run "approach-ice" "corp"))]
       (is (str/includes? out "DECLINE"))
       (is (str/includes? out "ICE rez window"))
       (is (str/includes? out "--no-rez")))))
@@ -668,20 +669,20 @@
 (deftest test-run-window-priority-movement-routes-through-hint-lines
   (testing "Both-must-pass movement window routes through run-priority-hint-lines
             (Runner told continuing yields its access)"
-    (let [out (with-out-str
+    (let [run {:server ["hq"] :phase "movement" :position 0 :no-action false}
+          out (with-out-str
                 (display/print-run-window-priority!
-                 {:server ["hq"] :phase "movement" :position 0 :no-action false}
-                 "movement" "runner"))]
+                 {:game-state {:run run}} run "movement" "runner"))]
       (is (str/includes? out "active player goes first"))
       (is (str/includes? out "breach HQ and access cards")))))
 
 (deftest test-run-window-priority-runner-approach-ice-passes-priority
   (testing "Runner at approach-ice (not a both-pass window for the Runner) gets the
             terse pass-priority line, no Corp rez phrasing"
-    (let [out (with-out-str
+    (let [run {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
+          out (with-out-str
                 (display/print-run-window-priority!
-                 {:server ["rd"] :phase "approach-ice" :position 1 :no-action false}
-                 "approach-ice" "runner"))]
+                 {:game-state {:run run}} run "approach-ice" "runner"))]
       (is (str/includes? out "pass priority"))
       (is (not (str/includes? out "ICE rez window"))))))
 
@@ -1036,3 +1037,116 @@
         (is (str/includes? out "Waiting for Corp to rez"))
         (is (< (count (str/split-lines (str/trim out))) 3)
             "One line, not the full prompt block")))))
+
+;; ============================================================================
+;; Encounter-ice decline guidance (#92): a Runner at an encounter it owns with
+;; UNBROKEN subroutines it is not breaking cannot pass with `continue` —
+;; handle-runner-encounter-ice surfaces a fire-decision, never a pass, so
+;; `continue` is silently refused. The run-window surfaces (prompt display and
+;; diagnose-blocker) used to tell that Runner to "use continue" anyway, a
+;; contradiction that deadlocked marquee G2 for ~20 min. The real options are
+;; break / tank / jack-out — never a bare `continue`.
+;; ============================================================================
+
+(defn- encounter-state
+  "Runner mid-encounter with `subs` on a rezzed ICE at position 1 on R&D."
+  [subs]
+  (mock-client-state
+   :side "runner"
+   :game-state {:active-player "runner" :turn 4
+                :run {:phase "encounter-ice" :position 1
+                      :server ["rd"] :no-action false}
+                :runner {:click 2 :credit 5 :hand []
+                         :prompt-state {:msg "You are encountering Whitespace"
+                                        :prompt-type "run"}}
+                :corp {:click 0 :credit 5 :hand []
+                       :servers {:rd {:ices [{:title "Whitespace" :rezzed true
+                                              :subroutines subs}]}}}}))
+
+(def two-unbroken
+  [{:label "Make the Runner lose 3 [Credits]" :broken false :fired false}
+   {:label "End the run if the Runner has 6 [Credits] or less" :broken false :fired false}])
+
+(def all-broken
+  [{:label "Make the Runner lose 3 [Credits]" :broken true :fired false}
+   {:label "End the run if the Runner has 6 [Credits] or less" :broken true :fired false}])
+
+(deftest test-encounter-decline-hint-names-tank-not-continue
+  (testing "the pure decline hint names tank/jack-out with the ICE title, never a bare continue"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Whitespace" 2))]
+      (is (str/includes? out "tank \"Whitespace\"")
+          (str "should name 'tank \"<ice>\"' as the decline-and-pass command, got: " out))
+      (is (str/includes? out "jack-out")
+          (str "should offer jack-out, got: " out))
+      (is (str/includes? out "2 unbroken")
+          (str "should state how many subs are unbroken, got: " out))
+      ;; The whole point of #92: this window must not steer to bare `continue`.
+      (is (not (re-find #"(?i)use 'continue' to pass priority" out))
+          (str "must NOT tell the seat to pass with continue here, got: " out)))))
+
+(deftest test-run-window-priority-encounter-unbroken-steers-to-tank
+  (testing "prompt run-window guidance at an encounter with unbroken subs names
+            tank/break/jack-out, NOT the (refused) continue — the #92 wedge"
+    (with-mock-state (encounter-state two-unbroken)
+      (let [out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state
+                   (get-in @ai-state/client-state [:game-state :run])
+                   "encounter-ice" "runner"))]
+        (is (str/includes? out "tank \"Whitespace\"")
+            (str "encounter-ice run window must steer to tank, got: " out))
+        (is (not (str/includes? out "Use 'continue' to pass priority"))
+            (str "must NOT tell the Runner continue passes here, got: " out))))))
+
+(deftest test-run-window-priority-encounter-all-broken-still-continues
+  (testing "once every sub is broken the Runner DOES pass with continue — the
+            decline steer must not leak into the all-broken pass window"
+    (with-mock-state (encounter-state all-broken)
+      (let [out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state
+                   (get-in @ai-state/client-state [:game-state :run])
+                   "encounter-ice" "runner"))]
+        (is (str/includes? out "continue")
+            (str "all subs broken: continue is the correct pass, got: " out))
+        (is (not (str/includes? out "tank"))
+            (str "no decline decision remains when all subs are broken, got: " out))))))
+
+(deftest test-run-window-priority-movement-unchanged
+  (testing "the movement window still routes to the side-aware continue hint —
+            the encounter branch must not disturb the both-must-pass windows"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 4
+                                   :run {:phase "movement" :position 0
+                                         :server ["rd"] :no-action :corp}
+                                   :runner {:click 1 :credit 5 :hand []}
+                                   :corp {:click 0 :credit 5 :hand []}})
+      (let [run (get-in @ai-state/client-state [:game-state :run])
+            out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state run "movement" "runner"))]
+        (is (str/includes? out "continue"))
+        (is (not (str/includes? out "tank")))))))
+
+(deftest test-blocker-diagnosis-encounter-unbroken-steers-to-tank
+  (testing "diagnose-blocker at an encounter with unbroken subs names tank, NOT
+            continue — the third surface that agreed with the lie in #92"
+    (with-mock-state (encounter-state two-unbroken)
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "tank \"Whitespace\"")
+            (str "should steer to tank, got: " out))
+        (is (not (re-find #"(?i)use: continue" out))
+            (str "must NOT steer to continue at an unbroken-sub encounter, got: " out))
+        (is (not (str/includes? out "ACTIONABLE")))))))
+
+(deftest test-blocker-diagnosis-encounter-all-broken-steers-to-continue
+  (testing "diagnose-blocker once every sub is broken DOES steer to continue —
+            the decline branch must not leak into the all-broken pass window
+            (symmetry with the print-run-window-priority! all-broken guard)"
+    (with-mock-state (encounter-state all-broken)
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (re-find #"(?i)continue" out)
+            (str "all subs broken: continue is the correct pass, got: " out))
+        (is (not (str/includes? out "tank"))
+            (str "no decline decision remains when all subs are broken, got: " out))))))
