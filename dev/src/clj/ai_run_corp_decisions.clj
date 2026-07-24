@@ -67,16 +67,71 @@
        (empty? (prompt-choices prompt))
        (empty? (prompt-selectables prompt))))
 
+(defn- last-index-where
+  "Index of the last element of coll satisfying pred, or -1 if none."
+  [coll pred]
+  (reduce (fn [acc [i x]] (if (pred x) i acc))
+          -1
+          (map-indexed vector coll)))
+
+(defn- on-ice-tail?
+  "True when a log line ENDS with 'on <ice>' (the break / signal / resolve shape),
+   title-ANCHORED so a shorter ice title does not match a longer same-prefixed one
+   (e.g. \"Fairchild\" must NOT match a line ending 'on Fairchild 3.0'). Tolerates a
+   trailing period / whitespace on the stored :text."
+  [text ice-title]
+  (boolean
+   (re-find (re-pattern (str "(?i) on " (java.util.regex.Pattern/quote ice-title) "\\.?\\s*$"))
+            text)))
+
+(defn- encounter-of-ice?
+  "True when a log line is the encounter marker for THIS ice: 'encounters <ice>
+   protecting …'. Anchored on the following ' protecting' so \"Fairchild\" does not
+   match 'encounters Fairchild 3.0 protecting …'."
+  [text ice-title]
+  (boolean
+   (re-find (re-pattern (str "(?i)encounters " (java.util.regex.Pattern/quote ice-title) " protecting"))
+            text)))
+
 (defn runner-signaled-let-fire?
-  "Check if Runner has signaled they are done breaking on current ICE."
+  "Check if the Runner has CURRENTLY signaled they are done breaking on this ICE, so
+   the Corp may fire its unbroken subs. The signal is a system message: \"indicates
+   to fire all unbroken subroutines on <ice>\".
+
+   A bare substring scan of the log is not enough (#90) — it authorises a fire when
+   the Runner never said to. The Corp must NOT fire unless the Runner said so IN THIS
+   encounter and has not un-said it, because otherwise a Runner who is merely
+   breaking or pausing (the active player, mid-stall) gets taxed for subs it was
+   going to break. Three staleness traps, all closed here:
+
+     1. Signal SUPERSEDED by a break — Runner signalled, then broke the subs anyway.
+        Honour the signal only if it is more recent than the last 'to break … <ice>'.
+     2. Signal from a PRIOR encounter of the same ice — two runs on one central in a
+        turn is routine; a resolved enc-1 tank must not fire enc-2 before the Runner
+        acts. Honour the signal only if it is more recent than this ice's most recent
+        'encounters <ice> protecting …' marker (the current-encounter boundary).
+     3. Same-prefixed ice titles — 'Fairchild' vs 'Fairchild 3.0'. All matching is
+        title-anchored (see on-ice-tail? / encounter-of-ice?), never bare substring.
+
+   A break line reads 'pays N … to break … subroutines on <ice>' and the signal line
+   contains 'unbroken' (never the needle 'to break'), so those two predicates do not
+   collide on the standard wording."
   [state ice-title]
-  (let [log (get-in state [:game-state :log])
-        meaningful (remove #(str/includes? (str (:text %)) "has no further action") log)
-        recent (take-last 20 meaningful)]
-    (boolean
-     (some #(and (str/includes? (str (:text %)) "indicates to fire")
-                 (str/includes? (str (:text %)) ice-title))
-           recent))))
+  (if (str/blank? ice-title)
+    false
+    (let [texts (->> (get-in state [:game-state :log])
+                     (map #(str (:text %)))
+                     (remove #(str/includes? % "has no further action"))
+                     (take-last 20)
+                     vec)
+          signal-idx    (last-index-where texts
+                          #(and (str/includes? % "indicates to fire") (on-ice-tail? % ice-title)))
+          break-idx     (last-index-where texts
+                          #(and (str/includes? % "to break") (on-ice-tail? % ice-title)))
+          encounter-idx (last-index-where texts #(encounter-of-ice? % ice-title))]
+      (and (>= signal-idx 0)             ; a signal for this ice exists,
+           (> signal-idx break-idx)      ; not superseded by a later break,
+           (> signal-idx encounter-idx))))) ; and it belongs to the CURRENT encounter
 
 (defn- current-checkpoint [state]
   (let [run (get-in state [:game-state :run])
