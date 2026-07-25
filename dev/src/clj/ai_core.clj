@@ -1253,6 +1253,18 @@
          (or (seq (:choices prompt))
              (seq (:selectable prompt))))))
 
+(defn opponent-mulligan-pending?
+  "True when the opponent has NOT finished their opening mulligan (#87).
+
+   Delegates to ai-state, which owns the one definition — every surface that
+   answers 'is it my move' (this wake path, the start-turn guard, and the turn
+   indicator appended to every command) must give the SAME answer. A `defn`
+   delegation, deliberately not `(def x state/x)`: the latter captures the function
+   VALUE, so with-redefs in tests silently misses it and a REPL :reload of the
+   owning namespace leaves this bound to the stale fn (the facade-unbound trap)."
+  [client-state]
+  (state/opponent-mulligan-pending? client-state))
+
 (defn my-turn-to-act?
   "Check if it's our turn to act (need to start-turn or have clicks).
    Handles Netrunner priority system where active-player doesn't flip until start-turn.
@@ -1268,7 +1280,13 @@
    (Runner=0, Corp=0, but Runner is still resolving the run). An earlier
    duplicate predicate had that bug and woke spuriously on every
    opponent run-transition; this predicate is the authoritative source
-   of truth for the `wait` command (via `relevance-reason`)."
+   of truth for the `wait` command (via `relevance-reason`).
+
+   Also NOT a wake condition: the opening-mulligan boundary. While our own prompt
+   is the 'waiting for opponent to keep hand or mulligan' window, start-turn is
+   refused (:opponent-mulligan), so reporting 'your move' here is a lie that
+   returns instantly and repeatedly — #87. The guard is checked FIRST so this
+   predicate agrees with can-start-turn? by construction."
   [state side]
   ;; nil-safe on side: in the lobby / pre-game the seat may have no :side yet,
   ;; and `(name nil)` would NPE (#46). No side => not our turn.
@@ -1277,7 +1295,11 @@
         my-clicks (get-in state [:game-state my-side :click] 0)
         end-turn (get-in state [:game-state :end-turn])
         turn-number (get-in state [:game-state :turn] 0)]
-    (or
+    (and
+     ;; #87: never claim it's our move while the opponent's opening mulligan is
+     ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
+     (not (opponent-mulligan-pending? state))
+     (or
       ;; My turn and I have clicks
       (and (= (name my-side) active-player) (> my-clicks 0))
       ;; Opponent ended turn, waiting for me to start
@@ -1285,7 +1307,7 @@
       (and end-turn (not= (name my-side) active-player))
       ;; Turn 0 with 0 clicks = post-mulligan, Corp needs to start
       ;; (Corp always goes first)
-      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp))))))
+      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))))
 
 (defn- turn-awaiting-start?
   "True when it's our turn at a boundary but the turn has NOT been started yet
@@ -1736,17 +1758,24 @@
 
                ;; Timeout
                (> (System/currentTimeMillis) deadline)
-               (do
+               ;; #87: name the reason when we were blocked on a KNOWN boundary.
+               ;; A bare :timeout here is indistinguishable from a genuine stall,
+               ;; which is the same "should I escalate?" ambiguity the false-wake
+               ;; caused — so say what we were waiting for when we know.
+               (let [mulligan? (opponent-mulligan-pending? current-state)]
                  (when (:verbose opts)
-                   (println "⏱️  Timeout - no relevant events")
+                   (if mulligan?
+                     (println "⏱️  Timeout - opponent has not finished their opening mulligan (not a stall; wait again)")
+                     (println "⏱️  Timeout - no relevant events"))
                    (when (seq entries-since-start)
                      (println "")
                      (println "📜 Game log while you were waiting:")
                      (doseq [entry (summarize-log-entries entries-since-start)]
                        (println (format "  • %s" (:text entry))))))
-                 {:status :timeout
-                  :cursor (state/get-cursor)
-                  :new-log-entries entries-since-start})
+                 (cond-> {:status :timeout
+                          :cursor (state/get-cursor)
+                          :new-log-entries entries-since-start}
+                   mulligan? (assoc :reason :opponent-mulligan)))
 
                ;; State changed but not relevant - keep waiting silently
                ;; (full log shown on wake, no need to spam ignored entries)

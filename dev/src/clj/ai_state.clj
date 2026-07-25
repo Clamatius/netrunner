@@ -236,6 +236,56 @@
   [prompt-type]
   (contains? #{:select "select"} prompt-type))
 
+(defn mulligan-wait-prompt?
+  "True when PROMPT is the opening-mulligan 'waiting for opponent to keep hand or
+   mulligan' window (engine: show-wait-prompt \"<side> to keep hand or mulligan\",
+   game.core.set-up).
+
+   Prompt-level half of opponent-mulligan-pending?, split out so the several
+   surfaces that phrase this boundary for the player (ai-prompts' keep-hand,
+   ai-display's blocker diagnosis) share ONE matcher instead of re-inlining the
+   regex. Text-matching is safe here and only here: no card title or card text in
+   the pool contains \"mulligan\" or \"keep hand\", and only set-up.clj emits a
+   matching :waiting message — so the usual engine-log-embeds-card-labels trap
+   does not apply."
+  [prompt]
+  (boolean
+    (and prompt
+         (waiting-prompt-type? (:prompt-type prompt))
+         (re-find #"(?i)mulligan|keep hand" (str (:msg prompt))))))
+
+(defn opponent-mulligan-pending?
+  "True when the opponent has NOT finished their opening mulligan, so we must not
+   act (or be told we can).
+
+   The Corp can keep + start-turn before the Runner finishes its opening mulligan;
+   the engine then grants the Corp clicks but bounces every action off the
+   still-pending mulligan prompt — a wedged, half-started turn.
+
+   Lives HERE, at the bottom of the stack, because EVERY surface that answers
+   'is it my move' must give the same answer: the `wait` wake path
+   (core/my-turn-to-act?), the start-turn guard (basic-actions/can-start-turn?),
+   AND the turn indicator appended to every command's output (get-turn-status,
+   below). It used to be private to ai-basic-actions, so `wait` woke
+   :my-turn-start at a boundary start-turn then refused (#87) — and the status
+   surface said \"🟢 Ready to start your turn\" alongside. Same
+   two-sources-of-truth family as #31/#68/#77: one predicate, one answer.
+
+   Detected from our OWN prompt (the server tells us directly; no fog-of-war peek),
+   but the engine's own resolution flag WINS when present: :keep is serialized for
+   both players (game.core.diffs player-keys), so if it says the opponent has
+   already kept/mulliganed we do NOT suppress, no matter what prompt we are still
+   holding. That makes a stale or mis-cleared wait prompt unable to deadlock us —
+   this check can only ever UNBLOCK relative to the prompt alone."
+  [client-state]
+  (let [my-side (keyword (:side client-state))
+        opp-side (case my-side :corp :runner :runner :corp nil)
+        opp-keep (get-in client-state [:game-state opp-side :keep])]
+    (and (mulligan-wait-prompt?
+           (get-in client-state [:game-state my-side :prompt-state]))
+         ;; Engine says they've resolved => not pending, whatever our prompt says.
+         (not opp-keep))))
+
 (defn get-prompt
   "Get current prompt for our side, if any"
   []
@@ -296,6 +346,16 @@
                   (str (clojure.string/capitalize (name winner)) " wins")
                   "Game over (tie)")
            false]
+
+          ;; Opponent's opening mulligan is unresolved (#87). MUST precede the
+          ;; both-zero-clicks branch: at that boundary both sides ARE at 0 clicks
+          ;; and turn 0 makes the Corp "next", so this read as "🟢 Ready to start
+          ;; your turn" — on EVERY command, since show-turn-indicator appends it —
+          ;; while start-turn refused and `wait` (correctly) blocked. Fixing only
+          ;; the wake path would have moved the lie to this surface rather than
+          ;; killing it: one predicate, one answer.
+          (opponent-mulligan-pending? @client-state)
+          ["⏳" "Waiting for opponent to finish their opening mulligan" false]
 
           ;; Both at 0 clicks - it's the next player's turn to start
           both-zero-clicks

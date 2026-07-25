@@ -29,21 +29,16 @@
       uid)))
 
 (defn- opponent-mulligan-pending?
-  "True when our OWN prompt is the opening-mulligan 'waiting for opponent to keep
-   hand or mulligan' window.
+  "True when the opponent has NOT finished their opening mulligan. Delegates to the
+   single definition in ai-state (see it for the why).
 
-   The Corp can keep + start-turn before the Runner finishes its opening
-   mulligan; the engine then grants the Corp clicks but bounces every action off
-   the still-pending mulligan prompt — a wedged, half-started turn. seat-corp.md
-   makes start-turn step 0, so a fast Corp racing ahead of a slow Runner trips
-   this in real agent-vs-agent play. Detected from our own prompt-state (the
-   server tells us directly), so no fog-of-war peek at the opponent is needed."
+   A delegating `defn-`, NOT `(def x core/x)`: the latter captures the function
+   VALUE, so with-redefs in tests silently misses it and a REPL :reload of the
+   owning namespace leaves this bound to the stale fn. A real duplicate here is
+   what drifted from the wake path and produced #87 (wait woke :my-turn-start,
+   start-turn then errored :opponent-mulligan). One predicate, one answer."
   [client-state]
-  (let [p (get-in client-state [:game-state (keyword (:side client-state)) :prompt-state])]
-    (boolean
-      (and p
-           (= "waiting" (str (:prompt-type p)))
-           (re-find #"(?i)mulligan|keep hand" (str (:msg p)))))))
+  (core/opponent-mulligan-pending? client-state))
 
 (defn can-start-turn?
   "Check if we CAN legally start our turn right now.
