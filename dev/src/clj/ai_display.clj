@@ -1290,6 +1290,88 @@
       (doseq [line lines] (println line))
       true)))
 
+(defn prompt-card-side
+  "Lowercase owning side (\"corp\"/\"runner\") of a prompt's :card, or nil if unknown.
+
+   Prefers the side the wire already put on the card; falls back to the card DB by
+   title (authoritative and wire-shape independent — see engine-rate-of-change).
+   Returns nil rather than guessing, so callers stay silent when we can't tell."
+  [card]
+  (when-let [s (or (:side card)
+                   (:side (get @all-cards (:title card))))]
+    (str/lower-case (str s))))
+
+(defn opponent-card-decision-lines
+  "Lines telling the DECIDING seat that this choice is theirs, when an OPPONENT'S
+   card handed them the decision (#84).
+
+   Cards like Wildcat Strike are Runner events whose mode the CORP picks, so the
+   Corp sees a prompt titled with a Runner card whose every option reads as a
+   Runner outcome (\"Runner gains 6 [Credits]\"). Two different models independently
+   read that as a mis-seated prompt and escalated 'am I wedged?' instead of
+   choosing — the prompt never said who owed the move. Nothing else in the prompt
+   carries ownership, so state it.
+
+   Fires ONLY when we are not the ACTIVE PLAYER — the discriminator for 'the
+   opponent's turn handed me a decision'. The symmetric real case still fires: a
+   Corp operation on the Corp's turn that makes the RUNNER choose (traces are the
+   best example after Wildcat Strike).
+
+   The CALLER must additionally gate on the prompt actually offering a decision
+   (:choices / :selectable). Two false positives make that mandatory, and both
+   reproduce the very confusion this line exists to cure:
+     - RUN prompts. show-run-prompts (prompts.clj) conses a choice-less
+       :prompt-type :run prompt onto BOTH queues carrying the RUNNER'S run event
+       (Jailbreak, Overclock — several per game in the shipped tutorial deck). The
+       Corp would be told to choose with no Choices block, and 'blocked until you
+       choose' would contradict print-run-window-priority! directly below it.
+     - ACCESS prompts. The Runner accessing a Corp card holds a prompt carrying an
+       opponent card; the active-player guard suppresses it on the Runner's turn,
+       but a Corp-turn run (An Offer You Can't Refuse) slips through, where
+       'your opponent's Hedge Fund hands you this' is simply false — nobody handed
+       us an R&D access. The caller drops \"You accessed …\" for that reason.
+   Requiring a real choice also makes the 'nothing is wedged' line true by
+   construction.
+
+   SCOPING (deliberate, not an oversight): an opponent card that hands us a
+   decision on OUR OWN turn is silent — e.g. Manegarm Skunkworks at
+   approach-server, or an on-encounter ice choice. Those share the
+   'options read as the opponent's outcome' shape, but the seat already knows it
+   is acting on its own turn, so the ownership line would be noise where the
+   confusion does not arise. Silence is also the safe direction here.
+
+   Silent (returns []) when the card is ours, when the side is unknown, or when the
+   active player is unknown — never claim an ownership we cannot establish."
+  [card-title card-side my-side active-player]
+  (let [lc      #(when % (str/lower-case (str %)))
+        card-lc (lc card-side)
+        my-lc   (lc my-side)
+        act-lc  (lc active-player)]
+    (if (and card-title card-lc my-lc act-lc
+             (not= card-lc my-lc)      ; the card is the opponent's, and
+             (not= my-lc act-lc))      ; it is not our turn — they handed us this
+      (let [opp (if (= "runner" card-lc) "Runner" "Corp")
+            me  (if (= "corp" my-lc) "Corp" "Runner")]
+        [(format "  ⚠️  This decision is YOURS: your opponent's %s hands the choice to you."
+                 card-title)
+         (format "     The options may read as %s outcomes — %s still picks which one happens."
+                 opp me)
+         "     Nothing is wedged: the game is blocked until you choose."])
+      [])))
+
+(defn waiting-on-opponent-lines
+  "Lines for the WAITING seat naming what the opponent actually owes (#84).
+
+   'Waiting for Corp to make a decision' is truthful but cannot distinguish
+   'opponent is thinking' from 'opponent is stuck on something it doesn't realise
+   it owns' — against a slow model those look identical for an unbounded time. The
+   engine puts the originating :card on the waiting prompt too, so name it."
+  [opp card-title]
+  (if card-title
+    [(format "  Action: Waiting on %s — they owe a decision for %s (no action required from you)."
+             opp card-title)]
+    [(format "  Action: Waiting on %s — no action required from you." opp)]))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices"
   []
@@ -1305,7 +1387,24 @@
         (println "  Type:" (:prompt-type prompt))
         (when-let [card (:card prompt)]
           (println (str "  Card: " (:title card)
-                        (when (:type card) (str " (" (:type card) ")")))))
+                        (when (:type card) (str " (" (:type card) ")"))))
+          ;; #84: if the OPPONENT played this card, say so — the options can read
+          ;; entirely as their outcomes and look mis-seated to us.
+          ;; #84: if an OPPONENT'S card handed us this decision, say so — the
+          ;; options can read entirely as their outcomes and look mis-seated.
+          ;; Gate on a REAL decision being offered: a choice-less :run prompt also
+          ;; carries the opponent's run event (show-run-prompts pushes it to both
+          ;; queues), and telling the Corp to "choose" there — with no Choices block
+          ;; and the run actually blocked on the Runner — recreates the #84
+          ;; confusion on the other seat. Access prompts are dropped too: we
+          ;; initiated those, nobody handed them to us.
+          (when (and (not (state/waiting-prompt-type? (:prompt-type prompt)))
+                     (or has-choices has-selectable)
+                     (not (str/starts-with? (str (:msg prompt)) "You accessed ")))
+            (doseq [line (opponent-card-decision-lines
+                          (:title card) (prompt-card-side card) side
+                          (get-in state [:game-state :active-player]))]
+              (println line))))
         ;; When BOTH a Choices and a Selectable block are present, name the verb
         ;; each block uses so the player doesn't reach for the wrong one. The
         ;; Choices verb DEPENDS ON prompt type: on a "select" prompt the :choices
@@ -1382,7 +1481,11 @@
                     opp (if (= my-side "runner") "Corp" "Runner")]
                 (if waiting?
                   (do
-                    (println (str "  Action: Waiting on " opp " — no action required from you."))
+                    ;; #84: name the card the opponent owes a decision for when the
+                    ;; engine gave us one — "Waiting for Corp to make a decision"
+                    ;; alone can't tell 'thinking' from 'stuck and doesn't know it'.
+                    (doseq [line (waiting-on-opponent-lines opp (:title (:card prompt)))]
+                      (println line))
                     (println (str "    → Other actions may still be available; use 'wait' to block until "
                                   opp " decides."))
                     (println "    → ('continue' is run-only and won't help here.)"))

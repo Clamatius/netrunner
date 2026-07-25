@@ -1150,3 +1150,147 @@
             (str "all subs broken: continue is the correct pass, got: " out))
         (is (not (str/includes? out "tank"))
             (str "no decline decision remains when all subs are broken, got: " out))))))
+
+;; ============================================================================
+;; #84: a decision the OPPONENT'S card handed you must say the choice is yours
+;; ============================================================================
+;; Marquee G2 turn 1: the Runner played Wildcat Strike, whose mode the CORP
+;; picks. The Corp saw a prompt titled with a Runner card whose every option
+;; described a Runner outcome ("Runner gains 6 [Credits]") and reasonably read it
+;; as mis-seated — "am I wedged?". The Runner meanwhile saw only the generic
+;; "Waiting for Corp to make a decision", which cannot distinguish "opponent is
+;; thinking" from "opponent is stuck on something it doesn't know it owns".
+;; Both seats escalated within 90s; ~12 minutes of game time died on wording.
+;; Neither seat did anything wrong — the prompt just never said who owed the move.
+
+(deftest test-opponent-card-decision-names-the-owner
+  (testing "#84: a Corp decision from a Runner card states the choice is the Corp's"
+    (let [lines (display/opponent-card-decision-lines "Wildcat Strike" "runner" "corp" "runner")
+          out (str/join "\n" lines)]
+      (is (seq lines) "an opponent-played card must produce an ownership line")
+      (is (str/includes? out "Wildcat Strike") "name the card that created the decision")
+      (is (re-find #"(?i)yours" out)
+          (str "must say the decision is YOURS, got: " out))
+      (is (re-find #"(?i)opponent|runner played" out)
+          (str "must say the opponent played it, got: " out)))))
+
+(deftest test-own-card-decision-adds-no-ownership-noise
+  (testing "#84: a decision from our OWN card needs no ownership disclaimer"
+    (is (empty? (display/opponent-card-decision-lines "Hedge Fund" "corp" "corp" "corp"))
+        "own-card prompts must not gain a spurious 'your opponent played this' line")))
+
+(deftest test-unknown-card-side-adds-no-ownership-noise
+  (testing "#84: an unknown card side stays silent rather than guessing wrong"
+    (is (empty? (display/opponent-card-decision-lines "Mystery Card" nil "corp" "runner"))
+        "never claim ownership we cannot establish")))
+
+(deftest test-waiting-prompt-names-what-the-opponent-owes
+  (testing "#84: the waiting seat is told WHICH card the opponent is deciding"
+    (let [lines (display/waiting-on-opponent-lines "Corp" "Wildcat Strike")
+          out (str/join "\n" lines)]
+      (is (str/includes? out "Wildcat Strike")
+          (str "waiting seat must learn what the opponent owes, got: " out))
+      (is (str/includes? out "Corp")
+          (str "and who owes it, got: " out)))))
+
+(deftest test-waiting-prompt-without-card-stays-generic
+  (testing "#84: with no card on the waiting prompt, fall back to the generic line"
+    (let [lines (display/waiting-on-opponent-lines "Corp" nil)
+          out (str/join "\n" lines)]
+      (is (seq lines) "must still say who we're waiting on")
+      (is (str/includes? out "Corp"))
+      (is (not (str/includes? out "nil")) "must never render a nil card title"))))
+
+(deftest test-prompt-detailed-surfaces-opponent-card-ownership
+  (testing "#84 end-to-end: show-prompt-detailed states ownership for an opponent card"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:corp {:prompt-state
+                                          {:msg "Choose one"
+                                           :prompt-type "other"
+                                           :card {:title "Wildcat Strike" :type "Event" :side "Runner"}
+                                           :choices [{:value "Runner gains 6 [Credits]"}
+                                                     {:value "Runner draws 4 cards"}]}}
+                                   :runner {}
+                                   :active-player "runner"})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (re-find #"(?i)yours" out)
+            (str "the deciding seat must be told the choice is theirs, got:\n" out))
+        (is (str/includes? out "Wildcat Strike"))))))
+
+(deftest test-access-prompt-gets-no-ownership-line
+  (testing "#84 noise guard: the Runner ACCESSING a Corp card also holds a prompt
+            carrying an opponent card — but the Runner is the ACTIVE player and knows
+            the choice is theirs. Announcing it on every access would be noise, and
+            'your opponent's Hedge Fund hands you this' is false for an R&D access."
+    (is (empty? (display/opponent-card-decision-lines
+                 "Hedge Fund" "corp" "runner" "runner"))
+        "access prompts (we are the active player) must stay silent")))
+
+(deftest test-corp-turn-decision-handed-to-runner-fires
+  (testing "#84 symmetry: a Corp card on the CORP's turn that makes the RUNNER choose
+            is the same bug wearing the other hat — it must fire"
+    (let [out (str/join "\n" (display/opponent-card-decision-lines
+                              "Punitive Counterstrike" "corp" "runner" "corp"))]
+      (is (re-find #"(?i)yours" out)
+          (str "the non-active seat must be told the decision is theirs, got: " out)))))
+
+(deftest test-unknown-active-player-stays-silent
+  (testing "#84: with no active player known, claim nothing"
+    (is (empty? (display/opponent-card-decision-lines
+                 "Wildcat Strike" "runner" "corp" nil)))))
+
+(deftest test-run-prompt-gets-no-ownership-line
+  (testing "#84 review catch: show-run-prompts pushes a CHOICE-LESS :run prompt
+            carrying the Runner's run event (Jailbreak/Overclock — several per game
+            in the shipped tutorial deck) onto the CORP's queue. Telling the Corp
+            'this decision is YOURS' there, with no Choices block and the run
+            actually blocked on the Runner, recreates #84 on the opposite seat."
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:corp {:prompt-state
+                                          {:msg "The Runner is running on HQ"
+                                           :prompt-type "run"
+                                           :card {:title "Jailbreak" :type "Event" :side "Runner"}
+                                           :choices [] :selectable []}}
+                                   :runner {}
+                                   :active-player "runner"})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (re-find #"(?i)decision is YOURS" out))
+            (str "a choice-less run prompt must not claim a decision, got:\n" out))
+        (is (not (str/includes? out "blocked until you choose"))
+            (str "and must not claim the game waits on us, got:\n" out))))))
+
+(deftest test-off-turn-access-gets-no-ownership-line
+  (testing "#84 review catch: on a CORP-turn run (An Offer You Can't Refuse) the
+            active-player guard no longer suppresses access, but nobody 'handed' the
+            Runner an R&D access — the access prompt must stay silent on ownership."
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:runner {:prompt-state
+                                            {:msg "You accessed Hedge Fund."
+                                             :prompt-type "other"
+                                             :card {:title "Hedge Fund" :type "Operation" :side "Corp"}
+                                             :choices [{:value "No action"}
+                                                       {:value "Pay 0 [Credits] to trash"}]}}
+                                   :corp {}
+                                   :active-player "corp"})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (re-find #"(?i)decision is YOURS" out))
+            (str "access prompts must not claim the opponent handed us this, got:\n" out))))))
+
+(deftest test-real-opponent-decision-still-fires-with-choices
+  (testing "#84 regression guard: the true positive (a real choice from an opponent
+            card on their turn) must survive both new guards"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:runner {:prompt-state
+                                            {:msg "Choose one"
+                                             :prompt-type "other"
+                                             :card {:title "Punitive Counterstrike" :type "Operation" :side "Corp"}
+                                             :choices [{:value "0"} {:value "1"}]}}
+                                   :corp {}
+                                   :active-player "corp"})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (re-find #"(?i)decision is YOURS" out)
+            (str "a genuine opponent-handed choice must still be surfaced, got:\n" out))))))
