@@ -1902,7 +1902,7 @@
       (do
         (println (format "⛔ You have a WAITING prompt: %s" (:msg prompt)))
         (println "   → Owner: OPPONENT. You are blocked until they act — this is NOT a stall.")
-        (if (re-find #"(?i)mulligan|keep hand" (str (:msg prompt)))
+        (if (state/mulligan-wait-prompt? prompt)
           (println "   → They're still on their opening mulligan. Use: wait, then start-turn once it clears.")
           (println "   → Use: wait --since <cursor>")))
 

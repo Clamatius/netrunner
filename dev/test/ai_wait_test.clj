@@ -9,6 +9,7 @@
   (:require [clojure.test :refer :all]
             [test-helpers :refer [with-mock-state]]
             [ai-state :as state]
+            [clojure.string :as str]
             [ai-core :as core]))
 
 (defn- mock-game
@@ -327,3 +328,127 @@
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :encounter-decision (:reason result))
               (str "encounter-ice must stay :encounter-decision, got: " result)))))))
+
+;; ---------------------------------------------------------------------------
+;; #87: `wait` must not false-wake at the opening-mulligan boundary.
+;;
+;; After keep-hand the Corp holds a "Waiting for Runner to keep hand or mulligan"
+;; prompt. my-turn-to-act?'s turn-0/Corp/0-clicks branch fired anyway, so
+;; relevance-reason returned :my-turn-start and `wait --since` returned INSTANTLY
+;; and repeatedly — but start-turn then refuses (:opponent-mulligan), because
+;; can-start-turn? consults a mulligan guard that `wait` did not. Two sources of
+;; truth for "is it my move", the #31/#68/#77 family. The blocking primitive
+;; failed at the ONE boundary where a seat has nothing to do but block, and the
+;; false alarm cost a real umpire escalation in marquee G2.
+;;
+;; Fix: the wake reason and what start-turn accepts must AGREE — my-turn-to-act?
+;; now consults the same core/opponent-mulligan-pending? guard.
+;; ---------------------------------------------------------------------------
+
+(def ^:private corp-awaiting-runner-mulligan
+  "Corp kept its hand; the Runner has NOT resolved its opening mulligan yet.
+   Exactly the state ai-basic-actions' start-turn! refuses with :opponent-mulligan."
+  {:active-player "corp" :turn 0
+   :corp {:click 0
+          :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                         :prompt-type "waiting" :selectable []}}
+   :runner {:click 0}
+   :log []})
+
+(deftest test-wait-does-not-false-wake-at-mulligan-boundary
+  (testing "#87: pending opponent mulligan must keep blocking, not wake :my-turn-start"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" corp-awaiting-runner-mulligan)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (not= :my-turn-start (:reason result))
+              (str "must not false-wake while opponent mulligan is pending, got: " result))
+          (is (= :timeout (:status result))
+              (str "wait must keep blocking across the mulligan boundary, got: " result)))))))
+
+(deftest test-wait-since-does-not-false-wake-at-mulligan-boundary
+  (testing "#87: the --since fast path must not false-wake either (the reported symptom
+            was `wait --since <cursor>` returning instantly and repeatedly)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" corp-awaiting-runner-mulligan)
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (not= :my-turn-start (:reason result))
+              (str "--since must not short-circuit on a pending mulligan, got: " result))
+          (is (= :timeout (:status result))
+              (str "expected the fast path to fall through to a real wait, got: " result)))))))
+
+(deftest test-wait-wakes-once-mulligan-resolves
+  (testing "#87 liveness: once the mulligan prompt clears, the Corp's turn-start
+            wake fires normally (the fix must not deadlock the boundary it guards)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" (dissoc corp-awaiting-runner-mulligan :corp))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-turn-start (:reason result))
+              (str "with no pending-mulligan prompt the Corp must wake to start, got: " result)))))))
+
+(deftest test-wait-mulligan-guard-does-not-suppress-a-real-prompt
+  (testing "#87 non-interference: our OWN actionable mulligan prompt (keep/mulligan)
+            still wakes — the guard only suppresses the waiting-on-opponent window"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                         (assoc-in corp-awaiting-runner-mulligan [:corp :prompt-state]
+                                   {:msg "Keep hand?" :prompt-type "mulligan"
+                                    :choices [{:value "Keep"} {:value "Mulligan"}]}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :has-prompt (:reason result))
+              (str "our own keep/mulligan choice must still wake, got: " result)))))))
+
+(deftest test-wait-timeout-names-the-mulligan-boundary
+  (testing "#87: a guarded block must say WHY it timed out — a bare :timeout is
+            indistinguishable from a genuine stall, which is the same
+            'should I escalate?' ambiguity the false-wake caused"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" corp-awaiting-runner-mulligan)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result)))
+          (is (= :opponent-mulligan (:reason result))
+              (str "the seat must learn it was blocked on the mulligan, got: " result)))))))
+
+(deftest test-mulligan-guard-suppresses-even-with-clicks-in-hand
+  (testing "#87: the guard covers ALL my-turn-to-act? branches, including
+            'active player WITH clicks' — that is the already-wedged half-started
+            turn the engine can produce (clicks granted, actions bounce off the
+            pending prompt). Pinned so the breadth is a decision, not an accident."
+    (with-mock-state (mock-game "corp"
+                       (-> corp-awaiting-runner-mulligan
+                           (assoc-in [:corp :click] 3)))
+      (is (not (core/my-turn-to-act? @state/client-state "corp"))
+          "clicks in hand must not override the pending-mulligan guard"))))
+
+(deftest test-turn-status-does-not-say-ready-during-opponent-mulligan
+  (testing "#87 (the surface a seat reads FIRST): get-turn-status backs the turn
+            indicator appended to EVERY command's output. Fixing only the wake path
+            would relocate the lie here — both-zero-clicks + turn 0 made the Corp
+            'next' and it printed '🟢 Ready to start your turn' while start-turn
+            refused. One predicate, one answer."
+    (with-mock-state (mock-game "corp" corp-awaiting-runner-mulligan)
+      (let [ts (state/get-turn-status)]
+        (is (false? (:can-act? ts))
+            (str "must not report actionable at the mulligan boundary, got: " ts))
+        (is (not (str/includes? (str (:status-text ts)) "Ready to start"))
+            (str "must not tell the seat to start its turn, got: " ts))
+        (is (str/includes? (str/lower-case (str (:status-text ts))) "mulligan")
+            (str "should name the mulligan as the blocker, got: " ts))))))
+
+(deftest test-turn-status-recovers-once-opponent-keeps
+  (testing "#87 liveness on the status surface: with the prompt cleared the Corp is
+            told it can start again"
+    (with-mock-state (mock-game "corp" (dissoc corp-awaiting-runner-mulligan :corp))
+      (let [ts (state/get-turn-status)]
+        (is (true? (:can-act? ts))
+            (str "must recover once the mulligan resolves, got: " ts))))))
+
+(deftest test-engine-keep-flag-overrides-a-stale-mulligan-prompt
+  (testing "#87 anti-deadlock: the engine's own :keep flag WINS over a lingering
+            wait prompt. Prompt-text alone had no liveness cross-check, so a stale
+            or mis-cleared prompt would have blocked the seat permanently."
+    (with-mock-state (mock-game "corp"
+                       (assoc-in corp-awaiting-runner-mulligan [:runner :keep] "keep"))
+      (is (not (state/opponent-mulligan-pending? @state/client-state))
+          "engine says the Runner resolved — a leftover prompt must not deadlock us")
+      (is (true? (:can-act? (state/get-turn-status)))
+          "and the status surface must agree"))))

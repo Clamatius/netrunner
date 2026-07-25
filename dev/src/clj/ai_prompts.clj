@@ -482,12 +482,12 @@
    or mulligan' window. The Corp resolves its opening mulligan first, so a Runner
    that calls keep-hand/mulligan before the Corp has decided genuinely has no
    mulligan prompt yet — just this waiting one. Detecting it lets us say 'wait for
-   them' instead of the misleading 'No mulligan prompt active'."
+   them' instead of the misleading 'No mulligan prompt active'.
+
+   Delegates to ai-state's matcher rather than re-inlining the regex — #87 was
+   caused by exactly this predicate existing in more than one place."
   [prompt]
-  (boolean
-    (and prompt
-         (= "waiting" (str (:prompt-type prompt)))
-         (re-find #"(?i)mulligan|keep hand" (str (:msg prompt))))))
+  (state/mulligan-wait-prompt? prompt))
 
 (defn keep-hand
   "Keep hand during mulligan"
