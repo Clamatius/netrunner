@@ -65,4 +65,6 @@ Gain 9[credit].
 
 **Q3:** Find a *third* sequence where your Click 1 action is different from both Q1 and Q2.
 
-All three paths must successfully breach the server. Prove each path works with click and credit accounting.
+**Q4:** What is the *cheapest* line available — the one that spends the fewest cards from your grip? Does it need any of them?
+
+All four paths must successfully breach the server. Prove each path works with click and credit accounting.

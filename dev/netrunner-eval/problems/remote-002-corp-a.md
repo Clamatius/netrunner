@@ -89,15 +89,15 @@ With 3 cards, Runner cannot tank. The math doesn't allow it.
 | Step | Action | Notes |
 |------|--------|-------|
 | Click 1 | Draw | 4 cards in grip |
-| Click 2 | Draw | 5 cards in grip |
-| Click 3 | Run Server 1 | |
-| Tank Karunā | 4 damage | 5 - 4 = 1 card |
+| Click 2 | Run Server 1 | |
+| Tank Karunā | 4 damage | 4 - 4 = 0 cards, **survives** |
 | Access | | Steal Offworld |
 
-This line works mathematically. But:
+**One draw is enough** — 4 damage against a 4-card grip empties the hand but does not
+flatline (damage must *exceed* the grip). This line works mathematically. But:
 
-1. Uses 2 clicks to draw up
-2. Runner ends at 1 card, crippled
+1. Costs a click and the entire grip
+2. Runner ends at 0 cards, crippled
 3. They have no Verbal Plasticity (slow recovery)
 4. No economy engine running (no Smartware drip)
 5. Even "winning" leaves them behind on board
