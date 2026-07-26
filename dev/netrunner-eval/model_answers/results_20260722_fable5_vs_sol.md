@@ -85,6 +85,16 @@ only branches — missing draw-once → 4-card grip → tank 4 net → steal at 
 (which Sol found, sharper than the key's own two-draw version, before retreating to
 the key's named Nico trap anyway).
 
+> **Post-run update (2026-07-22, same day):** all six items below were fixed in
+> commit `6b2c98309` after Michael adjudicated. Two grew on inspection: window-001 had a
+> *second* independent error (Brân has only 2 ETRs — sub 1 installs ice and can be
+> declined, so both ETRs cost $7 exactly, not $8), and breach-001 turned out to have a
+> board misread of its own (Karunā is under HQ's `ice:` — protecting HQ, not in it — so
+> the key's "all valid solutions must break sub 1" was unfounded). breach-001 gained a
+> **Q4** (the cheapest line uses no cards at all). Scores above are *not* restated
+> against the corrected keys; treat the turn1-002 and window-001 cells as understated
+> for both models.
+
 ## Key errors & issues found this run (the bet paid)
 
 1. **window-001 (CONFIRMED KEY ERROR):** Q1 claims the Runner "literally cannot afford"
