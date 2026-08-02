@@ -466,20 +466,40 @@
                     (println (format "❌ Cannot rez ICE during %s phase" run-phase))
                     (println "   → ICE can only be rezzed during approach-ice phase")))
                 nil)
-              (let [;; Capture log size BEFORE sending to avoid race conditions
-                    initial-log-size (core/get-log-size)]
+              ;; Ground truth for a rez is the card's own :rezzed flag flipping
+              ;; in client state — NOT the log. verify-action-in-log's name
+              ;; check scans the last 5 log lines, which routinely already
+              ;; mention the card (a derez, a rez-decision hint, embedded
+              ;; effect text), and its result map is always truthy besides —
+              ;; so a REFUSED rez (e.g. can't afford it mid-run) printed
+              ;; "🔴 Rezzed" instantly (#86). False success on a critical,
+              ;; time-sensitive action is exactly the shape that tempts the
+              ;; banned re-send.
+              (let [cid (:cid card)
+                    deadline (+ (System/currentTimeMillis) core/action-timeout)]
                 (ws/send-message! :game/action
                                   {:gameid gameid
                                    :command "rez"
                                    :args {:card card-ref}})
-                ;; Wait and verify action appeared in log
-                (if (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
-                  (let [after-state @state/client-state
-                        after-credits (get-in after-state [:game-state :corp :credit])]
-                    (println (str "🔴 Rezzed: " card-name))
-                    (when rez-cost
-                      (println (str "   💰 Cost: " rez-cost "₵ (remaining: " after-credits "₵)"))))
-                  (println (str "⚠️  Sent rez command for: " card-name " - but action not confirmed in game log (may have failed)"))))))
+                (loop []
+                  (cond
+                    (:rezzed (core/find-card-by-cid cid))
+                    (let [after-credits (get-in @state/client-state [:game-state :corp :credit])]
+                      (println (str "🔴 Rezzed: " card-name))
+                      (when rez-cost
+                        (println (str "   💰 Cost: " rez-cost "₵ (remaining: " after-credits "₵)")))
+                      {:status :success :card-name card-name})
+
+                    (< (System/currentTimeMillis) deadline)
+                    (do (Thread/sleep core/polling-delay) (recur))
+
+                    :else
+                    (let [credits (get-in @state/client-state [:game-state :corp :credit])]
+                      (println (str "⚠️  Rez did NOT take: " card-name " is still unrezzed."))
+                      (println (format "   Likely can't afford it: base cost %s, you have %s — a mid-run surcharge (e.g. Tread Lightly +3) raises the real cost."
+                                       (or rez-cost "?") (or credits "?")))
+                      (println "   Do not re-send blindly — check `board` and your credits first.")
+                      {:status :error :reason :rez-not-confirmed :card-name card-name}))))))
           (println (str "❌ Card not found installed: " card-name)))))))
 
 (defn let-subs-fire!
