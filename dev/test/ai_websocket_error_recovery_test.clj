@@ -40,3 +40,56 @@
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ws/handle-message {:type :game/error :data nil})
           (is (empty? @sent) "must not send resync with no gameid"))))))
+
+;; ============================================================================
+;; #93: lobby teardown invalidation
+;; ============================================================================
+;; close-lobby! announces itself with a BARE [:lobby/state] (no data). The old
+;; handler `(when data ...)` dropped it, so the cached snapshot kept answering
+;; every status query for a game the server had already discarded.
+
+(deftest test-bare-lobby-state-marks-lobby-gone
+  (testing "bare [:lobby/state] in a STARTED game marks it gone, wakes waiters, probes"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner")
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [cursor-before (state/get-cursor)]
+            (ws/handle-message {:type :lobby/state :data nil})
+            (is (state/lobby-gone?) "lobby-gone flag must be set")
+            (is (> (state/get-cursor) cursor-before)
+                "cursor must bump so a blocked `wait` wakes and sees the verdict")
+            ;; The bare signal is not uniquely teardown (it also answers a
+            ;; :lobby/list from an unseated uid while the game lives on for
+            ;; the opponent) — so the verdict must be probed: if the server
+            ;; still hosts us, the resync reply retracts the flag.
+            (is (some #(= :game/resync (:type %)) @sent)
+                "must probe with a resync so a false verdict self-corrects")))))))
+
+(deftest test-bare-lobby-state-without-started-game-is-noop
+  (testing "bare [:lobby/state] before ever joining a game sets no flag"
+    (let [sent (atom [])]
+      (with-mock-state (-> (mock-client-state :side "corp")
+                           (assoc :gameid nil :game-state nil))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (ws/handle-message {:type :lobby/state :data nil})
+          (is (not (state/lobby-gone?))
+              "a fresh client with no game has nothing to invalidate")
+          (is (empty? @sent) "nothing to probe either")))))
+  (testing "bare [:lobby/state] in a waiting-room lobby (gameid, no game-state) sets no flag"
+    ;; Pre-game the lobby-membership rules differ (an unstarted lobby DOES
+    ;; unseat on disconnect), so a bare lobby/state there is routine, not a
+    ;; teardown of a game in progress.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (ws/handle-message {:type :lobby/state :data nil})
+          (is (not (state/lobby-gone?))
+              "an unstarted lobby is a waiting room, not a game to invalidate"))))))
+
+(deftest test-lobby-state-with-data-retracts-lobby-gone
+  (testing "fresh lobby data (new/rejoined game) clears a stale lobby-gone verdict"
+    (with-mock-state (assoc (mock-client-state :side "corp") :lobby-gone? true)
+      (ws/handle-message {:type :lobby/state
+                          :data {:gameid "00000000-0000-0000-0000-000000000002"}})
+      (is (not (state/lobby-gone?))
+          "being seated in a lobby again must retract the gone verdict"))))

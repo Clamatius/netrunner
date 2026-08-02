@@ -166,6 +166,9 @@ After each of your turns, check:
 - `GAME-OVER winner=… turn=…` → the game is done. **Stop**, and give a short
   report: who won, how (agenda/flatline/deck), final score, turn count, and a
   couple of sentences on how your game went and any moment you'd replay.
+- `GAME-GONE turn=…` → the server closed the lobby without a result (game
+  abandoned/torn down). Also a **stop** condition: there is no game left to
+  play. Report what you saw and stand down — do not keep issuing commands.
 - `IN-PROGRESS …` → keep playing.
 
 ## Don'ts

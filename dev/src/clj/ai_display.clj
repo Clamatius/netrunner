@@ -258,7 +258,13 @@
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
                 (println "Clicks:" clicks)))
-            (let [hand-count (state/my-hand-count)
+            ;; This is the RUNNER section: report the RUNNER's grip size, not
+            ;; ours. It used to read my-hand-count, so a Corp viewer saw its
+            ;; OWN hand size labelled as the Runner's — the one number a kill
+            ;; calculation depends on (#85; marquee g1 priced a flatline off
+            ;; it). Hand size is public info, served as :hand-count.
+            (let [hand-count (get-in gs [:runner :hand-count]
+                                     (count (get-in gs [:runner :hand] [])))
                   max-hand-size (get-in gs [:runner :hand-size-modification] 5)
                   tags (get-in gs [:runner :tag :base] 0)]
               (println "Hand:" hand-count "cards")
@@ -352,6 +358,10 @@
      NO-GAME                                  - no game state loaded
      GAME-OVER winner=corp turn=18                     - decided (winner = corp|runner)
      GAME-OVER winner=tie turn=12                      - tied game
+     GAME-GONE turn=9                                  - server closed our lobby (#93);
+                                                         treat as a stop condition like
+                                                         GAME-OVER — there is no game
+                                                         left to play, only a snapshot
      AWAITING-START turn=12 next-player=runner         - clean turn boundary
      IN-PROGRESS turn=12 whose-turn=runner clicks=3    - game still running
 
@@ -375,6 +385,14 @@
           (println (format "GAME-OVER winner=%s turn=%s"
                            (if winner (str/lower-case (name winner)) "tie")
                            (or turn-number "?")))
+
+          ;; The server closed our lobby but the game never reached a decided
+          ;; state (#93) — e.g. an abandoned game reaped, or an unseat we did
+          ;; not initiate. A decided game stays GAME-OVER (the branch above);
+          ;; this catches the teardown-without-result case, which used to be
+          ;; reported as IN-PROGRESS forever off the cached snapshot.
+          (state/lobby-gone?)
+          (println (format "GAME-GONE turn=%s" (or turn-number "?")))
 
           waiting-to-start?
           (println (format "AWAITING-START turn=%s next-player=%s"
@@ -682,6 +700,15 @@
             runner-cred-str (if (pos? runner-hosted)
                               (format "%d(+%d)" runner-credits runner-hosted)
                               (str runner-credits))
+            ;; Tags decide endgames (Orbital Superiority won marquee g1 off
+            ;; one) but were only visible via full `status` — the one-call
+            ;; snapshot silently omitted them (#85). Append to the Runner's
+            ;; stat segment whenever tagged; omit when clean to keep the
+            ;; common case compact.
+            runner-tags (get-in gs [:runner :tag :base] 0)
+            runner-tag-str (if (pos? runner-tags)
+                             (format "/%dtag" runner-tags)
+                             "")
 
             ;; Corp state
             corp-credits (get-in gs [:corp :credit] 0)
@@ -691,12 +718,13 @@
             corp-ap (get-in gs [:corp :agenda-point] 0)
 
             ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
-            my-stats (if (= my-side "runner")
-                      (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks runner-hand-ct runner-ap)
-                      (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks corp-hand-ct corp-ap))
-            opp-stats (if (= my-side "runner")
-                       (format "%dc/%dcl/%dh/%dAP" corp-credits corp-clicks corp-hand-ct corp-ap)
-                       (format "%sc/%dcl/%dh/%dAP" runner-cred-str runner-clicks runner-hand-ct runner-ap))
+            runner-stats (format "%sc/%dcl/%dh/%dAP%s"
+                                 runner-cred-str runner-clicks runner-hand-ct
+                                 runner-ap runner-tag-str)
+            corp-stats (format "%dc/%dcl/%dh/%dAP"
+                               corp-credits corp-clicks corp-hand-ct corp-ap)
+            my-stats (if (= my-side "runner") runner-stats corp-stats)
+            opp-stats (if (= my-side "runner") corp-stats runner-stats)
             my-label (if (= my-side "runner") "R" "C")
             opp-label (if (= my-side "runner") "C" "R")
 

@@ -27,7 +27,9 @@ destroyed a game. One source of truth.
 1. **Play the ENTIRE game, to GAME-OVER. Do NOT stop after one turn.** After each
    of your turns run `./dev/send_command corp game-over-status`. While it prints
    `IN-PROGRESS …` the game is NOT over — take your next turn. Stop only on
-   `GAME-OVER winner=… turn=…`. Stopping early strands the game and wastes the run.
+   `GAME-OVER winner=… turn=…` or `GAME-GONE turn=…` (server tore the game down
+   without a result — report what you saw). Stopping early strands the game and
+   wastes the run.
 
 2. **Your opponent is a slow thinking model.** Multi-minute gaps between your
    turns are NORMAL, not a stall. Block rather than poll:

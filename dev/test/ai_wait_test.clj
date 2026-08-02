@@ -32,6 +32,21 @@
               (str "phantom cursor advance must not short-circuit, got: " result))
           (is (not= :already-advanced (:status result))))))))
 
+(deftest test-since-advance-lobby-gone-wakes-game-gone
+  ;; #93: the server closed our lobby out from under us. A seat blocked in
+  ;; `wait` must wake with :game-gone instead of sleeping the full timeout on
+  ;; a game that no longer exists.
+  (testing "lobby-gone -> :game-gone wake"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (assoc (mock-game "runner"
+                                         {:active-player "runner" :turn 9
+                                          :corp {:click 0} :runner {:click 1}})
+                              :lobby-gone? true)
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :already-advanced (:status result)))
+          (is (= :game-gone (:reason result))
+              (str "expected :game-gone, got: " result)))))))
+
 (deftest test-since-relevant-advance-short-circuits-my-turn
   ;; A genuine race: opponent ended their turn in the gap, so it's our turn.
   ;; The fast path must still return immediately with the real reason.

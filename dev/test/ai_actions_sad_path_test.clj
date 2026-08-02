@@ -13,6 +13,7 @@
    One new prod feature (nil-input guard on play-card!) added so
    test-play-card-nil-input has something correct to assert."
   (:require [clojure.test :refer :all]
+            [clojure.string]
             [test-helpers :refer :all]
             [ai-actions]
             [ai-core]
@@ -112,12 +113,56 @@
            :run {:phase "approach-ice" :position 1 :server [:hq]}
            :active-player "runner"})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      ;; Stub verify-action-in-log so we don't poll for a
-                      ;; log entry the test isn't producing.
-                      ai-core/verify-action-in-log (fn [& _] true)]
-          (ai-actions/rez-card! "Brân 1.0")
-          (is (some #(= "rez" (get-in % [:data :command])) @sent)
-              "rez command should be sent during approach-ice phase"))))))
+                      ;; Stub the rez ground-truth check so we don't poll for a
+                      ;; state change the test isn't producing.
+                      ai-core/find-card-by-cid (fn [_] {:cid 1 :rezzed true})]
+          (let [out (with-out-str (ai-actions/rez-card! "Brân 1.0"))]
+            (is (some #(= "rez" (get-in % [:data :command])) @sent)
+                "rez command should be sent during approach-ice phase")
+            (is (clojure.string/includes? out "🔴 Rezzed: Brân 1.0")
+                (str "confirmed rez must print the confirmation, got: " out))))))))
+
+(deftest test-rez-refused-reports-failure-not-success
+  ;; #86: verify-action-in-log's name check scanned the last 5 log lines, which
+  ;; routinely already mention the card (a derez, a rez-decision hint, embedded
+  ;; effect text), and its result map was always truthy — so a rez the engine
+  ;; REFUSED (e.g. can't afford it mid-run) printed "🔴 Rezzed" instantly.
+  ;; Reproduced live 2026-08-02: corp at 0c, rez cost 2, card stayed unrezzed,
+  ;; seat was told "🔴 Rezzed … (remaining: 0₵)". The verdict must come from the
+  ;; card's own :rezzed flag, and a refusal must be reported as a failure.
+  (testing "refused rez (card never flips to rezzed) reports failure, not 🔴 Rezzed"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-client-state
+          :side "corp"
+          :game-state
+          {:corp {:credit 0
+                  :servers {:remote1 {:content [{:cid 7 :title "Manegarm Skunkworks"
+                                                 :type "Upgrade" :cost 2
+                                                 :rezzed false :side "Corp"
+                                                 :zone [:servers :remote1 :content]}]}}}
+           :runner {}
+           ;; Recent log already mentions the card — the exact false-positive
+           ;; trigger for the old name-in-last-5-lines check.
+           :log [{:text "ai-corp derezzes Manegarm Skunkworks"}
+                 {:text "ai-runner approaches Server 1"}]
+           :run {:phase "movement" :position 0 :server [:remote1]}
+           :active-player "runner"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ;; The engine refuses: state never changes, so the card
+                      ;; stays unrezzed no matter how often we look.
+                      ai-core/find-card-by-cid (fn [_] {:cid 7 :rezzed false})
+                      ;; Keep the failure poll fast in tests.
+                      ai-core/action-timeout 50]
+          (let [out (with-out-str (ai-actions/rez-card! "Manegarm Skunkworks"))]
+            (is (not (clojure.string/includes? out "🔴 Rezzed"))
+                (str "a refused rez must NOT print the success banner, got: " out))
+            (is (clojure.string/includes? out "Rez NOT confirmed")
+                (str "the failure must be stated plainly, got: " out))
+            ;; A timeout doesn't prove WHY (could be latency, could be a
+            ;; refusal) — the message must not assert a cause as fact.
+            (is (not (clojure.string/includes? out "Likely can't afford"))
+                (str "no unproven affordability claim, got: " out))))))))
 
 ;; ============================================================================
 ;; Prompt / Input Validation
