@@ -26,8 +26,10 @@ of ICE, not the presence of an agenda, that makes a hand a throw.
    full multi-turn game. After each of your turns (and after a Runner turn), run
    `./dev/send_command corp game-over-status`. While it prints `IN-PROGRESS …` or
    `AWAITING-START …`, the game is NOT over — keep playing / keep defending. Only
-   stop when it prints `GAME-OVER winner=… turn=…`. If you stop early while it is
-   still in progress you strand the game and waste the run.
+   stop when it prints `GAME-OVER winner=… turn=…` — or `GAME-GONE turn=…`, which
+   means the server tore the game down without a result (also a stop; report what
+   you saw). If you stop early while it is still in progress you strand the game
+   and waste the run.
 
 2. **Your opponent is a slow thinking model.** Between your turns the Runner takes
    minutes to think. That is normal, NOT a stall. Block until something relevant

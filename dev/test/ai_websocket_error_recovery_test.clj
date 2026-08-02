@@ -40,3 +40,34 @@
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (ws/handle-message {:type :game/error :data nil})
           (is (empty? @sent) "must not send resync with no gameid"))))))
+
+;; ============================================================================
+;; #93: lobby teardown invalidation
+;; ============================================================================
+;; close-lobby! announces itself with a BARE [:lobby/state] (no data). The old
+;; handler `(when data ...)` dropped it, so the cached snapshot kept answering
+;; every status query for a game the server had already discarded.
+
+(deftest test-bare-lobby-state-marks-lobby-gone
+  (testing "bare [:lobby/state] while seated marks the game gone and wakes waiters"
+    (with-mock-state (mock-client-state :side "runner")
+      (let [cursor-before (state/get-cursor)]
+        (ws/handle-message {:type :lobby/state :data nil})
+        (is (state/lobby-gone?) "lobby-gone flag must be set")
+        (is (> (state/get-cursor) cursor-before)
+            "cursor must bump so a blocked `wait` wakes and sees the verdict")))))
+
+(deftest test-bare-lobby-state-without-gameid-is-noop
+  (testing "bare [:lobby/state] before ever joining a game sets no flag"
+    (with-mock-state (assoc (mock-client-state :side "corp") :gameid nil)
+      (ws/handle-message {:type :lobby/state :data nil})
+      (is (not (state/lobby-gone?))
+          "a fresh client with no game has nothing to invalidate"))))
+
+(deftest test-lobby-state-with-data-retracts-lobby-gone
+  (testing "fresh lobby data (new/rejoined game) clears a stale lobby-gone verdict"
+    (with-mock-state (assoc (mock-client-state :side "corp") :lobby-gone? true)
+      (ws/handle-message {:type :lobby/state
+                          :data {:gameid "00000000-0000-0000-0000-000000000002"}})
+      (is (not (state/lobby-gone?))
+          "being seated in a lobby again must retract the gone verdict"))))

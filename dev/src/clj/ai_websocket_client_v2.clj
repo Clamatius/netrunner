@@ -139,8 +139,9 @@
           (state/update-game-state! diff)
           ;; Record diff for replay if recording enabled
           (state/record-diff! diff)
-          ;; Clear lobby-state once game has started (receiving diffs means game is active)
-          (swap! state/client-state dissoc :lobby-state :diff-mismatch)
+          ;; Clear lobby-state once game has started (receiving diffs means game
+          ;; is active — which also retracts any stale lobby-gone verdict, #93)
+          (swap! state/client-state dissoc :lobby-state :diff-mismatch :lobby-gone?)
           ;; Track last successful diff time
           (swap! state/client-state assoc :last-diff-time (System/currentTimeMillis))
           ;; Announce newly revealed cards in Archives
@@ -184,12 +185,25 @@
       (println "📋 Received" (count data) "game(s)"))
 
     :lobby/state
-    (do
-      (println "🎮 Lobby state update")
-      (when data
+    (if data
+      (do
+        (println "🎮 Lobby state update")
         (when-let [gameid (:gameid data)]
           (swap! state/client-state assoc :gameid (state/normalize-gameid gameid) :lobby-state data)
-          (println "   GameID:" gameid))))
+          ;; Fresh lobby data means the server hosts us again — a stale
+          ;; lobby-gone verdict from a previous teardown no longer applies.
+          (swap! state/client-state dissoc :lobby-gone?)
+          (println "   GameID:" gameid)))
+      ;; A BARE [:lobby/state] (no data) is the server's only announcement that
+      ;; it closed our lobby (close-lobby! → clear-lobby-state). Dropping it —
+      ;; the old behaviour — left the cached game snapshot answering every
+      ;; status query for a game that no longer exists (#93: game-over-status
+      ;; said IN-PROGRESS forever). Mark the lobby gone and bump the cursor so
+      ;; a seat blocked in `wait` wakes up and sees the verdict.
+      (when (:gameid @state/client-state)
+        (println "🏚️  Lobby closed by server — game is gone")
+        (state/mark-lobby-gone!)
+        (state/bump-cursor!)))
 
     :lobby/notification
     (println "🔔 Lobby notification:" data)

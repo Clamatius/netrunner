@@ -103,6 +103,28 @@
       (is (= "NO-GAME"
              (str/trim (with-out-str (display/game-over-status))))))))
 
+;; #93: after close-lobby! the server's only announcement is a bare
+;; [:lobby/state]; the cached snapshot must stop being reported as a live game.
+(deftest test-game-over-status-lobby-gone
+  (testing "undecided game + lobby-gone prints GAME-GONE, not IN-PROGRESS"
+    (with-mock-state {:side "runner"
+                      :lobby-gone? true
+                      :game-state {:active-player "runner" :turn 9
+                                   :corp {:click 0} :runner {:click 1}}}
+      (is (= "GAME-GONE turn=9"
+             (str/trim (with-out-str (display/game-over-status)))))))
+  (testing "a DECIDED game still reports GAME-OVER even after lobby teardown"
+    ;; Normal endings tear the lobby down too (concede / save-replay leave).
+    ;; The real result must win over the teardown notice.
+    (with-mock-state {:side "corp"
+                      :lobby-gone? true
+                      :game-state {:active-player "corp" :turn 11
+                                   :winner :corp :reason "Flatline"
+                                   :end-time "2026-01-01T00:00:00Z"
+                                   :corp {:click 0} :runner {:click 0}}}
+      (is (= "GAME-OVER winner=corp turn=11"
+             (str/trim (with-out-str (display/game-over-status))))))))
+
 (deftest test-status-compact-awaiting-start
   ;; At a clean turn boundary the active-player wire field still names the player
   ;; who just finished, so the compact status line used to show the stale side

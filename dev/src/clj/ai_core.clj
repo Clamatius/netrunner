@@ -1523,6 +1523,13 @@
        (state/game-over? (:game-state state))
        :game-over
 
+       ;; The server closed our lobby without the game reaching a decided
+       ;; state (#93). Same urgency as :game-over: there is nothing left to
+       ;; wait for, and a seat sleeping here would burn the full timeout on a
+       ;; game that no longer exists.
+       (state/lobby-gone? state)
+       :game-gone
+
        ;; Run started - high priority, wake up!
        (and current-run-active? (not initial-run-active?))
        :run-started
@@ -1584,6 +1591,8 @@
      - we acquire priority at a run pass-window we own (:my-run-window)
      - the opponent sends a 'ping' chat message (:ping wake — escape hatch
        for when an external observer wants to nudge us)
+     - the game ends (:game-over) or the server closes our lobby without a
+       result (:game-gone, #93) — both mean stop acting and tear down
      - the timeout expires (:timeout)
 
    Opponent economy/draws/installs that don't produce a prompt for us are
@@ -1724,6 +1733,8 @@
                        (let [winner (get-in current-state [:game-state :winner])]
                          (println (format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."
                                           (if winner (str " — " (clojure.string/capitalize (name winner)) " wins") "")))))
+                     (when (= reason :game-gone)
+                       (println "   🏚️  The server closed this game's lobby — the game is GONE, not paused. Stop acting; `game-over-status` will confirm (GAME-GONE)."))
                      (println "")
                      (println "📜 Game log while you were waiting:")
                      (if (seq entries-since-start)

@@ -151,6 +151,7 @@ The `--since` flag makes `wait` return immediately if the game state already adv
 - A run ending
 - It becomes your turn to act
 - The game ends (match over) — `wait` wakes immediately on game-over instead of hanging the full timeout; stop acting, run `game-over-status`, tear down
+- The server closes the lobby without a result (`game-over-status` → `GAME-GONE`) — treat exactly like GAME-OVER: the game no longer exists, stop acting and report
 - Timeout (default 300s)
 
 It is silent on opponent economy/draws/installs — those don't require you to act.

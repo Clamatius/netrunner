@@ -32,8 +32,9 @@ C=$(./dev/send_command corp get-cursor)
 
 If a `wait` times out and the opponent is still alive (`peer-status`), **issue
 another `wait`**. A slow model opponent can think for many minutes; that is normal.
-Loop until `game-over-status` prints `GAME-OVER winner=… turn=…`. Only then stop
-and write your report.
+Loop until `game-over-status` prints `GAME-OVER winner=… turn=…` (or
+`GAME-GONE turn=…` — the server tore the game down without a result; also a
+stop). Only then stop and write your report.
 
 If an umpire reply tells you to "hold" or "wait", that means **keep looping on
 `wait`** — it does NOT mean end your session.

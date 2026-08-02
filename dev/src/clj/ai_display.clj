@@ -352,6 +352,10 @@
      NO-GAME                                  - no game state loaded
      GAME-OVER winner=corp turn=18                     - decided (winner = corp|runner)
      GAME-OVER winner=tie turn=12                      - tied game
+     GAME-GONE turn=9                                  - server closed our lobby (#93);
+                                                         treat as a stop condition like
+                                                         GAME-OVER — there is no game
+                                                         left to play, only a snapshot
      AWAITING-START turn=12 next-player=runner         - clean turn boundary
      IN-PROGRESS turn=12 whose-turn=runner clicks=3    - game still running
 
@@ -375,6 +379,14 @@
           (println (format "GAME-OVER winner=%s turn=%s"
                            (if winner (str/lower-case (name winner)) "tie")
                            (or turn-number "?")))
+
+          ;; The server closed our lobby but the game never reached a decided
+          ;; state (#93) — e.g. an abandoned game reaped, or an unseat we did
+          ;; not initiate. A decided game stays GAME-OVER (the branch above);
+          ;; this catches the teardown-without-result case, which used to be
+          ;; reported as IN-PROGRESS forever off the cached snapshot.
+          (state/lobby-gone?)
+          (println (format "GAME-GONE turn=%s" (or turn-number "?")))
 
           waiting-to-start?
           (println (format "AWAITING-START turn=%s next-player=%s"

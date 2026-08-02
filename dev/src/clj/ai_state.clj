@@ -107,8 +107,10 @@
            :game-state state
            :last-state state
            :side side)
-    ;; Clear lobby-state when game state is set (game has started)
-    (swap! client-state dissoc :lobby-state)
+    ;; Clear lobby-state when game state is set (game has started). A full
+    ;; state also proves the server still hosts our game, so any lobby-gone
+    ;; verdict from a previous teardown is stale — drop it (#93).
+    (swap! client-state dissoc :lobby-state :lobby-gone?)
     (when side
       (println "   Detected side:" side))))
 
@@ -134,6 +136,22 @@
    map; defaults to the current client game-state."
   ([] (game-over? (get-game-state)))
   ([gs] (boolean (or (:winner gs) (and (:reason gs) (:end-time gs))))))
+
+(defn mark-lobby-gone!
+  "Record that the server closed our lobby out from under us (#93). The server
+   announces this with a bare [:lobby/state] (no data) sent by close-lobby! /
+   clear-lobby-state; nothing else invalidates the cached game snapshot, so
+   without this flag every status command keeps answering from a game the
+   server has already discarded — game-over-status reported IN-PROGRESS
+   forever and a brief-obeying seat could never stop."
+  []
+  (swap! client-state assoc :lobby-gone? true))
+
+(defn lobby-gone?
+  "True when the server has closed our lobby but we still hold a cached game
+   snapshot. Accepts an optional client-state map for pure/test use."
+  ([] (lobby-gone? @client-state))
+  ([state] (boolean (:lobby-gone? state))))
 
 (defn active-player [] (get-in @client-state [:game-state :active-player]))
 (defn my-turn? [] (= (:side @client-state) (active-player)))
