@@ -242,6 +242,68 @@
         (is (str/includes? line "Opp(R):4c/0cl/5h/0AP")
             (str "opponent grip count must come from public :hand-count, got: " line))))))
 
+(deftest test-status-runner-section-shows-runner-hand-not-mine
+  ;; #85: the full-status RUNNER section read my-hand-count, so a Corp viewer
+  ;; saw its OWN hand size printed as the Runner's grip — the one number a
+  ;; meat-damage kill calculation depends on (marquee g1: snapshot said 2h,
+  ;; status said 4; status was the liar). The RUNNER section must report the
+  ;; RUNNER's public :hand-count regardless of viewer.
+  (testing "corp seat: RUNNER section reports the runner's grip, not corp's hand"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 10
+                                   :corp {:click 3 :credit 8 :hand [{:title "X"}]
+                                          :hand-count 4 :agenda-point 0 :deck-count 20
+                                          :servers {} :user {:username "ai-corp"}}
+                                   :runner {:click 0 :credit 6 :hand [] :hand-count 2
+                                            :agenda-point 2 :rig {}
+                                            :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/show-status))
+            runner-section (subs out (str/index-of out "--- RUNNER ---")
+                                (str/index-of out "--- CORP ---"))]
+        (is (str/includes? runner-section "Hand: 2 cards")
+            (str "RUNNER section must show the runner's grip (2), got: " runner-section))
+        (is (not (str/includes? runner-section "Hand: 4 cards"))
+            (str "RUNNER section must not show the corp's own hand (4), got: " runner-section))))))
+
+(deftest test-status-compact-runner-tags-visible
+  ;; #85 part 2: tags decide endgames (Orbital Superiority vs a tagged Runner
+  ;; won marquee g1) but were invisible in the one-call snapshot. The compact
+  ;; line must carry the runner's tag count when tagged — and stay clean when
+  ;; not, so the common case adds no noise.
+  (testing "tagged runner shows /Ntag in the runner stat segment (corp view)"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 10
+                                   :corp {:click 3 :credit 8 :hand [] :hand-count 4 :agenda-point 0}
+                                   :runner {:click 0 :credit 6 :hand [] :hand-count 2
+                                            :agenda-point 2 :tag {:base 2}}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Opp(R):6c/0cl/2h/2AP/2tag")
+            (str "runner tag count must appear in the compact line, got: " line)))))
+  (testing "tagged runner sees own tags too (runner view)"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 10
+                                   :runner {:click 2 :credit 6 :hand [] :hand-count 2
+                                            :agenda-point 2 :tag {:base 1} :rig {}}
+                                   :corp {:click 0 :credit 8 :hand [] :hand-count 4 :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Me(R):6c/2cl/2h/2AP/1tag")
+            (str "runner's own tag count must appear, got: " line)))))
+  (testing "untagged runner keeps the plain segment"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 10
+                                   :corp {:click 3 :credit 8 :hand [] :hand-count 4 :agenda-point 0}
+                                   :runner {:click 0 :credit 6 :hand [] :hand-count 2
+                                            :agenda-point 2 :tag {:base 0}}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Opp(R):6c/0cl/2h/2AP")
+            (str "untagged segment unchanged, got: " line))
+        (is (not (str/includes? line "tag"))
+            (str "no tag noise when untagged, got: " line))))))
+
 (deftest test-show-snapshot-bundles-read-loop
   ;; snapshot collapses the per-decision read-loop
   ;; (status-compact + prompt? + board-compact + hand + log + cursor) into one
