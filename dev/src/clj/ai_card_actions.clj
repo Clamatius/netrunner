@@ -494,11 +494,16 @@
                     (do (Thread/sleep core/polling-delay) (recur))
 
                     :else
+                    ;; Timeout only proves the client did not SEE the rez land
+                    ;; — don't assert why (codex review: an affordability claim
+                    ;; here would itself be misleading output). State what is
+                    ;; known, give the context a seat needs to diagnose, and
+                    ;; warn off the blind re-send.
                     (let [credits (get-in @state/client-state [:game-state :corp :credit])]
-                      (println (str "⚠️  Rez did NOT take: " card-name " is still unrezzed."))
-                      (println (format "   Likely can't afford it: base cost %s, you have %s — a mid-run surcharge (e.g. Tread Lightly +3) raises the real cost."
+                      (println (str "⚠️  Rez NOT confirmed: " card-name " still shows unrezzed."))
+                      (println (format "   Either the server refused it (can you afford it? base cost %s, you have %s — mid-run surcharges like Tread Lightly's +3 raise the real cost) or the update is delayed."
                                        (or rez-cost "?") (or credits "?")))
-                      (println "   Do not re-send blindly — check `board` and your credits first.")
+                      (println "   Check `board` and the log before deciding — do not re-send blindly.")
                       {:status :error :reason :rez-not-confirmed :card-name card-name}))))))
           (println (str "❌ Card not found installed: " card-name)))))))
 

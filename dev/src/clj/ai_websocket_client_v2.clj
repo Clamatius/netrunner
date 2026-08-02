@@ -194,16 +194,28 @@
           ;; lobby-gone verdict from a previous teardown no longer applies.
           (swap! state/client-state dissoc :lobby-gone?)
           (println "   GameID:" gameid)))
-      ;; A BARE [:lobby/state] (no data) is the server's only announcement that
-      ;; it closed our lobby (close-lobby! → clear-lobby-state). Dropping it —
-      ;; the old behaviour — left the cached game snapshot answering every
-      ;; status query for a game that no longer exists (#93: game-over-status
-      ;; said IN-PROGRESS forever). Mark the lobby gone and bump the cursor so
-      ;; a seat blocked in `wait` wakes up and sees the verdict.
-      (when (:gameid @state/client-state)
-        (println "🏚️  Lobby closed by server — game is gone")
-        (state/mark-lobby-gone!)
-        (state/bump-cursor!)))
+      ;; A BARE [:lobby/state] (no data) is how the server announces it closed
+      ;; our lobby (close-lobby! → clear-lobby-state). Dropping it — the old
+      ;; behaviour — left the cached game snapshot answering every status query
+      ;; for a game that no longer exists (#93: game-over-status said
+      ;; IN-PROGRESS forever). Mark the lobby gone and bump the cursor so a
+      ;; seat blocked in `wait` wakes up and sees the verdict.
+      ;;
+      ;; The signal is NOT uniquely teardown (codex review catch): the server
+      ;; also sends a bare [:lobby/state] whenever a :lobby/list request finds
+      ;; our uid in no lobby (send-lobby-list), which can happen while a game
+      ;; we were unseated from is still alive for the opponent. Two defences:
+      ;; only react when a game had actually STARTED for us (we hold both a
+      ;; gameid and game-state — a waiting-room lobby is not a game), and send
+      ;; a :game/resync probe after marking: if the server still hosts us, the
+      ;; resync reply (set-full-state!) retracts the verdict; if it doesn't,
+      ;; the probe dies silently and GAME-GONE stands.
+      (let [{:keys [gameid game-state]} @state/client-state]
+        (when (and gameid game-state)
+          (println "🏚️  Lobby closed by server — game is gone (probing with resync to confirm)")
+          (state/mark-lobby-gone!)
+          (state/bump-cursor!)
+          (send-message! :game/resync {:gameid gameid}))))
 
     :lobby/notification
     (println "🔔 Lobby notification:" data)

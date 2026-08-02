@@ -157,8 +157,12 @@
           (let [out (with-out-str (ai-actions/rez-card! "Manegarm Skunkworks"))]
             (is (not (clojure.string/includes? out "🔴 Rezzed"))
                 (str "a refused rez must NOT print the success banner, got: " out))
-            (is (clojure.string/includes? out "still unrezzed")
-                (str "the failure must be stated plainly, got: " out))))))))
+            (is (clojure.string/includes? out "Rez NOT confirmed")
+                (str "the failure must be stated plainly, got: " out))
+            ;; A timeout doesn't prove WHY (could be latency, could be a
+            ;; refusal) — the message must not assert a cause as fact.
+            (is (not (clojure.string/includes? out "Likely can't afford"))
+                (str "no unproven affordability claim, got: " out))))))))
 
 ;; ============================================================================
 ;; Prompt / Input Validation
