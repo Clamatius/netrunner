@@ -29,9 +29,19 @@ fi
 echo "✅ Both REPLs are running"
 echo ""
 
+# Step 0: Reap any prior lobby our uids are still seated in (#88).
+# :keep-lobbies-on-disconnect? (issue #76) keeps a started lobby alive across the
+# bounce, so an abandoned game would otherwise block create-game forever. An
+# explicit leave from each seat is the sanctioned teardown — the last player
+# out closes the lobby properly (stats/replays flush). No-op when unseated.
+echo "🧹 Clearing any prior lobby seats..."
+TIMEOUT=15 ./dev/send_command corp leave-game || true
+TIMEOUT=15 ./dev/send_command runner leave-game || true
+echo ""
+
 # Step 1: Corp creates a lobby
 echo "📋 Corp creating game lobby..."
-TIMEOUT=10 ./dev/send_command corp create-game "AI Self-Play Test"
+TIMEOUT=20 ./dev/send_command corp create-game "AI Self-Play Test"
 sleep 2
 
 # Step 2: Get the game ID from Corp's state

@@ -14,6 +14,64 @@
   []
   (ws/send-message! :lobby/list nil))
 
+(def ^:dynamic *seat-discovery-timeout-ms*
+  "How long to wait for the server to reveal our seat after a :lobby/list
+   request (#88). The server is local; the push normally lands in tens of ms.
+   The full timeout is only paid when we are NOT seated (nothing arrives)."
+  2000)
+
+(def ^:dynamic *create-confirm-timeout-ms*
+  "How long to wait for the :lobby/state confirmation after :lobby/create
+   before diagnosing the silence (#88)."
+  5000)
+
+(defn- poll-until
+  "Poll pred every 100ms up to timeout-ms. Returns pred's truthy value, or nil."
+  [pred timeout-ms]
+  (loop [waited 0]
+    (or (pred)
+        (when (< waited timeout-ms)
+          (Thread/sleep 100)
+          (recur (+ waited 100))))))
+
+(defn- discover-seat!
+  "Ask the server which lobby our uid is seated in, if any (#88).
+   A :lobby/list request makes the server push :lobby/state for the seated
+   lobby (web/lobby send-lobby-list), which sets our :gameid — that is the
+   discovery channel. It works even for a zombie lobby whose player usernames
+   were stripped on disconnect, because the server keys the seat on uid.
+   Returns the seated gameid, or nil if unseated."
+  []
+  (request-lobby-list!)
+  (poll-until #(:gameid @state/client-state) *seat-discovery-timeout-ms*))
+
+(defn leave-game!
+  "Explicitly leave the lobby we're seated in, discovering the seat server-side
+   when this client doesn't know it (fresh client after a bounce — #88).
+   The last player leaving closes the lobby properly (stats/replays flush),
+   which is the sanctioned teardown for an abandoned game.
+   Verifies against the server that the seat is actually gone.
+   Returns true if unseated (or never seated), false if the seat persists."
+  []
+  (let [known (:gameid @state/client-state)
+        gameid (or known (discover-seat!))]
+    (if-not gameid
+      (do (println "ℹ️  Not seated in any lobby — nothing to leave")
+          true)
+      (do
+        (when-not known
+          (println "🪑 Server seats us in lobby" (str gameid) "— leaving it"))
+        (ws/send-message! :lobby/leave {:gameid (state/normalize-gameid gameid)})
+        (Thread/sleep core/standard-delay)
+        (swap! state/client-state assoc :gameid nil :side nil :lobby-state nil)
+        (swap! state/client-state dissoc :lobby-gone?)
+        ;; Verify: if the server still seats us, discovery re-sets :gameid.
+        (if-let [still-seated (discover-seat!)]
+          (do (println "❌ Leave did not take — server still seats us in" (str still-seated))
+              false)
+          (do (println "✅ Left lobby" (str gameid))
+              true))))))
+
 (defn create-lobby!
   "Create a new game lobby
    Usage: (create-lobby! \"My Test Game\")
@@ -41,18 +99,40 @@
                save-replay true}} options]
      (if-not title
        (println "❌ Error: :title is required")
-       (let [lobby-options (assoc options
-                                  :side side
-                                  :format format
-                                  :gateway-type gateway-type
-                                  :room room
-                                  :allow-spectator allow-spectator
-                                  :spectatorhands spectatorhands
-                                  :save-replay save-replay)]
-         (ws/send-message! :lobby/create lobby-options)
-         (println "🎮 Creating lobby:" title)
-         (println "   Format:" format (when (= format "system-gateway") (str "(" gateway-type ")")))
-         (Thread/sleep core/standard-delay))))))
+       (let [{:keys [gameid spectator]} @state/client-state]
+         (if (and gameid (not spectator))
+           ;; The server refuses creation for a uid already seated as a player,
+           ;; and it refuses SILENTLY (#88) — say so up front instead.
+           (do (println "❌ Already seated in lobby" (str gameid) "— the server will refuse to create another.")
+               (println "   Run leave-game first (reset.sh does this automatically).")
+               false)
+           (let [prior-gameid gameid ; nil unless spectating
+                 lobby-options (assoc options
+                                      :side side
+                                      :format format
+                                      :gateway-type gateway-type
+                                      :room room
+                                      :allow-spectator allow-spectator
+                                      :spectatorhands spectatorhands
+                                      :save-replay save-replay)]
+             (ws/send-message! :lobby/create lobby-options)
+             (println "🎮 Creating lobby:" title)
+             (println "   Format:" format (when (= format "system-gateway") (str "(" gateway-type ")")))
+             ;; On success the server pushes :lobby/state with the new gameid.
+             ;; On a seat-block it sends NOTHING (register-lobby returns the map
+             ;; unchanged and try-create-lobby skips every send) — so silence
+             ;; must be diagnosed, not reported as success (#88).
+             (if (poll-until #(let [{:keys [gameid lobby-state]} @state/client-state]
+                                (and gameid lobby-state (not= gameid prior-gameid)))
+                             *create-confirm-timeout-ms*)
+               (do (println "✅ Lobby created:" (str (:gameid @state/client-state)))
+                   true)
+               (let [blocking (discover-seat!)]
+                 (if (and blocking (not= blocking prior-gameid))
+                   (do (println "❌ Create refused: our uid is already seated in lobby" (str blocking))
+                       (println "   Run leave-game first (reset.sh does this automatically)."))
+                   (println "❌ No confirmation from server — creation blocked or server unreachable."))
+                 false)))))))))
 
 (defn join-game!
   "Join a game by ID

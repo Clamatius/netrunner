@@ -1462,8 +1462,7 @@ case "$COMMAND" in
                                         :open-decklists false
                                         :turmoil false
                                         :timer nil})
-                   (Thread/sleep 2000)
-                   (println \"✅ Lobby creation request sent\"))"
+                   nil)"
         ;;
 
     start-game)
@@ -1491,19 +1490,12 @@ case "$COMMAND" in
     leave-game)
         ensure_connection
         info "Leaving game lobby..."
+        # Discovers the seat server-side when the client has no local gameid
+        # (fresh client after a bounce), so it can reap a zombie lobby (#88).
         execute '(do
-                   (require (quote [ai-websocket-client-v2 :as ws]))
-                   (require (quote [ai-state :as state]))
-                   (let [s @state/client-state
-                         gameid (:gameid s)]
-                     (if gameid
-                       (do
-                         (ws/send-message! :lobby/leave {:gameid gameid})
-                         (Thread/sleep 1000)
-                         ;; Clear client state after leaving
-                         (swap! state/client-state assoc :gameid nil :side nil)
-                         (println "✅ Left game lobby"))
-                       (println "⚠️  Not in a game lobby"))))'
+                   (require (quote [ai-connection :as conn]))
+                   (conn/leave-game!)
+                   nil)'
         ;;
 
     list-lobbies)
