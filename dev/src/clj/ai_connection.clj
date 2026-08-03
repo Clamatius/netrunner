@@ -40,7 +40,10 @@
    lobby (web/lobby send-lobby-list), which sets our :gameid — that is the
    discovery channel. It works even for a zombie lobby whose player usernames
    were stripped on disconnect, because the server keys the seat on uid.
-   Returns the seated gameid, or nil if unseated."
+   Returns the seated gameid, or nil if unseated.
+   CAVEAT: polls local :gameid, so a pre-set value satisfies it immediately —
+   callers must clear (or know) local :gameid first for this to reflect the
+   server rather than echo the client."
   []
   (request-lobby-list!)
   (poll-until #(:gameid @state/client-state) *seat-discovery-timeout-ms*))
@@ -54,6 +57,13 @@
    Returns true if unseated (or never seated), false if the seat persists."
   []
   (let [known (:gameid @state/client-state)
+        ;; A #93 GAME-GONE verdict means the server already closed this lobby;
+        ;; the leave below is then a server-side no-op (review catch: claiming
+        ;; "Left lobby" for it would narrate an action that never happened).
+        ;; Still SEND the leave — the verdict can be false (see the bare
+        ;; [:lobby/state] ambiguity notes in ai-websocket-client-v2), and a
+        ;; leave against a live lobby is the real teardown.
+        was-gone? (boolean (:lobby-gone? @state/client-state))
         gameid (or known (discover-seat!))]
     (if-not gameid
       (do (println "ℹ️  Not seated in any lobby — nothing to leave")
@@ -64,12 +74,16 @@
         (ws/send-message! :lobby/leave {:gameid (state/normalize-gameid gameid)})
         (Thread/sleep core/standard-delay)
         (swap! state/client-state assoc :gameid nil :side nil :lobby-state nil)
-        (swap! state/client-state dissoc :lobby-gone?)
+        (swap! state/client-state dissoc :lobby-gone? :spectator :spectator-perspective)
         ;; Verify: if the server still seats us, discovery re-sets :gameid.
+        ;; (Ordering is sound: the server's lobby pool is single-threaded, so
+        ;; our leave is processed before the verification list request.)
         (if-let [still-seated (discover-seat!)]
           (do (println "❌ Leave did not take — server still seats us in" (str still-seated))
               false)
-          (do (println "✅ Left lobby" (str gameid))
+          (do (println (if was-gone?
+                         (str "✅ Unseated — lobby " gameid " was already closed server-side")
+                         (str "✅ Left lobby " gameid)))
               true))))))
 
 (defn create-lobby!
@@ -99,10 +113,13 @@
                save-replay true}} options]
      (if-not title
        (println "❌ Error: :title is required")
-       (let [{:keys [gameid spectator]} @state/client-state]
-         (if (and gameid (not spectator))
+       (let [{:keys [gameid spectator lobby-gone?]} @state/client-state]
+         (if (and gameid (not spectator) (not lobby-gone?))
            ;; The server refuses creation for a uid already seated as a player,
            ;; and it refuses SILENTLY (#88) — say so up front instead.
+           ;; :lobby-gone? exempts the post-#93 stale state (the GAME-GONE
+           ;; verdict keeps :gameid for reporting, but the server no longer
+           ;; seats us, so it would ACCEPT a create — review catch).
            (do (println "❌ Already seated in lobby" (str gameid) "— the server will refuse to create another.")
                (println "   Run leave-game first (reset.sh does this automatically).")
                false)
@@ -122,17 +139,39 @@
              ;; On a seat-block it sends NOTHING (register-lobby returns the map
              ;; unchanged and try-create-lobby skips every send) — so silence
              ;; must be diagnosed, not reported as success (#88).
-             (if (poll-until #(let [{:keys [gameid lobby-state]} @state/client-state]
-                                (and gameid lobby-state (not= gameid prior-gameid)))
-                             *create-confirm-timeout-ms*)
-               (do (println "✅ Lobby created:" (str (:gameid @state/client-state)))
-                   true)
-               (let [blocking (discover-seat!)]
-                 (if (and blocking (not= blocking prior-gameid))
-                   (do (println "❌ Create refused: our uid is already seated in lobby" (str blocking))
-                       (println "   Run leave-game first (reset.sh does this automatically)."))
-                   (println "❌ No confirmation from server — creation blocked or server unreachable."))
-                 false)))))))))
+             ;;
+             ;; (not :started) is the created-lobby discriminator (review
+             ;; catch): a fresh lobby is never started, while every lobby the
+             ;; disconnect-keepalive retains IS — so a concurrent :lobby/state
+             ;; push revealing a zombie seat cannot be mistaken for our
+             ;; confirmation.
+             (let [created? (fn []
+                              (let [{:keys [gameid lobby-state]} @state/client-state]
+                                (and gameid lobby-state
+                                     (not= gameid prior-gameid)
+                                     (not (:started lobby-state)))))
+                   confirm! (fn []
+                              (println "✅ Lobby created:" (str (:gameid @state/client-state)))
+                              true)]
+               (if (poll-until created? *create-confirm-timeout-ms*)
+                 (confirm!)
+                 (let [blocking (discover-seat!)]
+                   (cond
+                     ;; The confirmation can land while we probe (review catch:
+                     ;; without this re-check a slow create would be reported as
+                     ;; a refusal naming the FRESH lobby as the blocker, with
+                     ;; advice that would destroy it).
+                     (created?)
+                     (confirm!)
+
+                     (and blocking (not= blocking prior-gameid))
+                     (do (println "❌ Create refused: our uid is already seated in lobby" (str blocking))
+                         (println "   Run leave-game first (reset.sh does this automatically).")
+                         false)
+
+                     :else
+                     (do (println "❌ No confirmation from server — creation blocked or server unreachable.")
+                         false))))))))))))
 
 (defn join-game!
   "Join a game by ID

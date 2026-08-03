@@ -220,6 +220,12 @@
     :lobby/notification
     (println "🔔 Lobby notification:" data)
 
+    ;; The server's explicit refusal channel (e.g. block-game-creation sends
+    ;; :lobby_creation-paused). Previously fell through to "Unhandled message
+    ;; type" — surface it as what it is.
+    :lobby/toast
+    (println (str "🔔 Server toast [" (:type data) "]: " (:message data)))
+
     :chsk/ws-ping
     ;; Respond to ping with pong to keep connection alive
     ;; Echo back ping data if present (some Sente versions use ping IDs)
