@@ -348,7 +348,7 @@ ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
   play-index <N>  - Play card by index (0-4)
   use-ability <name> <N>  - Use installed card's ability N
-  use-runner-ability <name> <N> - Use runner ability on Corp card
+  use-runner-ability <name> <N> - Bioroid click-to-break: use a Runner-usable ability printed on a Corp card (e.g. "Brân 1.0" during an encounter)
   trash <name>    - Trash installed card by name
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire unbroken ICE subroutines (Corp only, during runs)

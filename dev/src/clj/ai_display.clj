@@ -1021,7 +1021,17 @@
                   (println (format "     • %s (str %s)" (:title b) (or (:current-strength b) (:strength b))))
                   (doseq [[idx ab] playable-abs]
                     (println (format "       → %s" (:label ab)))
-                    (println (format "         use-ability \"%s\" %d" (:title b) idx))))))))))))
+                    (println (format "         use-ability \"%s\" %d" (:title b) idx))))))))
+          ;; Runner-usable abilities printed on the encountered ICE itself
+          ;; (bioroid click-to-break, issue #95). Source: current-run-ice, the
+          ;; authoritative run-state card — NOT prompt-state, which is
+          ;; stale-prone and missed this in marquee 6d8f4cf8.
+          (let [runner-abs (:runner-abilities current-ice)]
+            (when (seq runner-abs)
+              (println "  🦾 Runner-usable abilities on this ICE (cost is yours to pay):")
+              (doseq [[idx ab] (map-indexed vector runner-abs)]
+                (println (format "     → %s" (:label ab)))
+                (println (format "       use-runner-ability \"%s\" %d" ice-title idx)))))))))
 
 (defn run-server-display
   "Human-readable name for a run's target server, given the last element of the
@@ -1730,13 +1740,20 @@
   [card-name]
   (let [state @state/client-state
         side (:side state)
+        corp-viewer? (core/side= "Corp" side)
         ;; Find card in appropriate location. Use core/side= — client-state stores
         ;; :side lowercase ("corp"), so a strict (= "Corp" side) is always false
         ;; and would search the Runner rig, missing every Corp card. (issue #69)
-        card (if (core/side= "Corp" side)
+        card (if corp-viewer?
                (core/find-installed-corp-card card-name)
-               (core/find-installed-card card-name))]
-    (if card
+               (core/find-installed-card card-name))
+        ;; #95: a Runner probing a Corp card (bioroid click-break) used to
+        ;; dead-end on "Card not found". Fall back to the opponent's installed
+        ;; cards and surface the Runner-usable abilities instead.
+        cross-card (when (and (not card) (not corp-viewer?))
+                     (core/find-installed-corp-card card-name))]
+    (cond
+      card
       (let [abilities (:abilities card)]
         (println "\n" (clojure.string/join "" (repeat 70 "=")))
         (println "🎯" (:title card) "- ABILITIES")
@@ -1756,6 +1773,22 @@
                 (println (str "      " once-str)))))
           (println "No abilities available"))
         (println (clojure.string/join "" (repeat 70 "="))))
+
+      cross-card
+      (let [runner-abs (:runner-abilities cross-card)]
+        (println "\n" (clojure.string/join "" (repeat 70 "=")))
+        (println "🎯" (:title cross-card) "- RUNNER-USABLE ABILITIES (Corp card)")
+        (println (clojure.string/join "" (repeat 70 "=")))
+        (if (seq runner-abs)
+          (doseq [[idx ability] (map-indexed vector runner-abs)]
+            (println (str "\n  [" idx "] " (:label ability)))
+            (when-let [cost-label (:cost-label ability)]
+              (println (str "      Cost: " cost-label)))
+            (println (str "      use-runner-ability \"" (:title cross-card) "\" " idx)))
+          (println "No Runner-usable abilities on this Corp card"))
+        (println (clojure.string/join "" (repeat 70 "="))))
+
+      :else
       (println "❌ Card not found installed:" card-name))))
 
 ;; ============================================================================
@@ -1902,22 +1935,35 @@
                           label
                           (if cost (str " (" cost ")") ""))))))
 
-    ;; Runner abilities on Corp cards (e.g., bioroid click-to-break)
-    ;; Check prompt-state for runner abilities during encounters
+    ;; Runner abilities on Corp cards (e.g., bioroid click-to-break, #95).
+    ;; Primary source: the encountered ICE from run state (current-run-ice) —
+    ;; authoritative. The old prompt-state :card source is stale-prone (memory:
+    ;; prompt-state-not-cleared-use-eid) and missed the Brân encounter in
+    ;; marquee 6d8f4cf8; keep it only as a fallback for non-run prompts.
     (when (= side :runner)
-      (let [prompt-state (get-in gs [:runner :prompt-state])
-            prompt-card (:card prompt-state)
-            runner-abilities (:runner-abilities prompt-card)]
+      ;; Phase gate (review catch): current-run-ice also returns the ICE at
+      ;; approach-ice / mid-run movement, where the click-break is NOT live
+      ;; (engine req is currently-encountering-card) — advertising it there
+      ;; bait-and-switches the seat into a silent refusal + timeout.
+      (let [encounter-ice (when (= "encounter-ice" (get-in gs [:run :phase]))
+                            (core/current-run-ice state))
+            prompt-card (get-in gs [:runner :prompt-state :card])
+            source-card (if (seq (:runner-abilities encounter-ice))
+                          encounter-ice
+                          prompt-card)
+            runner-abilities (:runner-abilities source-card)]
         (when (seq runner-abilities)
           (println "\n🔓 Runner Abilities (Bioroid/Corp cards):")
           (doseq [[idx ability] (map-indexed vector runner-abilities)]
             (println (format "  - %s: Runner-Ability %d - %s%s"
-                            (:title prompt-card)
+                            (:title source-card)
                             idx
                             (:label ability)
                             (if-let [cost (:cost-label ability)]
                               (str " (" cost ")")
-                              "")))))))
+                              "")))
+            (println (format "    use-runner-ability \"%s\" %d"
+                            (:title source-card) idx))))))
 
     ;; Basic actions (always available if clicks > 0)
     (when (and clicks (pos? clicks))

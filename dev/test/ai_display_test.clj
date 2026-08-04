@@ -1378,3 +1378,98 @@
       (let [out (with-out-str (display/show-prompt-detailed))]
         (is (re-find #"(?i)decision is YOURS" out)
             (str "a genuine opponent-handed choice must still be surfaced, got:\n" out))))))
+
+;; ============================================================================
+;; Bioroid click-break discoverability (#95)
+;; ============================================================================
+;; Marquee 6d8f4cf8: during the Brân 1.0 encounter, neither `abilities` nor
+;; `list-playables` surfaced the bioroid's runner-usable click-break. The
+;; existing list-playables section read the PROMPT card's :runner-abilities —
+;; prompt-state is stale-prone (memory: prompt-state-not-cleared-use-eid) and
+;; it missed in the recorded game. The authoritative source during an
+;; encounter is current-run-ice; both surfaces must print the exact
+;; use-runner-ability invocation.
+
+(def show-encounter-ice-info #'display/show-encounter-ice-info)
+
+(def bran-ice
+  {:cid 77 :title "Brân 1.0" :zone [:servers :rd :ices] :side "Corp" :type "ICE"
+   :rezzed true :subtypes ["Bioroid" "Barrier"] :strength 4
+   :subroutines [{:label "Install ice from HQ" :broken false}
+                 {:label "End the run" :broken false}
+                 {:label "End the run" :broken false}]
+   :runner-abilities [{:label "Lose [click]: Break 1 subroutine"
+                       :cost-label "Lose [click]"}]})
+
+(defn- bran-encounter-state []
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:credit 5 :click 2
+                         :rig {:program [] :hardware [] :resource []}}
+                :corp {:servers {:rd {:ices [bran-ice] :content []}}}
+                :run {:position 1 :server ["rd"] :phase "encounter-ice"}
+                :active-player "runner"}))
+
+(deftest encounter-info-surfaces-bioroid-click-break
+  (testing "encounter display prints the runner-ability invocation from run state"
+    (with-mock-state (bran-encounter-state)
+      (let [state @ai-state/client-state
+            run (get-in state [:game-state :run])
+            out (with-out-str (show-encounter-ice-info state run "runner"))]
+        (is (str/includes? out "Lose [click]: Break 1 subroutine")
+            (str "bioroid ability label must appear, got:\n" out))
+        (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
+            (str "exact invocation must be printed, got:\n" out))))))
+
+(deftest encounter-info-no-bioroid-section-without-runner-abilities
+  (testing "no runner-ability section for plain ICE"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:runner {:credit 5 :click 2
+                             :rig {:program [] :hardware [] :resource []}}
+                    :corp {:servers {:rd {:ices [{:cid 78 :title "Palisade"
+                                                  :zone [:servers :rd :ices]
+                                                  :side "Corp" :type "ICE"
+                                                  :rezzed true}]
+                                          :content []}}}
+                    :run {:position 1 :server ["rd"] :phase "encounter-ice"}
+                    :active-player "runner"})
+      (let [state @ai-state/client-state
+            run (get-in state [:game-state :run])
+            out (with-out-str (show-encounter-ice-info state run "runner"))]
+        (is (not (str/includes? out "use-runner-ability"))
+            (str "no invocation hint for ICE without runner-abilities, got:\n" out))))))
+
+(deftest abilities-falls-back-to-corp-card-for-runner
+  (testing "show-card-abilities finds an opponent card and shows runner-abilities"
+    (with-mock-state (bran-encounter-state)
+      (let [out (with-out-str (display/show-card-abilities "Brân 1.0"))]
+        (is (not (str/includes? out "Card not found"))
+            (str "cross-side lookup must succeed, got:\n" out))
+        (is (str/includes? out "Lose [click]: Break 1 subroutine")
+            (str "runner-usable ability is listed, got:\n" out))
+        (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
+            (str "exact invocation must be printed, got:\n" out))))))
+
+(deftest playables-no-click-break-outside-encounter
+  (testing "list-playables must not advertise use-runner-ability at approach-ice (out of window => engine silently refuses, client times out)"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:runner {:credit 5 :click 2
+                             :rig {:program [] :hardware [] :resource []}
+                             :prompt-state nil}
+                    :corp {:servers {:rd {:ices [bran-ice] :content []}}}
+                    :run {:position 1 :server ["rd"] :phase "approach-ice"}
+                    :active-player "runner"})
+      (let [out (with-out-str (display/list-playables))]
+        (is (not (str/includes? out "use-runner-ability"))
+            (str "click-break is only live during encounter-ice, got:\n" out))))))
+
+(deftest playables-shows-click-break-during-encounter
+  (testing "list-playables still advertises the click-break in the live window"
+    (with-mock-state (bran-encounter-state)
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
+            (str "encounter-ice window must surface the invocation, got:\n" out))))))

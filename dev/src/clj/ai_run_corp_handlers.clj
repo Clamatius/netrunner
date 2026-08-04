@@ -388,6 +388,23 @@
              :ice ice-title
              :position position}))
 
+        ;; movement/pos-0 with an unrezzed upgrade in the attacked server's
+        ;; root — the Manegarm window (#94). This is the Corp's LAST chance to
+        ;; rez an approach-triggered upgrade (#67); sleep mode's own contract
+        ;; is "ALWAYS wakes for rez decisions" and this IS one. Fall through so
+        ;; handle-corp-server-upgrade-decision (later in the chain) can
+        ;; auto-rez (--rez), or surface the decision. Without this guard the
+        ;; empty-window branch below auto-continued through the window — even
+        ;; past an explicit --rez "Manegarm Skunkworks" commitment (marquee
+        ;; 6d8f4cf8, both seats observed the silent skip independently).
+        ;; --no-rez keeps sleeping: declining is exactly what the pass does.
+        (and (= run-phase "movement")
+             (zero? (or position 0))
+             (not (:no-rez strategy))
+             (some #(and (= "Upgrade" (:type %)) (not (:rezzed %)))
+                   (decisions/attacked-server-content state)))
+        nil  ; Fall through to server-upgrade-decision handler
+
         ;; Other phases with an EMPTY RUN paid-ability window - auto-continue.
         ;; BUT NOT during success/access phases where Runner is active and Corp just waits,
         ;; and ONLY for a "run"-type prompt (mirrors can-auto-continue?): a

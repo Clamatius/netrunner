@@ -1,5 +1,24 @@
 # Marquee Runbook — cross-model game pair (Opus ↔ GPT-5.5)
 
+> ## Current round: Fable ↔ GPT-5.6 Sol (2026-08-03) — deltas from the base runbook
+> Tier-1 pair. Everything below still applies except:
+> - **Models:** Claude seat = **Fable** (background Agent subagent, `model: "fable"`);
+>   guest seat = **GPT-5.6 Sol** via devin (`--model gpt-5.6-sol` — PONG-verified
+>   2026-08-03). Codex CLI stays reserved for gpt-5.5-pinned experiments.
+> - **Seat briefs:** `dev/seat-corp-sol.md` / `dev/seat-runner-sol.md` (wrappers over
+>   the canonical `seat-corp.md`/`seat-runner.md`, adapted from the Terra briefs);
+>   mid-game restart: `dev/seat-corp-sol-resume.md`.
+> - **Babysitter (keep armed for any 5.6 seat):** `dev/marquee-babysit.sh <side>
+>   gpt-5.6-sol <tag>` — re-invokes `devin -p -c` with an action-forcing nudge
+>   whenever the seat's process exits while the game is live. Proven Terra round
+>   6d8f4cf8; harmless when unneeded. Launch it right after spawning the devin seat.
+> - **Pre-round fixes in:** #95 (bioroid click-break reachable — Runner seat) and
+>   #94 (`--fire-if-asked` no longer swallows the movement/pos-0 upgrade-rez
+>   window). Both change fairness-relevant play; do not run the pair on an older
+>   build.
+> - **Game A:** Corp = Fable, Runner = Sol. **Game B:** swap. (Corp spawns first,
+>   as below.)
+
 Turnkey launch sequence for an **un-babysat** cross-model Netrunner game. Michael
 does NOT want to HITL these (model turns are 5+ min each — a huge time sink); the
 autonomous round owns the whole thing and posts results to the forum.
