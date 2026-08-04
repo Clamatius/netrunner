@@ -785,7 +785,12 @@
         side (keyword (:side client-state))
         clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
-        hand-size (count (get-in client-state [:game-state side :hand]))
+        ;; :hand-count, NOT (count :hand): our own hand contents are hidden in
+        ;; wire state (fog of war), so counting :hand reads 0 and the discard
+        ;; forewarning below never fired — the seat was told "no prompts" and
+        ;; then hit the engine's discard prompt unannounced (marquee game B).
+        hand-size (or (get-in client-state [:game-state side :hand-count])
+                      (count (get-in client-state [:game-state side :hand])))
         max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
         active-player (get-in client-state [:game-state :active-player])
         my-turn? (= (name side) active-player)

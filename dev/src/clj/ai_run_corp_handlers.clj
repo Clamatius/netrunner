@@ -130,10 +130,20 @@
               {:status :decision-required
                :prompt my-prompt})))
 
-        ;; --rez set exists but this ICE is already rezzed: just continue
+        ;; --rez set exists and this ICE is rezzed: just continue. Two honest
+        ;; wordings — if WE attempted the rez at this position, this pass is the
+        ;; confirmation of a FRESH rez, and "already rezzed" reads like the rez
+        ;; was redundant or didn't happen (misleading-output class, marquee
+        ;; Opus↔Terra game B). Print once per (position, ice): the continue
+        ;; doesn't advance state instantly, so an unguarded print fired ×2.
         (and (:rez strategy) ice-rezzed?)
-        (do
-          (println (format "   ICE %s already rezzed, continuing" ice-title))
+        (let [status-key [:corp-rez-done position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (if (= (:rez-attempted-at strategy) position)
+              (println (format "   ✅ Rez confirmed: %s is rezzed — continuing" ice-title))
+              (println (format "   ICE %s was already rezzed, continuing" ice-title))))
           (send-continue! gameid))
 
         ;; --rez set exists but THIS unrezzed ICE is not in it: pause for a

@@ -61,8 +61,9 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
    the board, or at an access prompt), and `abilities "<name>"` lists an installed
    card's numbered abilities for `use-ability`. If a command name doesn't exist,
    the client suggests the right one.
-2. **Decide & act** per your heuristics — draw, gain credits, install
-   programs/resources/hardware, run a server. Examples:
+2. **Decide & act** per your heuristics — draw, gain credits (the verb is
+   `take-credit`), install programs/resources/hardware, run a server. Examples:
+   `./dev/send_command runner take-credit`
    `./dev/send_command runner draw`
    `./dev/send_command runner install "Cleaver"`
    `./dev/send_command runner run "R&D"`

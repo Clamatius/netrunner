@@ -146,6 +146,33 @@
                 "must send end-turn to trigger the engine discard prompt")))))))
 
 ;; ============================================================================
+;; check-auto-end-turn! must forewarn the discard prompt under fog of war.
+;; Regression for marquee Opus↔Terra game B: it counted (count :hand), but our
+;; own hand CONTENTS are hidden in wire state (only :hand-count is real), so the
+;; count read 0, the "game will prompt for discard" line never printed, and the
+;; seat — told "Auto-ending turn (0 clicks, no prompts)" — hit the engine's
+;; discard prompt unannounced.
+
+(deftest test-check-auto-end-turn-forewarns-discard-under-fog-of-war
+  (testing "over hand size known only via :hand-count -> forewarns discard before auto-ending"
+    (let [sent (atom [])
+          ;; the live wire shape: hand contents hidden, only the count is real
+          game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 6
+                               :hand-size {:total 5} :installed {} :prompt-state nil}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :turn 8
+                      :active-player "runner"
+                      :log []}]
+      (with-mock-state (mock-client-state :side "runner" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"exceeds max" out)
+                (str "must forewarn the coming discard prompt, got: " out))
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                "still auto-ends — the engine's discard prompt is the mechanism")))))))
+
+;; ============================================================================
 ;; smart-end-turn! self-heal: rolled-back optimistic "is ending" line
 ;; ============================================================================
 ;; Regression for the agent-vs-agent deadlock found 2026-06-14 (Runner stuck at

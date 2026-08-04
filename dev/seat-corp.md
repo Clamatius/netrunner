@@ -73,7 +73,8 @@ hand + recent log + cursor in ONE call):
    **Don't guess what a card does — look it up:** `card-text "<name>"` gives any
    card's type/cost/text; `abilities "<name>"` lists an installed card's numbered
    abilities. If a command name doesn't exist, the client suggests the right one.
-2. **Decide & act:** draw, gain credits, install ICE on a server, install an
+2. **Decide & act:** draw, gain credits (the verb is `take-credit`), install
+   ICE on a server, install an
    agenda/asset into a remote. The server arg is one of: `new` (creates a fresh
    remote — `"new remote"` / `"new server"` also work, matching the game's own
    label), an existing `remote1`/`remote2`/…, or a central `HQ`/`R&D`/`Archives`
