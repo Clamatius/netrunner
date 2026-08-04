@@ -182,6 +182,9 @@ When you hit ICE, in order:
 □ Clicks remaining: [N]
 □ Subs to break: [N]
 □ Click through? [YES/NO]
+□ Command: `use-runner-ability "<ICE name>" 0` — the click-break is the
+  ICE's runner-ability, NOT one of your own card abilities. `abilities
+  "<ICE name>"` and `list-playables` show it during the encounter.
 
 **If not Bioroid (or choosing to pay):**
 □ Breaker type needed: [Killer/Fracter/Decoder/AI]

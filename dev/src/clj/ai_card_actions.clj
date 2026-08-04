@@ -298,6 +298,8 @@
 ;; Card Abilities
 ;; ============================================================================
 
+(declare use-runner-ability!)
+
 (defn use-ability!
   "Use an installed card's ability. Returns status map:
    - {:status :success} - ability fired
@@ -364,35 +366,84 @@
             :error
             (println (str "❌ Ability failed: " card-name " - " (:reason result))))
           result))
-      (do
-        (println (str "❌ Card not found installed: " card-name))
-        {:status :error :reason (str "Card not found: " card-name)}))))
+      ;; Own-side lookup missed. From the Runner seat the card may be a Corp
+      ;; card whose printed ability is Runner-usable (bioroid click-to-break,
+      ;; issue #95) — route to the runner-ability command instead of
+      ;; dead-ending; a Corp card's :abilities aren't the Runner's to use.
+      (if-let [corp-card (and (not (core/side= "Corp" side))
+                              (core/find-installed-corp-card card-name))]
+        (if (seq (:runner-abilities corp-card))
+          (do
+            (println (str "ℹ️  " card-name " is a Corp card — using its Runner-usable ability"))
+            (use-runner-ability! card-name ability-index))
+          (do
+            (println (str "❌ " card-name " is a Corp card with no Runner-usable abilities"))
+            (flush)
+            {:status :error :reason (str "No runner-abilities on Corp card: " card-name)}))
+        (do
+          (println (str "❌ Card not found installed: " card-name))
+          (flush)
+          {:status :error :reason (str "Card not found: " card-name)})))))
 
 (defn use-runner-ability!
-  "Use a runner ability on a Corp card (e.g., bioroid click-to-break)
-   Runner abilities are special abilities on Corp cards that the Runner can activate
-   Most commonly used for bioroid ICE during encounters
+  "Use a Runner-usable ability printed on a Corp card (e.g. bioroid
+   click-to-break during an encounter). The index addresses the card's
+   :runner-abilities vector, NOT its :abilities vector.
 
-   Usage: (use-runner-ability! \"Brân 1.0\" 0)
-          During encounter, activates the bioroid's click-to-break ability"
+   Returns a status map like use-ability!:
+   - {:status :success} - ability fired (verified in game log)
+   - {:status :waiting-input :prompt ...} - created a prompt
+   - {:status :error :reason ...} - failed
+
+   Usage: (use-runner-ability! \"Brân 1.0\" 0)"
   [card-name ability-index]
   (let [client-state @state/client-state
-        ;; Find the Corp card (usually ICE during encounter)
-        card (core/find-installed-corp-card card-name)]
-    (if card
+        card (core/find-installed-corp-card card-name)
+        runner-abilities (:runner-abilities card)
+        ability (when card (nth runner-abilities ability-index nil))]
+    (cond
+      (not card)
+      (do
+        (println (str "❌ Corp card not found installed: " card-name))
+        (flush)
+        {:status :error :reason (str "Card not found: " card-name)})
+
+      (not ability)
+      (do
+        (if (seq runner-abilities)
+          (println (format "❌ %s has no runner-ability %d (it has %d: 0-%d)"
+                           card-name ability-index
+                           (count runner-abilities) (dec (count runner-abilities))))
+          (println (str "❌ " card-name " has no Runner-usable abilities"
+                        " (only bioroids and similar cards do)")))
+        (flush)
+        {:status :error :reason (str "No runner-ability " ability-index " on " card-name)})
+
+      :else
       (let [gameid (:gameid client-state)
-            ;; Create card reference matching wire format
-            card-ref {:cid (:cid card)
-                     :zone (:zone card)
-                     :side (:side card)
-                     :type (:type card)}]
+            card-ref (core/create-card-ref card)
+            ;; Capture state BEFORE sending (same race guard as use-ability!)
+            pre-log-size (core/get-log-size)
+            pre-prompt (state/get-prompt)]
         (ws/send-message! :game/action
                           {:gameid gameid
                            :command "runner-ability"
                            :args {:card card-ref
                                   :ability ability-index}})
-        (Thread/sleep core/medium-delay))
-      (println (str "❌ Card not found: " card-name)))))
+        (let [result (core/verify-ability-in-log card-name core/action-timeout
+                                                 {:pre-log-size pre-log-size
+                                                  :pre-prompt pre-prompt})]
+          (case (:status result)
+            :success
+            (println (str "⚡ Used runner ability: " card-name " - " (:label ability)))
+
+            :waiting-input
+            (println (str "⏳ Runner ability triggered prompt: " card-name " - " (:label ability)))
+
+            :error
+            (println (str "❌ Runner ability failed: " card-name " - " (:reason result))))
+          (flush)
+          result)))))
 
 (defn trash-installed!
   "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)

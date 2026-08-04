@@ -309,6 +309,95 @@
       (is (str/includes? out "no new log entries")
           "the honest no-op message is preserved for the genuinely-empty case"))))
 
+;; ============================================================================
+;; Bioroid click-break reachability (#95)
+;; ============================================================================
+;; Marquee 6d8f4cf8: the Runner seat reserved a click for Brân 1.0's printed
+;; "Lose [click]: Break 1 subroutine" and found no path to it — `use-ability`
+;; searches only the rig, so a Corp-owned card with :runner-abilities was
+;; unreachable and the seat tanked a sub instead. use-ability must route
+;; runner→corp-card calls to the engine's "runner-ability" command, and
+;; use-runner-ability! must report honestly (status map) instead of
+;; fire-and-forget silence.
+
+(def bran
+  {:cid 77 :title "Brân 1.0" :zone [:servers :rd :ices] :side "Corp" :type "ICE"
+   :rezzed true :subtypes ["Bioroid" "Barrier"] :strength 4
+   :subroutines [{:label "Install ice from HQ" :broken false}
+                 {:label "End the run" :broken false}
+                 {:label "End the run" :broken false}]
+   :runner-abilities [{:label "Lose [click]: Break 1 subroutine"
+                       :cost-label "Lose [click]"}]})
+
+(defn- encounter-state-vs-bran []
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:credit 5 :click 2
+                         :rig {:program [] :hardware [] :resource []}}
+                :corp {:servers {:rd {:ices [bran] :content []}}}
+                :run {:position 1 :server ["rd"] :phase "encounter-ice"}
+                :active-player "runner"}))
+
+(deftest use-ability-routes-to-runner-ability-on-corp-card
+  (testing "runner use-ability on a Corp card with :runner-abilities sends runner-ability"
+    (let [sent (atom [])]
+      (with-mock-state (encounter-state-vs-bran)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-ability-in-log (fn [& _] {:status :success})]
+          (let [result (ai-card-actions/use-ability! "Brân 1.0" 0)]
+            (is (= :success (:status result))
+                "routed call reports the verified status, not a not-found error")
+            (is (= 1 (count @sent)))
+            (let [{:keys [data]} (first @sent)]
+              (is (= "runner-ability" (:command data))
+                  "engine command is runner-ability, not ability")
+              (is (= 77 (get-in data [:args :card :cid]))
+                  "card ref targets the encountered ICE")
+              (is (= 0 (get-in data [:args :ability]))
+                  "index addresses the :runner-abilities vector"))))))))
+
+(deftest use-ability-still-errors-on-truly-missing-card
+  (testing "a card installed nowhere still reports not-found and sends nothing"
+    (let [sent (atom [])]
+      (with-mock-state (encounter-state-vs-bran)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (ai-card-actions/use-ability! "Fenris" 0)]
+            (is (= :error (:status result)))
+            (is (zero? (count @sent)))))))))
+
+(deftest use-ability-errors-on-corp-card-without-runner-abilities
+  (testing "runner use-ability on a Corp card with no :runner-abilities errors without sending"
+    (let [sent (atom [])
+          palisade {:cid 78 :title "Palisade" :zone [:servers :rd :ices]
+                    :side "Corp" :type "ICE" :rezzed true}]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :game-state {:runner {:credit 5 :click 2
+                                              :rig {:program [] :hardware [] :resource []}}
+                                     :corp {:servers {:rd {:ices [palisade] :content []}}}
+                                     :active-player "runner"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (ai-card-actions/use-ability! "Palisade" 0)]
+            (is (= :error (:status result)))
+            (is (zero? (count @sent))
+                "no runner-ability send for a card the Runner can't use")))))))
+
+(deftest use-runner-ability-returns-verified-status
+  (testing "use-runner-ability! verifies and returns a status map (no more fire-and-forget)"
+    (let [sent (atom [])]
+      (with-mock-state (encounter-state-vs-bran)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-ability-in-log (fn [& _] {:status :success})]
+          (let [result (ai-card-actions/use-runner-ability! "Brân 1.0" 0)]
+            (is (= :success (:status result)))
+            (is (= "runner-ability" (:command (:data (first @sent)))))))))))
+
+(deftest use-runner-ability-errors-on-missing-card
+  (testing "use-runner-ability! on an absent card returns an error status map"
+    (with-mock-state (mock-client-state :side "runner")
+      (let [result (ai-card-actions/use-runner-ability! "Brân 1.0" 0)]
+        (is (= :error (:status result)))))))
+
 (comment
   ;; Run all happy path tests
   (run-tests 'ai-actions-test)
