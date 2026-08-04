@@ -1302,3 +1302,108 @@
               (is (= :waiting-for-opponent (:status r))
                   (str "suppressed continue reports an opponent wait, got: " r)))))
         (runner-handlers/reset-state!)))))
+
+;; =============================================================================
+;; #94: sleep mode (--fire-if-asked) must not swallow the Manegarm window
+;; =============================================================================
+;; Marquee 6d8f4cf8 (both seats observed independently): Corp held 8c/12c
+;; against Manegarm Skunkworks' 2c rez and it was never rezzed on two R&D
+;; runs. Root cause: handle-corp-fire-if-asked's "empty run window ->
+;; auto-continue" branch runs EARLIER in the handler chain than
+;; handle-corp-server-upgrade-decision and has no notion of the
+;; movement/pos-0 upgrade-rez window (#67), so sleep mode passes priority
+;; through the Corp's only chance to rez an approach-triggered upgrade —
+;; even when --rez explicitly whitelists it. Its docstring's own contract
+;; is "ALWAYS wakes for rez decisions".
+
+(defn- manegarm-window-state
+  "Corp seat at movement/pos-0 of a run on HQ, unrezzed Manegarm in the root,
+   rez trivially affordable, empty run prompt (both-pass window)."
+  [& {:keys [content] :or {content [{:cid 10 :title "Manegarm Skunkworks"
+                                     :type "Upgrade" :rezzed false}]}}]
+  (mock-client-state
+   :side "corp"
+   :game-state
+   {:run {:phase "movement" :position 0 :server [:hq]}
+    :runner {:prompt-state nil}
+    :corp {:credit 8
+           :prompt-state {:msg "You may use paid abilities"
+                          :prompt-type "run"
+                          :choices []
+                          :selectable []}
+           :servers {:hq {:ices [] :content content}}}}))
+
+(defn- manegarm-window-ctx [strategy]
+  (let [state @state/client-state]
+    {:side "corp"
+     :run-phase "movement"
+     :my-prompt (get-in state [:game-state :corp :prompt-state])
+     :strategy strategy
+     :state state
+     :gameid "test-game"}))
+
+(deftest fire-if-asked-falls-through-at-upgrade-window
+  (testing "sleep mode does NOT auto-continue past movement/pos-0 with an unrezzed root upgrade"
+    (let [sent (atom [])]
+      (with-mock-state (manegarm-window-state)
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-fire-if-asked
+                     (manegarm-window-ctx {:fire-if-asked true}))]
+              (is (nil? r)
+                  (str "must fall through to handle-corp-server-upgrade-decision, got: " r))
+              (is (not-any? #(= "continue" (:command %)) @sent)
+                  "no continue may be sent at the Manegarm window"))))))))
+
+(deftest fire-if-asked-chain-reaches-upgrade-decision
+  (testing "in chain order, sleep mode yields and the upgrade handler surfaces the decision"
+    (let [sent (atom [])]
+      (with-mock-state (manegarm-window-state)
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [ctx (manegarm-window-ctx {:fire-if-asked true})
+                  r (or (corp-handlers/handle-corp-fire-if-asked ctx)
+                        (corp-handlers/handle-corp-server-upgrade-decision ctx))]
+              (is (= :decision-required (:status r))
+                  (str "the Manegarm rez window must surface as a decision, got: " r))
+              (is (= "Manegarm Skunkworks" (:card r))))))))))
+
+(deftest fire-if-asked-with-rez-whitelist-rezzes-upgrade
+  (testing "sleep mode + --rez \"Manegarm Skunkworks\": the committed rez actually fires at the window"
+    (let [sent (atom [])]
+      (with-mock-state (manegarm-window-state)
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [ctx (manegarm-window-ctx {:fire-if-asked true
+                                            :rez #{"Manegarm Skunkworks"}})
+                  r (or (corp-handlers/handle-corp-fire-if-asked ctx)
+                        (corp-handlers/handle-corp-server-upgrade-decision ctx))]
+              (is (= :auto-rezzed-upgrade (:action r))
+                  (str "whitelisted upgrade must be rezzed at its only live window, got: " r))
+              (is (some #(= "rez" (:command %)) @sent)
+                  "a rez command must actually be sent"))))))))
+
+(deftest fire-if-asked-still-sleeps-through-genuinely-empty-window
+  (testing "guard must not wake sleep mode when the root has no unrezzed card (rezzed upgrade only)"
+    (let [sent (atom [])]
+      (with-mock-state (manegarm-window-state
+                        :content [{:cid 10 :title "Manegarm Skunkworks"
+                                   :type "Upgrade" :rezzed true}])
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-fire-if-asked
+                     (manegarm-window-ctx {:fire-if-asked true}))]
+              (is (some #(= "continue" (:command %)) @sent)
+                  (str "an empty window with nothing to rez still auto-continues, got: " r)))))))))
+
+(deftest fire-if-asked-no-rez-still-auto-passes-upgrade-window
+  (testing "sleep mode + --no-rez: standing decline means auto-continue, not a wedge of mutual fall-throughs"
+    (let [sent (atom [])]
+      (with-mock-state (manegarm-window-state)
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [ctx (manegarm-window-ctx {:fire-if-asked true :no-rez true})
+                  r (or (corp-handlers/handle-corp-fire-if-asked ctx)
+                        (corp-handlers/handle-corp-server-upgrade-decision ctx))]
+              (is (some #(= "continue" (:command %)) @sent)
+                  (str "--no-rez must decline by passing (no handler stall), got: " r)))))))))
