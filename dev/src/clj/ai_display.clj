@@ -1941,7 +1941,12 @@
     ;; prompt-state-not-cleared-use-eid) and missed the Brân encounter in
     ;; marquee 6d8f4cf8; keep it only as a fallback for non-run prompts.
     (when (= side :runner)
-      (let [encounter-ice (core/current-run-ice state)
+      ;; Phase gate (review catch): current-run-ice also returns the ICE at
+      ;; approach-ice / mid-run movement, where the click-break is NOT live
+      ;; (engine req is currently-encountering-card) — advertising it there
+      ;; bait-and-switches the seat into a silent refusal + timeout.
+      (let [encounter-ice (when (= "encounter-ice" (get-in gs [:run :phase]))
+                            (core/current-run-ice state))
             prompt-card (get-in gs [:runner :prompt-state :card])
             source-card (if (seq (:runner-abilities encounter-ice))
                           encounter-ice

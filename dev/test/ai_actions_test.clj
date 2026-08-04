@@ -398,6 +398,25 @@
       (let [result (ai-card-actions/use-runner-ability! "Brân 1.0" 0)]
         (is (= :error (:status result)))))))
 
+(deftest use-runner-ability-ambiguous-duplicate-is-not-a-not-found-lie
+  (testing "two copies of the same Corp card: error says disambiguate, never 'not found'"
+    (let [bran2 (assoc bran :cid 78 :zone [:servers :hq :ices])]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :game-state {:runner {:credit 5 :click 2
+                                              :rig {:program [] :hardware [] :resource []}}
+                                     :corp {:servers {:rd {:ices [bran] :content []}
+                                                      :hq {:ices [bran2] :content []}}}
+                                     :run {:position 1 :server ["rd"] :phase "encounter-ice"}
+                                     :active-player "runner"})
+        (let [out (java.io.StringWriter.)
+              result (binding [*out* out] (ai-card-actions/use-runner-ability! "Brân 1.0" 0))]
+          (is (= :error (:status result)))
+          (is (not (clojure.string/includes? (str out) "not found"))
+              (str "a card the disambiguation list just proved installed must not be called 'not found', got:\n" out))
+          (is (clojure.string/includes? (str out) "[0]")
+              "the disambiguation list with index syntax is shown"))))))
+
 (comment
   ;; Run all happy path tests
   (run-tests 'ai-actions-test)

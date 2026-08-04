@@ -12,6 +12,7 @@ SIDE="${1:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag]}"
 MODEL="${2:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag]}"
 TAG="${3:-$(date '+%Y%m%d-%H%M')}"
 cd "$(dirname "$0")/.." || exit 1
+mkdir -p logs
 LOG="logs/marquee-${SIDE}-${MODEL}-${TAG}-chunks.log"
 
 NUDGE="The Netrunner game is STILL LIVE and you are the ${SIDE} seat. Your last reply ended without finishing the game — that strands the match. Do NOT narrate intentions and do NOT end your reply until ./dev/send_command ${SIDE} game-over-status prints GAME-OVER or GAME-GONE. EXECUTE commands now: check status, take your turn(s), use the blocking wait loop between turns (C=\$(./dev/send_command ${SIDE} get-cursor); ./dev/send_command ${SIDE} wait --since \"\$C\"), and keep looping. A wait timeout is benign — re-issue wait. Keep appending to your move-by-move rationale as you play; produce the final report only at GAME-OVER/GAME-GONE."

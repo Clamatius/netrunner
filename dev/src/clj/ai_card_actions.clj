@@ -300,6 +300,35 @@
 
 (declare use-runner-ability!)
 
+(defn- corp-title-match-count
+  "How many installed Corp cards share the parsed title. >1 means
+   find-installed-corp-card just printed its disambiguation list and returned
+   nil because the reference is AMBIGUOUS — not because the card is absent.
+   Callers must not follow that list with a 'not found' lie (review catch on
+   #95; misleading-output class)."
+  [card-name]
+  (let [{:keys [title]} (core/parse-card-reference card-name)
+        servers (state/corp-servers)]
+    (->> (concat (mapcat :ices (vals servers))
+                 (mapcat :content (vals servers)))
+         (filter #(= title (:title %)))
+         count)))
+
+(defn- ambiguous-or-missing-error
+  "Honest error result for a nil corp-card lookup: ambiguity gets a
+   disambiguate hint (the list is already printed), absence gets not-found."
+  [card-name]
+  (if (> (corp-title-match-count card-name) 1)
+    (do
+      (println (str "   Re-run with the [N] suffix, e.g. \"" card-name " [0]\""))
+      (flush)
+      {:status :error
+       :reason (str "Ambiguous: multiple copies of " card-name " installed — specify [N]")})
+    (do
+      (println (str "❌ Card not found installed: " card-name))
+      (flush)
+      {:status :error :reason (str "Card not found: " card-name)})))
+
 (defn use-ability!
   "Use an installed card's ability. Returns status map:
    - {:status :success} - ability fired
@@ -380,10 +409,7 @@
             (println (str "❌ " card-name " is a Corp card with no Runner-usable abilities"))
             (flush)
             {:status :error :reason (str "No runner-abilities on Corp card: " card-name)}))
-        (do
-          (println (str "❌ Card not found installed: " card-name))
-          (flush)
-          {:status :error :reason (str "Card not found: " card-name)})))))
+        (ambiguous-or-missing-error card-name)))))
 
 (defn use-runner-ability!
   "Use a Runner-usable ability printed on a Corp card (e.g. bioroid
@@ -403,10 +429,7 @@
         ability (when card (nth runner-abilities ability-index nil))]
     (cond
       (not card)
-      (do
-        (println (str "❌ Corp card not found installed: " card-name))
-        (flush)
-        {:status :error :reason (str "Card not found: " card-name)})
+      (ambiguous-or-missing-error card-name)
 
       (not ability)
       (do

@@ -1451,3 +1451,25 @@
             (str "runner-usable ability is listed, got:\n" out))
         (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
             (str "exact invocation must be printed, got:\n" out))))))
+
+(deftest playables-no-click-break-outside-encounter
+  (testing "list-playables must not advertise use-runner-ability at approach-ice (out of window => engine silently refuses, client times out)"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:runner {:credit 5 :click 2
+                             :rig {:program [] :hardware [] :resource []}
+                             :prompt-state nil}
+                    :corp {:servers {:rd {:ices [bran-ice] :content []}}}
+                    :run {:position 1 :server ["rd"] :phase "approach-ice"}
+                    :active-player "runner"})
+      (let [out (with-out-str (display/list-playables))]
+        (is (not (str/includes? out "use-runner-ability"))
+            (str "click-break is only live during encounter-ice, got:\n" out))))))
+
+(deftest playables-shows-click-break-during-encounter
+  (testing "list-playables still advertises the click-break in the live window"
+    (with-mock-state (bran-encounter-state)
+      (let [out (with-out-str (display/list-playables))]
+        (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
+            (str "encounter-ice window must surface the invocation, got:\n" out))))))
