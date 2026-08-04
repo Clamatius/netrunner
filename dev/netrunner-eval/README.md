@@ -2,16 +2,15 @@
 
 A benchmark for testing strategic reasoning in the asymmetric card game Android: Netrunner.
 
-> **Scope: this eval is Beginner / 6-point by design.** The problems are built on
-> System Gateway **Beginner** decks (see `decklists.md`), which is a **6 agenda points
-> to win** format. This is internally correct, *not* a stale leftover from live play —
-> several problems (`midgame-001`, `scoring-002`) have reference answers whose lessons
-> depend on lethality *at 6 points*. **Do not "fix" the win threshold to 7 without
-> re-scoping the decks to Intermediate** — a raw number bump against Beginner decks
-> describes a hybrid format that is worse than either option. Live marquee games use SG
-> **Intermediate** decks (7-point); that parity is a deliberate future task (re-scope to
-> Intermediate decklists + rewrite the threshold-dependent answer keys), tracked as
-> option **(B)** in the `ai-netrunner` forum thread. See `## Limitations` below.
+> **Scope: System Gateway Beginner decks, standard 7-point threshold.** The problems
+> are built on SG **Beginner** decklists (see `decklists.md`) but are played and scored
+> at the standard **7 agenda points to win**. Until 2026-07-22 this eval used the
+> tutorial 6-point threshold; it was harmonized to 7 (PM decision: one threshold
+> everywhere beats fidelity to a tutorial-only rule) and the threshold-dependent
+> problems (`midgame-001`, `scoring-002`, `score-001`, `window-001`) were renumbered so
+> their lessons still bind at 7. Results in `model_answers/` dated before 2026-07-22
+> were scored against the 6-point set and are **not directly comparable** to runs on
+> the current set.
 
 ## What This Tests
 
@@ -130,7 +129,7 @@ Approximate token counts:
 
 ## Limitations
 
-- Tutorial decks only (System Gateway **Beginner** — 6-point win; see scope note at top)
+- Tutorial decks only (System Gateway **Beginner** decklists, played to the standard **7 points**; see scope note at top)
 - No advanced mechanics (tags, bad publicity, etc.)
 - Some problems have multiple valid answers
 - Strategic "best" is sometimes subjective

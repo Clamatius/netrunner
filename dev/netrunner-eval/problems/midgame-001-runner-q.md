@@ -2,8 +2,8 @@
 
 ## Situation
 Turn 8. You're Runner.
-Format: Tutorial — **6 agenda points to win** (System Gateway tutorial decks).
-Score: Corp 3, Runner 3 (both scored [[Offworld Office]] + [[Superconducting Hub]])
+Format: **7 agenda points to win** (System Gateway tutorial decks).
+Score: Corp 4, Runner 4 (Corp scored 2x [[Offworld Office]]; Runner stole [[Offworld Office]] + 2x [[Superconducting Hub]])
 ID: The Catalyst (no special ability, 40 card min, 1 link)
 
 ## Board State
@@ -11,7 +11,7 @@ ID: The Catalyst (no special ability, 40 card min, 1 link)
 ```yaml
 corp:
   credits: 5
-  points: 3  # Offworld Office + Superconducting Hub
+  points: 4  # 2x Offworld Office
   HQ:
     cards: 4  # Urtica Cipher, Nico Campaign, Palisade, Whitespace
   Server 1:
@@ -22,7 +22,7 @@ corp:
 
 runner:
   credits: 2
-  points: 3  # Offworld Office + Superconducting Hub
+  points: 4  # Offworld Office + 2x Superconducting Hub
   clicks: 4
   grip:
     - {card: VRcation}
@@ -46,8 +46,8 @@ Last turn you ran HQ with Docklands Pass and saw all 4 cards: [[Urtica Cipher]],
 **What could be in the remote with 2 advancement counters?**
 From the tutorial Corp decklist, cards that can be advanced:
 - [[Send a Message]] (5 advancements to score, worth 3 points)
-- [[Offworld Office]] (4 advancements to score, worth 2 points - already scored)
-- [[Superconducting Hub]] (3 advancements to score, worth 1 point - already scored)
+- [[Offworld Office]] (4 advancements to score, worth 2 points - all 3 copies scored/stolen)
+- [[Superconducting Hub]] (3 advancements to score, worth 1 point - both copies stolen)
 - [[Urtica Cipher]] (ambush, already seen in HQ)
 
 

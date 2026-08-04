@@ -4,119 +4,149 @@
 
 ### Q1: Can the Runner contest Server 1?
 
-**No Killer = Brân is a wall.**
+**Yes — cheaply. Brân is a tax, not a wall.** This is the problem's main trap, and it
+has two independent parts.
 
-Runner has Cleaver (fracter) and Unity (decoder), but no killer. Brân is a Barrier, so Cleaver breaks it... but look at the cost:
+**Part 1 — Brân only has TWO end-the-run subroutines.**
 
-| Method | Clicks | Credits | Total Cost |
-|--------|--------|---------|------------|
-| Click through (3 subs) | 3 | $0 | 3 clicks + 1 run = 4 clicks (entire turn!) |
-| Break with Cleaver | 1 | $8 | Boost $6 (3→6 str) + break $2 (2 uses) |
+```
+↳ You may install 1 piece of ice from HQ or Archives directly inward.   ← not an ETR
+↳ End the run.
+↳ End the run.
+```
 
-Runner has $7. They literally cannot afford to break Brân with Cleaver ($8 needed).
+Sub 1 does not stop the run. A Runner willing to let it fire needs to beat only two
+subroutines.
 
-**Conclusion:** Server 1 is safe this turn. Even clicking through costs their entire turn.
+**Part 2 — the Runner has more money than $7.** Pennyshaver: `[click]: Place 1 credit
+on this hardware, then take all credits from it.` With $2 hosted that is **+$3 for one
+click → $10**.
+
+**Actual cost to get through Brân** (Cleaver str 3 vs Brân str 6; boost $2 per +1;
+`1[credit]: Break up to 2 barrier subroutines`):
+
+| Method | Clicks | Credits | Affordable? |
+|--------|--------|---------|-------------|
+| Click-break both ETRs (let sub 1 fire) | 1 run + 2 = **3** | **$0** | Yes — and leaves a click |
+| Click-break all 3 subs | 1 run + 3 = 4 | $0 | Yes (whole turn) |
+| Cleaver both ETRs (let sub 1 fire) | **1** | $6 boost + $1 = **$7** | Yes — *exactly* their pool |
+| Cleaver all 3 subs | 1 | $6 + $2 = $8 | Yes after a Pennyshaver click ($10) |
+
+The old claim — "$8 needed, Runner has $7, they literally cannot afford it" — is wrong
+twice over: they can decline to break sub 1 ($7 exactly), and they can click Pennyshaver
+for $10 anyway.
+
+**What sub 1 is actually worth (the gamble, from both sides):**
+
+If the Runner lets sub 1 fire and the Corp *does* hold ICE, the Corp installs it
+**directly inward, ignoring all costs** — a free inner ICE on the scoring remote, no
+install click and no install cost paid, and every future run on that server is far more
+expensive. That is the risk the Runner takes, and it is why the safe line breaks all three.
+
+**But on this board the Corp holds no ICE.** HQ is `[Send a Message, Superconducting Hub,
+Nico Campaign, Urtica Cipher, Hedge Fund]` — every card is an agenda, asset, upgrade, or
+operation. Sub 1 is **blank**, and the Corp cannot reinforce Server 1 at all this turn.
+The Runner doesn't know that; the Corp does, and must plan on the assumption that a
+Runner who guesses right gets in for 3 clicks and $0.
 
 ---
 
 ### Q2: What's the HQ risk?
 
-**Send a Message in HQ is a liability.**
+**HQ is the real crisis, and it is cheap to attack.**
 
-If Runner runs HQ instead of contesting remotes:
-- Palisade costs $2 to break (Cleaver: $0 boost, $1 break)
-- 1 in 5 chance to access Send a Message = instant 3 points for Runner
+Palisade only gets +2 strength *while protecting a remote*. On HQ it is **strength 2**,
+below Cleaver's 3 — no boost needed, break is **$1 flat**. HQ costs one click and one
+credit per look.
 
-| HQ Size | SaM Access Risk |
-|---------|-----------------|
-| 5 cards | 20% |
-| 4 cards | 25% |
-| 6 cards | 17% |
-| 7 cards | 14% |
+**Behind that $1 door:** 2 agendas in 5 cards, worth 4 points.
 
-**More cards in HQ = better protection for Send a Message.**
+| Card accessed | Runner result |
+|---------------|---------------|
+| Send a Message (3 pts) | Runner 3 → 6 |
+| Superconducting Hub (1 pt) | Runner 3 → 4 |
+| Anything else (3 of 5) | Nothing |
+
+**40% per access, at $1 a go.** Stealing *both* wins them the game (3 + 4 = 7).
+
+| HQ Size | Agenda access risk |
+|---------|--------------------|
+| 5 cards | 40% |
+| 4 cards | 50% |
+| 3 cards | 67% |
 
 ---
 
 ### Q3: How do choices affect risk?
 
-**Don't play Hedge Fund!**
+Two forces pull against each other:
 
-| Action | HQ After | SaM Risk | Notes |
-|--------|----------|----------|-------|
-| Hedge Fund | 4 cards | 25% | WORSE - removes a card |
-| Install from HQ | 4 cards | 25% | Neutral if we install something |
-| Credit | 5 cards | 20% | Keeps sandbags |
-| Install + Install | 3 cards | 33% | Much worse! |
+1. **Cards in HQ are shields.** Playing Hedge Fund or installing a non-agenda *raises*
+   the density of what's left.
+2. **Installing an agenda removes it from the random-access pool entirely** — no longer
+   stealable off a $1 HQ run, only by contesting the remote.
 
-The key insight: **cards in HQ are shields for Send a Message**.
+Installing **Superconducting Hub** does both at once: HQ drops to 4 cards but from 2
+agendas to 1, so density falls 40% → 25%, and the maximum HQ haul falls from 4 points
+(game-winning) to 3 (not). Playing **Hedge Fund** is the worst of both: −1 shield, no
+agenda removed, and $11 is already ample.
 
 ---
 
 ## Optimal Line
 
-**Click 1:** Install Superconducting Hub in Server 1 (behind Brân)
-**Click 2:** Install Nico Campaign in Server 2
-**Click 3:** Take 1 credit ($12 total)
+**The Corp's win condition is Send a Message** — at 4 points, scoring it is 7 and the
+game. Superconducting Hub only reaches 5. There is no Seamless Launch in hand, so SaM
+needs five hard advancements, and it cannot be protected by an ICE that costs $7 or
+3 clicks to pass. Jamming SaM here loses it.
 
-**Why this works:**
+**Recommended: install Urtica Cipher in Server 1, advance, advance.** (End: $9.)
 
-1. **Hub is protected.** Runner can't afford to break Brân, clicking through costs 4 clicks total.
+At 4 points, *any* 2-counter card in your remote is a must-check — if it were Send a
+Message you would score it next turn and win, so the Runner cannot assume bluff. When
+they pay the Brân tax and access, Urtica at 2 counters does **2 + 2 = 4 net damage**
+into a 4-card grip: empty hand, no steal, most of their turn gone. You jam the real
+agenda next turn against an empty grip.
 
-2. **If Hub scores next turn:**
-   - Gain 1 point (Corp to 4)
-   - Draw 2 cards (HQ goes from 3 → 5)
-   - SaM now 1 in 5 instead of 1 in 3
+**The honest costs:** if they read the bluff and ignore it, you have spent a turn and $2
+and still hold 2 agendas in a $1-to-break HQ. And even when they *do* check via the
+3-click line, they keep 1 click and $7 — enough for one $1 HQ poke at 40%.
 
-3. **Nico in Server 2 is a tempo test:**
-   - If they trash it ($2), they're down to $5, still can't threaten Brân
-   - If they ignore it, you gain $9 over 3 turns
-   - Either way, you win the exchange
+**Defensible alternative: install Superconducting Hub in Server 1, advance, advance.**
+Cuts HQ's maximum haul from 7-point lethal to 3, and scores next turn if unchecked
+(+1 point, draw 2, refilling HQ's shields). If they check, they spend their whole turn
+and their credits for a single point — an acceptable trade. Prefer this if you would
+rather de-risk HQ than gamble on a bluff being called.
 
-4. **Credit instead of Hedge Fund:**
-   - Keeps HQ at 3 cards (after 2 installs)
-   - $12 is plenty to advance Hub next turn
-   - Don't need $15 right now
-
-**Next turn:** Advance Hub 3 times, score. Draw 2. Now at 4 points with a fuller hand protecting SaM.
+Both lines score as correct. What is **not** correct is any line whose reasoning rests
+on "the Runner can't get into Server 1."
 
 ---
 
 ## Wrong Lines
 
-### The "Just Jam SaM" Trap
-
-Install Send a Message in Server 1, advance, advance.
-- SaM at 2 advancements, needs 3 more
-- Takes 2 more turns to score
-- Runner has time to find a Killer
-- Meanwhile HQ has only 4 cards protecting nothing critical
-
 ### The "Hedge Fund First" Trap
+Hedge Fund ($15), install, advance — HQ drops to 3 cards with both agendas still in it
+(67% per access). The $4 does nothing this turn; you are already at $11.
 
-Hedge Fund ($15), install Hub, advance.
-- HQ drops to 3 cards
-- If Runner checks HQ, 33% to steal SaM
-- The $4 net gain doesn't help this turn
+### The "Jam Send a Message" Trap
+SaM needs 3 more advancements with no Seamless in hand, so it sits for a full Runner
+turn behind a $7 ICE. Stealing it puts them at 6 and removes your only route to 7.
 
-### The "All-In Bluff" Trap
-
-Install Urtica in Server 1, advance, advance.
-- Runner must check (you're at 3 points)
-- They eat 4 damage (2 base + 2 from advancements)
-- But now you have no trap threat remaining
-- Brân alone doesn't protect real agendas long-term
+### The "Brân is a wall" Trap
+Any plan that assumes Server 1 is safe. It costs 3 clicks and $0, or one click and $7.
 
 ---
 
 ## Key Takeaways
 
-1. **HQ cards are armor.** Every card in hand reduces agenda access probability.
-
-2. **Score the small agenda first.** Hub is 3/1, easy to score behind Brân. SaM is 5/3, needs a real remote or Seamless Launch.
-
-3. **Don't spend cards you don't need to.** Hedge Fund gains credits but costs a card from HQ.
-
-4. **Create lose-lose for Runner.** Nico in an empty remote: trash it (tempo loss) or let it fire (econ advantage).
-
-5. **Brân without a Killer is a 4-click tax.** That's the whole Runner turn. Abuse this window.
+1. **Read every subroutine, not just the count.** Brân is a 3-sub ICE with only 2 ETRs.
+   Its first subroutine is a *conditional* threat — worthless when your hand holds no
+   ICE, devastating when it does.
+2. **Bioroid ICE is priced in clicks.** "They can't afford it" is meaningless against an
+   ICE that can be paid with clicks.
+3. **Check the board for hidden economy.** Pennyshaver turns $7 into $10 for one click.
+4. **Palisade is strength 2 on centrals.** The card that taxes $3 on a remote taxes $1
+   on HQ.
+5. **Installing an agenda is a defensive act.** It leaves the random-access pool, and its
+   points stop being available to a lucky $1 run.

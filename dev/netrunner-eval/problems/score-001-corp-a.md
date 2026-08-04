@@ -3,9 +3,9 @@
 ## Expected Reasoning
 
 **Win condition check:**
-- Corp at 5 points, needs 1 more to win
+- Corp at 6 points, needs 1 more to win
 - Superconducting Hub is 1 point (3 adv requirement)
-- Runner at 4 points, needs 2 more
+- Runner at 5 points, needs 2 more
 
 **Can Runner contest the remote?**
 - Runner has: Cleaver (Fracter), Unity (Decoder)

@@ -6,7 +6,7 @@
 
 We saw Urtica Cipher in HQ last turn. A card with 2 advancements in a remote is the classic Urtica bluff line - install, advance twice, looks like a 5/3 agenda.
 
-But Corp also drew a card this turn (mandatory draw). The unseen cards include 2x Send a Message. If it's Send a Message at 2 adv, Corp's next turn: advance, advance, advance, score (2 → 5 advancements) → Corp reaches **6 agenda points → Corp wins** (tutorial threshold = 6; Corp 3 + Send a Message 3 = 6). This is the single fact that makes the whole turn forced — at the standard 7-point threshold the same score would be 6-3, *threatening but not lethal*, and the calculus below would be much softer.
+But Corp also drew a card this turn (mandatory draw). The unseen cards include 2x Send a Message. If it's Send a Message at 2 adv, Corp's next turn: advance, advance, advance, score (2 → 5 advancements) → Corp reaches **7 agenda points → Corp wins** (Corp 4 + Send a Message 3 = 7). This is the single fact that makes the whole turn forced. And it cuts both ways: stealing it puts *you* at 7 (Runner 4 + 3) — the remote is double game point.
 
 **The decision:**
 - If it's Urtica: 4 net damage, we have 5 cards, we survive with 1
@@ -39,7 +39,7 @@ Click 1: Run Server 1
   - Approach Palisade → Boost Cleaver ($2), break ($1) → $0
   - Access:
     - If Urtica: Take 4 net damage, survive with 1 card
-    - If agenda: STEAL
+    - If agenda: STEAL → 7 points, you WIN
 ```
 
 **Post-access state:**

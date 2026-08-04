@@ -1,6 +1,6 @@
 # Problem: servers-001-runner [Medium]
 
-> **Note:** Tutorial games are played to **6 points** (not the standard 7).
+> **Note:** Games are played to **7 points**.
 
 ## Context
 
@@ -56,4 +56,10 @@ Interface → 1[credit]: Break 1 code gate subroutine.
 
 ## Question
 
-Access both HQ and R&D this turn, maximizing total accesses. What is the maximum number of cards you can access, and what is the sequence of actions?
+Access both HQ and R&D this turn, maximizing total accesses.
+
+**Q1:** How many accesses can you **guarantee**, relying on no draw luck? Give the sequence.
+
+**Q2:** What is the **maximum** you can reach if the cards Jailbreak draws cooperate? Give the sequence.
+
+(Count access *events*. Note where a repeated access would show you a card you have already seen.)
