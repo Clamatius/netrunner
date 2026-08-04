@@ -5,15 +5,25 @@
 # Proven in marquee 6d8f4cf8 (Terra Corp: one nudge chunk then played the
 # entire remaining game). Harmless when unneeded — it exits on GAME-OVER.
 #
-# Usage: dev/marquee-babysit.sh <corp|runner> <devin-model> [log-tag]
-#   e.g. dev/marquee-babysit.sh runner gpt-5.6-sol game-a
+# Usage: dev/marquee-babysit.sh <corp|runner> <devin-model> [log-tag] [primary-pid]
+#   e.g. dev/marquee-babysit.sh runner gpt-5.6-sol game-a 12345
+# If primary-pid is given, the loop first WAITS for that process to exit —
+# `devin -p -c` continues the most recent conversation, so nudging while the
+# primary seat process is still alive would double-drive one conversation.
 set -u
-SIDE="${1:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag]}"
-MODEL="${2:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag]}"
+SIDE="${1:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag] [primary-pid]}"
+MODEL="${2:?usage: marquee-babysit.sh <corp|runner> <devin-model> [log-tag] [primary-pid]}"
 TAG="${3:-$(date '+%Y%m%d-%H%M')}"
+PRIMARY_PID="${4:-}"
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs
 LOG="logs/marquee-${SIDE}-${MODEL}-${TAG}-chunks.log"
+
+if [ -n "$PRIMARY_PID" ]; then
+  echo "waiting for primary seat process $PRIMARY_PID to exit before babysitting..."
+  while kill -0 "$PRIMARY_PID" 2>/dev/null; do sleep 20; done
+  echo "primary seat process $PRIMARY_PID exited; babysitter active"
+fi
 
 NUDGE="The Netrunner game is STILL LIVE and you are the ${SIDE} seat. Your last reply ended without finishing the game — that strands the match. Do NOT narrate intentions and do NOT end your reply until ./dev/send_command ${SIDE} game-over-status prints GAME-OVER or GAME-GONE. EXECUTE commands now: check status, take your turn(s), use the blocking wait loop between turns (C=\$(./dev/send_command ${SIDE} get-cursor); ./dev/send_command ${SIDE} wait --since \"\$C\"), and keep looping. A wait timeout is benign — re-issue wait. Keep appending to your move-by-move rationale as you play; produce the final report only at GAME-OVER/GAME-GONE."
 
