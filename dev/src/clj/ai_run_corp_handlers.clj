@@ -38,12 +38,24 @@
    :approach-server) and a continue from us is never legitimate. The engine has
    no in-flight guard there: each duplicate continue re-fires the checkpoint and
    mints a duplicate opponent prompt (marquee g2 wedge — five stacked Manegarm
-   prompts). Suppress and report an opponent wait so loops idle instead of spin."
+   prompts). Suppress and report an opponent wait so loops idle instead of spin.
+
+   Second guard (#98): if the engine already recorded US as this window's
+   passer (:no-action names us), the opponent owes the window — a repeat
+   continue is a no-op that only feeds the stuck-detector's false alarm."
   [gameid]
-  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+  (cond
+    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
     {:status :waiting-for-opponent
      :action :continue-suppressed-waiting-prompt
      :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+
+    (core/i-already-passed-run-window? @state/client-state (:side @state/client-state))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-already-passed
+     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
+
+    :else
     (do
       (ws/send-message! :game/action
                         {:gameid gameid

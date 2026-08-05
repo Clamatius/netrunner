@@ -1148,6 +1148,95 @@
     (when (or (pos? (:fail results)) (pos? (:error results)))
       (System/exit 1))))
 
+;; ============================================================================
+;; send-continue! already-passed guard (#98)
+;;
+;; The engine records the first side to pass a run/encounter priority window
+;; in :no-action. When it already names US, the opponent owes the window — a
+;; repeat continue from us is a no-op (or worse, a #75 checkpoint re-fire),
+;; and returning :action-taken for it spun the stuck-detector into a false
+;; '⚠️ Stuck in same state' alarm while the Runner was legitimately thinking
+;; (3+ marquee occurrences: Funhouse tag decision, Tithe post-fire window).
+;; The guard lives in ALL THREE send-continue! copies.
+;; ============================================================================
+
+(def ^:private send-continue-copies
+  {"corp-handlers"   #'corp-handlers/send-continue!
+   "runner-handlers" #'runner-handlers/send-continue!
+   "ai-runs"         #'runs/send-continue!})
+
+(defn- no-action-state
+  "Corp seat mid-encounter with no own prompt; :no-action per args."
+  [& {:keys [run-no-action enc-no-action]}]
+  (mock-client-state
+   :side "corp"
+   :game-state {:corp {:prompt-state nil}
+                :runner {}
+                :run (cond-> {:phase "encounter-ice" :position 1 :server ["hq"]}
+                       (some? run-no-action) (assoc :no-action run-no-action))
+                :encounters (when (some? enc-no-action) {:no-action enc-no-action})
+                :active-player "runner"}))
+
+(deftest send-continue-suppressed-when-engine-records-us-as-passer
+  (doseq [[copy-name send-continue] send-continue-copies]
+    (testing (str copy-name ": run-level :no-action naming us suppresses the repeat continue")
+      (let [sent (atom [])]
+        (with-mock-state (no-action-state :run-no-action "corp")
+          (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+            (let [r (send-continue "fake-gameid")]
+              (is (= :waiting-for-opponent (:status r))
+                  (str copy-name ": already-passed must read as an opponent wait, got: " r))
+              (is (= :continue-suppressed-already-passed (:action r)))
+              (is (zero? (count @sent))
+                  (str copy-name ": must not re-send continue after we already passed")))))))
+    (testing (str copy-name ": encounter-level :no-action (keyword form) also suppresses")
+      (let [sent (atom [])]
+        (with-mock-state (no-action-state :enc-no-action :corp)
+          (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+            (let [r (send-continue "fake-gameid")]
+              (is (= :waiting-for-opponent (:status r)))
+              (is (zero? (count @sent))))))))))
+
+(deftest send-continue-still-sends-when-opponent-was-first-passer
+  (doseq [[copy-name send-continue] send-continue-copies]
+    (testing (str copy-name ": opponent recorded as first passer — WE owe the closing pass, continue must send")
+      (let [sent (atom [])]
+        (with-mock-state (no-action-state :run-no-action "runner")
+          (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+            (let [r (send-continue "fake-gameid")]
+              (is (= :action-taken (:status r))
+                  (str copy-name ": suppressing OUR owed pass would deadlock the run, got: " r))
+              (is (= 1 (count @sent))))))))
+    (testing (str copy-name ": nobody has passed yet — continue must send")
+      (let [sent (atom [])]
+        (with-mock-state (no-action-state)
+          (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+            (let [r (send-continue "fake-gameid")]
+              (is (= :action-taken (:status r)))
+              (is (= 1 (count @sent))))))))))
+
+(deftest send-continue-second-pass-bypasses-only-the-passed-guard
+  (testing "#31 self-advance: :second-pass? true sends the deliberate second continue"
+    (let [sent (atom [])]
+      (with-mock-state (assoc (no-action-state :run-no-action "runner") :side "runner")
+        (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+          (let [r (#'runs/send-continue! "fake-gameid" :second-pass? true)]
+            (is (= :action-taken (:status r)))
+            (is (= 1 (count @sent))))))))
+  (testing "the waiting-prompt guard (#75) is NOT bypassed by :second-pass?"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                        :side "runner"
+                        :game-state {:runner {:prompt-state {:prompt-type "waiting"
+                                                             :msg "Waiting for Corp"}}
+                                     :run {:phase "approach-ice" :position 1
+                                           :no-action "runner"}})
+        (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
+          (let [r (#'runs/send-continue! "fake-gameid" :second-pass? true)]
+            (is (= :continue-suppressed-waiting-prompt (:action r))
+                "a blocked checkpoint must never receive a continue, even a deliberate second pass")
+            (is (zero? (count @sent)))))))))
+
 (comment
   ;; Run all tests
   (run-tests 'ai-runs-test)

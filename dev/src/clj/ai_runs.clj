@@ -812,12 +812,30 @@
    'waiting' prompt, the engine is mid-checkpoint on the OPPONENT and a
    continue from us re-fires that checkpoint (duplicate-prompt minting — the
    marquee-g2 Manegarm wedge). Suppress and report an opponent wait instead.
-   Same guard as the ai-run-corp-handlers copy."
-  [gameid]
-  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+   Same guard as the ai-run-corp-handlers copy.
+
+   Second guard (#98): if the engine already recorded US as this window's
+   passer (:no-action names us), the opponent owes the window — a repeat
+   continue is a no-op that only feeds the stuck-detector's false alarm.
+   `:second-pass? true` bypasses ONLY this guard: the #31 self-advance
+   deliberately sends the window's SECOND continue after proving the
+   opponent abandoned it (the engine's advance branch has no side-check).
+   The waiting-prompt guard is never bypassed — a blocked checkpoint must
+   not receive a continue from anyone (#75)."
+  [gameid & {:keys [second-pass?]}]
+  (cond
+    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
     {:status :waiting-for-opponent
      :action :continue-suppressed-waiting-prompt
      :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+
+    (and (not second-pass?)
+         (core/i-already-passed-run-window? @state/client-state (:side @state/client-state)))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-already-passed
+     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
+
+    :else
     (do
       (ws/send-message! :game/action
                         {:gameid gameid
@@ -1093,7 +1111,9 @@
       (when (>= stalled-ms self-advance-grace-ms)
         (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
                          (/ stalled-ms 1000.0)))
-        (send-continue! gameid)))))
+        ;; Deliberate SECOND pass of an abandoned window — bypasses the #98
+        ;; already-passed guard, which exists to stop accidental repeats.
+        (send-continue! gameid :second-pass? true)))))
 
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"

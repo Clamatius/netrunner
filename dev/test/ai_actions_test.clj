@@ -417,6 +417,46 @@
           (is (clojure.string/includes? (str out) "[0]")
               "the disambiguation list with index syntax is shown"))))))
 
+;; ============================================================================
+;; verify-ability-in-log wiring (#97): a nil pre-prompt is a real baseline
+;;
+;; use-ability! captures pre-prompt BEFORE sending; when no prompt was open
+;; that capture is nil. The old `(or pre-prompt (state/get-prompt))` treated
+;; nil as "not supplied" and re-read AFTER the send — an ability whose only
+;; observable effect is a fast prompt (Red Team's server choice, ~250ms) got
+;; its own prompt captured as the baseline and false-failed as '❌ timeout'
+;; while the prompt sat live (100% repro, marquee 30c4a1c0). The pure
+;; classifier was already eid-aware; the bug lived in this wiring, which
+;; every other test stubbed out.
+;; ============================================================================
+
+(def ^:private red-team-prompt
+  {:eid {:eid 9575} :msg "Choose a server" :prompt-type "other"
+   :choices [{:value "Archives"} {:value "R&D"} {:value "HQ"} {:value "Cancel"}]})
+
+(deftest verify-ability-nil-pre-prompt-sees-fast-prompt
+  (testing "explicit nil pre-prompt + live prompt in state -> :waiting-input, not timeout"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:runner {:prompt-state red-team-prompt}
+                                   :log [{:text "a"} {:text "b"}]})
+      (let [result (ai-core/verify-ability-in-log "Red Team" 300
+                                                  {:pre-log-size 2 :pre-prompt nil})]
+        (is (= :waiting-input (:status result))
+            "the prompt that appeared after send IS the ability's effect")
+        (is (= red-team-prompt (:prompt result)))))))
+
+(deftest verify-ability-omitted-pre-prompt-still-falls-back
+  (testing "omitting the :pre-prompt key entirely keeps the live-read fallback"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:runner {:prompt-state red-team-prompt}
+                                   :log [{:text "a"} {:text "b"}]})
+      (let [result (ai-core/verify-ability-in-log "Red Team" 60
+                                                  {:pre-log-size 2})]
+        (is (= :error (:status result))
+            "with no baseline supplied the live prompt is the baseline; nothing new happens")))))
+
 (comment
   ;; Run all happy path tests
   (run-tests 'ai-actions-test)

@@ -32,8 +32,16 @@
    the eid stays constant across iterations but the :msg field updates. We
    treat a :msg change as progress so we don't spuriously print 'Timeout'
    after each successful pay-step."
-  [old-eid & {:keys [timeout-ms old-msg] :or {timeout-ms 3000}}]
-  (let [baseline-msg (or old-msg (:msg (state/get-prompt)))]
+  [old-eid & {:keys [timeout-ms old-msg] :as opts :or {timeout-ms 3000}}]
+  ;; A nil/absent :old-msg used to fall back to a read taken AFTER the choice
+  ;; was already sent — a same-eid prompt whose :msg advanced faster than this
+  ;; call starts (Mutual Favor, #97) had the NEW msg captured as baseline, so
+  ;; the change was invisible and a resolved choice was reported 'NOT treating
+  ;; as resolved'. Callers now pass the pre-send msg; the live read remains
+  ;; only for callers that genuinely didn't supply the key.
+  (let [baseline-msg (if (contains? opts :old-msg)
+                       old-msg
+                       (:msg (state/get-prompt)))]
     (loop [waited 0]
       (if (>= waited timeout-ms)
         (do
@@ -84,7 +92,7 @@
         ;; unchanged prompt is still blocking, so auto-end could never fire and
         ;; the hook would only print a spurious "resolve the prompt" warning.
         ;; (See choose-card! for the partial-multi-select case this bites.)
-        (when (wait-for-prompt-change! old-eid)
+        (when (wait-for-prompt-change! old-eid :old-msg (:msg prompt))
           (maybe-auto-end-turn-after-prompt!))
         (core/with-cursor {:status :success}))
       (do
@@ -110,7 +118,8 @@
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         old-eid (:eid prompt)
         old-msg (:msg prompt)
-        old-cid (get-in prompt [:card :cid])]
+        old-cid (get-in prompt [:card :cid])
+        old-choice-values (mapv :value (:choices prompt))]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"
@@ -120,7 +129,7 @@
     ;; prompt unchanged — that must NOT read as success, and the success line
     ;; must not print before we know. Only run the auto-end hook if the prompt
     ;; actually moved (see choose-card!).
-    (if (wait-for-prompt-change! old-eid)
+    (if (wait-for-prompt-change! old-eid :old-msg old-msg)
       ;; Capture the revealed prompt BEFORE the auto-end hook runs (guest
       ;; review): the hook can itself advance state, and duplicate detection
       ;; must observe the prompt the choice immediately revealed.
@@ -134,20 +143,38 @@
             ;; Fingerprint requires a PRESENT msg and card cid (guest review):
             ;; nil = nil must not identify two different card-less prompts that
             ;; share a generic msg like "Choose one".
-            duplicate? (and new-prompt
-                            (not= (:eid new-prompt) old-eid)
-                            (some? old-msg)
-                            (= (:msg new-prompt) old-msg)
-                            (some? old-cid)
-                            (= (get-in new-prompt [:card :cid]) old-cid))]
+            same-shape? (and new-prompt
+                             (not= (:eid new-prompt) old-eid)
+                             (some? old-msg)
+                             (= (:msg new-prompt) old-msg)
+                             (some? old-cid)
+                             (= (get-in new-prompt [:card :cid]) old-cid))
+            ;; A stacked duplicate re-poses the SAME decision, so its choice
+            ;; VALUES match (uuids differ per instance — compare labels). A
+            ;; same-shaped prompt whose choice list CHANGED is a legitimate
+            ;; follow-up step of a repeating ability — e.g. the engine's
+            ;; repeatable break flow (#96: Brân re-asks "Break a subroutine"
+            ;; minus the sub just broken, another [click] per break). Calling
+            ;; that a duplicate told seats to "drain" a prompt that was
+            ;; actually offering more value, 9/9 breaks in marquee 30c4a1c0.
+            new-choice-values (mapv :value (:choices new-prompt))
+            duplicate? (and same-shape? (= new-choice-values old-choice-values))
+            follow-up? (and same-shape? (not= new-choice-values old-choice-values))]
         (maybe-auto-end-turn-after-prompt!)
         (println (str "✅ Chose: " (core/format-choice choice)))
         (when duplicate?
           (println (str "ℹ️  Your choice RESOLVED, but an identical duplicate prompt "
                         "appeared (new instance of the same card prompt — the engine "
                         "minted copies). Answer it again to drain the stack.")))
+        (when follow-up?
+          (println (str "➡️  Your choice RESOLVED and " (get-in new-prompt [:card :title])
+                        " is asking a follow-up: same prompt, but the choice list "
+                        "CHANGED (a repeating ability — e.g. break another subroutine, "
+                        "paying its cost again). Re-read the choices before answering; "
+                        "answer 'Done' (if offered) to stop repeating.")))
         (core/with-cursor (cond-> {:status :success :choice choice}
-                            duplicate? (assoc :duplicate-prompt true))))
+                            duplicate? (assoc :duplicate-prompt true)
+                            follow-up? (assoc :follow-up-prompt true))))
       (do
         (println (str "⚠️  Choice sent but the prompt did not change — NOT treating as "
                       "resolved: " (core/format-choice choice)))
@@ -294,7 +321,7 @@
               ;; Prompt moved → selection registered and resolved. Only here is it
               ;; safe to run the auto-end-turn hook (a partial multi-select leaves
               ;; the prompt put — see the select? branch). (#18 tail)
-              (wait-for-prompt-change! eid)
+              (wait-for-prompt-change! eid :old-msg (:msg prompt))
               (do
                 (println (format "📇 Selected card: %s (index %d)" (:title card) index))
                 (maybe-auto-end-turn-after-prompt!)
@@ -439,7 +466,7 @@
             ;; misleading-output bug that drove a marquee discard-to-5 misplay
             ;; (cards still in hand, prompt still open). Mirrors choose-card! (#40).
             (cond
-              (wait-for-prompt-change! eid)
+              (wait-for-prompt-change! eid :old-msg (:msg prompt))
               (do
                 (println "✅ Selection complete")
                 (core/with-cursor {:status :success :selected (count cards-to-select)}))
