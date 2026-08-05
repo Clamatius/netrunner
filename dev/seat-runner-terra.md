@@ -116,8 +116,9 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
    acting.
 1. **See state** (compact forms save tokens): `status-compact`, `board-compact`,
    `hand`, `list-playables`.
-2. **Decide & act** — draw, gain credits, install programs/resources/hardware,
-   run a server. Examples:
+2. **Decide & act** — draw, gain credits (the verb is `take-credit`), install
+   programs/resources/hardware, run a server. Examples:
+   `./dev/send_command runner take-credit`
    `./dev/send_command runner draw`
    `./dev/send_command runner install "Cleaver"`
    `./dev/send_command runner run "R&D"`

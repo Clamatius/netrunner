@@ -82,6 +82,10 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: choose <N>  (resolve a prompt; also choose-card <N> / choose-value \"<text>\" / multi-choose <i> <j>)${NC}" >&2; return;;
         cont|advance-run|pass|pass-priority|next)
             echo -e "${YELLOW}💡 Did you mean: continue  (pass priority in a run; or monitor-run to participate)${NC}" >&2; return;;
+        gain|gain-credit|gain-credits|gaincredit|gaincredits|take-credits|takecredit|click-for-credit)
+            echo -e "${YELLOW}💡 Did you mean: take-credit  (basic action: gain 1 [Credit])${NC}" >&2; return;;
+        credit)
+            echo -e "${YELLOW}💡 Did you mean: take-credit  (gain 1 [Credit]) — or credits  (show credit pools)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
     local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
@@ -90,9 +94,26 @@ did_you_mean() {
     # would abort the whole script *here* — silently swallowing both this hint and
     # the "Unknown command" error that follows. A novel wrong guess (no substring
     # match) is exactly when we most need to print, so the substitution must never fail.
-    hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd' ' - || true)
+    hits=$(printf '%s\n' $known | grep -iF -- "$attempted" | head -3 | paste -sd'|' - || true)
+    if [[ -z "$hits" ]]; then
+        # A hyphenated guess like 'show-log' matches nothing whole; retry per
+        # token (>=3 chars, so 'to'/'of' don't spray noise) — 'log' should hit.
+        # noglob: the guess is untrusted text; unquoted expansion of e.g. 'run*'
+        # must split into tokens, not glob against the cwd.
+        set -f
+        local tok
+        for tok in ${attempted//[-_]/ }; do
+            [[ ${#tok} -lt 3 ]] && continue
+            hits+=$(printf '%s\n' $known | grep -iF -- "$tok" | head -3 | paste -sd'|' - || true)
+            hits+='|'
+        done
+        set +f
+        hits=$(printf '%s' "$hits" | tr '|' '\n' | sed '/^$/d' | sort -u | head -3 | paste -sd'|' - || true)
+    fi
     if [[ -n "$hits" ]]; then
-        echo -e "${YELLOW}💡 Did you mean: ${hits}${NC}" >&2
+        # ' | ' separator: a bare space rendered two hits ('credits take-credit')
+        # as one mangled command — a seat model tried to run it verbatim.
+        echo -e "${YELLOW}💡 Did you mean: ${hits//|/ | }${NC}" >&2
     else
         echo -e "${YELLOW}💡 Run './send_command <side> help' for commands, or 'help --full' for everything.${NC}" >&2
     fi

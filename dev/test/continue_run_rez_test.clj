@@ -1407,3 +1407,69 @@
                         (corp-handlers/handle-corp-server-upgrade-decision ctx))]
               (is (some #(= "continue" (:command %)) @sent)
                   (str "--no-rez must decline by passing (no handler stall), got: " r)))))))))
+
+;; =============================================================================
+;; Test: the --rez "rezzed ICE" continue branch reports honestly and only once
+;; (misleading-output class, marquee Opus↔Terra game B).
+;;
+;; After the monitor's OWN --rez succeeds, the next pass sees the ICE rezzed and
+;; used to print "ICE X already rezzed, continuing" — reading as if the fresh
+;; rez had been redundant or hadn't happened — and, having no once-per-window
+;; guard (unlike every sibling branch), printed it twice. When we attempted the
+;; rez at this position it must read as a confirmation; a genuinely pre-rezzed
+;; ICE keeps the "already" wording; both print once per (position, ice).
+;; =============================================================================
+
+(defn- rezzed-ice-ctx
+  "Handler context approaching a REZZED Funhouse with a --rez strategy."
+  [strategy]
+  {:side "corp"
+   :run-phase "approach-ice"
+   :my-prompt {:msg "Paid ability window" :prompt-type "run" :choices []}
+   :strategy strategy
+   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000003")
+   :state {:game-state
+           {:run {:phase "approach-ice" :position 1 :server [:hq]}
+            :corp {:credit 7
+                   :servers {:hq {:ices [{:cid 99 :title "Funhouse" :cost 5 :rezzed true}]}}}}}})
+
+(deftest rez-strategy-own-fresh-rez-reads-as-confirmation
+  (testing "the pass after our own successful --rez confirms the rez instead of calling it 'already rezzed'"
+    (reset! corp-handlers/last-waiting-status nil)
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (let [out (with-out-str
+                    (corp-handlers/handle-corp-rez-strategy
+                     (rezzed-ice-ctx {:rez #{"Funhouse"} :rez-attempted-at 1})))]
+          (is (re-find #"Rez confirmed" out)
+              (str "a rez we just performed must read as confirmation, got: " out))
+          (is (not (re-find #"already rezzed" out))
+              (str "'already rezzed' misreports our own fresh rez, got: " out))
+          (is (some #(= "continue" (:command %)) @sent)
+              "must still pass priority past the rezzed ICE"))))))
+
+(deftest rez-strategy-pre-rezzed-ice-keeps-already-wording
+  (testing "an ICE rezzed before we ever attempted anything is honestly reported as already rezzed"
+    (reset! corp-handlers/last-waiting-status nil)
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (let [out (with-out-str
+                    (corp-handlers/handle-corp-rez-strategy
+                     (rezzed-ice-ctx {:rez #{"Funhouse"}})))]
+          (is (re-find #"already rezzed" out)
+              (str "a genuinely pre-rezzed ICE keeps the 'already' wording, got: " out))
+          (is (some #(= "continue" (:command %)) @sent)))))))
+
+(deftest rez-strategy-rezzed-continue-prints-once-per-window
+  (testing "re-entering the branch at the same (position, ice) does not repeat the line (was printing x2)"
+    (reset! corp-handlers/last-waiting-status nil)
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (let [ctx (rezzed-ice-ctx {:rez #{"Funhouse"} :rez-attempted-at 1})
+              out1 (with-out-str (corp-handlers/handle-corp-rez-strategy ctx))
+              out2 (with-out-str (corp-handlers/handle-corp-rez-strategy ctx))]
+          (is (re-find #"Rez confirmed" out1))
+          (is (= "" out2)
+              (str "second pass in the same window must be silent, got: " out2))
+          (is (= 2 (count (filter #(= "continue" (:command %)) @sent)))
+              "the continue itself still goes out each pass — only the print is deduped"))))))
