@@ -108,6 +108,43 @@
         (is (str/includes? out "choose-value"))))))
 
 ;; ============================================================================
+;; press-choice! baseline race (#97, Mutual Favor variant)
+;;
+;; Multi-step prompts can re-use one :eid and advance only :msg. The server can
+;; process a choice and ship the advanced prompt FASTER than the post-send wait
+;; starts; wait-for-prompt-change!'s baseline-msg fallback then read the NEW
+;; msg as the baseline, saw "no change", and a resolved choice was reported
+;; '⚠️ NOT treating as resolved' (Mutual Favor, marquee 30c4a1c0). Callers now
+;; pass the msg they captured BEFORE sending.
+;; ============================================================================
+
+(def press-choice #'ai-prompts/press-choice!)
+
+(deftest press-choice-fast-same-eid-msg-advance-is-resolved
+  (testing "a same-eid prompt whose :msg advanced before the wait starts counts as resolved"
+    (let [prompt {:prompt-type "credit" :eid "eid-c"
+                  :msg "Choose a credit providing card (0 of 4)"
+                  :choices [{:uuid "u1" :value "Pay from credit pool"}]}]
+      (with-mock-state (mock-client-state :side "runner" :prompt prompt)
+        (with-redefs [ws/send-message!
+                      (fn [_evt _data]
+                        ;; Server responds before the wait begins: same eid,
+                        ;; msg advanced one step.
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state :msg]
+                               "Choose a credit providing card (1 of 4)")
+                        true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [out (with-out-str
+                      (let [r (press-choice (first (:choices prompt)))]
+                        (is (= :success (:status r))
+                            "an advanced msg vs the PRE-send baseline is progress, not a stall")))]
+            (is (str/includes? out "✅ Chose")
+                (str "expected resolved confirmation, got: " out))
+            (is (not (str/includes? out "NOT treating as resolved"))
+                (str "must not report a resolved choice as unresolved, got: " out))))))))
+
+;; ============================================================================
 ;; choose-card! / multi-choose! gate on :selectable, not the :prompt-type string
 ;; (backlog #3). Some engine prompts (e.g. Mutual Favor's stack search) carry
 ;; selectable cards under :prompt-type "other"; the old "select"-only gate
@@ -518,6 +555,43 @@
                 "must flag the duplicate so a seat/bot can drain the stack instead of reading it as a no-op")
             (is (str/includes? out "identical")
                 (str "must tell the seat an identical duplicate appeared, got: " out))))))))
+
+(deftest choose-option-repeat-follow-up-is-not-a-duplicate
+  (testing "a same-shaped prompt whose CHOICE LIST changed is a follow-up step, not a stacked duplicate (#96)"
+    ;; The engine's repeatable break flow (Brân click-break): after breaking a
+    ;; sub it re-asks "Break a subroutine" minus the broken sub, another
+    ;; [click] per break. Telling the seat to "drain the stack" here is a lie
+    ;; that manufactured a per-break two-step, 9/9 in marquee 30c4a1c0.
+    (let [bran-prompt {:msg "Break a subroutine" :prompt-type "other" :eid {:eid 300}
+                       :card {:cid "bran-1" :title "Brân 1.0" :side "Corp"}
+                       :choices [{:uuid "b0" :value "Install an ice from HQ or Archives" :idx 0}
+                                 {:uuid "b1" :value "End the run" :idx 1}
+                                 {:uuid "b2" :value "End the run" :idx 2}
+                                 {:uuid "b3" :value "Done" :idx 3}]}
+          follow-up {:msg "Break a subroutine" :prompt-type "other" :eid {:eid 301}
+                     :card {:cid "bran-1" :title "Brân 1.0" :side "Corp"}
+                     :choices [{:uuid "c0" :value "Install an ice from HQ or Archives" :idx 0}
+                               {:uuid "c1" :value "End the run" :idx 1}
+                               {:uuid "c2" :value "Done" :idx 2}]}]
+      (with-mock-state (mock-client-state :side "runner" :prompt bran-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        (swap! state/client-state assoc-in
+                               [:game-state :runner :prompt-state] follow-up)
+                        true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (prompts/choose-option! 1)))]
+            (is (= :success (:status @result)))
+            (is (not (:duplicate-prompt @result))
+                "a changed choice list is a NEW decision, not a stacked copy")
+            (is (:follow-up-prompt @result)
+                "the follow-up must still be flagged so a bot/seat re-reads the prompt")
+            (is (not (str/includes? out "drain"))
+                (str "must not advise draining a prompt that offers more value, got: " out))
+            (is (str/includes? out "follow-up")
+                (str "must name the repeat step honestly, got: " out))))))))
 
 (deftest choose-option-normal-resolution-unchanged
   (testing "a normally-resolving choice still reports plain :success with no duplicate flag"

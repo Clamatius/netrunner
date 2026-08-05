@@ -435,9 +435,18 @@
    to avoid race conditions where the response arrives before we start polling.
 
    Waits up to max-wait-ms for the log entry to appear"
-  [card-name max-wait-ms {:keys [pre-log-size pre-prompt]}]
+  [card-name max-wait-ms {:keys [pre-log-size pre-prompt] :as opts}]
   (let [initial-size (or pre-log-size (get-log-size))
-        initial-prompt (or pre-prompt (state/get-prompt))
+        ;; A nil pre-prompt is MEANINGFUL: "no prompt was open when the command
+        ;; was sent". `(or pre-prompt (state/get-prompt))` treated it as absent
+        ;; and re-read the prompt AFTER the send — an ability whose prompt
+        ;; arrives faster than verification starts (Red Team, ~250ms, #97) got
+        ;; its own new prompt captured as the baseline, compared equal to
+        ;; itself forever, and false-failed as a timeout. Only fall back to a
+        ;; live read when the caller genuinely didn't supply the key.
+        initial-prompt (if (contains? opts :pre-prompt)
+                         pre-prompt
+                         (state/get-prompt))
         deadline (+ (System/currentTimeMillis) max-wait-ms)
         check-result (fn []
                        (classify-ability-result
@@ -1434,6 +1443,30 @@
         (not runner-passed?) :runner   ; nobody (or corp-only) has passed: Runner owes the first pass
         (not corp-passed?)   :corp     ; Runner passed, Corp owes the second
         :else nil))))                  ; both passed — window is closing, nothing to own
+
+(defn i-already-passed-run-window?
+  "True when the engine has recorded THIS side as the (first) passer of the
+   current run/encounter priority window — [:run :no-action] or
+   [:encounters :no-action] naming us. A further `continue` from us is then
+   never legitimate: at best a no-op the engine ignores, at worst it re-fires
+   a blocked checkpoint and mints duplicate opponent prompts (#75). The
+   OPPONENT owes the window, so loops must report an opponent wait and park
+   instead of spinning :action-taken into the stuck-detector's false
+   'stuck in same state' alarm (#98 — 3+ marquee occurrences, each burning a
+   persistent monitor call while the Runner was simply thinking).
+
+   Single-valued caveat (see run-window-owner): :no-action records only the
+   FIRST passer and set-phase resets it, so when it names the OPPONENT we may
+   legitimately owe the closing pass — this predicate is true ONLY when it
+   names US."
+  [state side]
+  (when side
+    (let [side-name (str/lower-case (name (keyword side)))  ; "Corp"-tolerant (#69)
+          mine #{(keyword side-name) side-name}
+          enc-no-action (get-in state [:game-state :encounters :no-action])
+          run-no-action (get-in state [:game-state :run :no-action])]
+      (boolean (or (contains? mine enc-no-action)
+                   (contains? mine run-no-action))))))
 
 (defn- my-run-window?
   "True when THIS side currently owns the un-passed pass at an active run window.

@@ -37,12 +37,24 @@
    is a 'waiting' prompt — the engine is mid-checkpoint on the OPPONENT and a
    continue from us re-fires that checkpoint, minting duplicate opponent
    prompts (the marquee-g2 wedge, mirrored to the Runner seat). Same guard as
-   the ai-runs and ai-run-corp-handlers copies."
+   the ai-runs and ai-run-corp-handlers copies.
+
+   Second guard (#98): if the engine already recorded US as this window's
+   passer (:no-action names us), the opponent owes the window — a repeat
+   continue is a no-op that only feeds the stuck-detector's false alarm."
   [gameid]
-  (if (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+  (cond
+    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
     {:status :waiting-for-opponent
      :action :continue-suppressed-waiting-prompt
      :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+
+    (core/i-already-passed-run-window? @state/client-state (:side @state/client-state))
+    {:status :waiting-for-opponent
+     :action :continue-suppressed-already-passed
+     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
+
+    :else
     (do
       (ws/send-message! :game/action
                         {:gameid gameid
