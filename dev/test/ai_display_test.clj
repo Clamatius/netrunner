@@ -1559,3 +1559,72 @@
       (let [out (with-out-str (display/list-playables))]
         (is (str/includes? out "use-runner-ability \"Brân 1.0\" 0")
             (str "encounter-ice window must surface the invocation, got:\n" out))))))
+
+;; ============================================================================
+;; #104: the same prompt block printed twice back-to-back
+;; ============================================================================
+;; Acting commands auto-append the resulting prompt (show-prompt-if-any, added
+;; because continue->prompt ran P=0.48), but seats kept calling `prompt` right
+;; after acting. Live repro on a fresh game: `install Palisade` printed the
+;; server-select block, then `prompt` printed the byte-identical block again with
+;; nothing distinguishing them — which reads as two stacked prompts and invites
+;; answering twice. The second render must say it is the same one.
+
+(defn- prompt-state-for [prompt]
+  {:corp {:prompt-state prompt} :runner {:prompt-state prompt}})
+
+(def ^:private select-server-prompt
+  {:eid 4242 :msg "Choose a location to install Palisade" :prompt-type "other"
+   :card {:title "Palisade" :type "ICE" :cid 7}
+   :choices [{:value "HQ" :uuid "u1"} {:value "New remote" :uuid "u2"}]})
+
+(deftest test-repeat-render-of-same-prompt-is-marked-unchanged
+  (testing "#104: second render of the SAME prompt instance is labelled, first is not"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (prompt-state-for select-server-prompt))
+      (ai-state/reset-rendered-prompt!)
+      (let [first-out (with-out-str (display/show-prompt-detailed))
+            second-out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? first-out "unchanged"))
+            (str "the first render must be a plain prompt block, got: " first-out))
+        (is (str/includes? second-out "unchanged")
+            (str "the repeat render must say it is the same prompt, got: " second-out))
+        ;; the block itself must still be fully rendered — this is a label, not a suppression
+        (is (str/includes? second-out "New remote")
+            "choices must still print on the repeat render")))))
+
+(deftest test-stacked-duplicate-prompt-is-not-marked-unchanged
+  (testing "#104 vs #75: a NEW instance (same msg+card, new eid) must read as new"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (prompt-state-for select-server-prompt))
+      (ai-state/reset-rendered-prompt!)
+      (with-out-str (display/show-prompt-detailed)))
+    ;; engine minted a fresh copy of the same-looking prompt
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state (prompt-state-for (assoc select-server-prompt :eid 4243)))
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "unchanged"))
+            (str "a stacked duplicate is a separate prompt to answer, got: " out))))))
+
+(deftest test-eidless-prompt-never-reads-as-unchanged
+  (testing "#104: an unidentifiable prompt (no :eid) is always treated as new"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state (prompt-state-for (dissoc select-server-prompt :eid)))
+      (ai-state/reset-rendered-prompt!)
+      (with-out-str (display/show-prompt-detailed))
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "unchanged"))
+            (str "nil eid must not match nil eid (#75 lesson), got: " out))))))
+
+(deftest test-rendered-prompt-marker-cleared-on-state-reset
+  (testing "#104 lifecycle: the marker must not survive into a fresh game"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (prompt-state-for select-server-prompt))
+      (ai-state/reset-rendered-prompt!)
+      (with-out-str (display/show-prompt-detailed))
+      (ai-state/reset-rendered-prompt!)
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "unchanged"))
+            (str "a new game's first prompt is never 'unchanged', got: " out))))))

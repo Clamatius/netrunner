@@ -173,6 +173,127 @@
                 "still auto-ends — the engine's discard prompt is the mechanism")))))))
 
 ;; ============================================================================
+;; #103: auto-end must not swallow the final paid-ability window
+;; ============================================================================
+;; Marquee ac71ce63 (Fable Corp): the instant the last click was spent,
+;; check-auto-end-turn! fired end-turn — no beat to rez Nico Campaign in the
+;; end-of-turn paid window. The seat only recovered by rezzing AFTER the auto-end
+;; (legal, but non-obvious enough that it flagged the timing as suspect).
+;;
+;; Only the AUTOMATIC path yields the beat. smart-end-turn! is the explicit "end
+;; my turn" command — the heuristic bots call it after their action loop, so
+;; pausing THAT would wedge autonomous self-play. Splitting the two is what makes
+;; this deadlock-safe.
+
+(defn- corp-eot-state
+  "Corp at 0 clicks with one unrezzed asset installed in a remote."
+  [& {:keys [credit cost rezzed] :or {credit 5 cost 2 rezzed false}}]
+  {:corp {:click 0 :credit credit :hand [] :hand-count 3
+          :hand-size {:total 5} :installed {} :prompt-state nil
+          :servers {:remote1 {:content [{:cid 99 :title "Nico Campaign"
+                                         :type "Asset" :cost cost :rezzed rezzed}]}}}
+   :runner {:click 0 :credit 5 :hand []}
+   :turn 8
+   :active-player "corp"
+   :log []})
+
+(deftest test-check-auto-end-turn-offers-paid-window-beat
+  (testing "#103: an affordable unrezzed asset pauses the auto-end and names it"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state (corp-eot-state))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"Nico Campaign" out)
+                (str "must name the card the paid window is for, got: " out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must NOT auto-end over an available paid-ability window")))))))
+
+(deftest test-check-auto-end-turn-ignores-unaffordable-rez
+  (testing "#103 no false pause: a rez we cannot pay for is not a window worth holding"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp"
+                                          :game-state (corp-eot-state :credit 1 :cost 4))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [_out (with-out-str (basic/check-auto-end-turn!))]
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                "unaffordable rez must still auto-end")))))))
+
+;; Guest-review catch (GPT-5.6): affordability read the credit POOL only, so a
+;; Corp at 0 credits holding a rezzed Mumba Temple (2 recurring, explicitly usable
+;; for :rez) was told it could not afford a 2-cost asset — the window closed and
+;; #103 reproduced for exactly the cards it was written to protect. The error is
+;; asymmetric: a missed window IS the bug, while a spurious pause costs one
+;; end-turn, so the predicate errs generous.
+
+(deftest test-check-auto-end-turn-counts-recurring-credits
+  (testing "#103: recurring credits on rezzed cards count toward rez affordability"
+    (let [sent (atom [])
+          game-state {:corp {:click 0 :credit 0 :hand [] :hand-count 3
+                             :hand-size {:total 5} :installed {} :prompt-state nil
+                             :servers {:remote1 {:content [{:cid 1 :title "Mumba Temple"
+                                                            :type "Asset" :cost 0 :rezzed true
+                                                            :counter {:recurring 2}}
+                                                           {:cid 2 :title "Nico Campaign"
+                                                            :type "Asset" :cost 2 :rezzed false}]}}}
+                      :runner {:click 0 :credit 5 :hand []}
+                      :turn 8 :active-player "corp" :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"Nico Campaign" out)
+                (str "2 recurring credits make a 2-cost rez affordable, got: " out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must hold the window open, not end the turn")))))))
+
+(deftest test-check-auto-end-turn-ignores-already-rezzed
+  (testing "#103 no false pause: an already-rezzed asset offers no rez window"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp"
+                                          :game-state (corp-eot-state :rezzed true))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [_out (with-out-str (basic/check-auto-end-turn!))]
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                "already-rezzed asset must still auto-end")))))))
+
+(deftest test-smart-end-turn-still-ends-over-paid-window
+  (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state (corp-eot-state))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [_out (with-out-str (basic/smart-end-turn!))]
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                "smart-end-turn! is the deliberate command — it must still end")))))))
+
+;; #103 (second half) / Terra round [184] item 4: "Auto-ending turn (0 clicks, no
+;; prompts)" printed in the same breath as the engine's discard prompt appearing.
+;; The claim was a PRE-condition of the check, but read as a postcondition — so
+;; the seat treated the discard prompt that followed as a desync.
+
+(deftest test-check-auto-end-turn-does-not-claim-no-prompts-before-a-discard
+  (testing "#103: when a discard is forewarned, the end line must not also claim 'no prompts'"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 6
+                               :hand-size {:total 5} :installed {} :prompt-state nil}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :turn 8
+                      :active-player "runner"
+                      :log []}]
+      (with-mock-state (mock-client-state :side "runner" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"exceeds max" out) "forewarning must stay")
+            (is (not (re-find #"no prompts" out))
+                (str "must not assert 'no prompts' while announcing a coming discard, got: " out))
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                "still auto-ends — the engine's discard prompt is the mechanism")))))))
+
+;; ============================================================================
 ;; smart-end-turn! self-heal: rolled-back optimistic "is ending" line
 ;; ============================================================================
 ;; Regression for the agent-vs-agent deadlock found 2026-06-14 (Runner stuck at

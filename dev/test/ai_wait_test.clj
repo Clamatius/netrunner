@@ -295,6 +295,22 @@
           (is (= :my-run-window (:reason result))
               (str "expected :my-run-window at inter-ice movement, got: " result)))))))
 
+;; #102(1): the SAME owned window, but with clicks still in hand. A run costs one
+;; click, so a Runner mid-run normally holds 2-3 — which made my-turn-to-act? true
+;; and won the cond ahead of :my-run-window. `wait` then returned instantly with
+;; :my-turn while a continue was owed at movement/approach-server, misdirecting the
+;; seat into start-turn thinking (both Fable runner sessions, marquee 30c4a1c0).
+;; Owning an un-passed run window is the more specific fact: report that.
+
+(deftest test-wait-runner-owns-window-with-clicks-in-hand-is-run-aware
+  (testing "#102: mid-run with clicks left, an owed continue reports :my-run-window, not :my-turn"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in approach-server-game-state [:runner :click] 2))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "a live run with an owed continue must not read as :my-turn, got: " result)))))))
+
 (deftest test-wait-runner-owns-approach-ice-window-wakes
   (testing "#91: the approach-ice pass window is owned by the Runner first too"
     (with-redefs [state/get-cursor (fn [] 10)]

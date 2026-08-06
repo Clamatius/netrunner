@@ -805,7 +805,9 @@
         ;; then is meaningless at best and confuses the engine at worst.
         turn-started? (turn-started-since-last-opp-end?)
         ;; Check for scorable agendas (Corp only)
-        scorable-agendas (core/find-scorable-agendas)]
+        scorable-agendas (core/find-scorable-agendas)
+        ;; End-of-turn paid window worth pausing for (#103, Corp only).
+        eot-rezzables (core/find-eot-rezzable-cards)]
 
     (cond
       ;; Not our turn — never auto-end (issue #16: a forced prompt during the
@@ -847,15 +849,45 @@
         (println "💡 Use 'prompt' command to see choices, or 'choose' to respond")
         (flush))
 
+      ;; Paid-ability window (#103): the last click is spent, but the end-of-turn
+      ;; window is still open and there is something to spend it on. Auto-ending
+      ;; here silently throws that window away — marquee ac71ce63 lost a Nico
+      ;; Campaign rez to it and only recovered by rezzing after the fact.
+      ;;
+      ;; Hand control back instead of ending. This cannot wedge autonomous play:
+      ;; the bots end their turn through smart-end-turn! (the explicit command,
+      ;; which still ends — see its :else branch), and this is only the automatic
+      ;; hook that fires from inside card actions. A seat that wants the turn over
+      ;; just says end-turn.
+      (and (= clicks 0)
+           (nil? prompt)
+           (not already-ended?)
+           (seq eot-rezzables))
+      (do
+        (println "")
+        (println "⏸️  Holding the end-of-turn paid window (0 clicks, turn NOT ended)")
+        (doseq [{:keys [title cost]} eot-rezzables]
+          (println (format "   💰 %s can still be rezzed for %d¢" title cost)))
+        (println "💡 Rez now if you want it up on the Runner's turn, then 'end-turn'")
+        (println "   (nothing to do? just 'end-turn')")
+        (flush)
+        (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))
+
       ;; Safe to auto-end
       (and (= clicks 0)
            (nil? prompt)
            (not already-ended?))
       (do
         (println "")
-        (when (> hand-size max-hand-size)
-          (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size)))
-        (println "💡 Auto-ending turn (0 clicks, no prompts)")
+        ;; Say what was actually checked, and what is about to happen. The old line
+        ;; asserted "no prompts" as a flat fact and then end-turn! immediately
+        ;; produced the discard prompt — read as a desync by every seat that hit it
+        ;; (#103 / Terra [184] item 4). "no prompts" was only ever a PRE-condition.
+        (if (> hand-size max-hand-size)
+          (do
+            (println (format "💡 Hand size %d exceeds max %d - game will prompt for discard" hand-size max-hand-size))
+            (println "💡 Auto-ending turn (0 clicks) — expect that discard prompt next"))
+          (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
         (end-turn!)))))
 
