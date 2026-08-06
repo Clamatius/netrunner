@@ -58,6 +58,19 @@ if [[ ! "$GAMEID" =~ ^[0-9a-fA-F-]+$ ]]; then
     exit 1
 fi
 
+# A short prefix of the seats' CURRENT game expands to the full id (#104: the
+# old path rejected the prefix while printing the very UUID that matched it).
+# Prefixes of other games can't be resolved — the mongo lookup is exact-match —
+# so a short id that isn't the current game's prefix needs the full UUID.
+if [[ -n "$CUR_GAMEID" && "$GAMEID" != "$CUR_GAMEID" && "$CUR_GAMEID" == "$GAMEID"* ]]; then
+    echo "ℹ️  Expanding gameid prefix $GAMEID → $CUR_GAMEID"
+    GAMEID="$CUR_GAMEID"
+elif [[ ${#GAMEID} -lt 36 ]]; then
+    echo "❌ $GAMEID looks like a gameid prefix (full UUIDs are 36 chars) and it" >&2
+    echo "   doesn't match the current game (${CUR_GAMEID:-none}) — pass the full id." >&2
+    exit 1
+fi
+
 # Eval a Clojure form in the game-server REPL and echo its stdout.
 # Errors are NOT swallowed: if the REPL is down or the form throws, callers see
 # it (the old mongosh path hid exactly this and produced false "no replay").

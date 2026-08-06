@@ -41,6 +41,64 @@
       (is (str/includes? line "Remotes 2 unrezzed / 1 advanced"))
       (is (str/includes? line "~3 agenda cards likely drawn")))))
 
+(deftest show-status-turn-zero-skips-agenda-threat-noise
+  ;; #104: at turn 0 every input to the threat estimate is zero, so the line
+  ;; rendered as 'Unaccounted: 18 agenda pts' over an empty board.
+  (testing "runner status before any cards exist prints the plain points line"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 0
+                                   :corp {:click 0 :credit 5 :hand [] :hand-count 0
+                                          :deck-count 0 :discard [] :agenda-point 0
+                                          :servers {} :user {:username "ai-corp"}}
+                                   :runner {:click 0 :credit 5 :hand [] :hand-count 0
+                                            :agenda-point 0 :rig {}
+                                            :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/show-status))]
+        (is (not (str/includes? out "Unaccounted"))
+            (str "turn-0 status must not show the vacuous threat line, got:\n" out))
+        (is (str/includes? out "Agenda Points: 0 / 7")
+            "the plain points line still shows"))))
+  (testing "once the corp has cards the threat line comes back"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 2
+                                   :corp {:click 0 :credit 5 :hand [] :hand-count 5
+                                          :deck-count 30 :discard [] :agenda-point 0
+                                          :servers {} :user {:username "ai-corp"}}
+                                   :runner {:click 4 :credit 5 :hand [] :hand-count 3
+                                            :agenda-point 0 :rig {}
+                                            :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/show-status))]
+        (is (str/includes? out "Unaccounted")
+            (str "a live board keeps the threat line, got:\n" out))))))
+
+;; ============================================================================
+;; sub-count-summary — fired subs are resolved, not unbroken (#99)
+;; ============================================================================
+;; Marquee ac71ce63 T8: after 'resolves 2 unbroken subroutines on Tithe', both
+;; seats' displays still said '2 unbroken of 2' because unbroken was computed as
+;; (not :broken), ignoring :fired. Each seat read the stale count as 'the
+;; encounter hasn't resolved' and pinged the umpire.
+
+(deftest sub-count-summary-excludes-fired-subs
+  (testing "fired subs no longer count as unbroken, and are shown explicitly"
+    (is (= "0 unbroken of 2 (2 fired)"
+           (display/sub-count-summary [{:label "Gain 1c" :fired true}
+                                       {:label "End the run" :fired true}]))))
+  (testing "mixed fired/broken/actionable is broken out"
+    (is (= "1 unbroken of 3 (1 fired, 1 broken)"
+           (display/sub-count-summary [{:label "a" :fired true}
+                                       {:label "b" :broken true}
+                                       {:label "c"}]))))
+  (testing "untouched subs keep the plain format"
+    (is (= "2 unbroken of 2"
+           (display/sub-count-summary [{:label "a"} {:label "b"}]))))
+  (testing "broken-only keeps its parenthetical too"
+    (is (= "1 unbroken of 2 (1 broken)"
+           (display/sub-count-summary [{:label "a" :broken true}
+                                       {:label "b"}])))))
+
 (deftest test-game-over-status-decided
   (testing "decided game prints GAME-OVER with lowercased winner and turn"
     (with-mock-state (mock-client-state
@@ -95,6 +153,34 @@
                       :game-state {:active-player "runner" :turn 6
                                    :corp {:click 0} :runner {:click 0}})
       (is (= "AWAITING-START turn=6 next-player=corp"
+             (str/trim (with-out-str (display/game-over-status)))))))
+
+  ;; #104: a boundary with our own prompt still open (end-of-turn discard) read
+  ;; as a desync to both guest models. The blocker is named as an additive
+  ;; machine-readable field; a mere waiting stub must not trigger it.
+  (testing "our open prompt at the boundary is named, not hidden"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 7
+                                   :end-turn true
+                                   :corp {:click 0
+                                          :prompt-state {:eid {:eid 1}
+                                                         :prompt-type "select"
+                                                         :msg "Discard down to maximum hand size"}}
+                                   :runner {:click 0}})
+      (is (= "AWAITING-START turn=7 next-player=runner open-prompt=mine"
+             (str/trim (with-out-str (display/game-over-status)))))))
+
+  (testing "a waiting-stub prompt does not claim open-prompt"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 7
+                                   :end-turn true
+                                   :corp {:click 0
+                                          :prompt-state {:prompt-type "waiting"
+                                                         :msg "Waiting for Runner"}}
+                                   :runner {:click 0}})
+      (is (= "AWAITING-START turn=7 next-player=runner"
              (str/trim (with-out-str (display/game-over-status))))))))
 
 (deftest test-game-over-status-no-game

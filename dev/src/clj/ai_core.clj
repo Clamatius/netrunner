@@ -803,11 +803,16 @@
             (str "Server " (subs (name server-key) 6))
             (name server-key)))))))
 
+(declare current-run-ice)
+
 (defn find-installed-corp-card
   "Find an installed Corp card by title
    Supports [N] suffix for duplicate cards: \"Palisade [1]\"
    Searches all servers for ICE, assets, and upgrades
-   Returns nil and prints disambiguation message if multiple copies and no index specified"
+   Duplicate titles with no [N] suffix: if one copy is the ICE at the current
+   run position, that copy wins (#100 — run-scoped commands like fire-subs/rez
+   shouldn't demand a suffix when the encounter already disambiguates).
+   Otherwise returns nil and prints the disambiguation list."
   [card-name]
   (let [servers (state/corp-servers)
         ;; Get all ICE from all servers
@@ -823,15 +828,24 @@
       (= 1 match-count) (first matches)
       explicit-index? (nth (vec matches) index nil)
       :else
-      (do
-        (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
-        (println "   Specify which one:")
-        (doseq [[idx card] (map-indexed vector matches)]
-          (let [location (card-server-location card)
-                rezzed? (:rezzed card)
-                status (if rezzed? "rezzed" "unrezzed")]
-            (println (format "   → \"%s [%d]\" (%s, %s)" title idx location status))))
-        nil))))
+      (let [run-ice (current-run-ice @state/client-state)
+            run-match (when run-ice
+                        (first (filter #(= (:cid run-ice) (:cid %)) matches)))]
+        (if run-match
+          (do
+            (println (format "→ %d copies of '%s' installed — using the one in the active run (%s). Use \"%s [N]\" to target another."
+                             match-count title
+                             (or (card-server-location run-match) "?") title))
+            run-match)
+          (do
+            (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
+            (println "   Specify which one:")
+            (doseq [[idx card] (map-indexed vector matches)]
+              (let [location (card-server-location card)
+                    rezzed? (:rezzed card)
+                    status (if rezzed? "rezzed" "unrezzed")]
+                (println (format "   → \"%s [%d]\" (%s, %s)" title idx location status))))
+            nil))))))
 
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.

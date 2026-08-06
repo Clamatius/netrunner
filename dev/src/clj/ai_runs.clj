@@ -1221,6 +1221,21 @@
   [entry]
   (boolean (and entry (not (contains? (reported-set) (event-key entry))))))
 
+(defn- rezzed-card-kind
+  "Best-effort classification of a rez log line: :ice when an installed ICE
+   title appears in the text, :non-ice when only an installed asset/upgrade
+   title does, nil when unknown (no state, no title match). Rez lines are
+   direct state reports ('corp rezzes X protecting Y'), so title matching does
+   not hit embedded effect text (#104)."
+  [state text]
+  (let [servers (vals (get-in state [:game-state :corp :servers]))
+        hit? (fn [card] (when-let [t (:title card)]
+                          (clojure.string/includes? (str text) t)))]
+    (cond
+      (some hit? (mapcat :ices servers)) :ice
+      (some hit? (mapcat :content servers)) :non-ice
+      :else nil)))
+
 (defn handle-events
   "Priority 4: Pause for important events (rez, subs, abilities, damage).
    Order is most-specific-first: a firing subroutine and its own 'uses <ice>
@@ -1247,10 +1262,18 @@
    entry) while :no-action sat at false. The pause is a feature; the latch is
    the bug. Dedupe is per-ENTRY, not a global mute, so a genuinely new rez still
    stops the Runner."
-  [{:keys [rez-event ability-event fired-event tag-damage-event]}]
+  [{:keys [rez-event ability-event fired-event tag-damage-event state side]}]
   (when-let [[status headline event]
              (cond
-               (unreported? rez-event)        [:ice-rezzed   "ICE rezzed!"        rez-event]
+               (unreported? rez-event)        [:ice-rezzed
+                                               ;; #104: a rezzed UPGRADE (Manegarm) was
+                                               ;; announced as 'ICE rezzed!'. The rez line
+                                               ;; is a direct state report, so installed-
+                                               ;; title matching is safe here.
+                                               (if (= :non-ice (rezzed-card-kind state (:text rez-event)))
+                                                 "Upgrade/asset rezzed!"
+                                                 "ICE rezzed!")
+                                               rez-event]
                (unreported? fired-event)      [:subs-fired   "subroutines fired!" fired-event]
                (unreported? ability-event)    [:ability-used "ability triggered!" ability-event]
                (unreported? tag-damage-event) [:tag-or-damage "tag or damage!"    tag-damage-event])]
@@ -1258,7 +1281,11 @@
     (swap! reported-events update :events conj (event-key event))
     (println (format "⚠️  Run paused - %s" headline))
     (println (format "   %s" (:text event)))
-    (println "   → Use 'continue-run' again to proceed")
+    ;; #104: the continue-run hint is the Runner's verb; on the Corp side it
+    ;; pointed at a command the seat doesn't drive the run with.
+    (println (if (core/side= "Corp" (or side ""))
+               "   → Resume with 'monitor-run' (or 'continue' to pass priority)"
+               "   → Use 'continue-run' again to proceed"))
     {:status status :wake-reason status :event event}))
 
 (defn handle-unexpected-state

@@ -56,6 +56,24 @@
   (format "Agenda Points: %d / 7  │  Unaccounted: %d agenda pts — hiding among HQ %d / R&D %d cards, Remotes %d unrezzed / %d advanced (~%d agenda cards likely drawn)"
           agenda-points missing hq-size rd-size unrezzed-count advanced-count expected-drawn))
 
+(defn sub-count-summary
+  "Pure: the sub-count portion of an encounter ICE status line, from the ICE's
+   :subroutines vector. 'Unbroken' counts only ACTIONABLE subs — neither :broken
+   nor :fired — matching the run handlers' own filter. Counting :fired subs as
+   unbroken made a fully-resolved encounter read as still pending on BOTH seats
+   (#99). Fired/broken totals get a parenthetical so the resolved state is
+   explicit, e.g. \"0 unbroken of 2 (2 fired)\"."
+  [subs]
+  (let [total (count subs)
+        fired (count (filter :fired subs))
+        broken (count (filter #(and (:broken %) (not (:fired %))) subs))
+        actionable (count (filter #(and (not (:broken %)) (not (:fired %))) subs))
+        detail (cond-> []
+                 (pos? fired) (conj (str fired " fired"))
+                 (pos? broken) (conj (str broken " broken")))]
+    (str actionable " unbroken of " total
+         (when (seq detail) (str " (" (str/join ", " detail) ")")))))
+
 (defn show-status
   "Display current game status or lobby state"
   []
@@ -231,11 +249,10 @@
                     (let [ice-title (:title current-ice)
                           ice-str (or (:current-strength current-ice) (:strength current-ice))
                           ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
-                          subs (:subroutines current-ice)
-                          unbroken (count (filter #(not (:broken %)) subs))]
+                          subs (:subroutines current-ice)]
                       (println (format "  🧊 ICE: %s (str %s)" ice-title ice-str))
                       (println (format "     Type: %s" ice-subtypes))
-                      (println (format "     Subs: %d unbroken of %d" unbroken (count subs)))))))
+                      (println (format "     Subs: %s" (sub-count-summary subs)))))))
               ;; Whose move is it now + what 'continue' does (same guidance the
               ;; `prompt` command shows) — status used to print only the ladder,
               ;; leaving the seat to guess whose window it was.
@@ -306,7 +323,10 @@
                                                               (pos? (get-in % [:advance-counter] 0)))
                                                         content)))
                                                remotes))]
-              (if (= "runner" my-side)
+              ;; The threat line is derived entirely from deck/hand counts; at
+              ;; turn 0 those are all zero and it renders as pure noise
+              ;; ('Unaccounted: 18 agenda pts' over an empty board — #104).
+              (if (and (= "runner" my-side) (pos? initial-deck-size))
                 (println (format-runner-agenda-line
                           agenda-points missing expected-drawn hq-size rd-size unrezzed-count advanced-count))
                 (println "Agenda Points:" agenda-points "/ 7")))
@@ -363,12 +383,18 @@
                                                          GAME-OVER — there is no game
                                                          left to play, only a snapshot
      AWAITING-START turn=12 next-player=runner         - clean turn boundary
+     AWAITING-START turn=12 next-player=runner open-prompt=mine
+                                                       - boundary blocked on OUR
+                                                         unresolved prompt (#104)
      IN-PROGRESS turn=12 whose-turn=runner clicks=3    - game still running
 
    AWAITING-START marks a clean turn boundary (a player ended their turn, or
    both sides are at 0 clicks) and names who acts next, so tooling can apply a
    patient boundary budget instead of mistaking a slow opponent's turn-start
-   think-time for a stall.
+   think-time for a stall. The optional open-prompt=mine suffix (additive —
+   consumers prefix-match) says the boundary can't complete until our own open
+   prompt (e.g. the end-of-turn discard) resolves; without it the pairing
+   'AWAITING-START + live discard prompt' read as a desync.
 
    The clicks field is the active player's remaining clicks, so tooling can
    distinguish a within-turn spin (same turn + same clicks, not progressing)
@@ -395,9 +421,18 @@
           (println (format "GAME-GONE turn=%s" (or turn-number "?")))
 
           waiting-to-start?
-          (println (format "AWAITING-START turn=%s next-player=%s"
-                           (or turn-number "?")
-                           (or next-player "?")))
+          ;; #104: AWAITING-START while OUR prompt is still open (e.g. the
+          ;; end-of-turn discard) read as a desync to both guest models. The
+          ;; pairing is honest — the boundary can't complete until the prompt
+          ;; resolves — so name the blocker in the same machine-readable line.
+          ;; Additive last field; prefix parsing is unaffected.
+          (let [my-prompt (state/get-prompt)
+                open-prompt? (and my-prompt
+                                  (not= "waiting" (:prompt-type my-prompt)))]
+            (println (str (format "AWAITING-START turn=%s next-player=%s"
+                                  (or turn-number "?")
+                                  (or next-player "?"))
+                          (when open-prompt? " open-prompt=mine"))))
 
           :else
           (println (format "IN-PROGRESS turn=%s whose-turn=%s clicks=%s"
@@ -994,10 +1029,9 @@
       (let [ice-title (:title current-ice)
             ice-str (or (:current-strength current-ice) (:strength current-ice))
             ice-subtypes (clojure.string/join " " (or (:subtypes current-ice) []))
-            subs (:subroutines current-ice)
-            unbroken (count (filter #(not (:broken %)) subs))]
+            subs (:subroutines current-ice)]
         (println (format "  🧊 ICE: %s (str %s, %s)" ice-title ice-str ice-subtypes))
-        (println (format "     Subroutines: %d unbroken of %d" unbroken (count subs)))
+        (println (format "     Subroutines: %s" (sub-count-summary subs)))
         ;; Show playable icebreakers for Runner
         (when (= my-side "runner")
           (let [programs (get-in state [:game-state :runner :rig :program])
