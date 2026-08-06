@@ -841,6 +841,148 @@
                    :initial-size 2 :current-log [{:text "a"} {:text "b"}]}))))))
 
 ;; ============================================================================
+;; classify-action-result / verify-action-in-log prompt baseline (issue #105)
+;;
+;; install! reported "❌ Failed to install: Karunā / Action not confirmed in
+;; game log (timeout)" while printing, in the same breath, the very prompt the
+;; install had just successfully opened. Reproduced 3 times in 4 installs on a
+;; fresh game -- a RACE, which is worse than a hard bug because the same
+;; command teaches a seat two different lessons about what its output means.
+;;
+;; Cause: the caller captured initial-LOG-SIZE before sending, but the PROMPT
+;; baseline was read inside verify-action-in-log, i.e. AFTER the send. When the
+;; WebSocket reply beat the start of verification, the freshly-opened prompt WAS
+;; the baseline, compared equal to itself forever, and the "new prompt created"
+;; branch could never fire -> poll to timeout -> :error.
+;;
+;; This is the same defect, one function over, as #97 (verify-ABILITY-in-log):
+;; the meaningful-nil `or`-fallback trap. verify-action-in-log never got the fix.
+;; ============================================================================
+
+(defn- install-prompt
+  "The location prompt a Corp install opens (ICE/asset/upgrade = the common case)."
+  [eid card-name]
+  {:eid {:eid eid}
+   :msg (str "Choose a location to install " card-name)
+   :prompt-type "select"
+   :choices [{:value "HQ"} {:value "R&D"} {:value "New remote"}]})
+
+(deftest test-classify-action-result-install-opens-prompt
+  (testing "card still in hand + a genuinely new prompt -> waiting-input, not error"
+    (let [p (install-prompt 200 "Karunā")
+          r (core/classify-action-result "Karunā" ["hand"]
+              {:initial-prompt nil :current-prompt p
+               :initial-size 3
+               :current-log [{:text "a"} {:text "b"} {:text "c"}]
+               :hand [{:title "Karunā" :zone ["hand"]}]})]
+      (is (= :waiting-input (:status r)))
+      (is (= p (:prompt r)))
+      (is (= "Karunā" (:card-name r)))))
+
+  (testing "stale leftover prompt of the SAME shape must still read as new (eid)"
+    ;; Install Palisade, choose a server, install Palisade again: prompt-state
+    ;; isn't cleared on resolve, so the leftover is byte-identical to the
+    ;; re-opened one. Structural inequality alone misses it.
+    (let [stale   (install-prompt 100 "Palisade")
+          re-open (install-prompt 300 "Palisade")
+          r (core/classify-action-result "Palisade" ["hand"]
+              {:initial-prompt stale :current-prompt re-open
+               :initial-size 3
+               :current-log [{:text "a"} {:text "b"} {:text "c"}]
+               :hand [{:title "Palisade" :zone ["hand"]}]})]
+      (is (= :waiting-input (:status r)))
+      (is (= re-open (:prompt r)))))
+
+  (testing "card left hand and log grew -> success (unchanged)"
+    (is (= {:status :success}
+           (core/classify-action-result "Hedge Fund" ["hand"]
+             {:initial-prompt nil :current-prompt nil
+              :initial-size 3
+              :current-log [{:text "a"} {:text "b"} {:text "c"}
+                            {:text "ai-corp plays Hedge Fund."}]
+              :hand []}))))
+
+  (testing "waiting-input wins over the bare log-grew heuristic"
+    ;; The click-spend line can land in the log while the location prompt is
+    ;; still open. Reporting :success there would be a false 'installed'.
+    (let [p (install-prompt 400 "Karunā")
+          r (core/classify-action-result "Karunā" ["hand"]
+              {:initial-prompt nil :current-prompt p
+               :initial-size 3
+               :current-log [{:text "a"} {:text "b"} {:text "c"}
+                             {:text "ai-corp spends [Click] to install a card."}]
+               :hand [{:title "Karunā" :zone ["hand"]}]})]
+      (is (= :waiting-input (:status r)))))
+
+  (testing "nothing happened yet -> nil (keep polling)"
+    (is (nil? (core/classify-action-result "Karunā" ["hand"]
+                {:initial-prompt nil :current-prompt nil
+                 :initial-size 3
+                 :current-log [{:text "a"} {:text "b"} {:text "c"}]
+                 :hand [{:title "Karunā" :zone ["hand"]}]})))))
+
+(deftest test-verify-action-in-log-prompt-arrives-before-verification
+  (testing "THE #105 RACE: prompt already in state when verification starts"
+    ;; Stage the losing side of the race: the WebSocket reply (prompt) has
+    ;; already landed, the card is still in hand, and the log has NOT grown.
+    ;; The caller captured pre-log-size AND pre-prompt (nil) before sending.
+    (let [p (install-prompt 200 "Karunā")
+          gs {:corp {:credit 5 :click 3
+                     :hand [{:title "Karunā" :zone ["hand"] :cid 1}]
+                     :prompt-state p}
+              :log [{:text "a"} {:text "b"} {:text "c"}]
+              :active-player "corp"}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (let [r (core/verify-action-in-log "Karunā" ["hand"] 200
+                  {:pre-log-size 3 :pre-prompt nil})]
+          (is (= :waiting-input (:status r))
+              "install that opened a prompt must report :waiting-input, never a timeout :error")
+          (is (= p (:prompt r)))))))
+
+  (testing "a nil :pre-prompt is MEANINGFUL and must not trigger a live re-read"
+    ;; Same staging: if `(or pre-prompt (get-prompt))` re-reads, the baseline
+    ;; becomes the new prompt itself and this false-fails as a timeout.
+    (let [p (install-prompt 201 "Palisade")
+          gs {:corp {:credit 5 :click 3
+                     :hand [{:title "Palisade" :zone ["hand"] :cid 2}]
+                     :prompt-state p}
+              :log [{:text "a"}]
+              :active-player "corp"}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (is (= :waiting-input
+               (:status (core/verify-action-in-log "Palisade" ["hand"] 200
+                          {:pre-log-size 1 :pre-prompt nil})))))))
+
+  (testing "legacy 4th-arg integer (bare initial-log-size) must not blow up"
+    ;; This var is re-exported by ai-actions and reachable from `eval`, so the
+    ;; old positional shape can still arrive. contains? THROWS on a
+    ;; non-associative arg -- it does NOT return false the way get returns nil
+    ;; -- so an un-normalized integer would be an IllegalArgumentException
+    ;; rather than a graceful degrade. (Guest review, GPT-5.6.)
+    (let [gs {:corp {:credit 5 :click 3
+                     :hand []
+                     :prompt-state nil}
+              :log [{:text "a"} {:text "b"} {:text "c"}
+                    {:text "ai-corp plays Hedge Fund."}]
+              :active-player "corp"}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (is (= :success
+               (:status (core/verify-action-in-log "Hedge Fund" ["hand"] 200 3)))
+            "an integer 4th arg is normalized to {:pre-log-size n}, not thrown on"))))
+
+  (testing "genuinely nothing happened still times out as :error"
+    (let [gs {:corp {:credit 5 :click 3
+                     :hand [{:title "Karunā" :zone ["hand"] :cid 1}]
+                     :prompt-state nil}
+              :log [{:text "a"} {:text "b"} {:text "c"}]
+              :active-player "corp"}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (let [r (core/verify-action-in-log "Karunā" ["hand"] 100
+                  {:pre-log-size 3 :pre-prompt nil})]
+          (is (= :error (:status r)))
+          (is (= "Karunā" (:card-name r))))))))
+
+;; ============================================================================
 ;; capture-state-snapshot / show-state-diff tests (ai-core)
 ;;
 ;; The before/after verification snapshot must read PUBLIC count fields for
