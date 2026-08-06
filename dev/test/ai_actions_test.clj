@@ -400,6 +400,8 @@
 
 (deftest use-runner-ability-ambiguous-duplicate-is-not-a-not-found-lie
   (testing "two copies of the same Corp card: error says disambiguate, never 'not found'"
+    ;; No :run here — an active encounter on one copy now resolves the tie
+    ;; (#100), so genuine ambiguity means no run context.
     (let [bran2 (assoc bran :cid 78 :zone [:servers :hq :ices])]
       (with-mock-state (mock-client-state
                         :side "runner"
@@ -407,7 +409,6 @@
                                               :rig {:program [] :hardware [] :resource []}}
                                      :corp {:servers {:rd {:ices [bran] :content []}
                                                       :hq {:ices [bran2] :content []}}}
-                                     :run {:position 1 :server ["rd"] :phase "encounter-ice"}
                                      :active-player "runner"})
         (let [out (java.io.StringWriter.)
               result (binding [*out* out] (ai-card-actions/use-runner-ability! "Brân 1.0" 0))]
@@ -456,6 +457,86 @@
                                                   {:pre-log-size 2})]
         (is (= :error (:status result))
             "with no baseline supplied the live prompt is the baseline; nothing new happens")))))
+
+;; ============================================================================
+;; find-installed-corp-card — active-run copy breaks title ties (#100)
+;;
+;; Marquee 30c4a1c0 T9: two Funhouse copies installed, one in the active
+;; encounter — fire-subs "Funhouse" still failed on ambiguity and forced the
+;; --fire-unbroken workaround. The run context is the natural tiebreak; the
+;; [N]-suffix path stays for genuinely ambiguous non-run cases.
+;; ============================================================================
+
+(def ^:private funhouse-rd {:cid "fun-rd" :title "Funhouse" :rezzed true
+                            :zone [:servers :rd :ices]})
+(def ^:private funhouse-r3 {:cid "fun-r3" :title "Funhouse" :rezzed true
+                            :zone [:servers :remote3 :ices]})
+
+(defn- corp-state-with-two-funhouses [run]
+  (mock-client-state
+   :side "corp"
+   :game-state {:corp {:servers {:rd {:ices [funhouse-rd]}
+                                 :remote3 {:ices [funhouse-r3]}}}
+                :run run}))
+
+(deftest find-corp-card-prefers-active-run-copy
+  (testing "with an active encounter on one copy, the encountered copy wins"
+    (with-mock-state (corp-state-with-two-funhouses
+                      {:server ["servers" "rd"] :position 1 :phase "encounter-ice"})
+      (let [out (java.io.StringWriter.)
+            card (binding [*out* out] (ai-core/find-installed-corp-card "Funhouse"))]
+        (is (= "fun-rd" (:cid card))
+            "must return the copy at the current run position")
+        (is (str/includes? (str out) "active run")
+            "must say the run context made the pick")))))
+
+(deftest find-corp-card-still-ambiguous-outside-run
+  (testing "no active run: duplicate titles still print disambiguation and return nil"
+    (with-mock-state (corp-state-with-two-funhouses nil)
+      (let [out (java.io.StringWriter.)
+            card (binding [*out* out] (ai-core/find-installed-corp-card "Funhouse"))]
+        (is (nil? card))
+        (is (str/includes? (str out) "Multiple copies"))))))
+
+(deftest find-corp-card-run-elsewhere-keeps-ambiguity
+  (testing "a run whose current ICE is NOT one of the matches doesn't fake a tiebreak"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:corp {:servers {:hq {:ices [{:cid "pal" :title "Palisade"
+                                                                 :zone [:servers :hq :ices]}]}
+                                                    :rd {:ices [funhouse-rd]}
+                                                    :remote3 {:ices [funhouse-r3]}}}
+                                   :run {:server ["servers" "hq"] :position 1
+                                         :phase "encounter-ice"}})
+      (let [out (java.io.StringWriter.)
+            card (binding [*out* out] (ai-core/find-installed-corp-card "Funhouse"))]
+        (is (nil? card))
+        (is (str/includes? (str out) "Multiple copies"))))))
+
+(deftest find-corp-card-forced-encounter-beats-position
+  (testing "a forced encounter's ICE (wire :encounters summary) outranks the
+            position-derived ICE as the tiebreak (guest review of #100)"
+    ;; Position points at the R&D copy, but the engine says the actual
+    ;; encounter is the Server 3 copy (e.g. a redirected/forced encounter).
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:corp {:servers {:rd {:ices [funhouse-rd]}
+                                                    :remote3 {:ices [funhouse-r3]}}}
+                                   :encounters {:ice funhouse-r3 :encounter-count 1}
+                                   :run {:server ["servers" "rd"] :position 1
+                                         :phase "encounter-ice"}})
+      (let [card (binding [*out* (java.io.StringWriter.)]
+                   (ai-core/find-installed-corp-card "Funhouse"))]
+        (is (= "fun-r3" (:cid card))
+            "the encountered copy, not the positional copy, must win")))))
+
+(deftest find-corp-card-explicit-index-still-wins
+  (testing "an explicit [N] suffix bypasses the run tiebreak"
+    (with-mock-state (corp-state-with-two-funhouses
+                      {:server ["servers" "rd"] :position 1 :phase "encounter-ice"})
+      (let [card (binding [*out* (java.io.StringWriter.)]
+                   (ai-core/find-installed-corp-card "Funhouse [1]"))]
+        (is (= "fun-r3" (:cid card)))))))
 
 (comment
   ;; Run all happy path tests

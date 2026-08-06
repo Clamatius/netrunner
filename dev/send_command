@@ -285,7 +285,7 @@ ${role_actions}
 ${role_running}
 
 ${GREEN}Prompts:${NC}
-  choose <N>       Choose option N (0 = first)
+  choose <N|text>  Choose option by index (0 = first) or label text
   choose-card <N>  Select card N from selectable cards
 
 ${GREEN}Waiting:${NC}
@@ -400,7 +400,8 @@ ${GREEN}Running:${NC}
                      through every symmetric 'pass priority' window.
 
 ${GREEN}Prompts:${NC}
-  choose <N>      - Choose option N from prompt (0 = first option)
+  choose <N|text> - Choose option N from prompt (0 = first option), or by
+                        label text (same matching as choose-value)
   choose-value <text> - Choose by matching text (e.g., "Yes", "Steal").
                         Also presses a SELECT prompt's meta-button, e.g.
                         choose-value "Done" to stop selecting cards.
@@ -1187,10 +1188,17 @@ case "$COMMAND" in
     choose)
         ensure_connection
         CHOICE="${1:-}"
-        [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index>"
-        [[ ! "$CHOICE" =~ ^[0-9]+$ ]] && error "Choice must be a number"
-        info "Choosing option $CHOICE..."
-        execute "(ai-actions/choose-option! $CHOICE)"
+        [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index-or-label>"
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]]; then
+            info "Choosing option $CHOICE..."
+            execute "(ai-actions/choose-option! $CHOICE)"
+        else
+            # Labels are unambiguous within one prompt (#101): a non-numeric
+            # arg routes to the same matcher as choose-value instead of the
+            # old 'Choice must be a number' refusal.
+            info "Choosing option matching: $CHOICE..."
+            execute "(ai-actions/choose-by-value! \"$CHOICE\")"
+        fi
         after_action
         ;;
 

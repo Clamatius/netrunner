@@ -20,6 +20,7 @@
       told GPT-5.5 to bail, and it threw away a broken Bran (8 credits) and the
       game."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-runs :as runs]
             [ai-display :as display]
@@ -508,6 +509,50 @@
                :timestamp "2026-07-18T04:21:00.000000Z"}]
       (is (= :ice-rezzed (:status (runs/handle-events {:rez-event rez})))
           "A new entry is a new event and must still pause"))))
+
+(deftest event-pause-banner-is-honest-about-upgrades-and-side
+  ;; #104: the Manegarm rez printed '⚠️ Run paused - ICE rezzed!' plus the
+  ;; runner-flavored continue-run hint on the CORP side.
+  (testing "a rezzed UPGRADE isn't announced as 'ICE rezzed!', and the Corp
+            side doesn't get the runner-flavored continue-run hint"
+    (runs/reset-reported-events!)
+    (let [manegarm-rez {:user "__system__"
+                        :text "ai-corp rezzes Manegarm Skunkworks protecting Server 2."
+                        :timestamp "2026-08-04T04:21:00.000000Z"}
+          state {:game-state {:corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
+                                                         :content [{:cid 7 :title "Manegarm Skunkworks"}]}}}}}
+          out (with-out-str (runs/handle-events {:rez-event manegarm-rez
+                                                 :state state
+                                                 :side "corp"}))]
+      (is (str/includes? out "Upgrade/asset rezzed!")
+          (str "a non-ICE rez must not claim to be ICE, got:\n" out))
+      (is (not (str/includes? out "ICE rezzed!")))
+      (is (not (str/includes? out "continue-run"))
+          "the Corp side must not be told to use the Runner's continue-run"))
+    (runs/reset-reported-events!)
+    (let [ice-rez {:user "__system__"
+                   :text "ai-corp rezzes Palisade protecting Server 2."
+                   :timestamp "2026-08-04T04:22:00.000000Z"}
+          state {:game-state {:corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
+                                                         :content [{:cid 7 :title "Manegarm Skunkworks"}]}}}}}
+          out (with-out-str (runs/handle-events {:rez-event ice-rez
+                                                 :state state
+                                                 :side "runner"}))]
+      (is (str/includes? out "ICE rezzed!") "a real ICE rez keeps its banner")
+      (is (str/includes? out "continue-run") "the Runner keeps its hint")))
+  (testing "title-substring collisions don't misclassify: rezzing the ASSET
+            'Hostile Architecture' with ICE 'Architect' installed is non-ICE"
+    (runs/reset-reported-events!)
+    (let [asset-rez {:user "__system__"
+                     :text "ai-corp rezzes Hostile Architecture."
+                     :timestamp "2026-08-04T04:23:00.000000Z"}
+          state {:game-state {:corp {:servers {:remote1 {:ices [{:cid 1 :title "Architect"}]
+                                                         :content [{:cid 2 :title "Hostile Architecture"}]}}}}}
+          out (with-out-str (runs/handle-events {:rez-event asset-rez
+                                                 :state state
+                                                 :side "corp"}))]
+      (is (str/includes? out "Upgrade/asset rezzed!")
+          (str "'Architect' must not substring-hijack 'Hostile Architecture', got:\n" out)))))
 
 (deftest reset-reported-events-rearms-the-pause
   (testing "A fresh run starts with a clean slate (run! resets)."

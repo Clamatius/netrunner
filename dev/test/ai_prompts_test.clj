@@ -98,6 +98,32 @@
       (is (nil? sent) "must not send a wire message when no choice matches")
       (is (str/includes? out "No choice matching")))))
 
+;; ============================================================================
+;; choice-match-index — label matching tolerant of [icon] tokens (#101)
+;;
+;; Wire labels embed icon tokens ('Gain 3 [Credits]'); choose-value's plain
+;; substring match rejected the natural paraphrase 'Gain 3 credits', so both
+;; guest models bounced off it. Matching strips brackets on both sides.
+;; ============================================================================
+
+(deftest choice-match-index-tolerates-bracket-tokens
+  (let [choices [{:uuid "a" :value "Gain 3 [Credits]"}
+                 {:uuid "b" :value "Draw 2 cards"}]]
+    (testing "paraphrase without brackets matches the bracketed wire label"
+      (is (= 0 (prompts/choice-match-index choices "Gain 3 credits"))))
+    (testing "the exact bracketed label still matches"
+      (is (= 0 (prompts/choice-match-index choices "Gain 3 [Credits]"))))
+    (testing "case-insensitive substring behavior is preserved"
+      (is (= 1 (prompts/choice-match-index choices "draw"))))
+    (testing "no match returns nil"
+      (is (nil? (prompts/choice-match-index choices "Purge"))))
+    (testing ":label fallback still works"
+      (is (= 0 (prompts/choice-match-index [{:uuid "c" :label "Done"}] "done"))))
+    (testing "a needle that normalizes to blank matches nothing, not everything"
+      (is (nil? (prompts/choice-match-index choices "[]")))
+      (is (nil? (prompts/choice-match-index choices "")))
+      (is (nil? (prompts/choice-match-index choices "[ ]"))))))
+
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"
     (with-mock-state (mock-client-state :side "corp" :prompt select-prompt-with-done)

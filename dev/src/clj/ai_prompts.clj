@@ -227,8 +227,35 @@
             (println (format "      %d. %s" i (:value c)))))
         (core/with-cursor {:status :error :reason "Invalid choice index"})))))
 
+(defn normalize-choice-text
+  "Lowercase and strip [] so a paraphrase like \"Gain 3 credits\" matches the
+   wire label \"Gain 3 [Credits]\" (#101: icon tokens made choose-value reject
+   anything short of the exact bracketed label — both guest models hit it)."
+  [s]
+  (-> (str s)
+      (clojure.string/lower-case)
+      (clojure.string/replace #"[\[\]]" "")))
+
+(defn choice-match-index
+  "Pure: index of the first choice whose :value/:label contains `value-text`,
+   comparing bracket-stripped lowercase text. nil when nothing matches."
+  [choices value-text]
+  (let [needle (normalize-choice-text value-text)]
+    ;; A needle that normalizes to blank (e.g. "[]") would substring-match
+    ;; EVERY label and silently press option 0 — no match is the honest answer
+    ;; (guest review).
+    (when-not (clojure.string/blank? needle)
+      (first
+       (keep-indexed
+        (fn [idx choice]
+          (let [choice-val (or (:value choice) (:label choice) "")]
+            (when (clojure.string/includes? (normalize-choice-text choice-val) needle)
+              idx)))
+        choices)))))
+
 (defn choose-by-value!
-  "Choose from prompt by matching value/label text (case-insensitive substring match).
+  "Choose from prompt by matching value/label text (case-insensitive substring
+   match, tolerant of [icon] brackets — see choice-match-index).
    Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")
 
    Works on `select` prompts too: the Done / decline / meta buttons live in
@@ -241,17 +268,7 @@
         side-kw (when side (keyword (clojure.string/lower-case side)))
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         choices (:choices prompt)
-        value-lower (clojure.string/lower-case (str value-text))
-        ;; Find first choice whose value contains the search text
-        matching-idx (first
-                      (keep-indexed
-                       (fn [idx choice]
-                         (let [choice-val (or (:value choice) (:label choice) "")]
-                           (when (clojure.string/includes?
-                                  (clojure.string/lower-case (str choice-val))
-                                  value-lower)
-                             idx)))
-                       choices))]
+        matching-idx (choice-match-index choices value-text)]
     (if matching-idx
       (press-choice! (nth choices matching-idx))
       (do
@@ -259,6 +276,7 @@
         (println "Available choices:")
         (doseq [[idx choice] (map-indexed vector choices)]
           (println (str "  " idx ". " (core/format-choice choice))))
+        (println "   → Press by index instead with: choose <N>")
         (core/with-cursor {:status :error :reason "No matching choice"})))))
 
 (defn choose-card!

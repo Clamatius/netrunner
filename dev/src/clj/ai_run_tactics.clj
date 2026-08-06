@@ -188,7 +188,9 @@
   [state ice-name reason]
   (let [ice (core/current-run-ice state)
         subroutines (:subroutines ice)
-        unbroken (filter #(not (:broken %)) subroutines)
+        ;; :fired subs are resolved, not pending — same predicate as the run
+        ;; handlers (#99: counting them as unbroken misreads a resolved encounter)
+        unbroken (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
         breakers (list-available-breakers state)
         credits (get-in state [:game-state :runner :credit])]
     (println (format "⏸️  Tactics pause: %s" reason))
