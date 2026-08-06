@@ -674,6 +674,53 @@
   (reset! seen-cards #{}))
 
 ;; ============================================================================
+;; Last prompt block we RENDERED (#104: the same prompt printed twice back-to-back)
+;; ============================================================================
+;; Every acting command now auto-appends the resulting prompt (see
+;; show-prompt-if-any), because continue->prompt ran P=0.48. Seats kept their old
+;; habit of calling `prompt` anyway, so the identical block printed twice in a row
+;; with nothing to say it was one prompt and not two stacked ones — and a seat that
+;; reads two blocks answers twice (exactly the double-acting #75 taught us to fear).
+;;
+;; Tracking what we last PRINTED — not what the server last sent — is the point:
+;; the duplication is a rendering artifact, so the dedupe belongs at the render.
+
+(defonce last-rendered-prompt (atom nil))
+
+(defn prompt-render-fingerprint
+  "Identity of a prompt AS RENDERED: [eid msg].
+
+   Requires a present :eid. A nil eid must never match another nil eid — that is
+   the #75 lesson (nil = nil once let two different card-less prompts share an
+   identity); an unidentifiable prompt is simply always treated as new."
+  [prompt]
+  (when-let [eid (:eid prompt)]
+    [eid (:msg prompt)]))
+
+(defn prompt-already-rendered?
+  "Is this the same prompt INSTANCE we most recently printed in full?
+
+   False for a stacked duplicate (#75: same msg + card, NEW eid) — those are
+   genuinely separate prompts the seat must answer separately, and calling one
+   'unchanged' would re-create the bug that issue exists to fix."
+  [prompt]
+  (boolean (when-let [fp (prompt-render-fingerprint prompt)]
+             (= fp @last-rendered-prompt))))
+
+(defn mark-prompt-rendered!
+  "Record that we just printed this prompt's full block."
+  [prompt]
+  (reset! last-rendered-prompt (prompt-render-fingerprint prompt)))
+
+(defn reset-rendered-prompt!
+  "Forget the last rendered prompt (new game / cleared state).
+
+   Wired into the same teardown as reset-seen-cards!: a render marker surviving
+   into a fresh game would mark that game's first prompt as 'unchanged'."
+  []
+  (reset! last-rendered-prompt nil))
+
+;; ============================================================================
 ;; State Cursor (for race-condition-free waiting)
 ;; ============================================================================
 ;; Monotonically increasing counter that bumps on relevant state changes.
@@ -828,5 +875,6 @@
     ;; Reset auxiliary state atoms
     (reset-cursor!)
     (reset-seen-cards!)
+    (reset-rendered-prompt!)
     (clear-stale-flag!)
     (println "🧹 Cleared cached game state")))

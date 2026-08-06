@@ -576,6 +576,58 @@
       ;; Not Corp, return empty
       [])))
 
+(defn find-eot-rezzable-cards
+  "Installed Corp assets/upgrades that are still unrezzed and affordable RIGHT NOW.
+   Returns a sequence of {:card :title :cost}.
+
+   This is the end-of-turn paid-ability window in the only shape worth pausing for
+   (#103): the Corp's last click is spent, and there is still a Nico Campaign sitting
+   unrezzed in a remote. Auto-end used to fire the instant the click pool emptied,
+   so that window went by unmentioned.
+
+   Deliberately NARROW, because every entry here costs the seat a beat:
+   - ICE is excluded. Rezzing ICE outside a run is legal but pointless — there is no
+     approach to defend at end of turn, and including it would pause on virtually
+     every Corp turn, which is how a helpful beat turns into noise the seat learns
+     to ignore.
+   - Affordability is checked, so an unpayable rez never holds the turn open.
+   - Corp only. The Runner's end-of-turn paid window exists but has no comparable
+     always-visible trigger, and a pause we can't justify is just a stall.
+
+   Affordability errs GENEROUS, and deliberately so — the two errors are not
+   symmetric. A false negative silently closes the window, which is precisely the
+   bug #103 exists to fix; a false positive costs the seat one `end-turn`. So the
+   spend pool includes recurring credits on rezzed cards (guest review: a Corp at 0
+   credits with a rezzed Mumba Temple can still rez a 2-cost asset, and the
+   pool-only check refused it). Recurring credits restricted to other uses are
+   counted anyway for the same reason.
+
+   Known residual, same direction: rez-cost REDUCERS are not modelled, so a card
+   made cheaper by an effect can still be missed. Costs a beat, never a wrong
+   action — worth revisiting if a seat reports it."
+  []
+  (let [side (:side @state/client-state)]
+    (if (side= "Corp" side)
+      (let [pool (or (get-in @state/client-state [:game-state :corp :credit]) 0)
+            servers (vals (state/corp-servers))
+            ;; Both content and ice can carry recurring credits.
+            all-cards (mapcat #(concat (:content %) (:ices %)) servers)
+            recurring (->> all-cards
+                           (filter :rezzed)
+                           (keep #(get-in % [:counter :recurring]))
+                           (reduce + 0))
+            spendable (+ pool recurring)]
+        (->> all-cards
+             (filter #(contains? #{"Asset" "Upgrade"} (:type %)))
+             (remove :rezzed)
+             ;; A missing :cost is unknown, not free — don't invent a rez we can't price.
+             (filter #(when-let [c (:cost %)] (<= c spendable)))
+             (map (fn [card]
+                    {:card card
+                     :title (:title card)
+                     :cost (:cost card)}))))
+      [])))
+
 ;; ============================================================================
 ;; Install Validation (Baby-proofing)
 ;; ============================================================================
@@ -1541,11 +1593,13 @@
                            before acting (we hold 0 clicks until we do)
      :my-turn            — it's our turn and we have clicks; act now
      :my-run-window      — we own the un-passed pass at an active run window
-                           (approach-ice / movement / approach-server) and
-                           my-turn-to-act? did NOT already cover it (0 clicks
-                           left, spent on the run). #91: a seat that had passed a
-                           PREVIOUS window otherwise sleeps through the new window
-                           it now owns and the game deadlocks.
+                           (approach-ice / movement / approach-server). #91: a
+                           seat that had passed a PREVIOUS window otherwise sleeps
+                           through the new window it now owns and the game
+                           deadlocks. Outranks :my-turn (#102) — while a run is
+                           live, an owed continue is the more specific fact, and
+                           reporting :my-turn there sent the seat looking for a
+                           turn to start instead of a run to finish.
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
@@ -1609,23 +1663,29 @@
             (not= initial-run-phase current-phase))
        :run-phase-change
 
+       ;; We own an un-passed run pass-window (#91). Ranked ABOVE my-turn-to-act?
+       ;; (#102): a run costs one click, so the Runner mid-run normally still holds
+       ;; 2-3 — my-turn-to-act? is true throughout its own run and used to win this
+       ;; cond, so `wait` returned :my-turn while a continue was owed at
+       ;; movement/approach-server. That misdirects the seat into start-turn
+       ;; thinking mid-run (both Fable runner sessions, marquee 30c4a1c0). Owning an
+       ;; un-passed window is the strictly more specific fact, so it reports first.
+       ;;
+       ;; This reorder changes only the LABEL, never the wake set: both branches
+       ;; wake, and every state that reached :my-turn before still wakes here or
+       ;; below. It also still covers the original #91 case (window ours, 0 clicks
+       ;; left, my-turn-to-act? false), and it does not spin — we own the window
+       ;; only until we pass it, and it never fires for the side merely waiting on
+       ;; the opponent to pass.
+       (my-run-window? state side)
+       :my-run-window
+
        ;; It's our turn. Distinguish a live actionable turn (:my-turn, we have
        ;; clicks) from a turn boundary where we must call start-turn first
        ;; (:my-turn-start, 0 clicks). Conflating them made a boundary look like
        ;; a stall and misled both seats in the first rung-2 game.
        (my-turn-to-act? state side)
        (if (turn-awaiting-start? state side) :my-turn-start :my-turn)
-
-       ;; We ACQUIRED priority at a run pass-window we own (#91). Ranks below
-       ;; my-turn-to-act? on purpose: when we have clicks that already wakes us
-       ;; (:my-turn); this catches the deadlock case where the window is ours but
-       ;; my-turn-to-act? is false — 0 clicks left (spent on the run) at an empty
-       ;; run window that is not an actionable :has-prompt. Without it a seat that
-       ;; had correctly passed a PREVIOUS window sleeps through the new window it now
-       ;; owns. It does not spin: we own the window only until we pass it, and it
-       ;; never fires for the side that is merely waiting on the opponent to pass.
-       (my-run-window? state side)
-       :my-run-window
 
        ;; Nothing relevant
        :else nil))))

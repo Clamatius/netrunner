@@ -1453,8 +1453,16 @@
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
     (if prompt
       (let [has-choices (seq (:choices prompt))
-            has-selectable (seq (:selectable prompt))]
-        (println "\n🔔 Current Prompt:")
+            has-selectable (seq (:selectable prompt))
+            ;; #104: acting commands auto-append this block, and seats still call
+            ;; `prompt` after acting — so the identical block prints twice in a row.
+            ;; Say which one this is. Computed BEFORE the mark below, and only for a
+            ;; matching :eid, so a stacked duplicate (#75) still reads as new.
+            already-shown? (state/prompt-already-rendered? prompt)]
+        (state/mark-prompt-rendered! prompt)
+        (println (if already-shown?
+                   "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
+                   "\n🔔 Current Prompt:"))
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
         (when-let [card (:card prompt)]
