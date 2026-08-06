@@ -118,7 +118,11 @@
     (testing "no match returns nil"
       (is (nil? (prompts/choice-match-index choices "Purge"))))
     (testing ":label fallback still works"
-      (is (= 0 (prompts/choice-match-index [{:uuid "c" :label "Done"}] "done"))))))
+      (is (= 0 (prompts/choice-match-index [{:uuid "c" :label "Done"}] "done"))))
+    (testing "a needle that normalizes to blank matches nothing, not everything"
+      (is (nil? (prompts/choice-match-index choices "[]")))
+      (is (nil? (prompts/choice-match-index choices "")))
+      (is (nil? (prompts/choice-match-index choices "[ ]"))))))
 
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"

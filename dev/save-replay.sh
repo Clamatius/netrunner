@@ -62,7 +62,9 @@ fi
 # old path rejected the prefix while printing the very UUID that matched it).
 # Prefixes of other games can't be resolved — the mongo lookup is exact-match —
 # so a short id that isn't the current game's prefix needs the full UUID.
-if [[ -n "$CUR_GAMEID" && "$GAMEID" != "$CUR_GAMEID" && "$CUR_GAMEID" == "$GAMEID"* ]]; then
+# >=8 chars: a 1-2 char prefix meant for ANOTHER game could collide with the
+# current one, get rewritten, and flush (leave) the wrong lobby (guest review).
+if [[ -n "$CUR_GAMEID" && "$GAMEID" != "$CUR_GAMEID" && ${#GAMEID} -ge 8 && "$CUR_GAMEID" == "$GAMEID"* ]]; then
     echo "ℹ️  Expanding gameid prefix $GAMEID → $CUR_GAMEID"
     GAMEID="$CUR_GAMEID"
 elif [[ ${#GAMEID} -lt 36 ]]; then

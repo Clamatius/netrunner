@@ -513,6 +513,23 @@
         (is (nil? card))
         (is (str/includes? (str out) "Multiple copies"))))))
 
+(deftest find-corp-card-forced-encounter-beats-position
+  (testing "a forced encounter's ICE (wire :encounters summary) outranks the
+            position-derived ICE as the tiebreak (guest review of #100)"
+    ;; Position points at the R&D copy, but the engine says the actual
+    ;; encounter is the Server 3 copy (e.g. a redirected/forced encounter).
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:corp {:servers {:rd {:ices [funhouse-rd]}
+                                                    :remote3 {:ices [funhouse-r3]}}}
+                                   :encounters {:ice funhouse-r3 :encounter-count 1}
+                                   :run {:server ["servers" "rd"] :position 1
+                                         :phase "encounter-ice"}})
+      (let [card (binding [*out* (java.io.StringWriter.)]
+                   (ai-core/find-installed-corp-card "Funhouse"))]
+        (is (= "fun-r3" (:cid card))
+            "the encountered copy, not the positional copy, must win")))))
+
 (deftest find-corp-card-explicit-index-still-wins
   (testing "an explicit [N] suffix bypasses the run tiebreak"
     (with-mock-state (corp-state-with-two-funhouses

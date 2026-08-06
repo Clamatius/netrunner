@@ -828,7 +828,12 @@
       (= 1 match-count) (first matches)
       explicit-index? (nth (vec matches) index nil)
       :else
-      (let [run-ice (current-run-ice @state/client-state)
+      (let [cs @state/client-state
+            ;; A FORCED encounter can put the Runner on an ICE that :position
+            ;; does not point at; the wire's encounter summary, not position,
+            ;; is the authoritative copy then (guest review of #100).
+            enc-ice (get-in cs [:game-state :encounters :ice])
+            run-ice (or enc-ice (current-run-ice cs))
             run-match (when run-ice
                         (first (filter #(= (:cid run-ice) (:cid %)) matches)))]
         (if run-match

@@ -539,7 +539,20 @@
                                                  :state state
                                                  :side "runner"}))]
       (is (str/includes? out "ICE rezzed!") "a real ICE rez keeps its banner")
-      (is (str/includes? out "continue-run") "the Runner keeps its hint"))))
+      (is (str/includes? out "continue-run") "the Runner keeps its hint")))
+  (testing "title-substring collisions don't misclassify: rezzing the ASSET
+            'Hostile Architecture' with ICE 'Architect' installed is non-ICE"
+    (runs/reset-reported-events!)
+    (let [asset-rez {:user "__system__"
+                     :text "ai-corp rezzes Hostile Architecture."
+                     :timestamp "2026-08-04T04:23:00.000000Z"}
+          state {:game-state {:corp {:servers {:remote1 {:ices [{:cid 1 :title "Architect"}]
+                                                         :content [{:cid 2 :title "Hostile Architecture"}]}}}}}
+          out (with-out-str (runs/handle-events {:rez-event asset-rez
+                                                 :state state
+                                                 :side "corp"}))]
+      (is (str/includes? out "Upgrade/asset rezzed!")
+          (str "'Architect' must not substring-hijack 'Hostile Architecture', got:\n" out)))))
 
 (deftest reset-reported-events-rearms-the-pause
   (testing "A fresh run starts with a clean slate (run! resets)."

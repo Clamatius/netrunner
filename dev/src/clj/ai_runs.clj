@@ -1221,16 +1221,28 @@
   [entry]
   (boolean (and entry (not (contains? (reported-set) (event-key entry))))))
 
+(defn- rez-line-names?
+  "True when the rez log line names `title` as the rezzed card. Anchored to the
+   engine's 'rezzes <title>' / 'to rez <title>' wording with a boundary after
+   the title, so bare substring collisions between real card names ('Architect'
+   inside 'rezzes Hostile Architecture') don't misclassify (guest review)."
+  [text title]
+  (boolean
+   (re-find (re-pattern (str "\\b(?:rezzes|to rez) "
+                             (java.util.regex.Pattern/quote (str title))
+                             "(?=$|[\\s.,!])"))
+            (str text))))
+
 (defn- rezzed-card-kind
-  "Best-effort classification of a rez log line: :ice when an installed ICE
-   title appears in the text, :non-ice when only an installed asset/upgrade
-   title does, nil when unknown (no state, no title match). Rez lines are
-   direct state reports ('corp rezzes X protecting Y'), so title matching does
-   not hit embedded effect text (#104)."
+  "Best-effort classification of a rez log line: :ice when it names an
+   installed ICE, :non-ice when it names an installed asset/upgrade, nil when
+   unknown (no state, no title match). Rez lines are direct state reports
+   ('corp rezzes X protecting Y'), so anchored title matching does not hit
+   embedded effect text (#104)."
   [state text]
   (let [servers (vals (get-in state [:game-state :corp :servers]))
         hit? (fn [card] (when-let [t (:title card)]
-                          (clojure.string/includes? (str text) t)))]
+                          (rez-line-names? text t)))]
     (cond
       (some hit? (mapcat :ices servers)) :ice
       (some hit? (mapcat :content servers)) :non-ice

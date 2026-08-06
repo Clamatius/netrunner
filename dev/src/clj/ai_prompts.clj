@@ -241,13 +241,17 @@
    comparing bracket-stripped lowercase text. nil when nothing matches."
   [choices value-text]
   (let [needle (normalize-choice-text value-text)]
-    (first
-     (keep-indexed
-      (fn [idx choice]
-        (let [choice-val (or (:value choice) (:label choice) "")]
-          (when (clojure.string/includes? (normalize-choice-text choice-val) needle)
-            idx)))
-      choices))))
+    ;; A needle that normalizes to blank (e.g. "[]") would substring-match
+    ;; EVERY label and silently press option 0 — no match is the honest answer
+    ;; (guest review).
+    (when-not (clojure.string/blank? needle)
+      (first
+       (keep-indexed
+        (fn [idx choice]
+          (let [choice-val (or (:value choice) (:label choice) "")]
+            (when (clojure.string/includes? (normalize-choice-text choice-val) needle)
+              idx)))
+        choices)))))
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring
