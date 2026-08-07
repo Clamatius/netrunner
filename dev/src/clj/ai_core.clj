@@ -1840,7 +1840,10 @@
                      (when (= reason :my-turn-start)
                        (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"))
                      (when (= reason :encounter-decision)
-                       (println "   👉 ICE encounter with unbroken subs: `continue` to see options, then break / tank / jack-out"))
+                       ;; NOT jack-out: it is movement-window only, so at an
+                       ;; encounter it is both illegal and a subroutine-skip.
+                       ;; `jack-out` refuses here with the same steer.
+                       (println "   👉 ICE encounter with unbroken subs: `continue` to see options, then break / tank"))
                      (when (= reason :game-over)
                        (let [winner (get-in current-state [:game-state :winner])]
                          (println (format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."

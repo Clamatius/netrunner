@@ -522,6 +522,158 @@
     (string? side-value) side-value
     :else (str side-value)))
 
+;; ============================================================================
+;; Jack-out legality — mirror the human UI's gate
+;; ============================================================================
+;; The engine's `jack-out` (src/clj/game/core/runs.clj) performs NO phase check.
+;; It trusts the client, and the human client (src/cljs/nr/gameboard/board.cljs)
+;; renders the Jack Out button only outside a forced encounter and outside the
+;; success phase, and ENABLES it only when:
+;;     phase == "movement"  AND  :no-action != "runner"  AND  (not :cannot-jack-out)
+;; `send_command jack-out` checked only "is there a run?", so a seat could take an
+;; action no human can. Measured across 21 archived replays: 28 jack-outs, exactly
+;; ONE legal. The encounter-ice cases (11 of them) are the damaging class — ending
+;; a run mid-encounter means unbroken subroutines never resolve, so it is illegal
+;; AND advantageous (replay ac71ce63, 2026-08-04: the Corp paid 5c to rez
+;; Whitespace, the Runner jacked out of the encounter, the subs never fired).
+;;
+;; Kept as a pure fn over [:game-state] so it is testable without a live game and
+;; so the refusal can name the legal move for the phase the seat is actually in.
+;;
+;; KNOWN LIMIT (guest panel, GPT-5.6) — this does NOT make an illegal jack-out
+;; impossible, and should not be described as if it does:
+;;
+;;   1. It is a client-side check against a local snapshot, so it is TOCTOU. If our
+;;      state is stale in the DANGEROUS direction (snapshot says movement, server
+;;      has advanced to encounter-ice) the gate passes, the engine accepts, and the
+;;      command even prints success. The refusal path cannot catch this case — by
+;;      construction there is no refusal to read.
+;;   2. Anything that reaches the engine another way is unaffected. `chat
+;;      "/jack-out"` was exactly that (commands.clj checks side and run-existence
+;;      but not phase, and should-process-command? permits it while holding a :run
+;;      prompt, i.e. mid-encounter). send_command now refuses that spelling, but
+;;      that is another client-side patch on the same open door, not a closure.
+;;
+;; The only authoritative fix is a legality check inside `jack-out` in the ENGINE
+;; (src/clj/game/core/runs.clj). That changes rules enforcement for every player on
+;; the server, not just our AI seats, so it is the project owner's call rather than
+;; a side-effect of a harness fix. What this buys meanwhile: the paths a seat
+;; actually takes are gated, and every refusal names the legal alternative.
+
+(defn- normalize-phase
+  "Run phase as a plain string. The wire sends strings, the engine and our own
+   fixtures use keywords (memory engine-rate-of-change: wire shape is the volatile
+   coupling). Neither shape may be silently read as legal."
+  [phase]
+  (cond
+    (nil? phase) nil
+    (keyword? phase) (name phase)
+    :else (str phase)))
+
+(def ^:private jack-out-phase-alternatives
+  "What the seat should do INSTEAD, per phase where jack out is refused. A bare
+   refusal is what pushed seats to invent recoveries in the first place, so every
+   branch names a concrete command."
+  {"initiation"
+   {:why "the run has not reached a movement phase yet — the Corp has not had its rez window"
+    :alt "`continue` to pass this window; you approach the outermost ICE once the Corp also passes."}
+   "approach-ice"
+   {:why "you are approaching ICE; jack out is not offered during an approach"
+    :alt "`continue` to pass the approach. You may jack out at the movement window AFTER you pass the ICE."}
+   "encounter-ice"
+   {:why (str "you are mid-encounter, and leaving now would skip the unbroken subroutines "
+              "entirely — no human client can do this")
+    :alt "break the subroutines with an icebreaker, or `tank \"<ice>\"` to decline and let them fire."}
+   "success"
+   {:why "the run already succeeded; there is nothing left to jack out of"
+    :alt "`continue` to breach and access."}})
+
+(defn jack-out-legality
+  "Can `side` legally jack out right now? Pure; `gs` is the [:game-state] map,
+   `side` is \"runner\"/\"corp\".
+
+   Mirrors the human UI gate exactly (board.cljs run-div) rather than the engine,
+   because the engine has no gate at all. Returns
+     {:legal? true}
+   or
+     {:legal? false :reason <kw> :message <str> :alternative <str>}
+   with :reason one of :no-run :wrong-side :forced-encounter :cannot-jack-out
+   :wrong-phase :already-passed.
+
+   `side` is REQUIRED rather than defaulted: the Jack Out button exists only in
+   runner-run-div, and the engine's process-action hands the socket's side
+   straight to `jack-out` with no check of its own, so a Corp seat sending this
+   command ENDS THE RUNNER'S RUN and logs \"<corp> jacks out\". A 1-arity that
+   assumed \"runner\" would be exactly the silently-permissive default that made
+   this bug possible in the first place."
+  [gs side]
+  (let [run   (:run gs)
+        phase (normalize-phase (:phase run))
+        na    (normalize-side (:no-action run))]
+    (cond
+      ;; Authorization comes FIRST — before the run even exists. "Only the Runner
+      ;; can jack out" is true regardless of board state, whereas leading with
+      ;; :no-run would answer a Corp seat "Start a run with `run <server>`",
+      ;; implying that starting a run is what it lacks. The Corp cannot run at all.
+      (not= "runner" (normalize-side side))
+      {:legal? false :reason :wrong-side
+       :message "Only the Runner can jack out — it is the Runner leaving their own run."
+       :alternative (str "To end the run from the Corp side you need an end-the-run effect: rez ICE "
+                         "with an ETR subroutine and let it fire.")}
+
+      (nil? run)
+      {:legal? false :reason :no-run
+       :message "There is no active run."
+       :alternative "Start a run with `run <server>`."}
+
+      ;; A forced encounter (e.g. an ICE encountered outside a run) has no run-div
+      ;; jack-out button at all.
+      (:forced-encounter gs)
+      {:legal? false :reason :forced-encounter
+       :message "This is a forced encounter, not a normal run — there is no jack out here."
+       :alternative "Resolve the encounter: break the subroutines, or `tank \"<ice>\"` to let them fire."}
+
+      ;; Engine-level prevention (Ashigaru-likes, Ward, etc). The engine also
+      ;; refuses this, but refusing here costs a round-trip less and explains why.
+      (:cannot-jack-out run)
+      {:legal? false :reason :cannot-jack-out
+       :message "An effect in play prevents jacking out of this run."
+       :alternative "Play the run out: `continue`, and break or `tank` what you meet."}
+
+      (not= "movement" phase)
+      (let [{:keys [why alt]} (get jack-out-phase-alternatives phase)]
+        {:legal? false :reason :wrong-phase
+         :message (format "Jack out is only legal in a movement window (between ICE). You are in `%s`%s."
+                          (or phase "an unknown phase")
+                          (if why (str " — " why) ""))
+         :alternative (or alt "`continue` to advance the run to its next window.")})
+
+      ;; Movement, but you already passed priority: the UI greys the button out,
+      ;; because the window now belongs to the opponent. This is the state that
+      ;; produced the two stall-bail jack-outs in replay 0b52266c.
+      (= "runner" na)
+      {:legal? false :reason :already-passed
+       :message (str "You have already passed priority in this window — it is the Corp's "
+                     "sub-step now, and the Jack Out button is disabled for a human here.")
+       :alternative "`wait` for the Corp to pass. If it never does, escalate: `./dev/umpire-ping runner \"<what you tried / what you see>\"`."}
+
+      :else {:legal? true})))
+
+(defn jack-out-refusal-lines
+  "Printable explanation for a refused jack out. Pure; returns a vector of lines.
+   Always ends on a concrete next command — and, for the already-passed case, on
+   the umpire (the judge button, issue #20), because that is the situation where a
+   seat with no sanctioned recovery reaches for jack out instead."
+  [{:keys [reason message alternative]}]
+  (cond-> [(str "🚫 Jack out is not legal right now.")
+           (str "   " message)
+           (str "   → Instead: " alternative)]
+    ;; The smell reminder belongs on the phase refusals, not on :no-run (where
+    ;; there is nothing to abandon) — see run-priority-hint-lines for the same
+    ;; framing on the display side.
+    (#{:wrong-phase :cannot-jack-out :forced-encounter} reason)
+    (conj "   (Jack out is a smell even when legal: the only real reasons are a misjudged entry cost or a Karunā jack-out sub.)")))
+
 (defn opponent-indicated-action?
   "Check if opponent pressed indicate-action (WAIT button) in recent log.
    The WAIT button signals 'I'm about to do something, don't auto-pass'.

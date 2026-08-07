@@ -227,7 +227,7 @@ show_help_compact() {
             role_running="${GREEN}Running:${NC}
   run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
   continue         Continue run / pass priority
-  jack-out         Abort the current run"
+  jack-out         Abort the run (movement window only — not mid-encounter)"
             role_examples="  ./send_command runner status
   ./send_command runner run HQ
   ./send_command runner install \"Cleaver\"
@@ -243,7 +243,7 @@ show_help_compact() {
             role_running="${GREEN}Running:${NC}
   run <server>     Runner: start a run (HQ, R&D, Archives, remote1, etc.)
   continue         Continue run / pass priority
-  jack-out         Runner: abort the current run
+  jack-out         Runner: abort the run (movement window only — not mid-encounter)
   monitor-run      Corp: participate in opponent's run (auto-pass priority
                    windows, surface rez/fire decisions). See 'help --full'."
             role_examples="  ./send_command corp install \"Hedge Fund\" HQ
@@ -381,7 +381,8 @@ ${GREEN}Running:${NC}
   run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.)
   let-subs-fire <name> - Signal intent to let ICE subroutines fire
   continue [flags]     - Auto-continue until decision required
-  jack-out             - Jack out of current run
+  jack-out             - Jack out (LEGAL ONLY in a movement window you have not
+                         passed: not at initiation, an approach, or an encounter)
   tank <ice-name>      - Authorize letting subs fire on ICE
 
   ${BLUE}Run Flags:${NC} (usable with run, continue)
@@ -1336,17 +1337,40 @@ case "$COMMAND" in
                   (require (quote [ai-runs :as runs]))
                   (let [s @state/client-state
                         gameid (:gameid s)
-                        run-state (get-in s [:game-state :run])]
-                    (if run-state
-                      (do
-                        (ws/send-message! :game/action
-                          {:gameid (if (string? gameid)
-                                     (java.util.UUID/fromString gameid)
-                                     gameid)
-                           :command "jack-out"
-                           :args nil})
-                        (Thread/sleep 500)
-                        (println "🚪 Jacked out of run"))
+                        run-state (get-in s [:game-state :run])
+                        ;; The engine does NOT gate jack-out by phase — it trusts
+                        ;; the client, and the human client only enables the button
+                        ;; in a movement window it has not already passed. Without
+                        ;; this check a seat can jack out of an ENCOUNTER and skip
+                        ;; the unbroken subroutines, which no human can do.
+                        legality (runs/jack-out-legality (:game-state s) (:side s))]
+                    ;; Legality is consulted BEFORE "is there a run": a Corp seat
+                    ;; must hear "only the Runner can jack out", not "not in a run"
+                    ;; (which implies starting one would help). The #48 rich
+                    ;; no-run explanation still owns the genuine :no-run case.
+                    (if (or run-state (not= :no-run (:reason legality)))
+                      (if (:legal? legality)
+                        (do
+                          (ws/send-message! :game/action
+                            {:gameid (if (string? gameid)
+                                       (java.util.UUID/fromString gameid)
+                                       gameid)
+                             :command "jack-out"
+                             :args nil})
+                          (Thread/sleep 500)
+                          (println "🚪 Jacked out of run"))
+                        (do
+                          (doseq [l (runs/jack-out-refusal-lines legality)] (println l))
+                          ;; A refusal must never read as "the tool is broken".
+                          ;; If the seat believes the phase shown is stale, say how
+                          ;; to check rather than leaving it to guess (or to hunt
+                          ;; for an override that deliberately does not exist).
+                          ;; `resync` takes a game-id — printing a bare "resync"
+                          ;; would hand the seat a command that just errors, which
+                          ;; is the misleading-output class this whole change is
+                          ;; about. Interpolate the live gameid.
+                          (println "   (Run `status` to see the current window. If that disagrees with this refusal,")
+                          (println (str "    `resync " gameid "` and retry — if it STILL disagrees, `./dev/umpire-ping` it.)"))))
                       ;; No active run. Distinguish "the run ended out from under
                       ;; a stale encounter menu" (#48) from a plain typo: if the
                       ;; recent log shows run-ending events, surface them so the
@@ -1582,6 +1606,23 @@ case "$COMMAND" in
         ensure_connection
         MESSAGE="${1:-}"
         [[ -z "$MESSAGE" ]] && error "Usage: send_command chat <message>"
+        # Slash-prefixed chat is executed by the server as a game command
+        # (process_actions/should-process-command?), and `/jack-out`
+        # (commands.clj) checks side + "is there a run" but NOT the phase — while
+        # should-process-command? explicitly permits commands while holding a
+        # :run prompt, i.e. mid-encounter. So chat was a second, ungated door to
+        # the exact illegal jack-out the `jack-out` command now refuses. Send the
+        # seat back through the gated door rather than silently duplicating it.
+        # (Other slash commands are left alone — /summon, /click and friends are
+        # legitimate scenario-staging tools.)
+        if [[ "$(echo "$MESSAGE" | tr -d '[:space:]')" == "/jack-out" ]]; then
+            echo "🚫 Use \`jack-out\`, not \`chat \"/jack-out\"\`." >&2
+            echo "   The chat form bypasses the legality check: the server's /jack-out does not" >&2
+            echo "   verify the run phase, so mid-encounter it would end the run and skip the" >&2
+            echo "   unbroken subroutines — something no human client can do." >&2
+            echo "   → Run \`jack-out\`; it will tell you whether this window allows it, and what to do instead." >&2
+            exit 1
+        fi
         info "Sending chat message..."
         execute "(ai-actions/send-chat! \"$MESSAGE\")"
         ;;

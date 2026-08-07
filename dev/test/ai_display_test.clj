@@ -620,18 +620,30 @@
       (let [out (with-out-str (display/show-blocker-diagnosis))]
         (is (str/includes? out "already passed priority")
             (str "should tell the Runner it already passed, got: " out))
-        (is (str/includes? out "jack-out")
-            (str "should offer jack-out as the stall recovery, got: " out))
+        ;; Was: "should offer jack-out as the stall recovery". It must not — the
+        ;; recovery is the umpire, and jack-out here throws the run away (and at
+        ;; this initiation phase is not even legal).
+        (is (str/includes? out "umpire-ping")
+            (str "should point at the judge, not at bailing, got: " out))
         (is (not (str/includes? out "ACTIONABLE")))))))
 
-(deftest test-priority-hint-runner-already-passed-suggests-jackout
-  (testing "Runner already-passed hint names jack-out as recovery if the opponent
-            seat isn't monitoring (issue #31: 'only jack-out cleared it')"
+(deftest test-priority-hint-runner-already-passed-escalates-not-bails
+  ;; Renamed from ...-suggests-jackout. The old test asserted only that the token
+  ;; "jack-out" appeared, so it kept passing once the text flipped to "Do NOT
+  ;; 'jack-out'" — it could not tell a recommendation from a prohibition. Assert
+  ;; the FRAMING, not the token.
+  (testing "Runner already-passed hint prohibits jack-out and names the umpire as
+            the recovery when the opponent seat isn't monitoring (issue #31/#20)"
     (let [out (str/join "\n" (display/run-priority-hint-lines
                               {:phase "initiation" :position 1 :server ["hq"] :no-action "runner"}
                               "runner"))]
       (is (str/includes? out "already passed priority"))
-      (is (str/includes? out "jack-out")))))
+      (is (re-find #"Do NOT 'jack-out'" out)
+          "jack-out must be named as prohibited here, not offered")
+      (is (str/includes? out "umpire-ping")
+          "and the sanctioned recovery must be present, or the seat invents one")
+      (is (not (re-find #"(?i)jack-out (?:to|and) (?:recover|unstick|clear)" out))
+          "no wording that reads as recommending jack-out as the escape hatch"))))
 
 (deftest test-priority-hint-corp-already-passed-no-jackout
   (testing "Corp already-passed hint does NOT suggest jack-out (Corp can't jack out)"
@@ -733,6 +745,56 @@
       (is (not (str/includes? out "YOUR move")))
       (is (str/includes? out "Runner (active player) has priority first"))
       (is (str/includes? out "Your sub-step comes next")))))
+
+;; ============================================================================
+;; The judge button: a seat stalled on an unanswered run window must be pointed
+;; at the umpire (./dev/umpire-ping, issue #20), not left to invent a recovery.
+;; ============================================================================
+;; Replay 0b52266c (2026-07-08) twice shows the failure: the Runner passed
+;; priority, the Corp never passed, the Runner pinged the opponent in game chat,
+;; waited, then jacked out — once abandoning a run where it had already broken
+;; Palisade for 3c and was one Corp pass from breaching Server 1. The umpire
+;; channel landed 2026-07-15, a week later, so that seat genuinely had no judge to
+;; call. It has one now, but this hint — the exact place a seat reads when it is
+;; stuck in a window — still only mentioned `peer-status`, which answers "is the
+;; opponent alive?" and not "I think we are wedged, adjudicate."
+
+(deftest test-priority-hint-stalled-window-names-the-umpire
+  (testing "Runner waiting on an unanswered window is given the escalation path"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["remote1"]
+                               :no-action :runner}
+                              "runner"))]
+      (is (str/includes? out "peer-status")
+          "keep the liveness check — it is how you tell 'thinking' from 'gone'")
+      (is (str/includes? out "umpire-ping")
+          "and name the judge button for when the opponent is NOT coming back")))
+  (testing "the Corp gets the same escalation when IT is the one left waiting"
+    (let [out (str/join "\n" (display/run-priority-hint-lines
+                              {:phase "movement" :position 0 :server ["hq"]
+                               :no-action :corp}
+                              "corp"))]
+      (is (str/includes? out "umpire-ping")
+          "the stall is symmetric; the judge button must be too"))))
+
+;; ============================================================================
+;; runner-encounter-decline-hint-lines — must not advertise an illegal action
+;; ============================================================================
+;; Jack out is disabled during encounter-ice in the human UI (board.cljs gates the
+;; button on phase == "movement"). Offering it here taught seats an action that
+;; skips unbroken subroutines — 11 of the 28 archived jack-outs fired at an
+;; encounter. The real options at an encounter are break or tank.
+
+(deftest test-encounter-decline-hint-does-not-offer-jack-out
+  (testing "no jack-out in the encounter menu — it is illegal in this phase"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Palisade" 1))]
+      (is (not (str/includes? out "jack-out"))
+          "jack out is UI-disabled during an encounter; offering it teaches a sub-skip")
+      (is (str/includes? out "tank"))
+      (is (re-find #"(?i)break" out))))
+  (testing "the menu says why bailing is not on it, so a seat does not go hunting"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Palisade" 2))]
+      (is (re-find #"(?i)cannot jack out|can't jack out" out)))))
 
 ;; ============================================================================
 ;; run-status-headline — the top-level `Status:` line during a run. The
@@ -1242,12 +1304,18 @@
    {:label "End the run if the Runner has 6 [Credits] or less" :broken true :fired false}])
 
 (deftest test-encounter-decline-hint-names-tank-not-continue
-  (testing "the pure decline hint names tank/jack-out with the ICE title, never a bare continue"
+  ;; This test previously asserted `(str/includes? out "jack-out")` — "should
+  ;; offer jack-out". That assertion was wrong and PINNED the bug: jack out is
+  ;; movement-window only (board.cljs), so at an encounter it is both illegal and
+  ;; a subroutine-skip. The #92 fix was right that this window must not steer to a
+  ;; bare `continue`; it was wrong about what the third option is. There is no
+  ;; third option — break or tank.
+  (testing "the pure decline hint names tank with the ICE title, never a bare continue"
     (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Whitespace" 2))]
       (is (str/includes? out "tank \"Whitespace\"")
           (str "should name 'tank \"<ice>\"' as the decline-and-pass command, got: " out))
-      (is (str/includes? out "jack-out")
-          (str "should offer jack-out, got: " out))
+      (is (not (str/includes? out "jack-out"))
+          (str "must NOT offer jack-out — illegal mid-encounter, and it skips the subs, got: " out))
       (is (str/includes? out "2 unbroken")
           (str "should state how many subs are unbroken, got: " out))
       ;; The whole point of #92: this window must not steer to bare `continue`.
