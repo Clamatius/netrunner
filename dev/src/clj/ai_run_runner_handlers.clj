@@ -362,7 +362,12 @@
                     (println "")
                     (println "   Options:")
                     (println (format "     tank \"%s\"   - let subs fire" ice-title))
-                    (println "     jack-out        - abandon run")
+                    ;; NOT jack-out: it is a movement-window action, illegal
+                    ;; mid-encounter (board.cljs gates the button on
+                    ;; phase == "movement"), and taking it here would skip the
+                    ;; unbroken subs. `jack-out` now refuses with this same steer.
+                    (println "     (you cannot jack out mid-encounter — tank through, then jack out")
+                    (println "      at the next movement window if the entry cost was misjudged)")
                     (println "     (or wait for situation to change)"))
                   ;; Return paused status - don't send let-subs-fire signal
                   {:status :paused-cannot-break
@@ -420,12 +425,15 @@
                                ice-title sub-count (if (= sub-count 1) "" "s")))
                 (println "   Options:")
                 (println (format "   → tank \"%s\"         - let subs fire, continue run" ice-title))
-                (println "   → jack-out            - end the run")
                 (println "   → Or break: use-ability \"<breaker>\" <index>")
-                (println "              (run 'abilities \"<breaker>\"' to see options)"))
+                (println "              (run 'abilities \"<breaker>\"' to see options)")
+                ;; jack-out is deliberately absent — see
+                ;; runner-encounter-decline-hint-lines: it is movement-window only
+                ;; and would skip these very subroutines.
+                (println "   (jack-out is NOT available mid-encounter — it is a movement-window action)"))
               {:status :fire-decision-required
                :wake-reason :decision-required
-               :message (format "%s has %d unbroken sub(s) - use 'tank' to let fire or 'jack-out'" ice-title sub-count)
+               :message (format "%s has %d unbroken sub(s) - break it or use 'tank' to let them fire" ice-title sub-count)
                :ice ice-title
                :unbroken-count sub-count
                :position position})

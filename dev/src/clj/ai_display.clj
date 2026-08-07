@@ -1131,12 +1131,28 @@
         ;; being at its post, and throwing away the run does not fix that. Patience
         ;; is the correct play; the peer-liveness signal (#63) tells you whether
         ;; waiting is sane.
-        (when (= my-side "runner")
-          [(str "      Waiting is CORRECT here — " opp " owes a decision. Check `peer-status`: "
-                "alive ⇒ keep waiting.")
-           (str "      Do NOT 'jack-out' to unstick a window — it throws the run away. "
-                "Jack-out is a smell: the only real reasons are a misjudged entry cost "
-                "or a Karuna jack-out sub.")]))
+        ;;
+        ;; The escalation path (issue #20) is what was MISSING when this advice
+        ;; was first written: telling a seat "keep waiting" answers 'is the
+        ;; opponent alive?' but not 'we look wedged, who adjudicates?'. With no
+        ;; sanctioned recovery, seats invented one — replay 0b52266c has the
+        ;; Runner pinging the opponent in game chat twice and then jacking out of
+        ;; a run it had already paid to get into. The umpire channel landed a week
+        ;; after that game; name it here, at the exact point a seat gets stuck.
+        (concat
+          (when (= my-side "runner")
+            [(str "      Waiting is CORRECT here — " opp " owes a decision. Check `peer-status`: "
+                  "alive ⇒ keep waiting.")
+             (str "      Do NOT 'jack-out' to unstick a window — it throws the run away. "
+                  "Jack-out is a smell: the only real reasons are a misjudged entry cost "
+                  "or a Karuna jack-out sub.")])
+          (when (= my-side "corp")
+            [(str "      Waiting is CORRECT here — " opp " owes a decision. Check `peer-status`: "
+                  "alive ⇒ keep waiting.")])
+          ;; Both seats stall the same way, so both get the same judge button.
+          [(str "      If " opp " never answers, ESCALATE rather than inventing a recovery: "
+                "`./dev/umpire-ping " my-side " \"passed this window, opponent hasn't, am I wedged?\"`")
+           (str "      (Harness state only — never your hand or your plan; the mailbox is opponent-readable.)")]))
 
       ;; Opponent already passed — my continue advances the run now.
       (and na (not= na my-side))
@@ -1225,17 +1241,23 @@
    NOT breaking. `continue` is REFUSED here — handle-runner-encounter-ice returns
    a fire-decision, never a pass — so the generic run-window steer ('use continue
    to pass priority') is a lie that deadlocked marquee G2 for ~20 min (#92). The
-   Runner's real options are: break with an icebreaker, `tank` to decline and let
-   the subs fire, or `jack-out`. Pure; returns a vector of lines to println.
-   `ice-title` is the encounter ICE; `unbroken-count` is the pending-sub count."
+   Runner's real options are exactly two: break with an icebreaker, or `tank` to
+   decline and let the subs fire. Pure; returns a vector of lines to println.
+   `ice-title` is the encounter ICE; `unbroken-count` is the pending-sub count.
+
+   This menu used to list `jack-out` as a third option. It is not one: the human
+   client enables Jack Out only in a movement window (board.cljs gates on
+   phase == \"movement\"), and leaving mid-encounter would skip the unbroken
+   subroutines outright. Offering it here taught seats to do exactly that — 11 of
+   the 28 jack-outs across the archived replays fired at an encounter. Say why it
+   is absent, so a seat doesn't go hunting for the option it half-remembers."
   [ice-title unbroken-count]
   [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
            unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
    "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
-   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances, OR" ice-title)
-   ;; Keep the jack-out smell caveat (matches run-priority-hint-lines): a run
-   ;; you can't profitably break is one of the few legitimate jack-out cases.
-   "      • jack-out  — end the run now (a smell unless entry cost was misjudged or a Karunā sub)."])
+   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances." ice-title)
+   "      (You cannot jack out during an encounter — that is a movement-window action. If the"
+   "       entry cost was misjudged, `tank` through and jack out at the next movement window.)"])
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current

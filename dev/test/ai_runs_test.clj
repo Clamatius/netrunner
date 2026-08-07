@@ -1237,6 +1237,137 @@
                 "a blocked checkpoint must never receive a continue, even a deliberate second pass")
             (is (zero? (count @sent)))))))))
 
+;; ============================================================================
+;; jack-out legality — mirror the human UI's gate
+;; ============================================================================
+;; The engine's `jack-out` (src/clj/game/core/runs.clj) has NO phase check: it
+;; trusts the UI, which enables the Jack Out button only when
+;;   phase == "movement" AND no-action != "runner" AND (not :cannot-jack-out)
+;;   AND no forced encounter AND phase != "success"
+;; (src/cljs/nr/gameboard/board.cljs). `send_command jack-out` gated on "is there
+;; a run at all" and then fired the raw action, so a seat could do things no human
+;; can. Across 21 archived replays, 28 jack-outs fired and exactly ONE was legal:
+;; 11 at encounter-ice, 8 at initiation, 3 at approach-ice, 2 at movement after the
+;; Runner had already passed. The encounter-ice ones are not merely illegal, they
+;; are ADVANTAGEOUS — ending the run mid-encounter means unbroken subroutines never
+;; resolve (replay ac71ce63, 2026-08-04: Corp paid 5c to rez Whitespace, Runner
+;; jacked out of the encounter, subs never fired).
+
+(defn- legality-at
+  "jack-out-legality for a RUNNER seat at a run in `phase`, plus optional run keys."
+  [phase & {:as extra}]
+  (runs/jack-out-legality
+   {:run (merge {:phase phase :position 1 :server ["hq"]} extra)}
+   "runner"))
+
+(deftest jack-out-is-a-runner-only-action
+  ;; The human client puts the Jack Out button in runner-run-div and NEVER in
+  ;; corp-run-div, so "side == runner" is part of the UI gate too. The engine does
+  ;; not enforce it either: process-action passes the socket's side straight into
+  ;; `jack-out`, which ends the run and logs "<corp> jacks out". Mirroring only the
+  ;; PHASE half of the gate would have left a Corp seat able to end the Runner's
+  ;; run outright. (Guest panel, GPT-5.6, CRITICAL — confirmed against the engine.)
+  (testing "a Corp seat is refused even in an otherwise-legal movement window"
+    (let [r (runs/jack-out-legality
+             {:run {:phase "movement" :position 0 :server ["hq"]}} "corp")]
+      (is (not (:legal? r)))
+      (is (= :wrong-side (:reason r)))))
+  (testing "the same window is legal for the Runner"
+    (is (:legal? (runs/jack-out-legality
+                  {:run {:phase "movement" :position 0 :server ["hq"]}} "runner"))))
+  (testing "side check precedes the phase check — a Corp seat is never told 'wrong phase'"
+    (let [r (runs/jack-out-legality
+             {:run {:phase "encounter-ice" :position 0 :server ["hq"]}} "corp")]
+      (is (= :wrong-side (:reason r))
+          "the reason a Corp cannot jack out is not the phase, and saying so would mislead"))))
+
+(deftest jack-out-legal-only-in-a-fresh-movement-window
+  (testing "movement, nobody has passed yet — the one legal case"
+    (let [r (legality-at "movement" :position 0)]
+      (is (:legal? r) "movement phase with no passer is the human UI's enabled state")))
+  (testing "movement, Runner already passed — UI disables the button"
+    (let [r (legality-at "movement" :position 0 :no-action "runner")]
+      (is (not (:legal? r)))
+      (is (= :already-passed (:reason r)))))
+  (testing "movement, Corp passed — still the Runner's to take"
+    (is (:legal? (legality-at "movement" :position 0 :no-action "corp")))))
+
+(deftest jack-out-illegal-before-the-first-movement-window
+  (testing "initiation — the Corp has not even had its rez window yet"
+    (let [r (legality-at "initiation")]
+      (is (not (:legal? r)))
+      (is (= :wrong-phase (:reason r)))
+      (is (re-find #"continue" (:alternative r))
+          "must name the legal move (continue to approach), not just refuse")))
+  (testing "approach-ice — jack out is not offered during an approach"
+    (let [r (legality-at "approach-ice")]
+      (is (not (:legal? r)))
+      (is (= :wrong-phase (:reason r))))))
+
+(deftest jack-out-illegal-during-an-encounter
+  ;; The load-bearing case: this is the one that skips unbroken subroutines.
+  (testing "encounter-ice is refused"
+    (let [r (legality-at "encounter-ice" :position 0)]
+      (is (not (:legal? r)))
+      (is (= :wrong-phase (:reason r)))))
+  (testing "the refusal names break/tank, the actual options at an encounter"
+    (let [r (legality-at "encounter-ice" :position 0)]
+      (is (re-find #"tank" (:alternative r)))
+      (is (re-find #"(?i)break" (:alternative r)))))
+  (testing "refusal explains the rules stake — subs would be skipped"
+    (let [r (legality-at "encounter-ice" :position 0)]
+      (is (re-find #"(?i)subroutine" (:message r))))))
+
+(deftest jack-out-illegal-in-the-remaining-ui-disabled-states
+  (testing "success phase — button is not even rendered"
+    (is (not (:legal? (legality-at "success" :position 0)))))
+  (testing ":cannot-jack-out flag on the run"
+    (let [r (legality-at "movement" :position 0 :cannot-jack-out true)]
+      (is (not (:legal? r)))
+      (is (= :cannot-jack-out (:reason r)))))
+  (testing "forced encounter — no run-div jack out at all"
+    (let [r (runs/jack-out-legality
+             {:run {:phase "movement" :position 0 :server ["hq"]}
+              :forced-encounter {:cid "x"}} "runner")]
+      (is (not (:legal? r)))
+      (is (= :forced-encounter (:reason r)))))
+  (testing "no run at all"
+    (let [r (runs/jack-out-legality {} "runner")]
+      (is (not (:legal? r)))
+      (is (= :no-run (:reason r)))))
+  (testing "a Corp seat with no run hears :wrong-side, not :no-run"
+    ;; Leading with :no-run would answer the Corp "Start a run with `run <server>`",
+    ;; implying a run is the thing it lacks. The Corp cannot run at all.
+    (let [r (runs/jack-out-legality {} "corp")]
+      (is (= :wrong-side (:reason r)))
+      (is (not (re-find #"Start a run" (:alternative r)))))))
+
+(deftest jack-out-legality-tolerates-keyword-wire-shapes
+  ;; Wire serialization is the volatile coupling (memory engine-rate-of-change);
+  ;; phase/no-action arrive as strings today but the client's own fixtures and
+  ;; the engine both use keywords. Neither shape may be read as "legal".
+  (testing "keyword phase"
+    (is (not (:legal? (legality-at :encounter-ice :position 0))))
+    (is (:legal? (legality-at :movement :position 0))))
+  (testing "keyword no-action"
+    (is (not (:legal? (legality-at "movement" :position 0 :no-action :runner))))))
+
+(deftest jack-out-refusal-lines-are-actionable
+  (testing "refusal names the phase, the alternative, and the umpire escape hatch"
+    (let [lines (runs/jack-out-refusal-lines
+                 (legality-at "encounter-ice" :position 0))
+          text  (clojure.string/join "\n" lines)]
+      (is (seq lines))
+      (is (re-find #"(?i)not legal" text))
+      (is (re-find #"tank" text))))
+  (testing "an already-passed refusal points at wait + umpire, never at bailing"
+    (let [text (clojure.string/join
+                "\n" (runs/jack-out-refusal-lines
+                      (legality-at "movement" :position 0 :no-action "runner")))]
+      (is (re-find #"wait" text))
+      (is (re-find #"umpire-ping" text)
+          "a seat stuck on an unanswered window must be pointed at the judge, not left to bail"))))
+
 (comment
   ;; Run all tests
   (run-tests 'ai-runs-test)
