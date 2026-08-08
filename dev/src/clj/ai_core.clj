@@ -294,81 +294,6 @@
     (when-let [match (re-find #"turn (\d+)" text)]
       (Integer/parseInt (second match)))))
 
-(defn verify-action-in-log
-  "Check if a card action appears in recent game log entries
-   Returns status map with:
-   - :status - :success (action completed), :waiting-input (prompt created), :error (failed)
-   - :prompt - the prompt that was created (if :waiting-input)
-   - :card-name - the card name being verified
-
-   Distinguishes between:
-   - Action completed: Card moved zones, log entry added, state changed
-   - Action waiting for input: Only prompt created, card still in hand
-   - Action failed: Nothing happened
-
-   Waits up to max-wait-ms for the log entry to appear
-
-   IMPORTANT: Pass initial-log-size captured BEFORE sending the action message
-   to avoid race conditions with fast WebSocket responses."
-  ([card-name card-initial-zone max-wait-ms]
-   (verify-action-in-log card-name card-initial-zone max-wait-ms nil))
-  ([card-name card-initial-zone max-wait-ms initial-log-size]
-  (let [initial-size (or initial-log-size (get-log-size))
-        initial-prompt (state/get-prompt)
-        deadline (+ (System/currentTimeMillis) max-wait-ms)
-        check-result (fn []
-                      (let [client-state @state/client-state
-                            log (get-in client-state [:game-state :log])
-                            current-size (count log)
-                            current-prompt (state/get-prompt)
-                            ;; Check if card is still in original zone (hand)
-                            side (keyword (:side client-state))
-                            hand (get-in client-state [:game-state side :hand])
-                            card-still-in-hand (some #(and (= (:title %) card-name)
-                                                           (= (:zone %) card-initial-zone))
-                                                    hand)
-                            ;; Check if new prompt was created
-                            new-prompt-created (and current-prompt
-                                                   (not= current-prompt initial-prompt))
-                            ;; Check if log entry mentions the card
-                            card-in-log (let [recent-log (take-last 5 log)]
-                                         (some #(when (string? (:text %))
-                                                 (str/includes? (:text %) card-name))
-                                              recent-log))]
-
-                        (cond
-                          ;; If card moved from hand AND log grew, it's a success
-                          (and (not card-still-in-hand)
-                               (or (> current-size initial-size)
-                                   card-in-log))
-                          {:status :success}
-
-                          ;; If card is STILL in hand but new prompt created, it's waiting for input
-                          (and card-still-in-hand new-prompt-created)
-                          {:status :waiting-input
-                           :prompt current-prompt
-                           :card-name card-name}
-
-                          ;; If log grew or card appears in log (even without zone change), might be success
-                          ;; (for Corp hidden cards where card name doesn't show)
-                          (or (> current-size initial-size) card-in-log)
-                          {:status :success}
-
-                          ;; Otherwise, no change yet
-                          :else
-                          nil)))]
-    ;; Poll until we get a result or timeout
-    (loop []
-      (if-let [result (check-result)]
-        result
-        (if (< (System/currentTimeMillis) deadline)
-          (do
-            (Thread/sleep polling-delay)
-            (recur))
-          {:status :error
-           :reason "Action not confirmed in game log (timeout)"
-           :card-name card-name}))))))
-
 (defn new-prompt?
   "Did a genuinely NEW prompt (a new decision point) appear, given the prompt
    seen before the action (`initial`) and the prompt seen now (`current`)?
@@ -388,6 +313,113 @@
     (and current
          (or (not= (:eid current) (:eid initial))
              (not= current initial)))))
+
+(defn classify-action-result
+  "Pure classifier for card-action verification. Given the prompt/log/hand seen
+   before the action and the current ones, decide the outcome. Returns a status
+   map (:success / :waiting-input) or nil if nothing has changed yet (keep
+   polling). Extracted from verify-action-in-log so the prompt-baseline logic is
+   unit-testable without the live atom or wall clock."
+  [card-name card-initial-zone
+   {:keys [initial-prompt current-prompt initial-size current-log hand]}]
+  (let [current-size (count current-log)
+        ;; Is the card still sitting in the zone it started in (i.e. hand)?
+        card-still-in-hand (some #(and (= (:title %) card-name)
+                                       (= (:zone %) card-initial-zone))
+                                 hand)
+        card-in-log (let [recent-log (take-last 5 current-log)]
+                      (some #(when (string? (:text %))
+                               (str/includes? (:text %) card-name))
+                            recent-log))]
+    (cond
+      ;; If card moved from hand AND log grew, it's a success
+      (and (not card-still-in-hand)
+           (or (> current-size initial-size)
+               card-in-log))
+      {:status :success}
+
+      ;; If card is STILL in hand but a new prompt appeared, it's waiting for
+      ;; input. This MUST be checked before the bare log-grew heuristic below:
+      ;; the click-spend line can land while the location prompt is still open,
+      ;; and reporting :success there is a false "installed".
+      (and card-still-in-hand (new-prompt? initial-prompt current-prompt))
+      {:status :waiting-input
+       :prompt current-prompt
+       :card-name card-name}
+
+      ;; If log grew or card appears in log (even without zone change), might be success
+      ;; (for Corp hidden cards where card name doesn't show)
+      (or (> current-size initial-size) card-in-log)
+      {:status :success}
+
+      ;; Otherwise, no change yet
+      :else
+      nil)))
+
+(defn verify-action-in-log
+  "Check if a card action appears in recent game log entries
+   Returns status map with:
+   - :status - :success (action completed), :waiting-input (prompt created), :error (failed)
+   - :prompt - the prompt that was created (if :waiting-input)
+   - :card-name - the card name being verified
+
+   Distinguishes between:
+   - Action completed: Card moved zones, log entry added, state changed
+   - Action waiting for input: Only prompt created, card still in hand
+   - Action failed: Nothing happened
+
+   Waits up to max-wait-ms for the log entry to appear
+
+   IMPORTANT: Pass pre-log-size AND pre-prompt captured BEFORE sending the
+   action message to avoid race conditions with fast WebSocket responses.
+
+   The 4th argument used to be a bare initial-log-size integer. That legacy
+   shape is still accepted (this var is re-exported by ai-actions and is
+   reachable from `eval`), and is normalized to {:pre-log-size <n>}."
+  ([card-name card-initial-zone max-wait-ms]
+   (verify-action-in-log card-name card-initial-zone max-wait-ms {}))
+  ([card-name card-initial-zone max-wait-ms opts]
+  (let [;; Normalize the legacy positional initial-log-size. This must happen
+        ;; BEFORE the contains? check below: contains? THROWS on a
+        ;; non-associative argument (it does NOT return false the way `get`
+        ;; returns nil), so an un-normalized integer would blow up rather than
+        ;; degrade. (Guest review, GPT-5.6.)
+        opts (if (map? opts) opts {:pre-log-size opts})
+        {:keys [pre-log-size pre-prompt]} opts
+        initial-size (or pre-log-size (get-log-size))
+        ;; A nil pre-prompt is MEANINGFUL: "no prompt was open when the command
+        ;; was sent". Reading the baseline here instead (i.e. AFTER the send)
+        ;; meant that whenever the WebSocket reply beat the start of
+        ;; verification, the freshly-opened prompt WAS the baseline -- it
+        ;; compared equal to itself forever, the waiting-input branch could
+        ;; never fire, and a perfectly good install false-failed as a timeout
+        ;; (#105; same trap as #97 one function over). Only fall back to a live
+        ;; read when the caller genuinely didn't supply the key.
+        initial-prompt (if (contains? opts :pre-prompt)
+                         pre-prompt
+                         (state/get-prompt))
+        deadline (+ (System/currentTimeMillis) max-wait-ms)
+        check-result (fn []
+                       (let [client-state @state/client-state
+                             side (keyword (:side client-state))]
+                         (classify-action-result
+                           card-name card-initial-zone
+                           {:initial-prompt initial-prompt
+                            :current-prompt (state/get-prompt)
+                            :initial-size initial-size
+                            :current-log (get-in client-state [:game-state :log])
+                            :hand (get-in client-state [:game-state side :hand])})))]
+    ;; Poll until we get a result or timeout
+    (loop []
+      (if-let [result (check-result)]
+        result
+        (if (< (System/currentTimeMillis) deadline)
+          (do
+            (Thread/sleep polling-delay)
+            (recur))
+          {:status :error
+           :reason "Action not confirmed in game log (timeout)"
+           :card-name card-name}))))))
 
 (defn classify-ability-result
   "Pure classifier for ability verification. Given the prompt/log seen before
