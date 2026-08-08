@@ -1696,3 +1696,53 @@
       (let [out (with-out-str (display/show-prompt-detailed))]
         (is (not (str/includes? out "unchanged"))
             (str "a new game's first prompt is never 'unchanged', got: " out))))))
+
+;; ============================================================================
+;; `prompt` must not route a seat into an infinite wait when the game is GONE
+;; ============================================================================
+;; Live capture, 2026-08-07 polish round, on a game the server had already
+;; purged (`game-over-status` correctly said NO-GAME, `status` correctly said
+;; "Not in a game"):
+;;
+;;   $ ./dev/send_command corp prompt
+;;   No active prompt — no decision is pending for you right now.
+;;   ⏳ It's the opponent's turn, not yours → use 'wait'.
+;;
+;; Both lines are false and the second is actively harmful: a seat that follows
+;; it blocks on `wait` for an opponent that does not exist. The no-prompt branch
+;; derives everything from get-turn-status and never asks whether we are in a
+;; game at all, so `my-turn?` is nil and the "not your turn" arm wins by default.
+;;
+;; Same lesson as the turn-boundary comment directly above that branch — "no
+;; active prompt" is technically true and still misleads — one level further up.
+
+(deftest test-prompt-no-game-does-not-advise-waiting
+  (testing "GAME-GONE: `prompt` must not tell the seat to wait for an opponent"
+    (with-mock-state {:side "corp" :game-state nil :lobby-state nil}
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "use 'wait'"))
+            (str "no game = nobody to wait for; steering a seat into `wait` here "
+                 "is the stall we keep paying for. Got: " out))
+        (is (not (str/includes? out "turn, not yours"))
+            (str "there is no turn to attribute to an opponent. Got: " out)))))
+
+  (testing "GAME-GONE: `prompt` says the game is gone and points at recovery"
+    (with-mock-state {:side "corp" :game-state nil :lobby-state nil}
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "Not in a game")
+            (str "must name the real condition, matching `status`. Got: " out))
+        (is (str/includes? out "reset.sh")
+            (str "must point at the documented recovery. Got: " out))))))
+
+(deftest test-prompt-still-answers-normally-in-a-live-game
+  (testing "the no-game guard must not swallow ordinary turn-boundary advice"
+    ;; Regression fence: the fix adds a branch ahead of the turn-status cond,
+    ;; so the live-game arms must keep firing.
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state {:active-player "runner"
+                                                     :turn 4
+                                                     :corp {:click 0}
+                                                     :runner {:click 2}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "use 'wait'")
+            (str "a real opponent turn must still route to `wait`. Got: " out))))))

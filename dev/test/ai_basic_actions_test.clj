@@ -609,3 +609,52 @@
           (let [result (binding [*out* (java.io.StringWriter.)] (basic/end-turn!))]
             (is (= :success (:status result)))
             (is (= 1 (count @sent)) "legitimate end-turn must still be sent")))))))
+
+;; ============================================================================
+;; end-turn! on a GONE game: honest refusal, never a Java stack trace
+;; ============================================================================
+;; Live capture, 2026-08-07 polish round. The server had purged the lobby; the
+;; auto-resync correctly diagnosed it and printed the GAME-GONE guidance — and
+;; then end-turn! ran anyway against the cleared state and died:
+;;
+;;   ❌ Game appears to be gone — not found in the lobby, ...
+;;   Execution error (NullPointerException) at ai-basic-actions/end-turn!
+;;     (ai_basic_actions.clj:733).
+;;   Cannot invoke "Object.getClass()" because "x" is null
+;;
+;; Line 733 is `(and (> clicks 0) (not force))`. Every other binding in the
+;; let is nil-hardened — `hand-size` via count, `max-hand-size` via a default,
+;; `active-player` via an explicit nil arm — but `clicks` was left bare, so
+;; `(> nil 0)` throws. A raw stack trace is the worst output a seat can get:
+;; it carries no verdict, no recovery, and nothing to pattern-match on.
+;;
+;; The refusal must also be a REFUSAL — with no game there is nothing to end,
+;; and sending end-turn into the void is how off-turn end-turns get minted.
+
+(deftest test-end-turn-no-game-state-refuses-without-crashing
+  (testing "GAME-GONE: end-turn! returns an honest error instead of throwing"
+    (let [sent (atom [])]
+      (with-mock-state {:side "corp" :gameid nil :game-state nil}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)]
+            (with-out-str (reset! result (basic/end-turn!)))
+            (is (= :error (:status @result))
+                (str "must report an error, got: " @result))
+            (is (= :no-game-state (:reason @result))
+                (str "must name the real cause, not clicks/hand-size, got: " @result))
+            (is (empty? @sent)
+                "must not send end-turn into a game that no longer exists")))))))
+
+(deftest test-end-turn-nil-clicks-mid-resync-does-not-throw
+  (testing "state present but click field nil (partial resync) still must not throw"
+    ;; The narrower shape of the same hazard: a resync that delivered the game
+    ;; map but not yet the side maps. `clicks` is nil here too.
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                        :side "corp"
+                        :game-state {:corp {} :runner {} :active-player "corp"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)]
+            (with-out-str (reset! result (basic/end-turn!)))
+            (is (map? @result)
+                "must return a status map rather than throwing NPE")))))))

@@ -395,6 +395,12 @@
 
     {:whose-turn active-side
      :next-player next-player
+     ;; Are we in a game AT ALL? Every other field here is derived from `gs`, so
+     ;; with no game state they all read as their falsy defaults and consumers
+     ;; silently pick the "not my turn" arm — which is how `prompt` came to tell
+     ;; a seat on a purged game to `wait` for an opponent that doesn't exist.
+     ;; Predicate matches show-status's, so the two surfaces cannot disagree.
+     :in-game? (boolean (or gs (:lobby-state @client-state)))
      ;; A clean turn boundary (a player ended their turn, or both sides are at
      ;; 0 clicks) is "next player to start", NOT a stall. Tooling uses this to
      ;; avoid false-positive stall detection while a slow opponent thinks about
