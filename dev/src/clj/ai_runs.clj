@@ -1001,12 +1001,16 @@
 
 (defn- send-choice!
   "Helper to send choice command and return action-taken result.
-   Waits briefly for state to sync via WebSocket."
-  [gameid choice-uuid choice-value]
+   Waits briefly for state to sync via WebSocket.
+
+   `prompt-eid` names the prompt being answered: without it the engine resolves
+   whatever is at the HEAD of the prompt queue, not necessarily what we saw."
+  [gameid choice-uuid choice-value prompt-eid]
   (ws/send-message! :game/action
                    {:gameid gameid
                     :command "choice"
-                    :args {:choice {:uuid choice-uuid}}})
+                    :args {:choice {:uuid choice-uuid}
+                           :eid prompt-eid}})
   ;; Brief wait for WebSocket state update to arrive
   (Thread/sleep 100)
   {:status :action-taken
@@ -1131,7 +1135,7 @@
         (core/show-card-on-first-sight! card-title))
       ;; All single-choice prompts auto-continue (2+ choice access handled by handle-real-decision)
       (println (format "   → Auto-choosing: %s" choice-value))
-      (send-choice! gameid choice-uuid choice-value))))
+      (send-choice! gameid choice-uuid choice-value (:eid my-prompt)))))
 
 (defn handle-recently-passed-in-log
   "Priority 5.5: Detect when we've passed via game log (backup for :no-action).

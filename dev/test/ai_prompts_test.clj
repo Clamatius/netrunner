@@ -88,8 +88,10 @@
     (let [{:keys [sent out]} (capture-choose-value "Done")]
       (is (= "choice" (:command sent))
           (str "expected a choice command, got: " sent))
-      (is (= {:choice {:uuid "done-uuid"}} (:args sent))
-          (str "expected Done's uuid in args, got: " sent))
+      ;; :eid is not decoration — resolve-prompt falls back to the HEAD of the
+      ;; prompt queue without it, so a stacked prompt would eat this press.
+      (is (= {:choice {:uuid "done-uuid"} :eid "sel-1"} (:args sent))
+          (str "expected Done's uuid AND the prompt's eid in args, got: " sent))
       (is (str/includes? out "Done")))))
 
 (deftest choose-by-value-no-match-on-select-does-not-send
@@ -443,9 +445,12 @@
 
 (deftest keep-hand-absorbs-post-bounce-sync-race
   (testing "keep-hand waits for a late-arriving mulligan prompt instead of false-negating"
-    (let [mull (make-prompt :prompt-type "mulligan"
-                            :choices [{:value "Keep" :uuid "keep-uuid"}
-                                      {:value "Mulligan" :uuid "mull-uuid"}])
+    (let [mull (assoc (make-prompt :prompt-type "mulligan"
+                                   :choices [{:value "Keep" :uuid "keep-uuid"}
+                                             {:value "Mulligan" :uuid "mull-uuid"}])
+                      ;; the fixture must carry an :eid — the payload names the
+                      ;; prompt it answers, and an eid-less mock hides that
+                      :eid "mull-eid-1")
           sent (atom nil)]
       ;; Cache starts with NO prompt (sync hasn't landed yet).
       (with-mock-state (mock-client-state :side "runner" :prompt nil)
@@ -464,7 +469,7 @@
                         (is (= :success (:status r))
                             (str "expected success after sync race, got: " r))))]
             ;; Pressed the Keep button (option 0), not bailed.
-            (is (= {:choice {:uuid "keep-uuid"}} (:args @sent)))
+            (is (= {:choice {:uuid "keep-uuid"} :eid "mull-eid-1"} (:args @sent)))
             (is (not (str/includes? out "No mulligan prompt active")))))))))
 
 (deftest keep-hand-still-errors-when-truly-no-prompt
@@ -504,9 +509,12 @@
 
 (deftest mulligan-absorbs-post-bounce-sync-race
   (testing "mulligan waits for a late-arriving prompt instead of false-negating"
-    (let [mull (make-prompt :prompt-type "mulligan"
-                            :choices [{:value "Keep" :uuid "keep-uuid"}
-                                      {:value "Mulligan" :uuid "mull-uuid"}])
+    (let [mull (assoc (make-prompt :prompt-type "mulligan"
+                                   :choices [{:value "Keep" :uuid "keep-uuid"}
+                                             {:value "Mulligan" :uuid "mull-uuid"}])
+                      ;; the fixture must carry an :eid — the payload names the
+                      ;; prompt it answers, and an eid-less mock hides that
+                      :eid "mull-eid-1")
           sent (atom nil)]
       (with-mock-state (mock-client-state :side "runner" :prompt nil)
         (with-redefs [core/wait-for-prompt
@@ -522,7 +530,7 @@
                         (is (= :success (:status r))
                             (str "expected success after sync race, got: " r))))]
             ;; Pressed the Mulligan button (option 1).
-            (is (= {:choice {:uuid "mull-uuid"}} (:args @sent)))
+            (is (= {:choice {:uuid "mull-uuid"} :eid "mull-eid-1"} (:args @sent)))
             (is (not (str/includes? out "No mulligan prompt active")))))))))
 
 ;; ============================================================================

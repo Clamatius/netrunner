@@ -26,7 +26,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -88,7 +88,7 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: take-credit  (gain 1 [Credit]) — or credits  (show credit pools)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
-    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
+    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-phase-12 end-post-discard end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
     local hits
     # `|| true`: grep exits non-zero on no match, which under `set -euo pipefail`
     # would abort the whole script *here* — silently swallowing both this hint and
@@ -275,6 +275,7 @@ ${GREEN}Inspect (read-only — use these to decide):${NC}
 
 ${GREEN}Turn Actions:${NC}
   start-turn       Start your turn
+  end-phase-12     Close a start-of-turn (1.2) window, if one is open
   take-credit      Spend click for credit
   draw             Spend click to draw
   end-turn         End your turn
@@ -349,6 +350,10 @@ ${GREEN}Status Commands:${NC}
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
+  end-phase-12    - Close the start-of-turn (1.2) window. Only needed when a card
+                    holds it open; until then the mandatory draw and every
+                    start-of-turn trigger have NOT happened. 'status' says so.
+  end-post-discard - Close a forced end-of-turn window so the turn can end.
   indicate-action - Signal you want to use paid ability (pauses game)
   take-credit     - Spend 1 click to gain 1 credit
   draw            - Spend 1 click to draw 1 card
@@ -853,6 +858,19 @@ case "$COMMAND" in
         info "Starting turn..."
         execute '(ai-actions/start-turn!)'
         after_action
+        ;;
+
+    end-phase-12)
+        ensure_connection
+        info "Closing the start-of-turn (1.2) window..."
+        execute '(ai-actions/end-phase-12!)'
+        after_action
+        ;;
+
+    end-post-discard)
+        ensure_connection
+        info "Closing the end-of-turn (post-discard) window..."
+        execute '(ai-actions/end-post-discard!)'
         ;;
 
     indicate-action)

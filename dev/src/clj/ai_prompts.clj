@@ -123,7 +123,12 @@
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"
-                       :args {:choice {:uuid (:uuid choice)}}})
+                       ;; :eid names the prompt we are answering. Without it the
+                       ;; engine's resolve-prompt falls back to the HEAD of the
+                       ;; prompt queue, which is not necessarily the one we
+                       ;; rendered. The reference client always sends it.
+                       :args {:choice {:uuid (:uuid choice)}
+                              :eid old-eid}})
     ;; Report what actually happened, not what we attempted (#75): a choice the
     ;; engine rejects (e.g. an unpayable cost) or silently swallows leaves the
     ;; prompt unchanged — that must NOT read as success, and the success line

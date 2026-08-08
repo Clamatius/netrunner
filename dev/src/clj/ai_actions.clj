@@ -102,6 +102,8 @@
 ;; ============================================================================
 
 (def start-turn! basic/start-turn!)
+(def end-phase-12! basic/end-phase-12!)
+(def end-post-discard! basic/end-post-discard!)
 (def indicate-action! basic/indicate-action!)
 (def take-credit! basic/take-credit!)
 (def draw-card! basic/draw-card!)
