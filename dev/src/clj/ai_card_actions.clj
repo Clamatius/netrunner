@@ -70,14 +70,19 @@
                       gameid (:gameid client-state)
                       card-ref (core/create-card-ref card)
                       card-zone (:zone card)
-                      ;; Capture log size BEFORE sending to avoid race conditions
-                      initial-log-size (core/get-log-size)]
+                      ;; Capture log size AND prompt BEFORE sending to avoid race
+                      ;; conditions: a reply that beats verification would
+                      ;; otherwise become its own baseline (#105).
+                      initial-log-size (core/get-log-size)
+                      pre-prompt (state/get-prompt)]
                   (ws/send-message! :game/action
                                     {:gameid gameid
                                      :command "play"
                                      :args {:card card-ref}})
               ;; Wait and verify action - now returns status map
-              (let [result (core/verify-action-in-log card-title card-zone core/action-timeout initial-log-size)]
+              (let [result (core/verify-action-in-log card-title card-zone core/action-timeout
+                                                      {:pre-log-size initial-log-size
+                                                       :pre-prompt pre-prompt})]
                 (case (:status result)
                   :success
                   (let [after-state @state/client-state
@@ -209,14 +214,20 @@
         args (if normalized-server
                {:card card-ref :server normalized-server}
                {:card card-ref})
-        ;; Capture log size BEFORE sending to avoid race conditions
-        initial-log-size (core/get-log-size)]
+        ;; Capture log size AND prompt BEFORE sending to avoid race conditions.
+        ;; Installing ICE/assets/upgrades without a server opens a location
+        ;; prompt; if that reply beat verification, the prompt became its own
+        ;; baseline and a working install false-failed as a timeout (#105).
+        initial-log-size (core/get-log-size)
+        pre-prompt (state/get-prompt)]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "play"
                        :args args})
     ;; Wait and verify action
-    (let [result (core/verify-action-in-log card-title card-zone core/action-timeout initial-log-size)]
+    (let [result (core/verify-action-in-log card-title card-zone core/action-timeout
+                                            {:pre-log-size initial-log-size
+                                             :pre-prompt pre-prompt})]
       (case (:status result)
         :success      (handle-install-success! card-title card-type normalized-server before-clicks before-credits card-cost side overwrite?)
         :waiting-input (handle-install-waiting! card-title (:prompt result))
@@ -753,15 +764,18 @@
                            :zone (:zone card)
                            :side (:side card)
                            :type (:type card)}
-                  ;; Capture log size BEFORE sending to avoid race conditions
-                  initial-log-size (core/get-log-size)]
+                  ;; Capture log size AND prompt BEFORE sending to avoid race conditions (#105)
+                  initial-log-size (core/get-log-size)
+                  pre-prompt (state/get-prompt)]
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "advance"
                                  :args {:card card-ref}})
               ;; Wait and verify action appeared in log
               ;; Note: Card doesn't change zones, so we pass its current zone
-              (let [result (core/verify-action-in-log card-name (:zone card) 3000 initial-log-size)]
+              (let [result (core/verify-action-in-log card-name (:zone card) 3000
+                                                      {:pre-log-size initial-log-size
+                                                       :pre-prompt pre-prompt})]
                 (if (= :success (:status result))
                   (let [after-state @state/client-state
                         updated-card (core/find-installed-corp-card card-name)
@@ -832,8 +846,9 @@
                 (let [gameid (:gameid client-state)
                       card-ref (core/create-card-ref card)
                       agenda-points (:agendapoints card)
-                      ;; Capture log size BEFORE sending to avoid race conditions
-                      initial-log-size (core/get-log-size)]
+                      ;; Capture log size AND prompt BEFORE sending to avoid race conditions (#105)
+                      initial-log-size (core/get-log-size)
+                      pre-prompt (state/get-prompt)]
                   (ws/send-message! :game/action
                                     {:gameid gameid
                                      :command "score"
@@ -842,7 +857,9 @@
                   ;; by the card name appearing in the log (which false-positives
                   ;; on prior scores / "cannot score" messages). Only a real
                   ;; increase in Corp agenda points means the agenda scored.
-                  (core/verify-action-in-log card-name (:zone card) core/action-timeout initial-log-size)
+                  (core/verify-action-in-log card-name (:zone card) core/action-timeout
+                                             {:pre-log-size initial-log-size
+                                              :pre-prompt pre-prompt})
                   (let [after-state @state/client-state
                         after-score (or (get-in after-state [:game-state :corp :agenda-point]) 0)
                         runner-score (or (get-in after-state [:game-state :runner :agenda-point]) 0)]
