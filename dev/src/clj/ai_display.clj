@@ -1603,6 +1603,23 @@
             side (:side @state/client-state)
             next-lc (clojure.string/lower-case (or (:next-player ts) ""))
             my-lc (clojure.string/lower-case (or side ""))]
+        ;; NO GAME AT ALL must be answered before anything derived from the game
+        ;; state, and before the "no active prompt" line — which reads as "the
+        ;; game has nothing for you" when the truth is "there is no game". On a
+        ;; purged game every field below is falsy, so the `(not (:my-turn? ts))`
+        ;; arm won by default and sent the seat to `wait` for a nonexistent
+        ;; opponent: a command that manufactures the stall it's meant to explain.
+        ;; :game-over? is checked alongside :in-game? because a decided game
+        ;; tears the lobby down too — reporting "not in a game" there would hide
+        ;; the RESULT, which is the one thing the seat still needs. Game-over
+        ;; wins; the no-game branch is only for a game that ended with no verdict.
+        (if (and (not (:in-game? ts)) (not (:game-over? ts)))
+          (do
+            (println "⚠️  Not in a game — there is no prompt, and nothing to wait for.")
+            (println "   (If a game was running, it has ended or been purged.)")
+            (println "💡 Start a fresh game:  ./dev/reset.sh")
+            (println "   Or check first:      ./dev/send_command <side> game-over-status"))
+          (do
         (println "No active prompt — no decision is pending for you right now.")
         (cond
           (:game-over? ts)
@@ -1628,7 +1645,7 @@
           (println "✅ It's your turn with clicks in hand → act (see 'list-playables').")
 
           :else
-          (println (format "ℹ️  %s" (:status-text ts))))))))
+          (println (format "ℹ️  %s" (:status-text ts))))))))))
 
 (defn show-prompt-if-any
   "Append the current prompt to an action's output — or print NOTHING if there

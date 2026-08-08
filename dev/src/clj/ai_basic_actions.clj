@@ -698,10 +698,32 @@
         gameid (:gameid client-state)
         active-player (get-in client-state [:game-state :active-player])
         ;; nil active-player = pre-game / unpopulated mock; don't refuse on it.
+        ;; nil side-kw must short-circuit too: `let` bindings all evaluate before
+        ;; the cond below, so `(name nil)` here threw BEFORE the no-game guard
+        ;; could refuse — making that guard unreachable for any state carrying an
+        ;; active-player but no seat. Guest-panel catch; the NPE it was added to
+        ;; kill simply moved two lines up.
         my-turn? (or (nil? active-player)
+                     (nil? side-kw)
                      (= (str/lower-case (name side-kw))
                         (str/lower-case active-player)))]
     (cond
+      ;; NO GAME STATE. Reached whenever the client has nothing to reason about:
+      ;; a purged/ended lobby whose auto-resync failed, or a resync that landed
+      ;; the game map without the side maps yet. `clicks` is nil there, and the
+      ;; `(> clicks 0)` arm below threw a bare NullPointerException at the seat —
+      ;; a stack trace carries no verdict and no recovery, so a seat can neither
+      ;; act on it nor pattern-match it. Refuse, and refuse LOUDLY-BUT-CLEANLY:
+      ;; with no game there is nothing to end, and pushing end-turn into the void
+      ;; is how off-turn end-turns (the unrecoverable kind) get minted.
+      (or (nil? clicks) (nil? side-kw))
+      (do
+        (println "⛔ Refusing end-turn: no game state — there is no turn to end.")
+        (println "   The game has ended, been purged, or the resync did not complete.")
+        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
+        (println "   Fresh game:    ./dev/reset.sh")
+        (core/with-cursor {:status :error :reason :no-game-state}))
+
       ;; OFF-TURN GUARD (game 02995207, turn 8). An end-turn sent while we are NOT
       ;; the active player ends the OPPONENT's turn, and the engine logs it under
       ;; OUR name — leaving no "<opponent> is ending" line at all. Every consumer

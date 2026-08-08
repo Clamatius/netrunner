@@ -4,6 +4,7 @@
    These tests lock down behavior before refactoring. They test functions
    that have no side effects and are easy to verify in isolation."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-runs :as runs]
             [ai-run-tactics :as tactics]
@@ -1050,3 +1051,48 @@
   ;; Run specific test
   (test-normalize-side-keyword)
   )
+
+;; ============================================================================
+;; print-selectable! — the phantom warning must say WHERE the phantoms sit
+;; ============================================================================
+;; #104's parked question was "do the phantoms land before or after the
+;; pickables?", left open because it looked like it needed a live sample. It
+;; doesn't — the engine answers it outright. `compute-selectable`
+;; (src/clj/game/core/prompts.clj:157) builds the list from `get-all-cards`,
+;; and `get-all-cards` (src/clj/game/core/board.clj:29) walks
+;; `(for [side [corp runner]] ...)` — Corp cards ALWAYS precede Runner cards.
+;;
+;; So for the discard-to-hand-size prompt (`:choices {:card in-hand?}`, which
+;; matches BOTH hands) the answer is side-dependent:
+;;   Corp seat   -> own hand first, phantoms TRAILING  -> indices 0..n-1, no gap
+;;   Runner seat -> phantoms LEADING                   -> own rows start at N
+;;
+;; That asymmetry is the whole point. On the Corp seat the warning explains a
+;; gap that isn't there; on the Runner seat there IS an offset and "ignore
+;; them" alone doesn't tell the seat its own list legitimately starts at 5.
+
+(deftest test-print-selectable-leading-phantoms-explain-the-offset
+  (testing "Runner seat shape: phantoms first — must say where the real rows start"
+    (let [out (with-out-str
+                (core/print-selectable!
+                 {:pickable [{:idx 2 :card {:title "Sure Gamble" :zone ["hand"]}}
+                             {:idx 3 :card {:title "Diesel" :zone ["hand"]}}]
+                  :phantom [0 1]}
+                 ""))]
+      (is (str/includes? out "start at index 2")
+          (str "a seat whose list begins at 2 needs to be told that is correct, "
+               "not a rendering bug. Got: " out)))))
+
+(deftest test-print-selectable-trailing-phantoms-affirm-the-numbering
+  (testing "Corp seat shape: phantoms last — own numbering is complete from 0"
+    (let [out (with-out-str
+                (core/print-selectable!
+                 {:pickable [{:idx 0 :card {:title "Hedge Fund" :zone ["hand"]}}
+                             {:idx 1 :card {:title "Palisade" :zone ["hand"]}}]
+                  :phantom [2 3]}
+                 ""))]
+      (is (not (str/includes? out "start at index"))
+          (str "there is no offset to explain here — saying so is the noise "
+               "#104 complains about. Got: " out))
+      (is (str/includes? out "can't see")
+          (str "the entries still exist and still can't be picked. Got: " out)))))
