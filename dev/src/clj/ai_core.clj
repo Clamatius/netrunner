@@ -1025,11 +1025,29 @@
   (doseq [{:keys [idx card]} pickable]
     (println (str indent idx ". " (format-selectable-card card))))
   (when (seq phantom)
-    (println (str indent "⚠️  " (count phantom)
-                  (if (= 1 (count phantom)) " entry (index " " entries (indices ")
-                  (str/join ", " phantom)
-                  ") are cards you can't see (hidden/opponent) —"
-                  " not selectable from this seat; ignore them."))))
+    (let [n (count phantom)
+          first-pickable (:idx (first pickable))
+          ;; #104 asked whether the phantoms land BEFORE or AFTER the pickable
+          ;; rows. The engine answers it: compute-selectable builds the list from
+          ;; get-all-cards, which walks `(for [side [corp runner]] ...)` — Corp
+          ;; cards always precede Runner cards. So on the discard-to-hand-size
+          ;; prompt (:choices {:card in-hand?} matches BOTH hands) the Corp seat
+          ;; sees its own cards first (phantoms trailing, numbering intact) and
+          ;; the Runner seat sees them last (phantoms leading, numbering offset).
+          ;; Only the leading case has a gap to explain; saying "mind the gap"
+          ;; on the trailing case is the noise this item was filed about.
+          leading? (and first-pickable
+                        (every? #(< % first-pickable) phantom))]
+      (println (str indent "⚠️  " n
+                    (if (= 1 n) " entry (index " " entries (indices ")
+                    (str/join ", " phantom)
+                    ") are cards you can't see (hidden/opponent) —"
+                    " not selectable from this seat; ignore them."))
+      (when leading?
+        (println (str indent "   Your own rows therefore start at index "
+                      first-pickable
+                      " — that is the real index to pass to `choose-card`,"
+                      " not a numbering bug."))))))
 
 ;; ============================================================================
 ;; Server Name Normalization
