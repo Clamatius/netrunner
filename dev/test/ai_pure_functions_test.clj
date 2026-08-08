@@ -1096,3 +1096,42 @@
                "#104 complains about. Got: " out))
       (is (str/includes? out "can't see")
           (str "the entries still exist and still can't be picked. Got: " out)))))
+
+;; ============================================================================
+;; credit-payment-prompt — classify the engine's per-credit payment prompt
+;;
+;; Built by game.core.pick-counters/pick-credit-providing-cards. Both the
+;; display hint and choose-card!'s paid-credits report key off this, so a false
+;; positive would paste payment advice onto an unrelated prompt.
+;; ============================================================================
+
+(deftest credit-payment-prompt-reads-the-engine-message
+  (testing "the plain form yields paid / target / remaining"
+    (is (= {:paid 0 :target 2 :remaining 2}
+           (core/credit-payment-prompt
+            "Choose a credit providing card (0 of 2 [Credits])")))
+    (is (= {:paid 4 :target 5 :remaining 1}
+           (core/credit-payment-prompt
+            "Choose a credit providing card (4 of 5 [Credits])"))))
+
+  (testing "the stealth clause the engine may append doesn't break the match"
+    (is (= {:paid 1 :target 3 :remaining 2}
+           (core/credit-payment-prompt
+            "Choose a credit providing card (1 of 3 [Credits], 0 of 2 stealth)"))))
+
+  (testing "a fully-paid prompt reports nothing remaining, never a negative"
+    (is (= {:paid 5 :target 5 :remaining 0}
+           (core/credit-payment-prompt
+            "Choose a credit providing card (5 of 5 [Credits])")))))
+
+(deftest credit-payment-prompt-rejects-everything-else
+  (testing "prompts that merely mention credits or cards must not match —
+            a false positive prints '--all' advice where --all does nothing"
+    (are [msg] (nil? (core/credit-payment-prompt msg))
+      "Choose a card to trash"
+      "Gain 2 [Credits]?"
+      "Choose a credit providing card"          ; no bracketed count yet
+      "You accessed Hedge Fund"
+      "Pay 3 [Credits] to continue?"
+      ""
+      nil)))

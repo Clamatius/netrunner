@@ -190,7 +190,7 @@
   (testing "choose-card on an 'other'-typed prompt WITH selectable cards selects, not rejects"
     (let [sent (atom nil)]
       (with-mock-state (mock-client-state :side "runner" :prompt other-typed-card-select-prompt)
-        (with-redefs [ws/select-card! (fn [card _eid] (reset! sent card) true)
+        (with-redefs [ws/select-card! (fn [card _eid & _] (reset! sent card) true)
                       prompts/wait-for-prompt-change! (fn [_eid & _] true)
                       basic/check-auto-end-turn! (fn [] nil)]
           (let [out (with-out-str
@@ -208,7 +208,7 @@
                         :side "runner"
                         :prompt {:prompt-type "choice" :eid "ch-1" :msg "Pick one"
                                  :choices [{:value "A"} {:value "B"}]})
-        (with-redefs [ws/select-card! (fn [_card _eid] (reset! sent :sent) true)]
+        (with-redefs [ws/select-card! (fn [_card _eid & _] (reset! sent :sent) true)]
           (let [out (with-out-str
                       (let [r (prompts/choose-card! 0)]
                         (is (= :error (:status r)))))]
@@ -220,7 +220,7 @@
   (testing "multi-choose on an 'other'-typed prompt WITH selectable cards selects, not rejects"
     (let [sent (atom [])]
       (with-mock-state (mock-client-state :side "runner" :prompt other-typed-card-select-prompt)
-        (with-redefs [ws/select-card! (fn [card _eid] (swap! sent conj (:title card)) true)
+        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:title card)) true)
                       prompts/wait-for-prompt-change! (fn [_eid & _] true)]
           (let [out (with-out-str
                       (let [r (prompts/multi-choose! 0 1)]
@@ -249,7 +249,7 @@
                                :msg "Discard down to 5 cards"
                                :selectable [{:cid "c1" :title "Hedge Fund"}
                                             {:cid "c2" :title "IPO"}]})
-      (with-redefs [ws/select-card! (fn [_card _eid] true)
+      (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                     ;; server toggled the cards but the prompt did not resolve
                     prompts/wait-for-prompt-change! (fn [_eid & _] false)]
         (let [out (with-out-str
@@ -269,7 +269,7 @@
                                :msg "Discard down to 5 cards"
                                :selectable [{:cid "c1" :title "Hedge Fund"}
                                             {:cid "c2" :title "IPO"}]})
-      (with-redefs [ws/select-card! (fn [_card _eid] true)
+      (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                     prompts/wait-for-prompt-change! (fn [_eid & _] true)]
         (let [out (with-out-str
                     (let [r (prompts/multi-choose! 0 1)]
@@ -284,7 +284,7 @@
                                :msg "Choose an icebreaker"
                                :choices [{:value "Corroder"}]
                                :selectable [{:cid "c1" :title "Corroder"}]})
-      (with-redefs [ws/select-card! (fn [_card _eid] true)
+      (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                     prompts/wait-for-prompt-change! (fn [_eid & _] false)]
         (let [out (with-out-str
                     (let [r (prompts/multi-choose! 0)]
@@ -312,7 +312,7 @@
                                         :msg "Click a card to access it."
                                         :selectable ["fd-1"]}}
                                      :active-player "runner"})
-        (with-redefs [ws/select-card! (fn [card _eid] (swap! sent conj (:cid card)) true)
+        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
                       prompts/wait-for-prompt-change! (fn [_eid & _] true)]
           (let [out (with-out-str
                       (let [r (prompts/multi-choose! 0)]
@@ -349,7 +349,7 @@
                                  :msg "Discard down to 5 cards"
                                  :selectable [{:cid "c1" :title "Hedge Fund"}
                                               {:cid "c2" :title "IPO"}]})
-        (with-redefs [ws/select-card! (fn [_card _eid] true)
+        (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                       ;; partial select: server toggles, prompt unchanged
                       prompts/wait-for-prompt-change! (fn [_eid & _] false)
                       basic/check-auto-end-turn! (fn [] (reset! auto-end-called? true))]
@@ -365,7 +365,7 @@
                         :prompt {:prompt-type "select" :eid "disc-1"
                                  :msg "Discard down to 5 cards"
                                  :selectable [{:cid "c1" :title "Hedge Fund"}]})
-        (with-redefs [ws/select-card! (fn [_card _eid] true)
+        (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                       ;; final select reaches :max → prompt resolves/moves
                       prompts/wait-for-prompt-change! (fn [_eid & _] true)
                       basic/check-auto-end-turn! (fn [] (reset! auto-end-called? true))]
@@ -394,7 +394,7 @@
                                :choices [{:value "Unity"} {:value "Cleaver"}]
                                :selectable [{:cid "c1" :title "Unity"}
                                             {:cid "c2" :title "Cleaver"}]})
-      (with-redefs [ws/select-card! (fn [_card _eid] true)
+      (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                     ;; engine wanted a text choice; the select never registered
                     prompts/wait-for-prompt-change! (fn [_eid & _] false)]
         (let [out (with-out-str
@@ -410,7 +410,7 @@
   (testing "choose-card prints the card confirmation only AFTER the prompt moves (#40)"
     (with-mock-state (mock-client-state
                       :side "runner" :prompt other-typed-card-select-prompt)
-      (with-redefs [ws/select-card! (fn [_card _eid] true)
+      (with-redefs [ws/select-card! (fn [_card _eid & _] true)
                     prompts/wait-for-prompt-change! (fn [_eid & _] true)
                     basic/check-auto-end-turn! (fn [] nil)]
         (let [out (with-out-str
@@ -662,3 +662,144 @@
             (is (= :success (:status @result)))
             (is (not (:duplicate-prompt @result))
                 "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))
+
+;; ============================================================================
+;; Per-credit payment prompts: --all / pay-all? (#110 §2, corroborating #104)
+;;
+;; game.core.pick-counters/pick-credit-providing-cards re-asks once per credit,
+;; UNLESS the client sets :shift-key-held — which the engine stores at
+;; [side :shift-key-select] and reads back as `should-auto-repeat?`. Its own
+;; comment: "taking 5cr from miss bones with one click, instead of waiting for
+;; 5 server round-trips". board.cljs sends it on shift-click; our select-card!
+;; hardcoded false, so seats could not do what a human does in one click.
+;; ============================================================================
+
+(defn- capture-select-action
+  "Run `f` with the wire layer stubbed, returning the args of the 'select'
+   action it sent (or nil). Bypasses safe-action!'s connection check by
+   redefining send-action! — the payload shape is what we care about."
+  [f]
+  (let [sent (atom nil)]
+    (with-redefs [ws/ensure-connected! (constantly true)
+                  ws/send-action! (fn [command args]
+                                    (when (= "select" command) (reset! sent args))
+                                    true)]
+      (f))
+    @sent))
+
+(deftest select-card!-defaults-to-no-shift-and-opts-in
+  (testing "the default stays shift-less, so non-payment callers are unchanged"
+    (let [args (capture-select-action
+                #(ws/select-card! {:cid 7 :zone ["hand"] :side "Runner" :type "Event"}
+                                  {:eid 1}))]
+      (is (false? (:shift-key-held args))
+          (str "default select must not auto-repeat payments, got: " args))))
+
+  (testing "the opt-in reaches the wire — this is the whole fix; without the flag
+            the engine's should-auto-repeat? can never be true for a seat"
+    (let [args (capture-select-action
+                #(ws/select-card! {:cid 7 :zone ["hand"] :side "Runner" :type "Event"}
+                                  {:eid 1} true))]
+      (is (true? (:shift-key-held args))
+          (str "pay-all must set :shift-key-held, got: " args))))
+
+  (testing "a truthy non-boolean is normalised — the engine stores this value
+            verbatim, so a stray string would linger as a truthy shift state"
+    (let [args (capture-select-action
+                #(ws/select-card! {:cid 7 :zone ["hand"] :side "Runner" :type "Event"}
+                                  {:eid 1} "yes"))]
+      (is (true? (:shift-key-held args))))))
+
+(deftest choose-card!-plumbs-pay-all-to-the-wire
+  (let [prompt {:prompt-type "select"
+                :msg "Choose a credit providing card (0 of 2 [Credits])"
+                :eid {:eid 42}
+                :selectable [{:cid 7 :title "Overclock" :zone ["play-area"]
+                              :side "Runner" :type "Event"}]}
+        run-choose (fn [& args]
+                     (with-mock-state (mock-client-state :side "runner" :prompt prompt)
+                       (capture-select-action
+                        (fn []
+                          (with-redefs [prompts/wait-for-prompt-change! (constantly true)
+                                        basic/check-auto-end-turn! (fn [] nil)]
+                            (with-out-str (apply prompts/choose-card! args)))))))]
+    (testing "one-arg choose-card is unchanged (regression guard)"
+      (is (false? (:shift-key-held (run-choose 0)))))
+    (testing "choose-card <N> --all reaches the wire as a shift-click"
+      (is (true? (:shift-key-held (run-choose 0 true)))))))
+
+(deftest choose-card!-reports-credits-not-just-the-card-title
+  ;; The misleading-output class: "📇 Selected card: Overclock (index 0)" is true
+  ;; but does not answer the only question the per-credit prompt leaves open —
+  ;; is another call owed?
+  (let [prompt {:prompt-type "select"
+                :msg "Choose a credit providing card (0 of 5 [Credits])"
+                :eid {:eid 42}
+                :selectable [{:cid 7 :title "Overclock" :zone ["play-area"]
+                              :side "Runner" :type "Event"}]}
+        run-choose (fn [after-msg]
+                     (with-mock-state (mock-client-state :side "runner" :prompt prompt)
+                       (with-redefs [ws/ensure-connected! (constantly true)
+                                     ws/send-action! (constantly true)
+                                     basic/check-auto-end-turn! (fn [] nil)
+                                     prompts/wait-for-prompt-change!
+                                     (fn [_eid & _]
+                                       (swap! state/client-state assoc-in
+                                              [:game-state :runner :prompt-state]
+                                              (when after-msg (assoc prompt :msg after-msg)))
+                                       true)]
+                         (with-out-str (prompts/choose-card! 0 true)))))]
+    (testing "a settled cost says so, and reports the full amount paid"
+      (let [out (run-choose nil)]
+        (is (str/includes? out "Paid 5 [Credits]")
+            (str "must report credits actually paid, got: " out))
+        (is (str/includes? out "cost settled")
+            (str "a resolved payment must say no more calls are owed, got: " out))))
+
+    (testing "a partial payment names what is STILL owed rather than implying done"
+      (let [out (run-choose "Choose a credit providing card (2 of 5 [Credits])")]
+        (is (str/includes? out "Paid 2 [Credits]"))
+        (is (str/includes? out "3 [Credits] still owed")
+            (str "must state the remainder, got: " out))
+        (is (not (str/includes? out "cost settled"))
+            (str "an unfinished payment must not claim to be settled, got: " out))))
+
+    ;; "[Credits]" is the game's credit ICON and is never pluralised — the engine
+    ;; itself writes "1 [Credits] from bad publicity". Our output must not invent
+    ;; a "[Credit]s" token the game never emits.
+    ;; A cost chain (an ability with two credit costs) shows a SECOND "0 of N"
+    ;; prompt. Diffing counters naively against a "0 of 5" baseline would print
+    ;; "Paid -0"/a negative for a real payment; the same-cost? guard treats a
+    ;; reset counter as "the cost we were on is finished".
+    (testing "the prompt moving on to a DIFFERENT cost never prints a negative"
+      (let [out (run-choose "Choose a credit providing card (0 of 3 [Credits])")]
+        (is (str/includes? out "Paid 5 [Credits]")
+            (str "the finished cost is reported in full, got: " out))
+        (is (not (re-find #"Paid -\d" out))
+            (str "a new cost must not read as a negative payment, got: " out))))
+
+    (testing "a remainder of one still uses the game's unpluralised icon"
+      (let [out (run-choose "Choose a credit providing card (4 of 5 [Credits])")]
+        (is (str/includes? out "Paid 4 [Credits]"))
+        (is (str/includes? out "1 [Credits] still owed")
+            (str "must echo the game's own credit token, got: " out))
+        (is (not (str/includes? out "[Credit]s"))
+            (str "invented token, got: " out))))))
+
+(deftest choose-card!-keeps-the-card-line-on-non-payment-prompts
+  (testing "an ordinary select still reports the card — the payment line must not
+            leak onto prompts that aren't payments"
+    (let [prompt {:prompt-type "select"
+                  :msg "Choose a card to trash"
+                  :eid {:eid 42}
+                  :selectable [{:cid 7 :title "Palisade" :zone ["servers"]
+                                :side "Corp" :type "ICE"}]}
+          out (with-mock-state (mock-client-state :side "runner" :prompt prompt)
+                (with-redefs [ws/ensure-connected! (constantly true)
+                              ws/send-action! (constantly true)
+                              basic/check-auto-end-turn! (fn [] nil)
+                              prompts/wait-for-prompt-change! (constantly true)]
+                  (with-out-str (prompts/choose-card! 0))))]
+      (is (str/includes? out "Selected card: Palisade"))
+      (is (not (str/includes? out "Paid"))
+          (str "non-payment prompts must not print a payment line, got: " out)))))

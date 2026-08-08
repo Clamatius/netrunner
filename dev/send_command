@@ -211,10 +211,12 @@ show_help_compact() {
   score <name>     Score an advanced agenda
   rez <name>       Rez ICE / asset / upgrade"
             role_running="${GREEN}Defending Runs:${NC}
-  monitor-run      Participate in the opponent's run (auto-pass priority
-                   windows, surface real Corp decisions). Required during
-                   runner runs — see 'help --full' for flags.
-  continue         Pass priority (e.g. decline to rez / fire)."
+  continue         Participate in the opponent's run: auto-pass priority
+                   windows, surface real Corp decisions, pass priority when you
+                   decline to rez / fire. Required during runner runs — see
+                   'help --full' for flags.
+  monitor-run      The SAME command under an older name. Both are accepted;
+                   'continue' is the one everything else refers to."
             role_examples="  ./send_command corp status
   ./send_command corp install \"Hedge Fund\" HQ
   ./send_command corp advance \"Project Atlas\"
@@ -225,7 +227,9 @@ show_help_compact() {
   play <name>      Play an event
   install <name>   Install a program / resource / hardware"
             role_running="${GREEN}Running:${NC}
-  run <server>     Start a run (HQ, R&D, Archives, remote1, etc.)
+  run <server>     Start a run (HQ, \"R&D\", Archives, remote1, etc.)
+                   QUOTE \"R&D\" — unquoted, the shell splits on & and you get
+                   'command not found: D' instead of a run.
   continue         Continue run / pass priority
   jack-out         Abort the run (movement window only — not mid-encounter)"
             role_examples="  ./send_command runner status
@@ -241,7 +245,9 @@ show_help_compact() {
   score <name>     Score agenda (Corp)
   rez <name>       Rez ICE/asset/upgrade (Corp)"
             role_running="${GREEN}Running:${NC}
-  run <server>     Runner: start a run (HQ, R&D, Archives, remote1, etc.)
+  run <server>     Runner: start a run (HQ, \"R&D\", Archives, remote1, etc.)
+                   QUOTE \"R&D\" — unquoted, the shell splits on & and you get
+                   'command not found: D' instead of a run.
   continue         Continue run / pass priority
   jack-out         Runner: abort the run (movement window only — not mid-encounter)
   monitor-run      Corp: participate in opponent's run (auto-pass priority
@@ -378,9 +384,20 @@ ${GREEN}Card Actions:${NC}
   score <name>    - Score agenda with sufficient advancement counters
 
 ${GREEN}Running:${NC}
-  run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.)
+  run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.).
+                         QUOTE "R&D": the & is a shell metacharacter, so an
+                         unquoted R&D never reaches this script — the shell
+                         splits it first and reports 'command not found: D'.
   let-subs-fire <name> - Signal intent to let ICE subroutines fire
-  continue [flags]     - Auto-continue until decision required
+  continue [flags]     - Auto-continue until decision required. This is THE verb
+                         for advancing a run and for passing priority; both seats
+                         use it. Prefer it over the two aliases below.
+  monitor-run [flags]  - Alias for 'continue'. Same command, kept because the Corp
+                         brief names it (participate in the opponent's run).
+  continue-run [flags] - Alias for 'continue --single': take exactly ONE step and
+                         return, instead of looping to the next decision. Only
+                         reach for this when you are debugging a run window and
+                         want to inspect state between steps.
   jack-out             - Jack out (LEGAL ONLY in a movement window you have not
                          passed: not at initiation, an approach, or an encounter)
   tank <ice-name>      - Authorize letting subs fire on ICE
@@ -391,6 +408,7 @@ ${GREEN}Running:${NC}
     --fire-unbroken  Corp: auto-fire unbroken subroutines
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start
+    --single         Take ONE step and return (what 'continue-run' is an alias for)
 
   ${BLUE}monitor-run Flags:${NC} (Corp)
     --fire-if-asked  Sleep mode: auto-fire, auto-continue, wake for rez/upgrade
@@ -406,8 +424,18 @@ ${GREEN}Prompts:${NC}
   choose-value <text> - Choose by matching text (e.g., "Yes", "Steal").
                         Also presses a SELECT prompt's meta-button, e.g.
                         choose-value "Done" to stop selecting cards.
-  choose-card <N> - Select card N from selectable cards
-  multi-choose <cards...> - Select MULTIPLE cards
+  choose-card <N> [--all] - Select card N from selectable cards.
+                        --all: on a "Choose a credit providing card (i of n
+                        [Credits])" prompt, keep taking credits from that source
+                        until the COST is met (or the source runs dry), in one
+                        call. It pays what is needed, not the card's whole
+                        balance — a 3-credit source covering a 1-credit cost
+                        keeps 2. Without it the prompt re-asks once per credit
+                        (5 calls to pay Overclock's 5). Inert on any other
+                        prompt.
+  multi-choose <cards...> - Select MULTIPLE cards. This is for picking several
+                        DIFFERENT cards (discard down to N). To pay a cost out
+                        of ONE source, use choose-card <N> --all.
 
 ${GREEN}Waiting / Synchronization:${NC}
   wait [seconds] [--since N] - Block until something you care about happens.
@@ -1058,10 +1086,23 @@ case "$COMMAND" in
 
     # Running
     run)
-        ensure_connection
         SERVER="${1:-}"
         shift
         [[ -z "$SERVER" ]] && error "Usage: send_command run <server> [--flags...]"
+
+        # #110 §3: `run R&D` unquoted is split by the SHELL before we are called.
+        # The shell backgrounds `... run R` and then tries to execute `D`, so the
+        # error the seat sees is `command not found: D` — naming neither the
+        # command nor the server. We can't stop the split, but we are the half of
+        # it that still runs, and "R" is not a server, so this is an unambiguous
+        # diagnosis rather than a guess.
+        if [[ "$SERVER" == "R" || "$SERVER" == "r" ]]; then
+            error "Bare 'R' is not a server — this is 'run R&D' with the quotes missing.
+       The shell split it on '&' before send_command saw it (and separately
+       reported 'command not found: D'). Retry with:  run \"R&D\""
+        fi
+
+        ensure_connection
 
         # Build flag arguments for varargs call
         FLAGS_ARGS=""
@@ -1215,10 +1256,24 @@ case "$COMMAND" in
     choose-card)
         ensure_connection
         INDEX="${1:-}"
-        [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index>"
+        [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index> [--all]"
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
-        info "Choosing card at index $INDEX..."
-        execute "(ai-actions/choose-card! $INDEX)"
+        shift
+        # --all is the seat's shift-click: on the engine's per-credit payment
+        # prompt it takes that source's FULL remaining amount in one call
+        # instead of one call per credit (#104, #110). Inert elsewhere.
+        PAY_ALL="false"
+        if [[ "${1:-}" == "--all" ]]; then
+            PAY_ALL="true"
+            shift
+        fi
+        [[ $# -gt 0 ]] && error "Unknown argument: $1 (usage: choose-card <index> [--all])"
+        if [[ "$PAY_ALL" == "true" ]]; then
+            info "Choosing card at index $INDEX (paying from it until the cost is met)..."
+        else
+            info "Choosing card at index $INDEX..."
+        fi
+        execute "(ai-actions/choose-card! $INDEX $PAY_ALL)"
         after_action
         ;;
 

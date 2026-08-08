@@ -279,100 +279,159 @@
         (println "   → Press by index instead with: choose <N>")
         (core/with-cursor {:status :error :reason "No matching choice"})))))
 
+(defn- payment-progress
+  "Report a per-credit payment step honestly, or nil if this wasn't one.
+
+   `before` is the (core/credit-payment-prompt …) reading taken BEFORE the
+   selection was sent; the current prompt supplies the after-reading. A payment
+   prompt that is GONE means the cost settled, so the remainder was paid.
+
+   Without this, a pay-all call that settled a 5-credit cost still printed
+   '📇 Selected card: Overclock (index 0)' — true but useless for deciding
+   whether another call is owed, which is exactly the question the per-credit
+   prompt leaves open (#104, #110)."
+  [before]
+  (when before
+    (let [after (core/credit-payment-prompt (:msg (state/get-prompt)))
+          ;; Is the prompt still the SAME cost, or has the engine moved on to a
+          ;; new one? An ability with two credit costs back to back shows a
+          ;; second "0 of N" prompt, and naively diffing the counters against a
+          ;; before-reading of "2 of 2" yields "Paid -2 [Credits]". Same cost
+          ;; requires the same target AND a counter that did not go backwards.
+          same-cost? (and after
+                          (= (:target after) (:target before))
+                          (>= (:paid after) (:paid before)))
+          ;; Not the same cost (or no payment prompt left) ⇒ the one we were on
+          ;; is finished, so everything that was outstanding on it got paid.
+          paid-now (if same-cost?
+                     (- (:paid after) (:paid before))
+                     (- (:target before) (:paid before)))
+          owed (if same-cost? (:remaining after) 0)]
+      ;; "[Credits]" is the game's credit ICON, not a word: the engine writes it
+      ;; unpluralised at every count ("1 [Credits] from bad publicity"), and the
+      ;; prompt we are echoing says "(0 of 2 [Credits])". Pluralising it to
+      ;; "[Credit]s" would emit a token the game never produces.
+      (str (format "💳 Paid %d [Credits]" paid-now)
+           (if (pos? owed)
+             (format " — %d [Credits] still owed; choose another source (add --all to pay from one source until the cost is met)." owed)
+             " — cost settled.")))))
+
 (defn choose-card!
   "Choose a card from selectable cards in current prompt by index.
    Used for select prompts like 'Send a Message' (choose card to trash).
 
-   Usage: (choose-card! 0)  ; Select first selectable card
-          (choose-card! 2)  ; Select third selectable card"
-  [index]
-  (let [client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        prompt (get-in client-state [:game-state side :prompt-state])
-        selectable (:selectable prompt)
-        eid (:eid prompt)]
-    (cond
-      ;; choose-card resolves a card-targeting prompt. The canonical wire type is
-      ;; "select", but some engine prompts (e.g. Mutual Favor's stack search) carry
-      ;; :selectable cards under a different :prompt-type ("other"). Gate on the
-      ;; PRESENCE of selectable cards, not the type string, so choose-card works
-      ;; wherever there are cards to pick — and steer text-choice prompts to
-      ;; `choose` rather than the misleading "No select prompt active". (backlog #3)
-      (empty? selectable)
-      (do
-        (if (and prompt (seq (:choices prompt)))
-          (do (println "❌ This prompt has text choices, not selectable cards.")
-              (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
-          (println "❌ No selectable cards in current prompt"))
-        (when prompt
-          (println (format "   Current prompt type: %s" (:prompt-type prompt))))
-        (core/with-cursor {:status :error :reason "No selectable cards"}))
+   Usage: (choose-card! 0)        ; Select first selectable card
+          (choose-card! 2)        ; Select third selectable card
+          (choose-card! 0 true)   ; PAY-ALL: take every remaining credit from
+                                  ; this source in one call
 
-      (not (< -1 index (count selectable)))
-      (do
-        (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
-                        index (count selectable) (dec (count selectable))))
-        (core/with-cursor {:status :error :reason "Invalid index"}))
+   `pay-all?` is the seat's version of the human UI's shift-click. On the
+   engine's per-credit payment prompt it keeps taking credits from the chosen
+   source until the COST is met, so one call replaces one-call-per-credit
+   (#104 Overclock ×5, #110 Unity ×2). It pays what is needed, not the card's
+   whole balance — pick-credit-providing-cards exits at
+   (<= target-count counter-count), so a richer source keeps the difference
+   (pinned by game.ai-pay-all-test). It is
+   inert on every other prompt — only pick-credit-providing-cards reads the
+   flag — so passing it where it does nothing costs a redundant selection, not a
+   wrong one."
+  ([index] (choose-card! index false))
+  ([index pay-all?]
+   (let [client-state @state/client-state
+         side-str (:side client-state)
+         side (when side-str (keyword (clojure.string/lower-case side-str)))
+         prompt (get-in client-state [:game-state side :prompt-state])
+         selectable (:selectable prompt)
+         eid (:eid prompt)]
+     (cond
+       ;; choose-card resolves a card-targeting prompt. The canonical wire type is
+       ;; "select", but some engine prompts (e.g. Mutual Favor's stack search) carry
+       ;; :selectable cards under a different :prompt-type ("other"). Gate on the
+       ;; PRESENCE of selectable cards, not the type string, so choose-card works
+       ;; wherever there are cards to pick — and steer text-choice prompts to
+       ;; `choose` rather than the misleading "No select prompt active". (backlog #3)
+       (empty? selectable)
+       (do
+         (if (and prompt (seq (:choices prompt)))
+           (do (println "❌ This prompt has text choices, not selectable cards.")
+               (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
+           (println "❌ No selectable cards in current prompt"))
+         (when prompt
+           (println (format "   Current prompt type: %s" (:prompt-type prompt))))
+         (core/with-cursor {:status :error :reason "No selectable cards"}))
 
-      :else
-      (let [cid-or-card (nth selectable index)
-            ;; Selectable can be CID strings or card maps - resolve CIDs to cards.
-            ;; Use the selectable-aware resolver so a FACE-DOWN card at a breach
-            ;; (title-less in the Runner's view) still resolves — the title-gated
-            ;; find-card-by-cid dropped it and wedged multi-card remote breaches. (#70)
-            card (if (string? cid-or-card)
-                   (core/find-selectable-card-by-cid cid-or-card)
-                   cid-or-card)]
-        ;; Card-shape guard mirrors resolve-selectable: a real pick has :title OR
-        ;; :zone. This keeps a raw junk map that the engine might drop directly
-        ;; into :selectable from reaching select-card! by index. (#70 review)
-        (if (and (map? card) (or (:title card) (:zone card)))
-          ;; Don't claim success before the prompt confirms registration: print
-          ;; the confirmation only AFTER the prompt moves. A non-select prompt
-          ;; that doesn't move means choose-card was the WRONG verb (the engine
-          ;; wanted a text choice) — error + steer to `choose`, instead of the
-          ;; old "📇 Selecting card …" + spurious :success on a stall. (issue #40)
-          (let [select? (state/select-prompt-type? (:prompt-type prompt))]
-            (ws/select-card! card eid)
-            (cond
-              ;; Prompt moved → selection registered and resolved. Only here is it
-              ;; safe to run the auto-end-turn hook (a partial multi-select leaves
-              ;; the prompt put — see the select? branch). (#18 tail)
-              (wait-for-prompt-change! eid :old-msg (:msg prompt))
-              (do
-                (println (format "📇 Selected card: %s (index %d)" (:title card) index))
-                (maybe-auto-end-turn-after-prompt!)
-                (core/with-cursor {:status :success :card card}))
+       (not (< -1 index (count selectable)))
+       (do
+         (println (format "❌ Invalid index: %d (only %d selectable cards, use 0-%d)"
+                          index (count selectable) (dec (count selectable))))
+         (core/with-cursor {:status :error :reason "Invalid index"}))
 
-              ;; Unchanged but a genuine multi-select toggle (discard-to-N): the
-              ;; server accumulates selections to :max and only then resolves.
-              ;; wait-for-prompt-change! already printed the multi-choose tip.
-              select?
-              (do
-                (println (format "📇 Toggled card: %s (index %d) — more selections needed"
-                                (:title card) index))
-                (core/with-cursor {:status :success :card card}))
+       :else
+       (let [cid-or-card (nth selectable index)
+             ;; Selectable can be CID strings or card maps - resolve CIDs to cards.
+             ;; Use the selectable-aware resolver so a FACE-DOWN card at a breach
+             ;; (title-less in the Runner's view) still resolves — the title-gated
+             ;; find-card-by-cid dropped it and wedged multi-card remote breaches. (#70)
+             card (if (string? cid-or-card)
+                    (core/find-selectable-card-by-cid cid-or-card)
+                    cid-or-card)]
+         ;; Card-shape guard mirrors resolve-selectable: a real pick has :title OR
+         ;; :zone. This keeps a raw junk map that the engine might drop directly
+         ;; into :selectable from reaching select-card! by index. (#70 review)
+         (if (and (map? card) (or (:title card) (:zone card)))
+           ;; Don't claim success before the prompt confirms registration: print
+           ;; the confirmation only AFTER the prompt moves. A non-select prompt
+           ;; that doesn't move means choose-card was the WRONG verb (the engine
+           ;; wanted a text choice) — error + steer to `choose`, instead of the
+           ;; old "📇 Selecting card …" + spurious :success on a stall. (issue #40)
+           (let [select? (state/select-prompt-type? (:prompt-type prompt))
+                 ;; Captured BEFORE the send: the success branch diffs it against
+                 ;; the post-send prompt to report credits actually paid.
+                 pay-before (core/credit-payment-prompt (:msg prompt))]
+             (ws/select-card! card eid pay-all?)
+             (cond
+               ;; Prompt moved → selection registered and resolved. Only here is it
+               ;; safe to run the auto-end-turn hook (a partial multi-select leaves
+               ;; the prompt put — see the select? branch). (#18 tail)
+               (wait-for-prompt-change! eid :old-msg (:msg prompt))
+               (do
+                 ;; On a payment prompt "Selected card: X" understates what
+                 ;; happened — with pay-all? one call can settle the whole cost.
+                 ;; Report the credits, and say plainly whether more are owed.
+                 (if-let [paid (payment-progress pay-before)]
+                   (println paid)
+                   (println (format "📇 Selected card: %s (index %d)" (:title card) index)))
+                 (maybe-auto-end-turn-after-prompt!)
+                 (core/with-cursor {:status :success :card card}))
 
-              ;; Unchanged on a NON-select prompt: choose-card is the wrong verb
-              ;; here (this prompt resolves by text choice). (issue #40)
-              :else
-              (do
-                (println (format "↪️  choose-card %d did not register — this prompt isn't a card-select."
-                                index))
-                (if (seq (:choices prompt))
-                  (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
-                  (println "   → Use 'prompt' to inspect, then choose / choose-value."))
-                (core/with-cursor {:status :error
-                                   :reason "Not a card-select prompt — use choose"}))))
-          (let [{:keys [pickable]} (core/resolve-selectable selectable)
-                pickable-idxs (map :idx pickable)]
-            (println (format "❌ Index %d isn't a card you can select — it's hidden/opponent (not in your view)." index))
-            (if (seq pickable-idxs)
-              (println (format "   Selectable indices: %s. Use 'prompt' to see them by name."
-                              (clojure.string/join ", " pickable-idxs)))
-              (println "   No selectable cards resolve from this seat — use 'prompt' / choose-value for meta-options."))
-            (core/with-cursor {:status :error :reason "Card resolution failed"})))))))
+               ;; Unchanged but a genuine multi-select toggle (discard-to-N): the
+               ;; server accumulates selections to :max and only then resolves.
+               ;; wait-for-prompt-change! already printed the multi-choose tip.
+               select?
+               (do
+                 (println (format "📇 Toggled card: %s (index %d) — more selections needed"
+                                  (:title card) index))
+                 (core/with-cursor {:status :success :card card}))
+
+               ;; Unchanged on a NON-select prompt: choose-card is the wrong verb
+               ;; here (this prompt resolves by text choice). (issue #40)
+               :else
+               (do
+                 (println (format "↪️  choose-card %d did not register — this prompt isn't a card-select."
+                                  index))
+                 (if (seq (:choices prompt))
+                   (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
+                   (println "   → Use 'prompt' to inspect, then choose / choose-value."))
+                 (core/with-cursor {:status :error
+                                    :reason "Not a card-select prompt — use choose"}))))
+           (let [{:keys [pickable]} (core/resolve-selectable selectable)
+                 pickable-idxs (map :idx pickable)]
+             (println (format "❌ Index %d isn't a card you can select — it's hidden/opponent (not in your view)." index))
+             (if (seq pickable-idxs)
+               (println (format "   Selectable indices: %s. Use 'prompt' to see them by name."
+                                (clojure.string/join ", " pickable-idxs)))
+               (println "   No selectable cards resolve from this seat — use 'prompt' / choose-value for meta-options."))
+             (core/with-cursor {:status :error :reason "Card resolution failed"}))))))))
 
 (defn- find-card-in-selectable
   "Find a card in the selectable list by name (case-insensitive substring match).

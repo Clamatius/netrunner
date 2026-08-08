@@ -1542,10 +1542,29 @@
                                  (and is-discard? (pos? cards-to-discard)) cards-to-discard
                                  :else nil)]
             ;; Show multi-select warning if applicable
-            (if cards-required
+            (cond
+              cards-required
               (do
                 (println (str "  ⚠️  MULTI-SELECT: Choose " cards-required " card(s)"))
                 (println "     Use: multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."))
+
+              ;; Per-credit payment prompt. It re-asks once per credit, and the
+              ;; count in the message is the ONLY hint that more calls are
+              ;; coming — which is why two models independently reported it as
+              ;; friction (#104 Overclock ×5, #110 Unity ×2). Say how many are
+              ;; owed and name the one-call form. This is NOT a multi-choose
+              ;; case: multi-choose re-selects DIFFERENT cards, whereas paying
+              ;; a cost out of ONE source is what --all does.
+              (core/credit-payment-prompt prompt-msg)
+              (let [{:keys [remaining]} (core/credit-payment-prompt prompt-msg)]
+                ;; "[Credits]" unpluralised — it's the game's credit icon (see
+                ;; ai-prompts/payment-progress).
+                (println (format "  💳 PAYMENT: %d [Credits] still owed. Each pick pays ONE credit."
+                                 remaining))
+                (println "     Use: choose-card <N> --all   (pay from that source until the cost is met)")
+                (println "     Or:  choose-card <N>         (one credit, prompt re-asks)"))
+
+              :else
               (println "  Selectable cards: (Use choose-card to select by index)"))
             ;; Render via the shared helper: pickable cards with their true
             ;; indices + a single warning line for phantom (unresolvable) CIDs,
@@ -2168,7 +2187,11 @@
       (:in-run? ts)
       (do
         (println (format "🏃 A run is in progress on %s." (or (:run-server ts) "?")))
-        (println "   → Use: monitor-run (or continue-run) to participate / advance it."))
+        ;; #110: this offered `continue-run` — the single-step alias — as a way to
+        ;; "advance" a run, which is both the undocumented verb and the wrong one
+        ;; for the job. Name `continue`; monitor-run stays because the Corp brief
+        ;; uses that name for the same command.
+        (println "   → Use: continue (Corp brief calls the same command monitor-run)."))
 
       ;; Turn boundary — my turn but not started (0 clicks).
       (and (:waiting-to-start? ts) (= next-lc (clojure.string/lower-case (or side ""))))

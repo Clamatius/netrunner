@@ -1445,11 +1445,22 @@
     (swap! reported-events update :events conj (event-key event))
     (println (format "⚠️  Run paused - %s" headline))
     (println (format "   %s" (:text event)))
-    ;; #104: the continue-run hint is the Runner's verb; on the Corp side it
-    ;; pointed at a command the seat doesn't drive the run with.
-    (println (if (core/side= "Corp" (or side ""))
-               "   → Resume with 'monitor-run' (or 'continue' to pass priority)"
-               "   → Use 'continue-run' again to proceed"))
+    ;; #110: ONE verb, and it is `continue`.
+    ;;
+    ;; The history here is a defect that kept moving instead of leaving. #104
+    ;; made this hint side-flavoured: the Runner arm named `continue-run` (the
+    ;; single-step alias, undocumented) and the Corp arm named `monitor-run`
+    ;; "(or 'continue')". Both arms then disagreed with the prompt block printed
+    ;; two lines later, which says `continue` — and a Luna seat, handed two verbs
+    ;; for one act in a single output, reached for the undocumented one.
+    ;;
+    ;; The side split was never load-bearing: `continue`, `monitor-run` and
+    ;; `continue-run` all dispatch into the same run handler (send_command's
+    ;; `continue` and `monitor-run` branches are byte-identical; `continue-run`
+    ;; is `continue --single`). Offering a seat a choice between aliases of one
+    ;; command is the ambiguity, not a service to it. The aliases stay reachable
+    ;; and are now documented in `help --full`; runtime guidance names one.
+    (println "   → Use 'continue' again to proceed")
     {:status status :wake-reason status :event event}))
 
 (defn handle-unexpected-state
