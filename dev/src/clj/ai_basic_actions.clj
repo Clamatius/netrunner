@@ -698,7 +698,13 @@
         gameid (:gameid client-state)
         active-player (get-in client-state [:game-state :active-player])
         ;; nil active-player = pre-game / unpopulated mock; don't refuse on it.
+        ;; nil side-kw must short-circuit too: `let` bindings all evaluate before
+        ;; the cond below, so `(name nil)` here threw BEFORE the no-game guard
+        ;; could refuse — making that guard unreachable for any state carrying an
+        ;; active-player but no seat. Guest-panel catch; the NPE it was added to
+        ;; kill simply moved two lines up.
         my-turn? (or (nil? active-player)
+                     (nil? side-kw)
                      (= (str/lower-case (name side-kw))
                         (str/lower-case active-player)))]
     (cond
@@ -710,7 +716,7 @@
       ;; act on it nor pattern-match it. Refuse, and refuse LOUDLY-BUT-CLEANLY:
       ;; with no game there is nothing to end, and pushing end-turn into the void
       ;; is how off-turn end-turns (the unrecoverable kind) get minted.
-      (nil? clicks)
+      (or (nil? clicks) (nil? side-kw))
       (do
         (println "⛔ Refusing end-turn: no game state — there is no turn to end.")
         (println "   The game has ended, been purged, or the resync did not complete.")

@@ -1609,7 +1609,11 @@
         ;; purged game every field below is falsy, so the `(not (:my-turn? ts))`
         ;; arm won by default and sent the seat to `wait` for a nonexistent
         ;; opponent: a command that manufactures the stall it's meant to explain.
-        (if-not (:in-game? ts)
+        ;; :game-over? is checked alongside :in-game? because a decided game
+        ;; tears the lobby down too — reporting "not in a game" there would hide
+        ;; the RESULT, which is the one thing the seat still needs. Game-over
+        ;; wins; the no-game branch is only for a game that ended with no verdict.
+        (if (and (not (:in-game? ts)) (not (:game-over? ts)))
           (do
             (println "⚠️  Not in a game — there is no prompt, and nothing to wait for.")
             (println "   (If a game was running, it has ended or been purged.)")

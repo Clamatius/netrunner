@@ -658,3 +658,28 @@
             (with-out-str (reset! result (basic/end-turn!)))
             (is (map? @result)
                 "must return a status map rather than throwing NPE")))))))
+
+;; Guest-panel catch (GPT-5.6 Terra) on the first cut of the #109 fix: my
+;; (nil? clicks) guard is UNREACHABLE when :side is nil. `let` bindings all
+;; evaluate before the `cond`, and the `my-turn?` binding calls
+;; `(str/lower-case (name side-kw))` — with :side nil that is `(name nil)`,
+;; which throws before any guard runs. It only short-circuits when
+;; :active-player is also nil, so a state carrying an active-player but no side
+;; still dies with the same unpattern-matchable stack trace the guard was
+;; added to eliminate.
+
+(deftest test-end-turn-nil-side-does-not-throw
+  (testing "no :side but a populated game-state must still refuse cleanly"
+    (let [sent (atom [])]
+      (with-mock-state {:side nil
+                        :gameid nil
+                        :game-state {:active-player "corp" :corp {:click 0}}}
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)]
+            (with-out-str (reset! result (basic/end-turn!)))
+            (is (map? @result)
+                "must return a status map, not throw on (name nil)")
+            (is (= :error (:status @result))
+                (str "no side = no seat = nothing to end, got: " @result))
+            (is (empty? @sent)
+                "must not send end-turn without knowing which seat we are")))))))

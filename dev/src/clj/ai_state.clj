@@ -395,12 +395,24 @@
 
     {:whose-turn active-side
      :next-player next-player
-     ;; Are we in a game AT ALL? Every other field here is derived from `gs`, so
-     ;; with no game state they all read as their falsy defaults and consumers
-     ;; silently pick the "not my turn" arm — which is how `prompt` came to tell
-     ;; a seat on a purged game to `wait` for an opponent that doesn't exist.
-     ;; Predicate matches show-status's, so the two surfaces cannot disagree.
-     :in-game? (boolean (or gs (:lobby-state @client-state)))
+     ;; Is there a LIVE game to reason about? Every other field here is derived
+     ;; from `gs`, so with no game they all read as their falsy defaults and
+     ;; consumers silently pick the "not my turn" arm — which is how `prompt`
+     ;; came to tell a seat on a purged game to `wait` for an opponent that
+     ;; doesn't exist.
+     ;;
+     ;; :lobby-gone? is part of the predicate, not an afterthought (guest-panel
+     ;; catch). #93's teardown leaves the cached SNAPSHOT in place and announces
+     ;; itself only through that flag, so "is there a :game-state?" answers YES
+     ;; on exactly the state game-over-status calls GAME-GONE. Testing presence
+     ;; alone made the fix a no-op in the case it was written for.
+     ;;
+     ;; A DECIDED game is deliberately NOT excluded here: normal endings tear the
+     ;; lobby down too, and callers need :game-over? to win so the seat still
+     ;; learns the result. Same precedence as game-over-status and wake-reason —
+     ;; game-over first, lobby-gone second.
+     :in-game? (boolean (and (or gs (:lobby-state @client-state))
+                             (not (lobby-gone? @client-state))))
      ;; A clean turn boundary (a player ended their turn, or both sides are at
      ;; 0 clicks) is "next player to start", NOT a stall. Tooling uses this to
      ;; avoid false-positive stall detection while a slow opponent thinks about

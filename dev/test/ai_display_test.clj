@@ -1746,3 +1746,37 @@
       (let [out (with-out-str (display/show-prompt-detailed))]
         (is (str/includes? out "use 'wait'")
             (str "a real opponent turn must still route to `wait`. Got: " out))))))
+
+;; Guest-panel catch (GPT-5.6 Terra) on the first cut of the #109 fix.
+;; My :in-game? predicate asked "is there a cached game-state?" — but #93
+;; established that a purged lobby can leave the SNAPSHOT behind and announce
+;; itself only via :lobby-gone?. In that shape the predicate says "in a game",
+;; `prompt` takes the live arm, and the seat is told to `wait` all over again —
+;; the fix reads as complete while being a no-op in the teardown case that
+;; issue #93 exists to describe. game-over-status already treats :lobby-gone?
+;; as authoritative; :in-game? has to agree with it or the surfaces re-diverge,
+;; which is the exact failure the single-predicate rule is meant to prevent.
+
+(deftest test-prompt-lobby-gone-with-cached-snapshot-does-not-advise-waiting
+  (testing "#93 teardown shape: cached game-state + :lobby-gone? must not route to `wait`"
+    (with-mock-state {:side "corp"
+                      :lobby-gone? true
+                      :game-state {:active-player "runner" :turn 9
+                                   :corp {:click 0} :runner {:click 2}}}
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "use 'wait'"))
+            (str "game-over-status calls this GAME-GONE; `prompt` must not "
+                 "call it someone's turn. Got: " out))))))
+
+(deftest test-in-game-predicate-agrees-with-game-over-status
+  (testing ":in-game? and game-over-status must not disagree about the same state"
+    (let [dead {:side "corp"
+                :lobby-gone? true
+                :game-state {:active-player "runner" :turn 9
+                             :corp {:click 0} :runner {:click 2}}}]
+      (with-mock-state dead
+        (is (str/starts-with? (str/trim (with-out-str (display/game-over-status)))
+                              "GAME-GONE")
+            "fixture sanity: this state is the one #93 calls GAME-GONE")
+        (is (false? (:in-game? (ai-state/get-turn-status)))
+            "a GAME-GONE state is not a game we are in")))))
