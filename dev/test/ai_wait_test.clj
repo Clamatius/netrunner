@@ -483,3 +483,79 @@
           "engine says the Runner resolved — a leftover prompt must not deadlock us")
       (is (true? (:can-act? (state/get-turn-status)))
           "and the status surface must agree"))))
+
+;; ---------------------------------------------------------------------------
+;; #115: the wake REASON must decode itself.
+;;
+;; :my-run-window fires on every run and was documented nowhere — not in the
+;; emitted output, not in any of the 13 seat briefs. Two Luna seats read
+;;   ⚡ Woke up: my-run-window
+;;   📜 Game log while you were waiting:
+;;     (no new entries)
+;; as "nothing happened", re-blocked, and sat on the pass that advances the run
+;; until the umpire told them what the token meant. Every ping in the first half
+;; of that game traced to this; they stopped completely after the explanation.
+;;
+;; These assert the FRAMING (does the seat learn it owes a move?), never that a
+;; particular token appears — a green "the string is present" test is what let
+;; the bare token ship in the first place.
+;; ---------------------------------------------------------------------------
+
+(deftest test-my-run-window-wake-tells-the-seat-it-owes-the-move
+  (testing "#115: waking on an owned run window says the run is stopped on US and
+            names an action — a bare reason token is not decodable by a seat"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" approach-server-game-state)
+        (let [out (with-out-str
+                    (core/wait-for-relevant-diff {:timeout 0 :verbose true}))]
+          (is (str/includes? out "my-run-window")
+              (str "fixture sanity: this is the my-run-window wake, got:\n" out))
+          (is (re-find #"(?i)you owe|stopped on you" out)
+              (str "the seat must learn the move is OWED BY IT, got:\n" out))
+          (is (str/includes? out "continue")
+              (str "and must be pointed at the verb that advances the window, got:\n" out))
+          (is (re-find #"(?i)another `?wait`? (cannot|can't)" out)
+              (str "and must be told that re-blocking does not advance it — the exact
+                    loop two seats fell into, got:\n" out)))))))
+
+(deftest test-my-run-window-guidance-defuses-the-empty-log
+  (testing "#115: an owned window with no new log entries is the trap shape —
+            'no new entries' must not be the last word the seat reads"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" approach-server-game-state)
+        (let [out (with-out-str
+                    (core/wait-for-relevant-diff {:timeout 0 :verbose true}))]
+          (is (str/includes? out "(no new entries)")
+              (str "fixture sanity: the empty-log rendering, got:\n" out))
+          (is (re-find #"(?i)empty game log|no new entries.*waiting on you|waiting on you" out)
+              (str "an empty log at an owned window means the OPPONENT is waiting on
+                    us; say so rather than leaving 'no new entries' to be read as
+                    'nothing happened', got:\n" out)))))))
+
+;; The same reason token is printed from TWO places — the polling loop above and
+;; the :since fast path. Only the polling copy had grown guidance, so every
+;; reason but :my-turn-start arrived undecoded on the fast path. One contract,
+;; both emitters (the #75/#77/#113 "N senders" shape).
+
+(deftest test-fast-path-decodes-its-wake-reason-too
+  (testing "#115: the :already-advanced fast path carries the same guidance as the
+            polling loop — a GAME-GONE wake there must still say the game is gone"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (assoc (mock-game "corp"
+                                         {:active-player "corp" :turn 5
+                                          :corp {:click 3} :runner {:click 0}})
+                              :lobby-gone? true)
+        (let [out (with-out-str
+                    (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose true}))]
+          (is (str/includes? out "returning immediately")
+              (str "fixture sanity: this is the fast path, got:\n" out))
+          (is (re-find #"(?i)gone, not paused|game is GONE" out)
+              (str "the fast path must decode the reason, not print a bare token, got:\n" out)))))))
+
+(deftest test-wake-guidance-is-silent-for-reasons-with-nothing-to-add
+  (testing "#115: guidance is per-reason, not a blanket paragraph — reasons that
+            speak for themselves add no lines"
+    (is (empty? (core/wake-reason-guidance-lines :run-started {}))
+        "a run starting needs no decoding")
+    (is (empty? (core/wake-reason-guidance-lines :has-prompt {}))
+        "a prompt is self-describing — the prompt itself is the guidance")))

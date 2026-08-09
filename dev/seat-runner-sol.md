@@ -27,6 +27,12 @@ already kept its hand. You take the Runner seat.
    ```
    A `wait` that wakes with reason `my-turn-start` means **start your turn** (run
    `start-turn`); it is NOT a stall. Reason `my-turn` (with clicks) means act now.
+   Reason `my-run-window` means **a run is stopped on YOU**: you owe the
+   `continue` at the current run window (an ICE approach, or movement past one).
+   It fires on every run. Another `wait` cannot advance it, and an empty game log
+   under it means the opponent is already waiting on you — do not read it as
+   nothing-happened. (A break/`tank` decision is a different wake:
+   `encounter-decision`.)
 
    **Do NOT give up just because a `wait` times out empty.** A `wait` return now
    ends with a peer-liveness line — and you can check any time with

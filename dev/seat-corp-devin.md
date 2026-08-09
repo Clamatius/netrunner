@@ -42,6 +42,12 @@ of ICE, not the presence of an agenda, that makes a hand a throw.
    `start-turn`); it is NOT a stall. Reason `my-turn` (with clicks) means act now.
    A `wait` that wakes because **a run started** means **defend it now** (see the
    ⚠️ box below).
+   Reason `my-run-window` means **a run is stopped on YOU**: you owe the
+   `continue` at the current run window. It fires on every run. At an ICE
+   *approach* that continue is also your rez window (`continue --rez <ice>` to
+   rez first, `--no-rez` to decline); at movement there is nothing to rez, just
+   pass. Another `wait` cannot advance it, and an empty game log under it means
+   the Runner is already waiting on you — do not read it as nothing-happened.
 
 2a. **OPENING MULLIGAN RACE — do NOT give up if `start-turn` is refused.** You
    keep your hand first, but the Runner may not have finished its mulligan yet. If

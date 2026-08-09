@@ -171,7 +171,8 @@
           (when-not already-printed?
             (reset! last-waiting-status status-key)
             (println "⏸️  Waiting for corp rez decision")
-            (println (format "   ICE: %s (position %d/%d, unrezzed)" ice-title position ice-count)))
+            (println (format "   %s"
+                             (core/describe-approached-ice ice-title position ice-count))))
           {:status :waiting-for-corp-rez
            :wake-reason :rez-decision
            :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
