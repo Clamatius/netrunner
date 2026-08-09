@@ -683,3 +683,263 @@
                 (str "no side = no seat = nothing to end, got: " @result))
             (is (empty? @sent)
                 "must not send end-turn without knowing which seat we are")))))))
+
+;; ============================================================================
+;; #114: a turn whose last click hands the OPPONENT a decision must still end
+;; ============================================================================
+;; Luna-vs-Luna d840fc14 turn 10: the Corp spent its last click on Public Trail,
+;; which gives the RUNNER the choice (take a tag or pay 8). The engine hands the
+;; Corp a :waiting pseudo-prompt; check-auto-end-turn! read "prompt is non-nil"
+;; as "blocking" and declined to end. When the Runner took the tag, nothing
+;; re-ran the check — the turn was orphaned at 0 clicks and both seats deadlocked
+;; until an umpire with eval access intervened.
+;;
+;; Two defects, two fixes:
+;;   1. the guidance ("use 'choose' to respond") is unactionable — the Corp has
+;;      no choices. Engine-pinned in game.ai-waiting-prompt-test: the prompt
+;;      carries :prompt-type :waiting and an empty :choices.
+;;   2. nothing re-checked when the block cleared. The turn is ARMED here and
+;;      resumed by resume-deferred-auto-end! off the next diff.
+;;
+;; We do NOT simply end the turn over the waiting prompt (the issue's first
+;; suggested bullet). board.cljs' button-pane renders the prompt div instead of
+;; basic-actions whenever a prompt is up, so a HUMAN Corp holding this prompt has
+;; no End Turn button at all — ending anyway would send what the reference client
+;; cannot. Deferring and re-checking gets the same outcome inside the wire spec.
+
+(defn- corp-waiting-on-runner-state
+  "Corp at 0 clicks holding the 'Waiting for Runner to make a decision' prompt.
+   PROMPT-TYPE defaults to the live wire form (the JSON string), not the keyword."
+  [& {:keys [prompt-type turn] :or {prompt-type "waiting" turn 10}}]
+  {:corp {:click 0 :credit 3 :hand [] :hand-count 3
+          :hand-size {:total 5} :installed {} :servers {}
+          :prompt-state {:msg "Waiting for Runner to make a decision"
+                         :prompt-type prompt-type
+                         :eid {:eid 4242}}}
+   :runner {:click 0 :credit 5 :hand []}
+   :turn turn
+   :active-player "corp"
+   :log []})
+
+(deftest test-auto-end-waiting-prompt-does-not-coach-choose
+  (testing "#114: an opponent-owed prompt must not be described as ours to resolve"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp"
+                                          :game-state (corp-waiting-on-runner-state))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (not (re-find #"'choose'" out))
+                (str "must not tell a seat with no choices to 'choose', got: " out))
+            (is (not (re-find #"Active prompt must be resolved first" out))
+                (str "we cannot resolve the opponent's decision, got: " out))
+            (is (re-find #"(?i)runner" out)
+                (str "must name who actually owes the decision, got: " out))
+            (is (re-find #"(?i)automatic" out)
+                (str "must promise the re-check so the seat doesn't hunt, got: " out))
+            (is (empty? @sent)
+                "must not end the turn while the reference client shows no End Turn button")))))))
+
+(deftest test-auto-end-waiting-prompt-arms-the-recheck
+  (testing "#114: deferring records enough to validate the resume later"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (corp-waiting-on-runner-state))
+      (with-redefs [ws/send-message! (fn [& _] nil)
+                    basic/turn-started-since-last-opp-end? (fn [] true)]
+        (with-out-str (basic/check-auto-end-turn!))
+        (let [armed (:auto-end-deferred @state/client-state)]
+          (is (some? armed) "the waiting branch must arm the deferred re-check")
+          (is (= 10 (:turn armed)) "pinned to the turn it was armed on")
+          (is (= :corp (:side armed)) "and to the seat that owes the end-turn"))))))
+
+(deftest test-auto-end-waiting-prompt-arms-on-keyword-prompt-type
+  (testing "#114: fixture/keyword :waiting is recognised too, not just the wire string"
+    (with-mock-state (mock-client-state
+                       :side "corp"
+                       :game-state (corp-waiting-on-runner-state :prompt-type :waiting))
+      (with-redefs [ws/send-message! (fn [& _] nil)
+                    basic/turn-started-since-last-opp-end? (fn [] true)]
+        (with-out-str (basic/check-auto-end-turn!))
+        (is (some? (:auto-end-deferred @state/client-state)))))))
+
+(deftest test-real-prompt-still-blocks-and-does-not-arm
+  (testing "#114 no over-reach: a prompt WE owe keeps the original blocking behaviour"
+    (let [sent (atom [])
+          gs (assoc-in (corp-waiting-on-runner-state)
+                       [:corp :prompt-state]
+                       {:msg "Choose a card to discard" :prompt-type "select"
+                        :choices [{:value "x"}] :eid {:eid 1}})]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"Active prompt must be resolved first" out)
+                (str "an actionable prompt must still block loudly, got: " out))
+            (is (nil? (:auto-end-deferred @state/client-state))
+                "and must NOT arm a deferred end — we owe this one")
+            (is (empty? @sent))))))))
+
+;; --- the resume half -------------------------------------------------------
+
+(defn- armed-state
+  "Client state armed for a deferred auto-end, with GAME-STATE as the world now.
+   The arm's :gameid is taken from the state being built, exactly as
+   check-auto-end-turn! writes it — a hand-written gameid here would drift from
+   the code and turn every one of these into a vacuous 'stale arm' pass."
+  [game-state & {:keys [turn side] :or {turn 10 side :corp}}]
+  (let [cs (mock-client-state :side (name side) :game-state game-state)]
+    (assoc cs :auto-end-deferred {:turn turn :side side :gameid (:gameid cs)})))
+
+(deftest test-resume-deferred-ends-turn-once-opponent-resolves
+  (testing "#114: the waiting prompt clearing is what ends the orphaned turn"
+    (let [sent (atom [])
+          ;; exactly the post-resolution state pinned by game.ai-waiting-prompt-test:
+          ;; prompt gone, 0 clicks, turn still open
+          gs (assoc-in (corp-waiting-on-runner-state) [:corp :prompt-state] nil)]
+      (with-mock-state (armed-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (with-out-str (basic/resume-deferred-auto-end!))
+          (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+              (str "the deadlocked turn must end itself, sent: " @sent))
+          (is (nil? (:auto-end-deferred @state/client-state))
+              "and disarm, so a later diff can't re-send end-turn"))))))
+
+(deftest test-resume-deferred-noop-while-opponent-still-deciding
+  (testing "#114: every other diff in the window must be a no-op"
+    (let [sent (atom [])]
+      (with-mock-state (armed-state (corp-waiting-on-runner-state))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (with-out-str (basic/resume-deferred-auto-end!))
+          (is (empty? @sent) "waiting prompt still up — nothing to do")
+          (is (some? (:auto-end-deferred @state/client-state))
+              "and stay armed for the diff that does clear it"))))))
+
+(deftest test-resume-deferred-noop-when-not-armed
+  (testing "#114: an unarmed client must not auto-end off arbitrary diffs"
+    (let [sent (atom [])
+          gs (assoc-in (corp-waiting-on-runner-state) [:corp :prompt-state] nil)]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (with-out-str (basic/resume-deferred-auto-end!))
+          (is (empty? @sent)
+              "no arm = no end-turn: diffs arrive constantly, including on the opponent's turn"))))))
+
+(deftest test-resume-deferred-expires-on-a-later-turn
+  (testing "#114: a stale arm must never fire into a turn it wasn't armed for"
+    (let [sent (atom [])
+          ;; turn moved on and it's the Runner's turn now — the arm is garbage
+          gs (-> (corp-waiting-on-runner-state :turn 11)
+                 (assoc-in [:corp :prompt-state] nil)
+                 (assoc :active-player "runner"))]
+      (with-mock-state (armed-state gs :turn 10)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (with-out-str (basic/resume-deferred-auto-end!))
+          (is (empty? @sent) "must not end-turn off a stale arm")
+          (is (nil? (:auto-end-deferred @state/client-state))
+              "and must clear the stale arm rather than carry it forward"))))))
+
+(deftest test-smart-end-turn-waiting-prompt-guidance
+  (testing "#114: the explicit command must also not blame us for the opponent's prompt"
+    (with-mock-state (mock-client-state :side "corp"
+                                        :game-state (corp-waiting-on-runner-state))
+      (with-redefs [ws/send-message! (fn [& _] nil)
+                    basic/turn-started-since-last-opp-end? (fn [] true)]
+        (let [out (with-out-str (basic/smart-end-turn!))]
+          (is (not (re-find #"Resolve the prompt first" out))
+              (str "there is no prompt we can resolve, got: " out))
+          (is (re-find #"(?i)runner" out)
+              (str "must name who owes the decision, got: " out)))))))
+
+;; --- guest-panel CRITICALs on the first cut of the #114 fix ----------------
+;; All three were real. Recorded as tests because none of them is visible from
+;; the happy path: the fix worked perfectly in every single-threaded run.
+
+;; The interlock is claim-deferred-arm!: end-turn is gated on WINNING it, not on
+;; having seen an arm. Tested as an invariant rather than by racing threads — a
+;; race test here does NOT discriminate (verified by mutation: with the interlock
+;; removed, 8 concurrent resumes still produced one end-turn, because the window
+;; between reading the arm and clearing it is shorter than future-spawn overhead).
+;; A test that cannot fail against the broken code is not a regression pin.
+(def ^:private claim-arm! #'basic/claim-deferred-arm!)
+
+(deftest test-arm-claim-is-exclusive
+  (testing "#114 CRITICAL: exactly one caller may take the arm"
+    (let [arm {:turn 10 :side :corp :gameid "g1"}]
+      (with-mock-state (assoc (mock-client-state :side "corp") :auto-end-deferred arm)
+        (is (true? (claim-arm! arm)) "first caller takes it")
+        (is (false? (claim-arm! arm))
+            "second caller must LOSE — if it proceeded we would send a duplicate end-turn")
+        (is (nil? (:auto-end-deferred @state/client-state)))))))
+
+(deftest test-two-arms-for-the-same-turn-are-distinguishable
+  (testing "#114 CRITICAL: the claim must not be ABA-vulnerable"
+    ;; A card can hand the opponent two decisions in a row, so the SAME
+    ;; (gameid, turn, side) gets armed twice. If those two arms compare equal, a
+    ;; caller whose claim was already consumed can match the re-armed value and
+    ;; win a second claim — two end-turns, which is unrecoverable here.
+    (let [gs (corp-waiting-on-runner-state)
+          arm-twice (fn []
+                      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+                        (with-redefs [ws/send-message! (fn [& _] nil)
+                                      basic/turn-started-since-last-opp-end? (fn [] true)]
+                          (with-out-str (basic/check-auto-end-turn!))
+                          (let [first-arm (:auto-end-deferred @state/client-state)]
+                            (with-out-str (basic/check-auto-end-turn!))
+                            [first-arm (:auto-end-deferred @state/client-state)]))))
+          [a b] (arm-twice)]
+      (is (some? a))
+      (is (some? b))
+      (is (not= a b)
+          "re-arming the same turn must produce a DISTINCT arm, or the claim can be won twice")
+      (is (= (dissoc a :token) (dissoc b :token))
+          "…distinct only by token: the (gameid, turn, side) pin must still match"))))
+
+(deftest test-arm-claim-refuses-a-different-arm
+  (testing "#114 CRITICAL: claiming is compare-and-clear, so it cannot eat a newer arm"
+    (let [live {:turn 12 :side :corp :gameid "g1"}
+          stale {:turn 10 :side :corp :gameid "g1"}]
+      (with-mock-state (assoc (mock-client-state :side "corp") :auto-end-deferred live)
+        (is (false? (claim-arm! stale)) "a late thread's stale arm must not win")
+        (is (= live (:auto-end-deferred @state/client-state))
+            "and turn 12's arm must survive — it is the only thing that will end turn 12")))))
+
+(deftest test-concurrent-resumes-send-at-most-one-end-turn
+  (testing "#114: stress check (not a regression pin — see comment above)"
+    (let [sent (atom [])
+          gs (assoc-in (corp-waiting-on-runner-state) [:corp :prompt-state] nil)]
+      (with-mock-state (armed-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [threads (mapv (fn [_] (future (with-out-str (basic/resume-deferred-auto-end!))))
+                              (range 8))]
+            (doseq [t threads] (deref t 10000 :timeout))
+            (is (= 1 (count (filter #(= "end-turn" (get-in % [:data :command])) @sent)))
+                (str "exactly one end-turn must reach the wire, sent: " @sent))))))))
+
+(deftest test-arm-from-a-different-game-never-fires
+  (testing "#114 CRITICAL: the arm now survives clear-game-state!, so it must be game-pinned"
+    (let [sent (atom [])
+          gs (assoc-in (corp-waiting-on-runner-state) [:corp :prompt-state] nil)]
+      (with-mock-state (assoc (mock-client-state :side "corp" :game-state gs)
+                              :auto-end-deferred
+                              {:turn 10 :side :corp
+                               :gameid (java.util.UUID/fromString
+                                         "ffffffff-ffff-ffff-ffff-ffffffffffff")})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (with-out-str (basic/resume-deferred-auto-end!))
+          (is (empty? @sent)
+              "turn numbers repeat across games — an arm from a dead game must not end a live turn")
+          (is (nil? (:auto-end-deferred @state/client-state))))))))
+
+(deftest test-arm-survives-clear-game-state
+  (testing "#114 CRITICAL: a resync must not forget that our turn is orphaned"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :auto-end-deferred {:turn 10 :side :corp :gameid "g1"})
+      (with-out-str (state/clear-game-state!))
+      (is (= {:turn 10 :side :corp :gameid "g1"} (:auto-end-deferred @state/client-state))
+          "cleared with the rest of game state, the resync hook has nothing to act on"))))
