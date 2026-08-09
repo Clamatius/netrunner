@@ -1533,6 +1533,37 @@
   [phase]
   (contains? #{"approach-ice" "movement"} phase))
 
+(defn ice-pass-index
+  "Convert the run's `position` COUNTDOWN into the 1-based order the Runner meets
+   the ICE — position = ice-count is the outermost ICE, i.e. ICE 1 of N. Returns
+   nil when the inputs can't support an honest index (no count, past all ICE, or
+   a position out of range — the wire is the volatile coupling, so drop the index
+   rather than print a bogus one).
+
+   Single source for the convention (#115): the run ladder printed 'ICE 1 of 2'
+   while the approach handler printed 'position 2/2' two lines above it — the same
+   ICE under two conventions that read as a contradiction."
+  [position ice-count]
+  (when (and ice-count position (pos? position) (<= position ice-count))
+    (inc (- ice-count position))))
+
+(defn describe-approached-ice
+  "One line naming the ICE the Runner is approaching, in the ladder's convention.
+
+   Renders the fog of war honestly instead of as breakage: an unrezzed ICE has no
+   title on the Runner's wire, and the old format string put the literal default
+   through %s to print `ICE: ICE` (#115), which reads as a display bug rather than
+   as 'you are not allowed to know yet'."
+  [ice-title position ice-count]
+  (let [idx   (ice-pass-index position ice-count)
+        where (if idx
+                (format "ICE %d of %d (outermost first)" idx ice-count)
+                "ICE")
+        named (when (and ice-title (not= ice-title "ICE")) ice-title)]
+    (if named
+      (format "%s: %s — unrezzed" where named)
+      (format "%s — unrezzed, identity hidden until the Corp rezzes it" where))))
+
 (defn- run-window-owner
   "Who owns the FIRST un-passed pass at the current run pass-window, or nil when it
    is not a pass window or both seats have already passed. Ownership is read from
@@ -1740,6 +1771,57 @@
        ;; Nothing relevant
        :else nil))))
 
+(defn wake-reason-guidance-lines
+  "Lines that decode a wake `reason` into the action it demands, printed under the
+   `⚡ Woke up: <reason>` line. `state` is the full client-state (only :game-state
+   is read, for the winner). Pure; returns a (possibly empty) vector of strings.
+
+   Why this is a function and not two inline conds (#115): the reason token is
+   emitted from TWO places — the fast :already-advanced path and the polling
+   loop — and only the polling copy had grown guidance. A seat whose cursor had
+   already advanced got the bare token for every reason but :my-turn-start, so
+   :game-over / :game-gone / :encounter-decision arrived undecoded there. Same
+   shape as send-continue!'s three copies (#75/#77) and the prompt :eid fix that
+   landed on the wrong sender (#113): N emitters, one contract. Both call here.
+   (The fast path cannot currently report :my-run-window itself — it passes
+   initial-run-active? false, so a live run always resolves to :run-started
+   first — but that is a property of the caller, not something to encode twice.)
+
+   :my-run-window in particular shipped with NO decoding anywhere — not here, not
+   in a single seat brief — and two Luna seats independently read
+   `⚡ Woke up: my-run-window` + `(no new entries)` as nothing-happened and
+   re-blocked while owing the pass that advances the run (#115)."
+  [reason state]
+  (case reason
+    :my-turn-start
+    ["   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"]
+
+    ;; The seat OWNS the un-passed pass at an active run window (my-run-window?
+    ;; = run-window-owner names us at approach-ice / movement). The run cannot
+    ;; advance until we send it, so another `wait` returns here unchanged — the
+    ;; precise trap this guidance exists to break.
+    :my-run-window
+    ["   👉 The run is stopped on YOU: you owe the pass at this run window."
+     "      Act — `prompt` shows the window; the verb is usually `continue`"
+     "      (Corp at an ICE approach: `continue --rez <ice>` to rez first)."
+     "      Another `wait` cannot advance it, and an empty game log here means the"
+     "      opponent is already waiting on you."]
+
+    :encounter-decision
+    ;; NOT jack-out: it is movement-window only, so at an encounter it is both
+    ;; illegal and a subroutine-skip. `jack-out` refuses here with the same steer.
+    ["   👉 ICE encounter with unbroken subs: `continue` to see options, then break / tank"]
+
+    :game-over
+    (let [winner (get-in state [:game-state :winner])]
+      [(format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."
+               (if winner (str " — " (clojure.string/capitalize (name winner)) " wins") ""))])
+
+    :game-gone
+    ["   🏚️  The server closed this game's lobby — the game is GONE, not paused. Stop acting; `game-over-status` will confirm (GAME-GONE)."]
+
+    []))
+
 (defn wait-for-relevant-diff
   "Block until something we care about happens, then return.
 
@@ -1841,8 +1923,8 @@
          (when (:verbose opts)
            (println (format "⚡ Cursor advanced (%d → %d), %s — returning immediately"
                            since-cursor current-cursor (name since-reason)))
-           (when (= since-reason :my-turn-start)
-             (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)")))
+           (doseq [line (wake-reason-guidance-lines since-reason current-state)]
+             (println line)))
          {:status :already-advanced
           :reason since-reason
           :cursor current-cursor
@@ -1887,19 +1969,8 @@
                  (do
                    (when (:verbose opts)
                      (println (format "⚡ Woke up: %s" (name reason)))
-                     (when (= reason :my-turn-start)
-                       (println "   👉 Turn boundary: call `start-turn` before acting (0 clicks until you do)"))
-                     (when (= reason :encounter-decision)
-                       ;; NOT jack-out: it is movement-window only, so at an
-                       ;; encounter it is both illegal and a subroutine-skip.
-                       ;; `jack-out` refuses here with the same steer.
-                       (println "   👉 ICE encounter with unbroken subs: `continue` to see options, then break / tank"))
-                     (when (= reason :game-over)
-                       (let [winner (get-in current-state [:game-state :winner])]
-                         (println (format "   🏁 Game over%s — stop acting; call `game-over-status` for the result, then tear down."
-                                          (if winner (str " — " (clojure.string/capitalize (name winner)) " wins") "")))))
-                     (when (= reason :game-gone)
-                       (println "   🏚️  The server closed this game's lobby — the game is GONE, not paused. Stop acting; `game-over-status` will confirm (GAME-GONE)."))
+                     (doseq [line (wake-reason-guidance-lines reason current-state)]
+                       (println line))
                      (println "")
                      (println "📜 Game log while you were waiting:")
                      (if (seq entries-since-start)

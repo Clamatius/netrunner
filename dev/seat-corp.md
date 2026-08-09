@@ -69,6 +69,12 @@ hand + recent log + cursor in ONE call):
    Do this every turn before acting. A `wait` at a turn boundary wakes with reason
    `my-turn-start` (and prints a 👉 start-turn reminder) — that means start your
    turn, it is NOT a stall. Reason `my-turn` (with clicks) means act now.
+   Reason `my-run-window` means **a run is stopped on YOU**: you owe the
+   `continue` at the current run window. It fires on every run. At an ICE
+   *approach* that continue is also your rez window (`continue --rez <ice>` to
+   rez first, `--no-rez` to decline); at movement there is nothing to rez, just
+   pass. Another `wait` cannot advance it, and an empty game log under it means
+   the Runner is already waiting on you — do not read it as nothing-happened.
 1. **See state:** `./dev/send_command corp snapshot`
    **Don't guess what a card does — look it up:** `card-text "<name>"` gives any
    card's type/cost/text; `abilities "<name>"` lists an installed card's numbered
