@@ -790,6 +790,25 @@
         (core/show-turn-indicator)
         (core/with-cursor {:status :success})))))
 
+(defn- arm-for
+  "Build a deferred auto-end arm for CLIENT-STATE.
+
+   Pinned to (gameid, turn, side) so a stale arm expires instead of firing an
+   end-turn into somebody else's turn, plus a unique :token so that two arms for
+   the SAME turn are never `=` — that token is what makes claim-deferred-arm!
+   exclusive rather than ABA-vulnerable."
+  [client-state side]
+  {:turn (get-in client-state [:game-state :turn])
+   :side side
+   :gameid (:gameid client-state)
+   :token (str (java.util.UUID/randomUUID))})
+
+(defn- opponent-label
+  "Human name of the other seat, for messages that must say WHO owes a decision.
+   A message that only says 'a prompt is active' is what made #114 unreadable."
+  [side]
+  (if (= (keyword side) :corp) "Runner" "Corp"))
+
 (defn check-auto-end-turn!
   "Proactively check if turn should auto-end after an action.
    Called automatically after clicks-consuming actions.
@@ -860,6 +879,33 @@
         (println "💡 Review agendas and score if able, then manually end turn")
         (flush))
 
+      ;; #114: the prompt is the OPPONENT's decision, not ours. A last click spent
+      ;; on a card that hands the other seat a choice (Public Trail, tag punishment)
+      ;; leaves us holding a :waiting pseudo-prompt with NO choices. The old code
+      ;; lumped it in with real prompts and told us to `choose` — advice with no
+      ;; referent, which sent the seat hunting and then into a wait loop.
+      ;;
+      ;; We still don't end the turn here: board.cljs' button-pane renders the
+      ;; prompt div instead of basic-actions whenever a prompt is up, so a human
+      ;; Corp in this spot has no End Turn button either. Instead ARM the re-check
+      ;; — resume-deferred-auto-end! fires it off the diff that clears the prompt.
+      ;; Without that arm the turn is orphaned at 0 clicks forever (Luna-vs-Luna
+      ;; d840fc14 turn 10: both seats deadlocked until an umpire intervened).
+      (and (= clicks 0)
+           prompt
+           (state/waiting-prompt-type? (:prompt-type prompt))
+           (not already-ended?))
+      (do
+        (swap! state/client-state assoc :auto-end-deferred (arm-for client-state side))
+        (println "")
+        (println (format "⏸️  Turn not ended yet — the %s owes a decision (you are at 0 clicks)."
+                         (opponent-label side)))
+        (println (format "   Prompt: %s" (:msg prompt)))
+        (println "   Nothing for you to do: you have no choices in this prompt.")
+        (println "   Your turn will end automatically as soon as they resolve it.")
+        (flush)
+        (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
+
       ;; Has prompt blocking - notify user
       (and (= clicks 0)
            prompt
@@ -912,6 +958,92 @@
           (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
         (end-turn!)))))
+
+(defn- claim-deferred-arm!
+  "Atomically take ARMED off the client state. Returns true for the ONE caller
+   that actually removed it, false for everyone else.
+
+   This is the duplicate-end-turn interlock, and it has to be a claim rather than
+   a check-then-clear. Diffs arrive in bursts and each armed one spawns a resume;
+   two of them can read the same arm before either clears it, and both would then
+   pass every downstream guard (the already-ended? log line has not come back yet)
+   and send end-turn — which this codebase treats as unrecoverable engine
+   corruption. Only the winner of this claim may proceed.
+
+   Comparing against ARMED (rather than a blind dissoc) also stops a late thread
+   from deleting a NEWER arm belonging to a later turn, which would silently
+   re-open the very deadlock this fixes. Both failure modes were guest-panel
+   CRITICALs on the first cut.
+
+   The comparison relies on every arm carrying a unique :token — see arm-for.
+   Without it the claim has an ABA hole: (gameid, turn, side) can be re-armed
+   identically on the same turn (a card that hands the opponent two decisions in
+   a row), so a second caller could match the re-armed value and win a claim the
+   first caller had already taken."
+  [armed]
+  (let [[old _new] (swap-vals! state/client-state
+                               (fn [s] (if (= (:auto-end-deferred s) armed)
+                                         (dissoc s :auto-end-deferred)
+                                         s)))]
+    (= (:auto-end-deferred old) armed)))
+
+(defn resume-deferred-auto-end!
+  "#114 second half: re-run the auto-end check once the OPPONENT's decision clears.
+
+   check-auto-end-turn! arms `:auto-end-deferred` when it declines to end over a
+   :waiting pseudo-prompt. Nothing else re-evaluates that turn — maybe-auto-end-
+   turn-after-prompt! only fires for the side that resolved a prompt, and the side
+   that resolved this one is the opponent. So the orphaned turn needs a hook on
+   incoming state: this is called from the :game/diff and :game/resync handlers.
+
+   Safe to call on every state update: no arm means no work. The arm is pinned to
+   the (gameid, turn, side) it was created for, so a stale one expires instead of
+   firing an end-turn into somebody else's turn — the one unrecoverable mistake at
+   this boundary (see end-turn!'s off-turn guard).
+
+   The end-turn is gated on WINNING claim-deferred-arm!, not merely on having
+   seen an arm — see that fn for why a check-then-clear is not enough."
+  []
+  ;; Read the arm fresh: never act on a value captured before we could have been
+  ;; descheduled.
+  (when-let [armed (:auto-end-deferred @state/client-state)]
+    (let [client-state @state/client-state
+          side (keyword (:side client-state))
+          gameid (:gameid client-state)
+          turn (get-in client-state [:game-state :turn])
+          active-player (get-in client-state [:game-state :active-player])
+          my-turn? (boolean (and active-player
+                                 side
+                                 (= (str/lower-case (name side))
+                                    (str/lower-case active-player))))
+          prompt (get-in client-state [:game-state side :prompt-state])
+          still-waiting? (boolean (and prompt
+                                       (state/waiting-prompt-type? (:prompt-type prompt))))]
+      (cond
+        ;; Stale: the world moved on (different game, turn advanced, seat
+        ;; changed, or it is no longer our turn). Drop the arm — never act on it.
+        ;; The gameid pin matters because the arm now survives clear-game-state!:
+        ;; turn numbers repeat across games, so (turn, side) alone would let an
+        ;; arm from a dead game fire into a fresh one.
+        (or (not= (:side armed) side)
+            (not= (:turn armed) turn)
+            (not= (:gameid armed) gameid)
+            (not my-turn?))
+        (do (claim-deferred-arm! armed)
+            nil)
+
+        ;; They haven't decided yet. Stay armed; most diffs in this window are
+        ;; the opponent thinking out loud.
+        still-waiting?
+        nil
+
+        ;; The block cleared. Only the thread that CLAIMS the arm may end the
+        ;; turn; the losers of a concurrent burst fall out here having done
+        ;; nothing. The winner then lets check-auto-end-turn! re-apply every
+        ;; other guard (scorable agendas, paid window, already-ended) afresh.
+        :else
+        (when (claim-deferred-arm! armed)
+          (check-auto-end-turn!))))))
 
 (defn smart-end-turn!
   "Smart end-turn that checks if it's safe to end turn automatically.
@@ -1011,6 +1143,20 @@
         (println "⚠️  Cannot auto-end: you still have clicks")
         (println (format "   %d click(s) remaining - use them or end-turn --force" clicks))
         (core/with-cursor {:status :clicks-remaining :clicks clicks}))
+
+      ;; #114: opponent-owed prompt. "Resolve the prompt first" is false here —
+      ;; there is nothing we can resolve. Arm the deferred re-check (a seat that
+      ;; reaches this by typing end-turn explicitly, e.g. after a reconnect that
+      ;; skipped the automatic hook, must still get the resume) and say who we
+      ;; are actually waiting on.
+      (and has-prompt? (state/waiting-prompt-type? (:prompt-type prompt)))
+      (do
+        (swap! state/client-state assoc :auto-end-deferred (arm-for client-state side))
+        (println (format "⏸️  Cannot end yet — the %s owes a decision." (opponent-label side)))
+        (println (format "   Prompt: %s" (:msg prompt)))
+        (println "   You have no choices here. The turn ends automatically once they resolve it;")
+        (println "   do NOT re-send end-turn.")
+        (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
 
       ;; Pause: active prompt (discard, choices, etc.)
       has-prompt?

@@ -8,7 +8,8 @@
   (:require [clojure.test :refer :all]
             [test-helpers :refer [mock-client-state with-mock-state mock-websocket-send!]]
             [ai-websocket-client-v2 :as ws]
-            [ai-state :as state]))
+            [ai-state :as state]
+            [ai-basic-actions]))
 
 (deftest test-game-error-triggers-resync
   (testing "receiving :game/error requests a full resync for the current game"
@@ -93,3 +94,50 @@
                           :data {:gameid "00000000-0000-0000-0000-000000000002"}})
       (is (not (state/lobby-gone?))
           "being seated in a lobby again must retract the gone verdict"))))
+
+;; ============================================================================
+;; #114: the deferred auto-end resume must be ON the live state-update path
+;; ============================================================================
+;; The resume logic itself is unit-tested in ai-basic-actions-test. What that
+;; can't show is whether anything ever CALLS it in a real game — and a resume
+;; nobody calls leaves the turn orphaned exactly as before. These pin the two
+;; message types that carry new state to a seat sitting at 0 clicks behind an
+;; opponent-owed decision.
+
+(defn- await-resume-call
+  "Run BODY and return true if the deferred resume fired within 2s.
+   The hook runs on a future (the diff handler is the websocket receive thread
+   and end-turn! sleeps a full second), so this can't be a bare assertion."
+  [body-fn]
+  (let [called (promise)]
+    (with-redefs [ai-basic-actions/resume-deferred-auto-end! (fn [] (deliver called true))]
+      (body-fn)
+      (= true (deref called 2000 :timeout)))))
+
+(deftest test-game-diff-fires-deferred-auto-end-resume
+  (testing "#114: an incoming diff re-checks an armed turn"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :auto-end-deferred {:turn 10 :side :corp})
+      (let [gameid (:gameid @state/client-state)]
+        (is (await-resume-call
+              #(ws/handle-message {:type :game/diff
+                                   :data {:gameid gameid :diff [{} {}]}}))
+            "the diff that clears the opponent's prompt is the ONLY event that can end this turn")))))
+
+(deftest test-game-resync-fires-deferred-auto-end-resume
+  (testing "#114: a resync counts too — the arm survives a reconnect"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :auto-end-deferred {:turn 10 :side :corp})
+      (is (await-resume-call
+            #(ws/handle-message {:type :game/resync
+                                 :data {:turn 10 :active-player "corp"}}))
+          "otherwise a seat that reconnected waits for a diff the game may never send"))))
+
+(deftest test-game-diff-does-not-fire-resume-when-unarmed
+  (testing "#114: no arm, no thread — diffs arrive constantly all game"
+    (with-mock-state (mock-client-state :side "corp")
+      (let [gameid (:gameid @state/client-state)]
+        (is (not (await-resume-call
+                   #(ws/handle-message {:type :game/diff
+                                        :data {:gameid gameid :diff [{} {}]}})))
+            "unarmed clients must not spawn a resume on every diff")))))

@@ -881,7 +881,16 @@
    Call this BEFORE requesting a resync to ensure clean state."
   []
   (let [preserved-keys [:connected :socket :uid :session-token :username :csrf-token
-                        :client-id :side :gameid :spectator :spectator-perspective]]
+                        :client-id :side :gameid :spectator :spectator-perspective
+                        ;; #114: the deferred auto-end arm records that OUR turn is
+                        ;; orphaned at 0 clicks behind an opponent-owed decision.
+                        ;; Dropping it here made the resync hook dead on the only
+                        ;; path that actually runs it (guest-panel CRITICAL #3):
+                        ;; the seat came back, the arm was gone, and the turn stayed
+                        ;; orphaned with no further diff coming. It is safe to keep:
+                        ;; the arm is pinned to (gameid, turn, side) and re-validated
+                        ;; against live state before it can fire.
+                        :auto-end-deferred]]
     ;; Clear game-specific state
     (swap! client-state
            (fn [s]

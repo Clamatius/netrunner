@@ -17,6 +17,29 @@
 
 (declare ensure-connected! send-message!)
 
+;; #114: the deferred auto-end resume lives in ai-basic-actions, which requires
+;; THIS namespace — so it can only be reached by late var lookup (same pattern as
+;; ai-prompts' maybe-auto-end-turn-after-prompt!). Held in a delay so the lookup
+;; happens once, at the first diff, long after both namespaces have loaded.
+;; requiring-resolve returns the Var, so calls still see with-redefs in tests.
+(def ^:private resume-deferred-auto-end-var
+  (delay (requiring-resolve 'ai-basic-actions/resume-deferred-auto-end!)))
+
+(defn- resume-deferred-auto-end-async!
+  "Fire the #114 deferred auto-end check off an incoming diff, if one is armed.
+
+   Off-thread deliberately: this runs on the websocket RECEIVE thread, and
+   end-turn! sleeps a full standard-delay (1s) before reading state back. Doing
+   that inline would stall every message behind it — including the diff that
+   confirms the end-turn we just sent."
+  []
+  (when (:auto-end-deferred @state/client-state)
+    (future
+      (try
+        (@resume-deferred-auto-end-var)
+        (catch Throwable t
+          (debug/debug "WARN" (str "deferred auto-end resume failed: " t)))))))
+
 ;; ============================================================================
 ;; Action Synchronization
 ;; ============================================================================
@@ -150,6 +173,9 @@
           (hud/write-game-log-to-hud 30)
           ;; Bump cursor for wait synchronization
           (state/bump-cursor!)
+          ;; #114: if our turn is orphaned behind an opponent-owed decision, this
+          ;; is the only event that can tell us it cleared.
+          (resume-deferred-auto-end-async!)
           (println "   ✓ Diff applied successfully"))
         ;; Diff doesn't match our game - we might be stale
         (do
@@ -163,7 +189,12 @@
       (println "🔄 Game resync")
       (state/set-full-state! state)
       ;; Bump cursor for wait synchronization
-      (state/bump-cursor!))
+      (state/bump-cursor!)
+      ;; #114: the arm lives in the client atom, so it survives a reconnect. A
+      ;; resync can be the state update that reveals the block cleared, and if we
+      ;; only listened for diffs there might not be another one — the game would
+      ;; be waiting on the very end-turn we're sitting on.
+      (resume-deferred-auto-end-async!))
 
     :game/error
     (do
