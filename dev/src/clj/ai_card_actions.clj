@@ -340,6 +340,192 @@
       (flush)
       {:status :error :reason (str "Card not found: " card-name)})))
 
+(defn- break-ability?
+  "Does this ability's label read as a subroutine-break?
+
+   Used ONLY to pick which hint to print after the engine has already ruled the
+   ability unplayable — never to decide legality itself. The engine's own
+   `:playable` flag is the authority (see unplayable-ability-error), so a false
+   positive here costs a slightly-off suggestion, not a wrong verdict.
+
+   `:dynamic :auto-pump-and-break` is the encounter-only compound ability the
+   engine SYNTHESISES during an encounter; the plain 'Break N ... subroutine'
+   label is the printed one, which is what a seat reaches for at approach."
+  [ability]
+  (boolean
+    (or (= :auto-pump-and-break (:dynamic ability))
+        (when-let [label (:label ability)]
+          (re-find #"(?i)\bbreak\b.*\bsubroutine" label)))))
+
+(defn- unplayable-ability-error
+  "Explain an ability the engine has marked NOT playable, and DON'T send it.
+
+   Why this gate exists (#116). `use-ability` used to send unconditionally and
+   then infer failure from the absence of a log entry, reporting
+   `Ability not confirmed in game log (timeout)`. That sentence describes a
+   HARNESS fault — a lost message, a slow server, a desync — and invites a retry.
+   The actual condition is usually a rules one, and retrying an illegal ability
+   is the duplicate-send pattern that mints phantom prompts (#75/#77).
+
+   The engine already tells us. `game.core.diffs/ability-playable?` runs
+   can-pay? + can-trigger? (which for a break ability includes the encounter
+   requirement) and assoc's `:playable true` only when the ability is legal
+   RIGHT NOW; the summary reaches us over the wire on every card. board.cljs
+   renders an ability without it as `[:li.disabled label]` — no click handler at
+   all — so the human UI physically cannot send what we were sending. Mirroring
+   that enable condition is the same lesson as [[board-cljs-is-the-wire-spec]]:
+   the UI is the rules layer, and anything its buttons refuse to send, we must
+   refuse too.
+
+   Verified against the engine (game.ai-ability-legality-test): a Corroder at
+   `approach-ice` reports NO :playable on 'Break 1 Barrier subroutine' while
+   'Add 1 strength' keeps it. So this is per-ability, not per-phase — a blanket
+   'nothing works at approach' would wrongly block the pump."
+  [card-name ability-index ability]
+  (let [run (get-in @state/client-state [:game-state :run])
+        phase (:phase run)
+        encountering? (= "encounter-ice" phase)
+        label (:label ability)
+        breaking? (and run (break-ability? ability) (not encountering?))
+        ;; Only at APPROACH is the encounter still ahead of us. The other
+        ;; non-encounter phases are real and reachable — the engine's run ladder
+        ;; is approach-ice / encounter-ice / movement / pass-ice / success — and
+        ;; at movement or success the ICE is already behind the Runner, so
+        ;; "continue to enter the encounter" would push them FURTHER from the
+        ;; recovery. Guest-panel MAJOR: the first cut printed it at every
+        ;; non-encounter phase. Guidance text that asserts engine behaviour is
+        ;; code, and this project has been bitten by exactly this before (#115).
+        encounter-ahead? (and breaking? (= "approach-ice" phase))]
+    (println (format "❌ %s ability %d%s is not usable right now — NOT sent."
+                     card-name ability-index
+                     (if label (str " (\"" label "\")") "")))
+    (println "   The game reports this ability as unavailable in the current state;")
+    (println "   this is a rules/timing condition, not a lost message — retrying as-is will fail again.")
+    (cond
+      encounter-ahead?
+      (do
+        (println (format "   You are at run phase '%s' — you have not reached the ICE yet." phase))
+        (println "   → Subroutines can only be broken during the ENCOUNTER.")
+        (println "     Use 'continue' to enter the encounter, then retry this ability."))
+
+      breaking?
+      (do
+        (println (format "   You are at run phase '%s', not encountering an ICE." phase))
+        (println "   → Subroutines can only be broken during an ENCOUNTER.")
+        (println (if (= "success" phase)
+                   "     This run has passed the ICE — there is nothing left to break."
+                   "     'board' / 'status' to see where in the run you are.")))
+
+      :else
+      (do
+        (println "   Common causes: not enough credits, once-per-turn already used,")
+        (println "   a condition on the card that isn't met, or the wrong game phase.")
+        (when run
+          (println (format "   (You are in a run, phase '%s'.)" phase)))
+        ;; Real command spellings — `send_command` has card-text and abilities;
+        ;; there is no `show-card`. (Guest-panel MINOR, and the same class as the
+        ;; line above: an invented command name reads as authoritative.)
+        (println (format "   → 'abilities \"%s\"' for the indexed menu, 'card-text \"%s\"' for the card,"
+                         card-name card-name))
+        (println "     or 'list-playables' for what IS usable right now.")))
+    (flush)
+    {:status :error
+     :reason (if breaking?
+               (format "Ability not legal at run phase %s (subroutines break during the encounter)" phase)
+               "Ability not currently playable (engine reports it unavailable)")
+     :card-name card-name
+     :unplayable true}))
+
+(def ^:private playable-settle-ms
+  "How long to let an in-flight diff land before trusting a NEGATIVE :playable.
+
+   Our flag is a CACHED negative — whatever the last applied diff said. board.cljs
+   disables its button off the same cached field, so the gate is no staler than
+   the human UI; but a human re-reads a greyed button while a seat treats a hard
+   error as final. The dangerous window is `continue` immediately followed by
+   `use-ability`: if the encounter diff hasn't applied, the pre-send gate would
+   refuse an action that is about to be legal (guest-panel CRITICAL).
+
+   Polling costs nothing in the case the gate exists for — a genuinely illegal
+   ability never gains the flag, so we always pay the full wait and then refuse.
+   It is still an order of magnitude under the 3s log timeout it replaces."
+  600)
+
+(defn- settle-ability
+  "Re-read the ability at INDEX, giving an in-flight diff up to
+   `playable-settle-ms` to make it playable. Returns [abilities ability] as of
+   the freshest read. `get-abilities` re-looks-up the card each poll, so a diff
+   that replaces the whole card map is picked up too.
+
+   Returns immediately once the ability is playable; only a refusal pays the wait."
+  [get-abilities ability-index]
+  (let [deadline (+ (System/currentTimeMillis) playable-settle-ms)]
+    (loop []
+      (let [abilities (get-abilities)
+            ability (when (and abilities (< ability-index (count abilities)))
+                      (nth abilities ability-index))]
+        (if (or (:playable ability)
+                (>= (System/currentTimeMillis) deadline))
+          [abilities ability]
+          (do (Thread/sleep core/polling-delay)
+              (recur)))))))
+
+(defn- ability-blocked
+  "Return an error map when the request can be refused BEFORE sending, else nil.
+
+   `unplayable-ability-error` is shared with `use-runner-ability!`, which does
+   the same two checks in its own `cond`. Both senders must agree: this codebase
+   keeps paying for per-sender copies of a shared rule (#75/#77 three
+   send-continue! copies, #113 the sender the CLI never calls, #115 the inlined
+   phase set).
+
+   Two refusable conditions, both knowable from state we already hold:
+   - the index addresses no ability (the seat guessed, or is reaching for the
+     encounter-only dynamic 'Fully break X' that the engine has not synthesised
+     yet — it appears in the list ONLY during an encounter);
+   - the ability exists but the engine has not marked it :playable.
+
+   Both are re-checked against settled state first (see `settle-ability`) so an
+   unapplied diff can't produce a false refusal. With no abilities vector at all
+   we know nothing, so we send and let the existing verification path answer."
+  [card-name ability-index get-abilities]
+  (let [[abilities ability] (settle-ability get-abilities ability-index)]
+   (cond
+    (and (seq abilities) (>= ability-index (count abilities)))
+    (do
+      (println (format "❌ %s has no ability %d — it has %d (0-%d). NOT sent."
+                       card-name ability-index (count abilities) (dec (count abilities))))
+      (doseq [[i a] (map-indexed vector abilities)]
+        (println (format "     %d. %s%s" i (or (:label a) "?")
+                         (if (:playable a) "" "   [not usable right now]"))))
+      (println "   Note: a breaker's 'Fully break <ICE>' ability only exists DURING an encounter.")
+      (flush)
+      {:status :error
+       :reason (format "No ability %d on %s (has %d)" ability-index card-name (count abilities))
+       :card-name card-name})
+
+    (and ability (not (:playable ability)))
+    (unplayable-ability-error card-name ability-index ability))))
+
+(defn- rules-explanation-after-timeout
+  "When verification timed out, look at state as it stands NOW and replace the
+   timeout wording if the current state explains the failure as a rules one.
+
+   The pre-send gate can't catch everything (#116, guest-panel MAJOR): the
+   reverse of the stale-negative race is a stale POSITIVE. If a `continue` moved
+   the server out of the encounter but that diff hadn't applied, the ability
+   still read :playable, we sent it, the engine refused — and the diff that
+   arrives moments later plainly shows why. The issue asked for exactly this:
+   'before falling through to the timeout path, check whether the ability is
+   legal in the current run phase.' Returns nil when the state offers no
+   explanation, so a genuine harness fault still reports as one."
+  [card-name ability-index get-abilities]
+  (let [abilities (get-abilities)
+        ability (when (and abilities (< ability-index (count abilities)))
+                  (nth abilities ability-index))]
+    (when (and abilities (not (:playable ability)))
+      (unplayable-ability-error card-name ability-index ability))))
+
 (defn use-ability!
   "Use an installed card's ability. Returns status map:
    - {:status :success} - ability fired
@@ -358,6 +544,14 @@
     (if card
       (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
+            ;; Re-looks-up the card each call, so the legality gate and the
+            ;; post-timeout explanation both read LIVE state rather than the
+            ;; snapshot this fn opened with (#116, guest-panel CRITICAL).
+            get-abilities (fn []
+                            (:abilities
+                              (if (core/side= "Corp" side)
+                                (core/find-installed-corp-card card-name)
+                                (core/find-installed-card card-name))))
             ;; Check if this ability is dynamic (e.g., auto-pump, auto-pump-and-break)
             abilities (:abilities card)
             ability (when (and abilities (< ability-index (count abilities)))
@@ -368,6 +562,9 @@
             ;; response arrives before we start polling (fixes false timeouts)
             pre-log-size (core/get-log-size)
             pre-prompt (state/get-prompt)]
+        (if-let [blocked (ability-blocked card-name ability-index get-abilities)]
+          blocked
+          (do
         ;; Send the ability command
         (if dynamic-type
           ;; Use dynamic-ability command for abilities with :dynamic field
@@ -403,9 +600,15 @@
             (println (str "⏳ Ability triggered prompt: " card-name " - "
                           (or ability-label (str "#" ability-index))))
 
+            ;; #116: prefer a rules explanation from CURRENT state over the
+            ;; timeout wording, which describes only how we noticed.
             :error
-            (println (str "❌ Ability failed: " card-name " - " (:reason result))))
-          result))
+            nil)
+          (if (= :error (:status result))
+            (or (rules-explanation-after-timeout card-name ability-index get-abilities)
+                (do (println (str "❌ Ability failed: " card-name " - " (:reason result)))
+                    result))
+            result)))))
       ;; Own-side lookup missed. From the Runner seat the card may be a Corp
       ;; card whose printed ability is Runner-usable (bioroid click-to-break,
       ;; issue #95) — route to the runner-ability command instead of
@@ -437,7 +640,9 @@
   (let [client-state @state/client-state
         card (core/find-installed-corp-card card-name)
         runner-abilities (:runner-abilities card)
-        ability (when card (nth runner-abilities ability-index nil))]
+        ability (when card (nth runner-abilities ability-index nil))
+        ;; Live re-read, same as use-ability! — see settle-ability.
+        get-abilities (fn [] (:runner-abilities (core/find-installed-corp-card card-name)))]
     (cond
       (not card)
       (ambiguous-or-missing-error card-name)
@@ -453,7 +658,14 @@
         (flush)
         {:status :error :reason (str "No runner-ability " ability-index " on " card-name)})
 
+      ;; #116: same legality gate as use-ability!. A bioroid's click-to-break is
+      ;; exactly as encounter-bound as a breaker's, and this sender had the same
+      ;; send-then-blame-the-log shape. Goes through the SHARED helper (which
+      ;; settles in-flight diffs first) rather than testing :playable inline, so
+      ;; the two senders can't drift — the N-senders tax this repo keeps paying.
       :else
+      (if-let [blocked (ability-blocked card-name ability-index get-abilities)]
+        blocked
       (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
             ;; Capture state BEFORE sending (same race guard as use-ability!)
@@ -474,10 +686,15 @@
             :waiting-input
             (println (str "⏳ Runner ability triggered prompt: " card-name " - " (:label ability)))
 
+            ;; #116: same post-timeout re-diagnosis as use-ability!.
             :error
-            (println (str "❌ Runner ability failed: " card-name " - " (:reason result))))
+            nil)
           (flush)
-          result)))))
+          (if (= :error (:status result))
+            (or (rules-explanation-after-timeout card-name ability-index get-abilities)
+                (do (println (str "❌ Runner ability failed: " card-name " - " (:reason result)))
+                    result))
+            result)))))))
 
 (defn trash-installed!
   "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)

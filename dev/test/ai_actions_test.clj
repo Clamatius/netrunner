@@ -326,8 +326,14 @@
    :subroutines [{:label "Install ice from HQ" :broken false}
                  {:label "End the run" :broken false}
                  {:label "End the run" :broken false}]
+   ;; :playable is what the wire actually carries (game.core.diffs/ability-keys)
+   ;; and it is TRUE here: this fixture is mid-encounter, where a bioroid's
+   ;; click-break is legal. The fixture omitted it, which was fine while nothing
+   ;; read it and wrong the moment #116's gate did — the same
+   ;; fixture-omits-the-field-that-matters trap as #31's missing :log.
    :runner-abilities [{:label "Lose [click]: Break 1 subroutine"
-                       :cost-label "Lose [click]"}]})
+                       :cost-label "Lose [click]"
+                       :playable true}]})
 
 (defn- encounter-state-vs-bran []
   (mock-client-state
@@ -548,3 +554,264 @@
   ;; Run from main
   (-main)
   )
+
+;; ============================================================================
+;; #116 — a phase-legality refusal must not be reported as a log timeout
+;; ============================================================================
+;; The Luna Runner seat ran `use-ability "Mayfly" 0` at the approach window and
+;; got `Ability not confirmed in game log (timeout).` That sentence describes a
+;; HARNESS fault — lost message, slow server, desync — and the correct response
+;; to it is a retry. The actual condition was a rules one, whose correct response
+;; is `continue` first. The seat guessed right; retrying an illegal ability at
+;; the wrong phase is the duplicate-send pattern that mints phantom prompts
+;; (#75/#77).
+;;
+;; The engine already publishes the verdict: game.core.diffs/ability-playable?
+;; assoc's :playable only when the ability is legal right now, and board.cljs
+;; renders an ability without it as [:li.disabled] — no click handler, so the
+;; human UI cannot send what we were sending. Pinned against the real engine in
+;; game.ai-ability-legality-test: at approach-ice a Corroder's break ability has
+;; NO :playable while its pump ability keeps it.
+
+(def ^:private corroder-at-approach
+  {:cid 90 :title "Corroder" :type "Program" :subtypes ["Icebreaker" "Fracter"]
+   :zone [:program]
+   :abilities [{:label "Break 1 Barrier subroutine" :cost-label "1 [Credits]"}
+               {:label "Add 1 strength" :cost-label "1 [Credits]" :playable true}]})
+
+(defn- approach-state
+  "Runner mid-run at the APPROACH window (not encountering), rig holding a
+   breaker whose printed break ability the engine has not marked playable."
+  []
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:credit 5 :click 2
+                         :rig {:program [corroder-at-approach]
+                               :hardware [] :resource []}}
+                :corp {:servers {:hq {:ices [] :content []}}}
+                :run {:position 1 :server ["hq"] :phase "approach-ice"}
+                :active-player "runner"}))
+
+(deftest use-ability-refuses-unplayable-break-instead-of-blaming-the-log
+  (testing "#116: nothing is sent, so the illegal action can't mint a prompt"
+    (let [sent (atom [])]
+      (with-mock-state (approach-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (ai-card-actions/use-ability! "Corroder" 0)]
+            (is (= :error (:status result)))
+            (is (zero? (count @sent))
+                "an ability the human UI renders as disabled must not go on the wire"))))))
+
+  (testing "#116: the message names the CAUSE, not the detection mechanism"
+    (let [out (with-out-str
+                (with-mock-state (approach-state)
+                  (with-redefs [ws/send-message! (fn [& _] nil)]
+                    (ai-card-actions/use-ability! "Corroder" 0))))]
+      (is (not (str/includes? out "timeout"))
+          (str "'timeout' invites the retry that mints phantom prompts; got:\n" out))
+      (is (not (str/includes? out "game log"))
+          (str "the log is how we noticed, not why it failed; got:\n" out))
+      (is (str/includes? out "approach-ice")
+          (str "name the phase the seat is actually at; got:\n" out))
+      (is (re-find #"(?i)encounter" out)
+          (str "and the rule: subroutines break during the encounter; got:\n" out))
+      (is (str/includes? out "continue")
+          (str "and the one command that fixes it; got:\n" out))))
+
+  (testing "#116: the SAME card's pump ability still sends — the gate is per-ability"
+    ;; A phase-level 'nothing works at approach' rule would block a legal action.
+    ;; The engine marks this one :playable at approach (pinned in the engine test).
+    (let [sent (atom [])]
+      (with-mock-state (approach-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-ability-in-log (fn [& _] {:status :success})]
+          (let [result (ai-card-actions/use-ability! "Corroder" 1)]
+            (is (= :success (:status result)))
+            (is (= 1 (count @sent))
+                "pumping outside an encounter is legal and must still be sent")))))))
+
+(deftest use-ability-out-of-range-index-names-what-exists
+  (testing "#116: reaching for the encounter-only 'Fully break' index at approach"
+    ;; The dynamic ability is absent from the list until the encounter, so the
+    ;; index is out of range — a different refusal from 'present but unplayable',
+    ;; and previously also reported as a log timeout.
+    (let [sent (atom [])
+          out (with-out-str
+                (with-mock-state (approach-state)
+                  (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+                    (ai-card-actions/use-ability! "Corroder" 2))))]
+      (is (zero? (count @sent)))
+      (is (not (str/includes? out "timeout")) (str "got:\n" out))
+      (is (str/includes? out "Break 1 Barrier subroutine")
+          (str "list what the card actually offers; got:\n" out))
+      (is (str/includes? out "not usable right now")
+          (str "and mark which of those are currently blocked; got:\n" out)))))
+
+(deftest use-runner-ability-shares-the-legality-gate
+  (testing "#116: the bioroid sender refuses the same way — one rule, both senders"
+    ;; N-senders-one-command: #75/#77 (three send-continue! copies), #113, #115.
+    (let [sent (atom [])
+          bran-unplayable (assoc-in bran [:runner-abilities 0 :playable] false)
+          out (with-out-str
+                (with-mock-state
+                  (mock-client-state
+                   :side "runner"
+                   :game-state {:runner {:credit 5 :click 2
+                                         :rig {:program [] :hardware [] :resource []}}
+                                :corp {:servers {:rd {:ices [bran-unplayable] :content []}}}
+                                :run {:position 1 :server ["rd"] :phase "approach-ice"}
+                                :active-player "runner"})
+                  (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+                    (ai-card-actions/use-runner-ability! "Brân 1.0" 0))))]
+      (is (zero? (count @sent))
+          "the click-break is as encounter-bound as a breaker's")
+      (is (not (str/includes? out "timeout")) (str "got:\n" out))
+      (is (str/includes? out "continue")
+          (str "same recovery, same wording; got:\n" out))
+      (is (= 1 (count (re-seq #"NOT sent" out)))
+          (str "the diagnosis prints ONCE, not once per cond probe; got:\n" out)))))
+
+;; ---------------------------------------------------------------------------
+;; #116, guest-panel round: the four ways the first cut was wrong
+;; ---------------------------------------------------------------------------
+
+(defn- run-state-at [phase]
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:credit 5 :click 2
+                         :rig {:program [corroder-at-approach]
+                               :hardware [] :resource []}}
+                :corp {:servers {:hq {:ices [] :content []}}}
+                :run {:position 1 :server ["hq"] :phase phase}
+                :active-player "runner"}))
+
+(deftest use-ability-only-promises-the-encounter-when-it-is-actually-ahead
+  ;; MAJOR: the first cut printed "you have not reached the ICE yet → continue to
+  ;; enter the encounter" at EVERY non-encounter phase. The engine's run ladder is
+  ;; approach-ice / encounter-ice / movement / pass-ice / success; at movement or
+  ;; success the ICE is behind the Runner, so `continue` moves them further from
+  ;; any recovery. Guidance text that asserts engine behaviour is code (#115).
+  (testing "#116: at approach-ice the encounter IS ahead — promise it"
+    (let [out (with-out-str
+                (with-mock-state (run-state-at "approach-ice")
+                  (with-redefs [ws/send-message! (fn [& _] nil)]
+                    (ai-card-actions/use-ability! "Corroder" 0))))]
+      (is (str/includes? out "have not reached the ICE yet") (str "got:\n" out))
+      (is (str/includes? out "continue") (str "got:\n" out))))
+
+  (doseq [phase ["movement" "pass-ice" "success"]]
+    (testing (str "#116: at " phase " the ICE is behind us — do NOT say continue")
+      (let [out (with-out-str
+                  (with-mock-state (run-state-at phase)
+                    (with-redefs [ws/send-message! (fn [& _] nil)]
+                      (ai-card-actions/use-ability! "Corroder" 0))))]
+        (is (not (str/includes? out "have not reached the ICE yet"))
+            (str "false at " phase "; got:\n" out))
+        (is (not (str/includes? out "Use 'continue' to enter the encounter"))
+            (str "continuing cannot make this legal at " phase "; got:\n" out))
+        (is (re-find #"(?i)encounter" out)
+            (str "the rule itself still holds and must be stated; got:\n" out))))))
+
+(deftest use-ability-generic-hint-names-real-commands
+  ;; MINOR, but the exact class this project keeps re-learning: the first cut
+  ;; pointed the seat at `show-card`, which `send_command` does not have. An
+  ;; invented command name reads as authoritative and costs a wasted round trip.
+  (testing "#116: a non-break unplayable ability points at commands that exist"
+    (let [pump-unplayable (assoc-in corroder-at-approach [:abilities 1 :playable] false)
+          out (with-out-str
+                (with-mock-state
+                  (mock-client-state
+                   :side "runner"
+                   :game-state {:runner {:credit 5 :click 2
+                                         :rig {:program [pump-unplayable]
+                                               :hardware [] :resource []}}
+                                :active-player "runner"})
+                  (with-redefs [ws/send-message! (fn [& _] nil)]
+                    (ai-card-actions/use-ability! "Corroder" 1))))]
+      (is (not (str/includes? out "show-card"))
+          (str "no such command; got:\n" out))
+      (is (str/includes? out "abilities")
+          (str "point at the indexed menu; got:\n" out))
+      (is (str/includes? out "card-text")
+          (str "and the real card-lookup command; got:\n" out)))))
+
+(deftest use-ability-lets-an-in-flight-diff-settle-before-refusing
+  ;; CRITICAL: :playable is a CACHED negative. `continue` then `use-ability` can
+  ;; read the pre-encounter snapshot and hard-refuse an action that is about to
+  ;; be legal. board.cljs disables its button off the same cached field, but a
+  ;; human re-reads a greyed button where a seat treats an error as final.
+  (testing "#116: an ability that becomes playable mid-wait is SENT, not refused"
+    (let [sent (atom [])
+          reads (atom 0)
+          ;; The diff lands on the THIRD read. Read 1 is use-ability!'s own card
+          ;; lookup and read 2 is settle's first poll, so the ability only turns
+          ;; playable after settle has had to sleep at least once — otherwise
+          ;; this test passes with a 0ms window and pins nothing. (It did: the
+          ;; first version put the flip at read 2 and survived that mutation.)
+          card-now (fn [_]
+                     (if (< (swap! reads inc) 3)
+                       corroder-at-approach
+                       (assoc-in corroder-at-approach [:abilities 0 :playable] true)))]
+      (with-mock-state (run-state-at "approach-ice")
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/find-installed-card card-now
+                      ai-core/verify-ability-in-log (fn [& _] {:status :success})]
+          (let [result (ai-card-actions/use-ability! "Corroder" 0)]
+            (is (= :success (:status result))
+                "the settle window must not turn a race into a hard refusal")
+            (is (= 1 (count @sent))))))))
+
+  (testing "#116: a genuinely illegal ability still refuses after the wait"
+    (let [sent (atom [])]
+      (with-mock-state (run-state-at "approach-ice")
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (ai-card-actions/use-ability! "Corroder" 0)]
+            (is (= :error (:status result)))
+            (is (zero? (count @sent))
+                "the flag never appears, so we pay the wait and then refuse")))))))
+
+(deftest use-ability-timeout-is-re-explained-from-current-state
+  ;; MAJOR / the issue's literal ask: "before falling through to the timeout
+  ;; path, check whether the ability is legal in the current run phase." The
+  ;; pre-send gate cannot catch the reverse race — a STALE POSITIVE, where the
+  ;; ability still reads :playable, we send, the engine refuses, and the diff
+  ;; explaining why lands while we are polling the log.
+  (testing "#116: a timeout whose cause is visible in current state is re-worded"
+    (let [reads (atom 0)
+          ;; Playable for reads 1-2 (use-ability!'s card lookup, then settle's
+          ;; single poll — settle returns at once when the flag is there) so the
+          ;; pre-send gate PASSES and we actually send. The diff that explains
+          ;; the refusal lands by read 3, which is the post-timeout re-read.
+          ;; Flipping at read 2 instead makes the pre-send gate fire and the
+          ;; assertions below pass without ever reaching the code under test.
+          card-now (fn [_]
+                     (if (< (swap! reads inc) 3)
+                       (assoc-in corroder-at-approach [:abilities 0 :playable] true)
+                       corroder-at-approach))
+          out (with-out-str
+                (with-mock-state (run-state-at "approach-ice")
+                  (with-redefs [ws/send-message! (fn [& _] nil)
+                                ai-core/find-installed-card card-now
+                                ai-core/verify-ability-in-log
+                                (fn [& _] {:status :error
+                                           :reason "Ability not confirmed in game log (timeout)."})]
+                    (ai-card-actions/use-ability! "Corroder" 0))))]
+      (is (not (str/includes? out "timeout"))
+          (str "current state explains it as a rules failure; got:\n" out))
+      (is (re-find #"(?i)encounter" out)
+          (str "and says which rule; got:\n" out))))
+
+  (testing "#116: a timeout with no rules explanation still reports as a timeout"
+    ;; A real harness fault must keep its own wording — this is the branch that
+    ;; stops the re-diagnosis from swallowing genuine desyncs.
+    (let [playable-card (assoc-in corroder-at-approach [:abilities 0 :playable] true)
+          out (with-out-str
+                (with-mock-state (run-state-at "encounter-ice")
+                  (with-redefs [ws/send-message! (fn [& _] nil)
+                                ai-core/find-installed-card (fn [_] playable-card)
+                                ai-core/verify-ability-in-log
+                                (fn [& _] {:status :error
+                                           :reason "Ability not confirmed in game log (timeout)."})]
+                    (ai-card-actions/use-ability! "Corroder" 0))))]
+      (is (str/includes? out "timeout")
+          (str "nothing in state contradicts the send; got:\n" out)))))
