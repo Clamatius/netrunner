@@ -563,12 +563,13 @@
 (defn- normalize-phase
   "Run phase as a plain string. The wire sends strings, the engine and our own
    fixtures use keywords (memory engine-rate-of-change: wire shape is the volatile
-   coupling). Neither shape may be silently read as legal."
+   coupling). Neither shape may be silently read as legal.
+
+   MOVED to ai-core (#116) — the #116 refusal path needed the same coercion, and
+   ai-core cannot require ai-runs. Delegating rather than copying, for the reason
+   #117 exists."
   [phase]
-  (cond
-    (nil? phase) nil
-    (keyword? phase) (name phase)
-    :else (str phase)))
+  (core/normalize-phase phase))
 
 (def ^:private jack-out-phase-alternatives
   "What the seat should do INSTEAD, per phase where jack out is refused. A bare

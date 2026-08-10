@@ -364,48 +364,69 @@
                      (nth abilities ability-index))
             ability-label (when ability (:label ability))
             dynamic-type (:dynamic ability)
+            ;; #116: a break outside a live ENCOUNTER cannot succeed — break-sub's
+            ;; :break-req requires one — so report the rules cause instead of
+            ;; sending and then blaming a timeout on the game log.
+            break-block (when (and ability (core/break-ability? ability))
+                          (core/break-refusal-lines ability (state/get-game-state)))
             ;; Capture state BEFORE sending to avoid race condition where
             ;; response arrives before we start polling (fixes false timeouts)
             pre-log-size (core/get-log-size)
             pre-prompt (state/get-prompt)]
-        ;; Send the ability command
-        (if dynamic-type
-          ;; Use dynamic-ability command for abilities with :dynamic field
-          (ws/send-message! :game/action
-                            {:gameid gameid
-                             :command "dynamic-ability"
-                             :args {:card card-ref
-                                    :dynamic dynamic-type}})
-          ;; Use regular ability command for normal abilities
-          (ws/send-message! :game/action
-                            {:gameid gameid
-                             :command "ability"
-                             :args {:card card-ref
-                                    :ability ability-index}}))
-        ;; Verify the ability fired by checking game log
-        (let [result (core/verify-ability-in-log card-name core/action-timeout
-                                                  {:pre-log-size pre-log-size
-                                                   :pre-prompt pre-prompt})]
-          (case (:status result)
-            :success
-            (do
-              (if ability-label
-                (println (str "⚡ Used ability: " card-name " - " ability-label))
-                (println (str "⚡ Used ability #" ability-index " on " card-name)))
-              ;; Auto-end turn if this was a click ability and no clicks remaining
-              ;; Skip during runs (breaker abilities) and for non-click abilities
-              (let [cost-label (str (:cost-label ability ""))]
-                (when (and (clojure.string/includes? cost-label "[Click]")
-                           (not (some? (get-in @state/client-state [:game-state :run]))))
-                  (basic/check-auto-end-turn!))))
+        (if break-block
+          (do
+            (println (format "❌ Cannot use %s's break ability right now: %s"
+                             card-name (or ability-label (str "#" ability-index))))
+            (doseq [line break-block] (println (str "   " line)))
+            (flush)
+            {:status :error
+             :reason (str "Break ability is not legal at this run phase: "
+                          (first break-block))
+             :card-name card-name})
+          (do
+            ;; Send the ability command
+            (if dynamic-type
+              ;; Use dynamic-ability command for abilities with :dynamic field
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "dynamic-ability"
+                                 :args {:card card-ref
+                                        :dynamic dynamic-type}})
+              ;; Use regular ability command for normal abilities
+              (ws/send-message! :game/action
+                                {:gameid gameid
+                                 :command "ability"
+                                 :args {:card card-ref
+                                        :ability ability-index}}))
+            ;; Verify the ability fired by checking game log
+            (let [result (core/verify-ability-in-log card-name core/action-timeout
+                                                      {:pre-log-size pre-log-size
+                                                       :pre-prompt pre-prompt})]
+              (case (:status result)
+                :success
+                (do
+                  (if ability-label
+                    (println (str "⚡ Used ability: " card-name " - " ability-label))
+                    (println (str "⚡ Used ability #" ability-index " on " card-name)))
+                  ;; Auto-end turn if this was a click ability and no clicks remaining
+                  ;; Skip during runs (breaker abilities) and for non-click abilities
+                  (let [cost-label (str (:cost-label ability ""))]
+                    (when (and (clojure.string/includes? cost-label "[Click]")
+                               (not (some? (get-in @state/client-state [:game-state :run]))))
+                      (basic/check-auto-end-turn!))))
 
-            :waiting-input
-            (println (str "⏳ Ability triggered prompt: " card-name " - "
-                          (or ability-label (str "#" ability-index))))
+                :waiting-input
+                (println (str "⏳ Ability triggered prompt: " card-name " - "
+                              (or ability-label (str "#" ability-index))))
 
-            :error
-            (println (str "❌ Ability failed: " card-name " - " (:reason result))))
-          result))
+                :error
+                (do
+                  (println (str "❌ Ability failed: " card-name " - " (:reason result)))
+                  ;; #116: the timeout wording describes our detection mechanism, not
+                  ;; the cause. When the server already told us the ability isn't
+                  ;; usable, say so — a retry is the wrong response.
+                  (doseq [line (core/ability-failure-lines ability)] (println line))))
+              result))))
       ;; Own-side lookup missed. From the Runner seat the card may be a Corp
       ;; card whose printed ability is Runner-usable (bioroid click-to-break,
       ;; issue #95) — route to the runner-ability command instead of
@@ -437,7 +458,9 @@
   (let [client-state @state/client-state
         card (core/find-installed-corp-card card-name)
         runner-abilities (:runner-abilities card)
-        ability (when card (nth runner-abilities ability-index nil))]
+        ability (when card (nth runner-abilities ability-index nil))
+        break-block (when (core/break-ability? ability)
+                      (core/break-refusal-lines ability (state/get-game-state)))]
     (cond
       (not card)
       (ambiguous-or-missing-error card-name)
@@ -452,6 +475,21 @@
                         " (only bioroids and similar cards do)")))
         (flush)
         {:status :error :reason (str "No runner-ability " ability-index " on " card-name)})
+
+      ;; #116: bioroid click-to-break is `bioroid-break` (game.core.ice), which
+      ;; wraps `break-sub` and adds a `currently-encountering-card` requirement —
+      ;; so it is constrained MORE strictly than an ordinary breaker, not less.
+      ;; I originally withheld this refusal here for lack of evidence; both guest
+      ;; seats independently checked the engine and supplied it.
+      break-block
+      (do
+        (println (format "❌ Cannot use %s's break ability right now: %s"
+                         card-name (:label ability)))
+        (doseq [line break-block] (println (str "   " line)))
+        (flush)
+        {:status :error
+         :reason (str "Break ability is not legal right now: " (first break-block))
+         :card-name card-name})
 
       :else
       (let [gameid (:gameid client-state)
@@ -475,7 +513,11 @@
             (println (str "⏳ Runner ability triggered prompt: " card-name " - " (:label ability)))
 
             :error
-            (println (str "❌ Runner ability failed: " card-name " - " (:reason result))))
+            (do
+              (println (str "❌ Runner ability failed: " card-name " - " (:reason result)))
+              ;; #116: :runner-abilities go through the same core/diffs
+              ;; abilities-summary, so :playable is populated here too.
+              (doseq [line (core/ability-failure-lines ability)] (println line))))
           (flush)
           result)))))
 
