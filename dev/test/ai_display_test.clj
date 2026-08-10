@@ -148,13 +148,20 @@
       (is (= "AWAITING-START turn=5 next-player=runner"
              (str/trim (with-out-str (display/game-over-status)))))))
 
-  (testing "both sides at 0 clicks (no end-turn flag yet) -> AWAITING-START"
+  ;; #117 INVERTED. "Both sides at 0 clicks with no :end-turn flag" is NOT a
+  ;; boundary — it is a turn that has run out of clicks without ending. Calling
+  ;; it AWAITING-START named a next-player who could not act, and a boundary that
+  ;; had not happened; the real game deadlocked behind exactly this line. It now
+  ;; reports as IN-PROGRESS with clicks=0, which is both true and already the
+  ;; same-turn/same-clicks spin signature tooling watches for.
+  (testing "both sides at 0 clicks, no end-turn flag -> IN-PROGRESS, not a boundary (#117)"
     (with-mock-state (mock-client-state
                       :side "corp"
                       :game-state {:active-player "runner" :turn 6
                                    :corp {:click 0} :runner {:click 0}})
-      (is (= "AWAITING-START turn=6 next-player=corp"
-             (str/trim (with-out-str (display/game-over-status)))))))
+      (is (= "IN-PROGRESS turn=6 whose-turn=runner clicks=0"
+             (str/trim (with-out-str (display/game-over-status))))
+          "no owes=end-turn: this seat is the Corp, and the orphaned turn is the Runner's")))
 
   ;; #104: a boundary with our own prompt still open (end-of-turn discard) read
   ;; as a desync to both guest models. The blocker is named as an additive

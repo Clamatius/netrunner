@@ -1397,47 +1397,18 @@
 
 (defn my-turn-to-act?
   "Check if it's our turn to act (need to start-turn or have clicks).
-   Handles Netrunner priority system where active-player doesn't flip until start-turn.
 
-   Wake conditions (any one is sufficient):
-     - I am the active player AND I have clicks remaining
-     - opponent set the :end-turn flag and active-player is still them
-       (engine in transition; my turn is up next)
-     - turn 0, Corp side, 0 clicks (post-mulligan: Corp goes first)
+   MOVED to ai-state (#117) — see there for the wake conditions and why 'both
+   players at 0 clicks' is not one of them. It had to go down a layer because
+   `get-turn-status`, which backs every seat-facing turn surface, lives in
+   ai-state and so could not call it here; it grew its own boundary heuristic
+   instead, and that second copy is what #117 is.
 
-   Crucially NOT a wake condition: 'both players at 0 clicks'. That
-   scenario fires every time the Runner spends their last click on a run
-   (Runner=0, Corp=0, but Runner is still resolving the run). An earlier
-   duplicate predicate had that bug and woke spuriously on every
-   opponent run-transition; this predicate is the authoritative source
-   of truth for the `wait` command (via `relevance-reason`).
-
-   Also NOT a wake condition: the opening-mulligan boundary. While our own prompt
-   is the 'waiting for opponent to keep hand or mulligan' window, start-turn is
-   refused (:opponent-mulligan), so reporting 'your move' here is a lie that
-   returns instantly and repeatedly — #87. The guard is checked FIRST so this
-   predicate agrees with can-start-turn? by construction."
+   Kept as a delegating `defn` (not `(def x state/x)`, which captures the fn
+   VALUE and defeats with-redefs / REPL :reload) so every existing caller and
+   the umpire's `eval` recipe still resolve `ai-core/my-turn-to-act?`."
   [state side]
-  ;; nil-safe on side: in the lobby / pre-game the seat may have no :side yet,
-  ;; and `(name nil)` would NPE (#46). No side => not our turn.
-  (when-let [my-side (keyword side)]
-   (let [active-player (get-in state [:game-state :active-player])
-        my-clicks (get-in state [:game-state my-side :click] 0)
-        end-turn (get-in state [:game-state :end-turn])
-        turn-number (get-in state [:game-state :turn] 0)]
-    (and
-     ;; #87: never claim it's our move while the opponent's opening mulligan is
-     ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
-     (not (opponent-mulligan-pending? state))
-     (or
-      ;; My turn and I have clicks
-      (and (= (name my-side) active-player) (> my-clicks 0))
-      ;; Opponent ended turn, waiting for me to start
-      ;; (active-player = opponent because end-turn was called, I'm next)
-      (and end-turn (not= (name my-side) active-player))
-      ;; Turn 0 with 0 clicks = post-mulligan, Corp needs to start
-      ;; (Corp always goes first)
-      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))))
+  (state/my-turn-to-act? state side))
 
 (defn- turn-awaiting-start?
   "True when it's our turn at a boundary but the turn has NOT been started yet

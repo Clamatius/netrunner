@@ -161,14 +161,38 @@
             prompt (state/get-prompt)
             prompt-type (:prompt-type prompt)
             run-state (get-in gs [:run])
-            runner-clicks (get-in gs [:runner :click])
-            corp-clicks (get-in gs [:corp :click])
-            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
-            next-player (cond
-                         (= turn-num 0) "corp"
-                         (= active-side "corp") "runner"
-                         (= active-side "runner") "corp"
-                         :else "unknown")
+            ;; #117: `status` used to re-derive the boundary here (both sides at
+            ;; 0 clicks => "waiting to start <next>") while printing the engine's
+            ;; :active-player on the Turn line right above it. On an orphaned
+            ;; turn that produced the two contradictory lines in one block —
+            ;; "Turn: 10 - corp" and "🟢 Waiting to start runner turn". One
+            ;; derivation now, shared with prompt / game-over-status / snapshot /
+            ;; diagnose-blocker.
+            ts (state/get-turn-status)
+            ;; At a boundary the wire's :active-player still names the player who
+            ;; just FINISHED; show who is actually up (same flip as `snapshot`).
+            display-side (if (:waiting-to-start? ts) (:next-player ts) active-side)
+            ;; Per-side clicks line. The "(End of Turn)" marker belongs to the
+            ;; ACTIVE side whenever its turn hasn't ended, but the end-turn steer
+            ;; belongs only to the seat that owns that turn — :turn-orphaned? is
+            ;; side-relative, so a Runner reading the CORP section is never
+            ;; offered a command that would end the Corp's turn for it.
+            ;;
+            ;; This used to carry a `(not both-zero-clicks)` term, which made the
+            ;; whole hint unreachable: during your own turn the opponent is at 0
+            ;; clicks too, so "both at 0" is true for every turn that runs out of
+            ;; clicks — i.e. exactly the case the hint was written for (#117).
+            print-clicks-line
+            (fn [side-name clicks]
+              (let [clicks (or clicks 0)]
+                (if (and (= side-name active-side)
+                         (zero? clicks)
+                         (not (:waiting-to-start? ts)))
+                  (do
+                    (println "Clicks:" clicks "(End of Turn)")
+                    (when (:turn-orphaned? ts)
+                      (println "💡 Use 'smart-end-turn' to finish your turn")))
+                  (println "Clicks:" clicks))))
             runner-missing? (and gs (nil? (get-in gs [:runner :user])))
             corp-missing? (and gs (nil? (get-in gs [:corp :user])))]
 
@@ -190,44 +214,28 @@
           ;; Normal game status display
           (do
             (println "📊 GAME STATUS")
-            (println "\nTurn:" turn-num "-" active-side)
+            (println "\nTurn:" turn-num "-" display-side)
 
             ;; Active player / waiting status
-            (cond
+            (if run-state
               ;; During an active run, run-window priority is authoritative. The
               ;; turn-level active-side ('it's the Runner's turn') misleads inside
               ;; a run — the Corp still owns its rez / upgrade sub-steps — so a
               ;; Corp seat at its own rez window would otherwise read 'Waiting for
               ;; runner to act'. (Michael forum [154]: surface waiting-on-X.)
-              run-state
               (println "Status:" (run-status-headline
                                   gs (clojure.string/lower-case (or my-side "runner"))))
-
-              ;; End-turn was called, and it's my side's turn to start
-              (and end-turn (not= my-side active-side))
               (do
-                (println "Status: 🟢 Waiting to start" my-side "turn (use 'start-turn' command)")
-                (println "💡 Use 'start-turn' to begin your turn"))
+                (println "Status:" (:status-emoji ts) (:status-text ts))
+                ;; The next-action hints the old bespoke branches carried.
+                (cond
+                  (and (:waiting-to-start? ts) (:can-act? ts))
+                  (println "💡 Use 'start-turn' to begin your turn")
 
-              ;; End-turn was called, waiting for opponent to start
-              (and end-turn (= my-side active-side))
-              (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to start turn")
-
-              ;; Both players have 0 clicks but end-turn not called yet
-              both-zero-clicks
-              (println "Status: 🟢 Waiting to start" next-player "turn (use 'start-turn' command)")
-
-              ;; Waiting for opponent
-              (not= my-side active-side)
-              (println "Status: ⏳ Waiting for" active-side "to act")
-
-              ;; Waiting prompt
-              (state/waiting-prompt-type? prompt-type)
-              (println "Status: ⏳" (:msg prompt))
-
-              ;; My turn and active
-              :else
-              (println "Status: ✅ Your turn to act"))
+                  (:turn-orphaned? ts)
+                  (do
+                    (println "💡 Use 'smart-end-turn' — you are the active player and the")
+                    (println "   engine's :end-turn flag is not set, so ending is safe here.")))))
 
             ;; Run status
             (when run-state
@@ -269,12 +277,7 @@
                                    (map #(format "%s %d" (:title %) (:credits %))
                                         (:sources hosted)))))
                 (println "Credits:" (state/runner-credits))))
-            (let [clicks runner-clicks]
-              (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
-                (do
-                  (println "Clicks:" clicks "(End of Turn)")
-                  (println "💡 Use 'end-turn' to finish your turn"))
-                (println "Clicks:" clicks)))
+            (print-clicks-line "runner" (get-in gs [:runner :click]))
             ;; This is the RUNNER section: report the RUNNER's grip size, not
             ;; ours. It used to read my-hand-count, so a Corp viewer saw its
             ;; OWN hand size labelled as the Runner's — the one number a kill
@@ -332,12 +335,7 @@
                 (println "Agenda Points:" agenda-points "/ 7")))
             (println "\n--- CORP ---")
             (println "Credits:" (state/corp-credits))
-            (let [clicks corp-clicks]
-              (if (and (= "corp" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
-                (do
-                  (println "Clicks:" clicks "(End of Turn)")
-                  (println "💡 Use 'end-turn' to finish your turn"))
-                (println "Clicks:" clicks)))
+            (print-clicks-line "corp" (get-in gs [:corp :click]))
             (let [hand-count (state/corp-hand-count)
                   max-hand-size (get-in gs [:corp :hand-size-modification] 5)]
               (println "Hand:" hand-count "cards")
@@ -404,7 +402,7 @@
     (if (nil? gs)
       (println "NO-GAME")
       (let [{:keys [game-over? winner turn-number whose-turn
-                    waiting-to-start? next-player]} (state/get-turn-status)
+                    waiting-to-start? turn-orphaned? next-player]} (state/get-turn-status)
             clicks (when whose-turn (get-in gs [(keyword whose-turn) :click]))]
         (cond
           game-over?
@@ -435,10 +433,23 @@
                           (when open-prompt? " open-prompt=mine"))))
 
           :else
-          (println (format "IN-PROGRESS turn=%s whose-turn=%s clicks=%s"
-                           (or turn-number "?")
-                           (or whose-turn "?")
-                           (if (some? clicks) clicks "?"))))))))
+          ;; #117: an orphaned turn (active player out of clicks, :end-turn not
+          ;; set) reports here, as IN-PROGRESS with clicks=0 — which is exactly
+          ;; true, and is already the documented same-turn/same-clicks spin
+          ;; signature tooling watches for. It used to be reported as
+          ;; AWAITING-START next-player=<opponent>, naming a boundary that had
+          ;; not happened and a player who could not act.
+          ;;
+          ;; `owes=end-turn` is an ADDITIVE last field (same contract as
+          ;; open-prompt=mine above; prefix parsing is unaffected), and appears
+          ;; only on the seat that actually owns the turn — :turn-orphaned? is
+          ;; side-relative so this can never suggest an end-turn to the player
+          ;; whose turn it isn't.
+          (println (str (format "IN-PROGRESS turn=%s whose-turn=%s clicks=%s"
+                                (or turn-number "?")
+                                (or whose-turn "?")
+                                (if (some? clicks) clicks "?"))
+                        (when turn-orphaned? " owes=end-turn"))))))))
 
 (defn ice-encounter-label
   "Annotation describing WHEN the Runner encounters this ICE during a run.
@@ -1708,6 +1719,18 @@
           (:waiting-to-start? ts)
           (println (format "⏳ Waiting for %s to start their turn → use 'wait'." (:next-player ts)))
 
+          ;; #117: MY turn, no clicks, not ended, nothing pending. This used to
+          ;; match the boundary arm above and print "🟢 It's YOUR turn but it
+          ;; hasn't started yet → start-turn" to the player who wasn't even
+          ;; active — the line the umpire read and acted on.
+          (:turn-orphaned? ts)
+          (do
+            (println "⏳ It's still YOUR turn — 0 clicks left, but the turn has not ended.")
+            (println "   → use 'smart-end-turn'. This is the one shape where end-turn is")
+            (println "     safe: you ARE the active player and :end-turn is not set.")
+            (println "   (If a decision is pending on the opponent, the client ends the")
+            (println "    turn itself once that clears — see #114.)"))
+
           (not (:my-turn? ts))
           (println (format "⏳ It's %s's turn, not yours → use 'wait'."
                            (or (:whose-turn ts) "the opponent")))
@@ -2252,6 +2275,15 @@
       (do
         (println (format "⏳ Waiting for %s to start their turn." (:next-player ts)))
         (println "   → Use: wait --since <cursor>"))
+
+      ;; #117: my turn, out of clicks, not ended. Nobody is owed a start-turn and
+      ;; no `wait` can wake — this is the shape that deadlocks a match, so the
+      ;; blocker diagnosis has to name it rather than route the seat to `wait`.
+      (:turn-orphaned? ts)
+      (do
+        (println "⛔ Your turn is out of clicks but has NOT ended — nothing will")
+        (println "   wake either seat until it does. This is not a stall to wait out.")
+        (println "   → Use: smart-end-turn"))
 
       ;; Not my turn.
       (not (:my-turn? ts))
