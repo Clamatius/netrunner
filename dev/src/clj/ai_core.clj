@@ -500,6 +500,88 @@
            :card-name card-name})))))
 
 ;; ============================================================================
+;; Ability legality (#116)
+;; ============================================================================
+;; "Ability not confirmed in game log (timeout)" describes the DETECTION
+;; MECHANISM — no confirmation appeared within N seconds — not the cause. A
+;; timeout invites a retry; a rules violation requires a different action first.
+;; The Luna seat hit this trying to break at approach-ice, guessed right, and
+;; retrying at the wrong phase is the duplicate-send pattern that mints phantom
+;; prompts (#75/#77). Same family as #104/#109.
+
+(defn break-ability?
+  "True when ABILITY breaks subroutines.
+
+   Detected from the label, deliberately CONSERVATIVELY (`starts-with` \"break \",
+   not `includes`). The engine builds these labels as `(str \"break \" ...)` in
+   game.core.ice/break-sub, so the standard ones all match — but a card may
+   supply a custom :label, and a false NEGATIVE only costs us a generic error
+   message while a false POSITIVE prints a rules claim that isn't true. The
+   engine's `:break-req` / `:breaks` keys would be unambiguous, but core/diffs
+   `ability-keys` does not serialize them, so the label is what we have."
+  [ability]
+  (boolean
+    (or (= :auto-pump-and-break (:dynamic ability))
+        (some-> (:label ability) str/lower-case (str/starts-with? "break ")))))
+
+(defn break-phase-block
+  "Lines explaining why a BREAK ability cannot fire right now, or nil if the run
+   phase permits breaking.
+
+   This is the one refusal we make WITHOUT asking the server, because it rests on
+   an engine invariant rather than on a possibly-stale flag:
+   game.core.ice/break-sub's `:break-req` requires `(peek (:encounters @state))`,
+   so with no live encounter a break is impossible — there is no state of the
+   world where sending it would have worked. Contrast `:playable`, which is a
+   snapshot value and could be stale-false on a legal ability; refusing on THAT
+   could cost a seat a break it was entitled to, so we never do."
+  [game-state]
+  (let [run (:run game-state)
+        phase (:phase run)]
+    (cond
+      (nil? run)
+      ["No run is active — subroutines only exist to break during a run."
+       "→ Start a run first ('run <server>'); breaking is legal only while"
+       "  ENCOUNTERING a piece of ice."]
+
+      (not= "encounter-ice" phase)
+      [(format "The run is at phase '%s', not 'encounter-ice'." phase)
+       "Subroutines can only be broken during the ENCOUNTER. Approaching a"
+       "piece of ice is not encountering it."
+       "→ 'continue' to enter the encounter, then retry the break."]
+
+      :else nil)))
+
+(defn ability-failure-lines
+  "Extra lines to print when an ability failed to confirm, or nil to leave the
+   generic timeout wording alone.
+
+   Only speaks up when the ENGINE's own per-ability `:playable` flag is absent.
+   That flag is computed by core/diffs `ability-playable?` — the same value that
+   greys the button out in the web UI (nr.gameboard.board/list-abilities) — and
+   core/diffs `select-non-nil-keys` drops it when false, so ABSENT means 'the
+   server would refuse this'. Verified live: with no run active, every `Break …`
+   ability on the rig carries no :playable while every `Add N strength` pump
+   carries `:playable true`.
+
+   Deliberately does NOT refuse the send. A stale snapshot can show a legal
+   ability as unplayable, and mis-refusing costs more than a wordy error.
+
+   Requires an actual ability map. A nil ability (index out of range) has no
+   :playable for the trivial reason that there is nothing there, and claiming
+   'the server reports this as not usable' about it would be a fabricated rules
+   explanation — the exact species of misleading output this issue is about."
+  [ability]
+  ;; `seq`, not truthiness: {} is truthy in Clojure, so a bare `(and ability ...)`
+  ;; still fabricates the claim for an empty map.
+  (when (and (seq ability) (not (:playable ability)))
+    ["ℹ️  The server reports this ability as not currently usable (it carries no"
+     "   :playable flag — the same value that greys the button out in the web UI),"
+     "   so this is a RULES refusal, not a lost message. Do not just retry."
+     "   Usual causes: cost you can't pay, once-per-turn already used, a timing"
+     "   window that isn't open, or an icebreaker below the ice's strength."]))
+
+;; ============================================================================
 ;; Card Name Parsing and Formatting
 ;; ============================================================================
 
