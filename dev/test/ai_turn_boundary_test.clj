@@ -129,6 +129,69 @@
                                                    :msg "Waiting for Runner to make a decision"}})]
       (is (false? (state/my-turn-orphaned? (with-side gs "corp")))))))
 
+(deftest paid-ability-windows-are-not-orphaned-turns
+  ;; Guest-panel CRITICAL. The engine's two paid-ability windows sit at
+  ;; clicks=0 with :end-turn still false — the orphaned shape exactly — but the
+  ;; resolving action is a PHASE command, not end-turn. Sending end-turn there
+  ;; re-enters game.core.turns/end-turn and skips a window the opponent is
+  ;; entitled to use.
+  ;;
+  ;; These are player-togglable settings ("PAW" checkboxes in
+  ;; nr.gameboard.player-stats, :force-post-discard-* / :force-phase-12-* in
+  ;; core/process-actions), not card effects, so any opponent can turn them on.
+  ;; All four keys are serialized to us (core/diffs), so we can see them.
+  (testing "post-discard window (end-turn would skip it)"
+    (let [gs (assoc orphaned-turn :corp-post-discard {:active true})]
+      (is (false? (state/my-turn-orphaned? (with-side gs "corp"))))
+      (with-mock-state (with-side gs "corp")
+        (is (not (str/includes? (with-out-str (display/show-status)) "smart-end-turn"))
+            "no surface may offer end-turn during a post-discard window")
+        (is (not (str/includes? (with-out-str (display/show-prompt-detailed)) "end-turn"))))))
+
+  (testing "runner's post-discard window, seen from the runner seat"
+    (let [gs (assoc orphaned-turn :active-player "runner"
+                    :runner-post-discard {:active true})]
+      (is (false? (state/my-turn-orphaned? (with-side gs "runner"))))))
+
+  (testing "phase 1.2 window at 0 clicks"
+    ;; Normally unreachable — start-turn grants clicks BEFORE it sets the phase
+    ;; flag — but a negative :extra-click-temp can zero them, and the guard costs
+    ;; nothing. The lesson the panel actually delivered is that my enumeration of
+    ;; zero-click non-boundary states was incomplete, not that this one input is
+    ;; common.
+    (let [gs (assoc orphaned-turn :corp-phase-12 {:active true})]
+      (is (false? (state/my-turn-orphaned? (with-side gs "corp")))))))
+
+(deftest boundary-blocked-by-the-opening-mulligan
+  ;; Guest-panel HIGH. The opening mulligan IS a boundary (:end-turn ships true
+  ;; on a new game) but my-turn-to-act? is deliberately false for the Corp until
+  ;; the Runner finishes (#87). Deriving "am I next" by comparing side names
+  ;; agreed with the predicate everywhere EXCEPT here, so the surfaces split:
+  ;; game-over-status said the Corp was up, the Corp's own prompt said it was
+  ;; waiting.
+  ;;
+  ;; The fix that this test actually pins is the `blocked=` field. The companion
+  ;; change — get-turn-status calling my-turn-to-act? instead of comparing side
+  ;; names — is NOT pinned by anything here and cannot be: the
+  ;; opponent-mulligan-pending? branch (#87) runs before the boundary branch and
+  ;; already absorbs this input. Reverting that line leaves the suite green. It
+  ;; is a structural guard against the branch order changing, and it is labelled
+  ;; as such rather than credited with a red it does not produce.
+  (let [gs (assoc pre-first-turn
+                  :corp {:click 0 :hand-count 0 :user {:username "ai-corp"}
+                         :prompt-state {:prompt-type "waiting"
+                                        :msg "Waiting for Runner to keep hand or mulligan"}})]
+    (testing "corp cannot act, and is not told it can"
+      (with-mock-state (with-side gs "corp")
+        (let [ts (state/get-turn-status)]
+          (is (false? (:can-act? ts)))
+          (is (not (core/my-turn-to-act? (with-side gs "corp") "corp"))))))
+
+    (testing "the machine line names the blocker instead of just pointing at corp"
+      (with-mock-state (with-side gs "corp")
+        (is (= "AWAITING-START turn=0 next-player=corp blocked=opponent-mulligan"
+               (str/trim (with-out-str (display/game-over-status)))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; 2. get-turn-status — the one derivation the surfaces share
 ;; ---------------------------------------------------------------------------

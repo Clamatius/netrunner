@@ -443,6 +443,31 @@
                   ;; `continue` is the move there, and offering end-turn instead
                   ;; would end a turn with a run still live.
                   (not (:run gs))
+                  ;; The engine's other zero-click pauses (guest-panel CRITICAL).
+                  ;; Both paid-ability windows sit at clicks=0 with :end-turn
+                  ;; still false, so they match this shape exactly — and in both
+                  ;; the resolving action is a PHASE command
+                  ;; (post-discard-pass-priority / end-phase-12), not end-turn.
+                  ;; Steering a seat to end-turn there re-enters
+                  ;; game.core.turns/end-turn and skips the window the opponent
+                  ;; is entitled to use.
+                  ;;
+                  ;; Not exotic: these are player-togglable settings, not card
+                  ;; effects — see the "PAW" checkboxes in
+                  ;; nr.gameboard.player-stats and the :force-phase-12-* /
+                  ;; :force-post-discard-* keys in core/process-actions. All four
+                  ;; state keys are serialized to us (core/diffs), so we can and
+                  ;; must check them.
+                  ;;
+                  ;; My original enumeration of "zero-click non-boundary states"
+                  ;; was clicks-out-but-not-ended and nothing else. It was
+                  ;; incomplete, and the shape of that mistake — assuming the
+                  ;; complement of one known state is a single other state — is
+                  ;; the thing to distrust here.
+                  (not (:corp-phase-12 gs))
+                  (not (:runner-phase-12 gs))
+                  (not (:corp-post-discard gs))
+                  (not (:runner-post-discard gs))
                   (not (game-over? gs))
                   (zero? (get-in gs [(keyword active) :click] 0))
                   (nil? (get-in gs [(keyword my-side) :prompt-state]))))))
@@ -502,10 +527,20 @@
                      :else "unknown")
 
         ;; Determine status
-        ;; Am I the one owed the start-turn? (only meaningful at a boundary)
-        i-am-next (and boundary?
-                       my-side
-                       (= (clojure.string/lower-case my-side) next-player))
+        ;; Am I the one owed the start-turn? CALLS the authority rather than
+        ;; re-deriving "am I the next player" from side names (guest-panel:
+        ;; agreeing by construction is not the same as asking).
+        ;;
+        ;; HONEST NOTE, because a comment that overstates this would be the same
+        ;; species of bug as #117: today this is NOT behaviourally different from
+        ;; the name comparison it replaced. The only input where the two diverge
+        ;; is the opening mulligan — a boundary where my-turn-to-act? is
+        ;; deliberately false for the Corp (#87) but the Corp IS the next player
+        ;; by name — and the opponent-mulligan-pending? branch below already
+        ;; catches that case first. Reverting this line to the name comparison
+        ;; leaves the whole suite green; it is a structural guarantee against the
+        ;; branch order changing, not a fix for a live symptom.
+        i-am-next (and boundary? (boolean (my-turn-to-act? @client-state my-side)))
 
         [emoji text can-act]
         (cond

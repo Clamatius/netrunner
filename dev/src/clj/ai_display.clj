@@ -178,10 +178,14 @@
             ;; side-relative, so a Runner reading the CORP section is never
             ;; offered a command that would end the Corp's turn for it.
             ;;
-            ;; This used to carry a `(not both-zero-clicks)` term, which made the
-            ;; whole hint unreachable: during your own turn the opponent is at 0
-            ;; clicks too, so "both at 0" is true for every turn that runs out of
-            ;; clicks — i.e. exactly the case the hint was written for (#117).
+            ;; This used to carry a `(not both-zero-clicks)` term. That did NOT
+            ;; make the hint unreachable (my first claim; the guest panel
+            ;; disproved it) — the engine lets a player end their turn early and
+            ;; does not zero their remaining clicks, so the opponent can hold
+            ;; clicks while the active player is at 0, and the hint fired there.
+            ;; What it did do is suppress the hint in the ordinary case, where
+            ;; the inactive side is at 0 clicks too — i.e. exactly the case the
+            ;; hint was written for (#117).
             print-clicks-line
             (fn [side-name clicks]
               (let [clicks (or clicks 0)]
@@ -430,7 +434,14 @@
             (println (str (format "AWAITING-START turn=%s next-player=%s"
                                   (or turn-number "?")
                                   (or next-player "?"))
-                          (when open-prompt? " open-prompt=mine"))))
+                          (when open-prompt? " open-prompt=mine")
+                          ;; #117/guest-panel HIGH: the opening mulligan IS a
+                          ;; boundary, but the named next-player cannot start
+                          ;; until the opponent finishes mulliganing (#87) — so
+                          ;; the bare line disagreed with that seat's own prompt.
+                          ;; Same additive-field contract as open-prompt=mine.
+                          (when (state/opponent-mulligan-pending? @state/client-state)
+                            " blocked=opponent-mulligan"))))
 
           :else
           ;; #117: an orphaned turn (active player out of clicks, :end-turn not
