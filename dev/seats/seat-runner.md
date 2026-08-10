@@ -54,6 +54,12 @@ You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:
    acting. A `wait` at a turn boundary wakes with reason `my-turn-start` (and
    prints a 👉 start-turn reminder) — that means start your turn, it is NOT a
    stall. Reason `my-turn` (with clicks) means act now.
+   Reason `my-run-window` means **a run is stopped on YOU**: you owe the
+   `continue` at the current run window (an ICE approach, or movement past one).
+   It fires on every run. Another `wait` cannot advance it, and an empty game log
+   under it means the opponent is already waiting on you — do not read it as
+   nothing-happened. (A break/`tank` decision is a different wake:
+   `encounter-decision`.)
 1. **See state** (use the compact forms to save tokens):
    `status-compact`, `board-compact`, `hand`, `list-playables`.
    **Don't guess what a card does — look it up:** `card-text "<name>"` gives any

@@ -9,6 +9,7 @@
             [clojure.string :as str]
             [test-helpers :refer [mock-client-state with-mock-state]]
             [ai-state :as ai-state]
+            [ai-core :as core]
             [ai-display :as display]))
 
 ;; ============================================================================
@@ -702,13 +703,19 @@
       (is (not (str/includes? out "access cards"))))))
 
 (deftest test-priority-hint-i-already-passed-waits
-  (testing "Side that already passed is told to wait, not re-continue"
+  ;; This test used to assert the Runner is told "Re-sending 'continue' does
+  ;; nothing". A guest panel on #115 showed that sentence is false on this side:
+  ;; the run loop's own #31 recovery IS a re-issued continue. The test had pinned
+  ;; the bug. What must hold is that the seat is not steered back into an
+  ;; immediate manual repeat as if the window were still its move.
+  (testing "Side that already passed is told to wait, not that it's still its move"
     (let [out (str/join "\n" (display/run-priority-hint-lines
                               {:phase "movement" :position 0 :server ["hq"] :no-action "runner"}
                               "runner"))]
       (is (str/includes? out "already passed priority"))
       (is (str/includes? out "waiting for Corp"))
-      (is (str/includes? out "Re-sending 'continue' does nothing")))))
+      (is (str/includes? out "use 'wait'"))
+      (is (not (str/includes? out "It's YOUR move"))))))
 
 (deftest test-priority-hint-opponent-passed-my-move
   (testing "When opponent already passed, it's my move to advance"
@@ -1780,3 +1787,192 @@
             "fixture sanity: this state is the one #93 calls GAME-GONE")
         (is (false? (:in-game? (ai-state/get-turn-status)))
             "a GAME-GONE state is not a game we are in")))))
+
+;; ============================================================================
+;; #115: approach-ice is a both-must-pass window for the Runner too.
+;;
+;; game.core.runs `continue :approach-ice` records the first passer in
+;; [:run :no-action] exactly as movement does, so a Runner that has already
+;; passed cannot advance it. This surface printed the terse "use 'continue' to
+;; pass priority (advance the run)" at that seat — with none of the
+;; already-passed / don't-jack-out / escalate guidance the identical situation
+;; gets at #1 Run begins. Two Luna seats re-sent continue and then pinged the
+;; umpire.
+;; ============================================================================
+
+(deftest test-approach-ice-runner-already-passed-gets-the-run-begins-guidance
+  (testing "#115: a Runner that has passed approach-ice is told it has passed, that
+            re-sending does nothing, and how to escalate — not to 'continue'"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action "runner"}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "runner"))]
+      (is (str/includes? out "already passed priority")
+          (str "the seat must learn its pass is already recorded, got:\n" out))
+      (is (str/includes? out "use 'wait'")
+          (str "and steered to wait rather than an immediate manual repeat, got:\n" out))
+      (is (str/includes? out "umpire-ping")
+          (str "and be given the sanctioned escalation instead of inventing one, got:\n" out))
+      (is (not (re-find #"→ Use 'continue' to pass priority" out))
+          (str "the terse steer that provably cannot act must be gone, got:\n" out)))))
+
+(deftest test-approach-ice-runner-fresh-window-names-what-passing-buys
+  (testing "#115: at a fresh approach-ice window the Runner is the first sub-step,
+            and passing resolves THIS ICE — not 'the next ICE', which is the
+            movement-window outcome"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action false}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "runner"))]
+      (is (str/includes? out "active player goes first")
+          (str "expected the sub-step framing, got:\n" out))
+      (is (str/includes? out "resolve this ICE")
+          (str "passing an approach resolves the ICE in front of you, got:\n" out))
+      (is (not (str/includes? out "approach the next ICE"))
+          (str "the movement-window outcome must not be claimed here, got:\n" out))
+      (is (not (str/includes? out "ICE rez window"))
+          (str "the rez verb is the Corp's, not the Runner's, got:\n" out)))))
+
+(deftest test-approach-ice-runner-corp-passed-is-my-move
+  (testing "#115: Corp has passed approach-ice — the Runner's continue advances it"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action "corp"}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "runner"))]
+      (is (str/includes? out "It's YOUR move")
+          (str "expected the opponent-has-passed branch, got:\n" out))
+      (is (not (str/includes? out "already passed priority here"))
+          (str "the Runner has NOT passed — must not read as its own pass, got:\n" out)))))
+
+(deftest test-approach-ice-corp-already-passed-loses-the-rez-offer
+  (testing "#115: a Corp that has already declined this window must not be offered
+            a rez it can no longer take, nor told 'continue' passes priority"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action "corp"}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "corp"))]
+      (is (str/includes? out "already passed priority")
+          (str "the Corp's own pass is recorded; say so, got:\n" out))
+      (is (not (str/includes? out "ICE rez window"))
+          (str "the rez window is closed to a Corp that passed it, got:\n" out))
+      (is (not (str/includes? out "DECLINE"))
+          (str "it has already declined — offering the decline again is the lie, got:\n" out)))))
+
+(deftest test-approach-ice-corp-owning-window-keeps-its-rez-guidance
+  (testing "#115 regression guard: a Corp that still owns the window keeps the rez
+            options — the fix must not cost the Corp its rez steer"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action false}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "corp"))]
+      (is (str/includes? out "ICE rez window"))
+      (is (str/includes? out "--no-rez"))
+      (is (str/includes? out "DECLINE")))))
+
+;; ============================================================================
+;; #115 cosmetics: one indexing convention, and fog of war that reads as fog.
+;; ============================================================================
+
+(deftest test-ice-pass-index-counts-up-as-position-counts-down
+  (testing "position is a countdown; the Runner meets position=ice-count FIRST"
+    (is (= 1 (core/ice-pass-index 2 2)) "outermost ICE is 'ICE 1 of 2'")
+    (is (= 2 (core/ice-pass-index 1 2)) "innermost ICE is 'ICE 2 of 2'"))
+  (testing "no honest index available -> nil, never a bogus one"
+    (is (nil? (core/ice-pass-index 0 2)) "past all ICE")
+    (is (nil? (core/ice-pass-index nil 2)))
+    (is (nil? (core/ice-pass-index 2 nil)) "unknown ICE count")
+    (is (nil? (core/ice-pass-index 3 2)) "position out of range (wire drift)")))
+
+(deftest test-describe-approached-ice-renders-fog-not-breakage
+  (testing "#115: an unrezzed ICE has no title on the Runner's wire — the old
+            format printed the literal default and read as 'ICE: ICE'"
+    (let [line (core/describe-approached-ice "ICE" 2 2)]
+      (is (not (str/includes? line "ICE: ICE"))
+          (str "the placeholder-as-name rendering is gone, got: " line))
+      (is (str/includes? line "hidden")
+          (str "say WHY there is no name, got: " line))))
+  (testing "the line uses the ladder's convention, not the raw countdown"
+    (let [line (core/describe-approached-ice "ICE" 2 2)]
+      (is (str/includes? line "ICE 1 of 2")
+          (str "outermost ICE with 2 ICE = 'ICE 1 of 2', matching the run ladder, got: " line))
+      (is (not (str/includes? line "position 2/2"))
+          (str "the contradicting second convention is gone, got: " line))))
+  (testing "a known title is still named"
+    (is (str/includes? (core/describe-approached-ice "Whitespace" 2 2) "Whitespace"))))
+
+;; The same lie lived in a SECOND emitter. `diagnose` is the surface a stuck seat
+;; reaches for, and it carried its own inline copy of the both-pass phase set —
+;; so fixing print-run-window-priority! alone would have left the seat that had
+;; actually noticed it was stuck reading "Use: continue" at a window it had
+;; already passed. Both now read the membership from both-pass-window?.
+
+(deftest test-diagnose-approach-ice-runner-already-passed-agrees-with-prompt
+  (testing "#115: diagnose at an approach-ice window the Runner has passed gives the
+            already-passed guidance, not the generic continue steer"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 4
+                                   :run {:phase "approach-ice" :position 2
+                                         :server ["rd"] :no-action "runner"}
+                                   :runner {:click 2 :credit 5 :hand []
+                                            :prompt-state {:msg "Waiting for Corp to rez"
+                                                           :prompt-type "run"}}
+                                   :corp {:click 0 :credit 5 :hand []
+                                          :servers {:rd {:ices [{:title "Whitespace"}
+                                                                {:title "Diviner"}]}}}})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "already passed priority")
+            (str "diagnose must agree with prompt/status that the pass is spent, got:\n" out))
+        (is (not (re-find #"(?i)use: continue \(to pass priority\)" out))
+            (str "the generic steer that cannot act must be gone from diagnose too, got:\n" out))))))
+
+(deftest test-both-pass-window-membership
+  (testing "#115: the Runner's pass windows include approach-ice — the engine's
+            continue :approach-ice records [:run :no-action] exactly as movement does"
+    (is (display/both-pass-window? "approach-ice" "runner"))
+    (is (display/both-pass-window? "initiation" "runner"))
+    (is (display/both-pass-window? "movement" "runner")))
+  (testing "encounter-ice is NOT one: its passer lives on [:encounters :no-action]
+            and the Runner's decision there is break/tank, not a pass (#92)"
+    (is (not (display/both-pass-window? "encounter-ice" "runner")))
+    (is (not (display/both-pass-window? "encounter-ice" "corp"))))
+  (testing "the Corp keeps its own richer steer at the windows carrying a rez decision"
+    (is (not (display/both-pass-window? "approach-ice" "corp")))
+    (is (not (display/both-pass-window? "initiation" "corp")))
+    (is (display/both-pass-window? "movement" "corp"))))
+
+;; Guest-panel catch on the #115 fix: the already-passed block told the Runner
+;; "Re-sending 'continue' does nothing" and then, two lines later, to escalate to
+;; an umpire. Both cannot be right. The engine's advance branch has no side-check
+;; (game.core.runs `continue`), and handle-stalled-window-self-advance uses that
+;; deliberately — a re-issued `continue` after the grace period IS the sanctioned
+;; #31 recovery for a decision-free abandoned window. The old wording steered the
+;; Runner straight past its own recovery into the ping this block exists to avoid.
+
+(deftest test-already-passed-runner-is-told-about-self-advance-before-escalating
+  (testing "#115/panel: the Runner's already-passed guidance must not call a repeat
+            continue futile — it is the #31 recovery — and must order it before the
+            umpire escalation"
+    (let [run {:server ["rd"] :phase "approach-ice" :position 2 :no-action "runner"}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "approach-ice" "runner"))]
+      (is (not (str/includes? out "Re-sending 'continue' does nothing"))
+          (str "flatly false for the Runner: the run loop self-advances an abandoned
+                window with a second pass, got:\n" out))
+      (is (re-find #"(?i)re-issuing 'continue'.*self|advance the abandoned" out)
+          (str "the seat must learn the recovery exists, got:\n" out))
+      (is (< (.indexOf out "BEFORE escalating") (.indexOf out "umpire-ping"))
+          (str "and must be told to try it BEFORE the umpire, got:\n" out)))))
+
+(deftest test-already-passed-corp-keeps-the-flat-no-op-line
+  (testing "#115/panel: self-advance is Runner-side only, so the Corp's repeat
+            continue really is a no-op — it must not be told otherwise"
+    (let [run {:server ["rd"] :phase "movement" :position 1 :no-action "corp"}
+          out (with-out-str
+                (display/print-run-window-priority!
+                 {:game-state {:run run}} run "movement" "corp"))]
+      (is (str/includes? out "Re-sending 'continue' does nothing")
+          (str "the Corp has no self-advance path, got:\n" out))
+      (is (not (str/includes? out "abandoned"))
+          (str "must not promise the Corp a recovery it does not have, got:\n" out)))))

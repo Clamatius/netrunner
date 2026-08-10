@@ -1081,6 +1081,29 @@
       (seq k) (str "the " k " server")
       :else "the server")))
 
+(defn both-pass-window?
+  "True when `run-phase` is a window `my-side` advances by PASSING PRIORITY, and
+   whose pass the engine records in [:run :no-action] — i.e. one that must route
+   through run-priority-hint-lines so an already-passed seat is not told to
+   `continue` at a window it cannot advance.
+
+   The Runner owns a sub-step at initiation, approach-ice and movement/
+   approach-server; the Corp's initiation and approach-ice sub-steps carry a rez /
+   paid-ability decision, so those two keep their own richer steer and are not
+   listed here. encounter-ice is deliberately absent: its passer lives on
+   [:encounters :no-action], and the Runner's decision there is break/tank, not a
+   pass (#92).
+
+   Single source (#115): this set was inlined in BOTH print-run-window-priority!
+   and diagnose-blocker, so adding approach-ice to one left the other — the
+   surface a stuck seat actually reaches for — printing the same steer that
+   provably cannot act. Same N-emitters shape as #75/#77/#113."
+  [run-phase my-side]
+  (contains? (if (= my-side "runner")
+               #{"initiation" "approach-ice" "movement" "approach-server"}
+               #{"movement" "approach-server"})
+             run-phase))
+
 (defn run-priority-hint-lines
   "Side-aware hint lines for a run priority window (movement / approach-server).
 
@@ -1107,18 +1130,39 @@
         ;; so we encode that directly rather than trusting the volatile
         ;; :active-player wire field. Render: Runner = first sub-step, Corp = second.
         i-am-active? (= my-side "runner")
-        ;; What the Runner specifically gains by continuing this window.
+        ;; What the Runner specifically gains by continuing this window. Phase
+        ;; matters: at approach-ice the Runner is already AT the ICE, so passing
+        ;; resolves THIS ICE (encounter it, or walk past it if the Corp declined
+        ;; the rez) — "approach the next ICE" is only true of the windows BEFORE
+        ;; an approach (initiation, and movement with ICE still to come).
         gain      (when (= my-side "runner")
-                    (if past-ice?
-                      (str "breach " server " and access cards")
-                      (str "approach the next ICE on " server)))]
+                    (cond
+                      past-ice? (str "breach " server " and access cards")
+                      (= "approach-ice" (:phase run))
+                      "resolve this ICE (encounter it if the Corp rezzes, otherwise walk past it)"
+                      :else (str "approach the next ICE on " server)))]
     (cond
       ;; I have already passed — waiting on the opponent; no action from me.
       (= na my-side)
       (into
         [(str "    ⏸️  You have already passed priority here — waiting for " opp
               " to pass before the run advances.")
-         (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)")]
+         ;; "Re-sending does nothing" is true of a MANUAL repeat — send-continue!'s
+         ;; #98 guard suppresses it — but it is NOT true of the Runner's run loop.
+         ;; handle-stalled-window-self-advance (ai-runs) deliberately sends a
+         ;; SECOND pass once a decision-free window has gone unanswered for
+         ;; self-advance-grace-ms, because the engine's advance branch has no
+         ;; side-check (game.core.runs `continue`), and that is the sanctioned #31
+         ;; recovery. Telling the Runner a repeat is futile therefore steered it
+         ;; past its own recovery and into an umpire ping — the exact escalation
+         ;; this block exists to prevent. Guest panel caught it (#115); the Corp
+         ;; keeps the flat line because self-advance is Runner-side only.
+         (if (= my-side "runner")
+           (str "      (Nothing to send right now; use 'wait'. A repeat 'continue' is suppressed "
+                "while the window is live — but if the Corp has no decision to make here, "
+                "re-issuing 'continue' after ~5s lets the run loop advance the abandoned "
+                "window itself (#31). Try that BEFORE escalating.)")
+           (str "      (No action needed from you; use 'wait'. Re-sending 'continue' does nothing.)"))]
         ;; Stall recovery (issue #31). We used to tell the Runner that 'jack-out
         ;; ends the run to recover' here. That advice LOST marquee d6962df4:
         ;; GPT-5.5 followed it 5 times, once abandoning a Brân it had just broken
@@ -1268,21 +1312,44 @@
    encounter ICE's subs); `run` is [:game-state :run]; `run-phase` is
    (:phase run); `my-side` is \"runner\"/\"corp\". Returns nil.
 
-   The both-must-pass windows (initiation for the Runner, movement/approach-server
-   for both) route through run-priority-hint-lines, which disambiguates the two
-   sub-steps and warns about the #31 stall. A Runner mid-encounter with UNBROKEN
-   subs it is not breaking routes through runner-encounter-decline-hint-lines:
-   `continue` is refused there, so steering to it is the #92 lie. Other windows
-   get the terse decline/continue guidance — spelled out for the Corp (continue
-   here DECLINES an action, e.g. an ICE rez, rather than being forced)."
+   The both-must-pass windows (initiation and approach-ice for the Runner,
+   movement/approach-server for both) route through run-priority-hint-lines, which
+   disambiguates the two sub-steps and warns about the #31 stall. A Runner
+   mid-encounter with UNBROKEN subs it is not breaking routes through
+   runner-encounter-decline-hint-lines: `continue` is refused there, so steering to
+   it is the #92 lie. Other windows get the terse decline/continue guidance —
+   spelled out for the Corp (continue here DECLINES an action, e.g. an ICE rez,
+   rather than being forced).
+
+   approach-ice is a both-must-pass window for the Runner too (#115). The engine's
+   `continue :approach-ice` records the first passer in [:run :no-action] exactly
+   as movement does (game.core.runs), so a Runner that has already passed cannot
+   advance it — yet this printed the terse 'use continue to pass priority' at a
+   seat that provably could not act, with none of the already-passed / do-not-
+   jack-out / escalate guidance the identical situation gets at #1 Run begins. Two
+   Luna seats re-sent continue and then pinged the umpire."
   [state run run-phase my-side]
   (let [runner-unbroken (when (and (= my-side "runner") (= run-phase "encounter-ice"))
-                          (runner-encounter-unbroken-count state))]
+                          (runner-encounter-unbroken-count state))
+        ;; A Corp that has already passed this window is in the SAME position the
+        ;; Runner's already-passed branch describes: `continue` is a no-op and the
+        ;; opponent owes the move. The Corp's rez guidance below is correct only
+        ;; while it still owns the window.
+        ;;
+        ;; Scoped to the run-level windows that reach the Corp branch at all:
+        ;; movement/approach-server already route through the hint lines above,
+        ;; and at encounter-ice the passer lives on [:encounters :no-action] while
+        ;; run-priority-hint-lines reads [:run :no-action] — routing there would
+        ;; hand it a stale nil and print fresh-window text. Same source as the fn
+        ;; we delegate to, or not at all.
+        corp-already-passed? (and (= my-side "corp")
+                                  (contains? #{"initiation" "approach-ice"} run-phase)
+                                  (= my-side (let [v (:no-action run)]
+                                               (cond (keyword? v) (name v)
+                                                     (string? v) v
+                                                     :else nil))))]
     (cond
-      (contains? (if (= my-side "runner")
-                   #{"initiation" "movement" "approach-server"}
-                   #{"movement" "approach-server"})
-                 run-phase)
+      (both-pass-window? run-phase my-side)
       (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
 
@@ -1291,6 +1358,12 @@
       (and runner-unbroken (pos? runner-unbroken))
       (doseq [line (runner-encounter-decline-hint-lines
                     (:title (core/current-run-ice state) "this ICE") runner-unbroken)]
+        (println line))
+
+      ;; Corp at approach-ice having already declined/passed: don't offer it a rez
+      ;; it can no longer take, and don't call a no-op a priority pass (#115).
+      corp-already-passed?
+      (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
 
       (= my-side "corp")
@@ -1342,12 +1415,10 @@
     (when cur
       (let [srv      (or server-name "the server")
             ;; Pass order: the Runner meets the OUTERMOST ICE (position = ice-count)
-            ;; first, so pass-index counts up as position counts down. Guard the
-            ;; upper bound too: a position > ice-count (shouldn't happen, but the
-            ;; wire is the volatile coupling) would otherwise print a bogus
-            ;; "ICE 0 of N" / negative index — drop the index rather than lie.
-            pass-idx (when (and ice-count position (pos? position) (<= position ice-count))
-                       (inc (- ice-count position)))
+            ;; first, so pass-index counts up as position counts down. Shared with
+            ;; the approach handler's ICE line (core/ice-pass-index) so the two
+            ;; can't drift into contradicting conventions on adjacent lines (#115).
+            pass-idx (core/ice-pass-index position ice-count)
             ice-of   (if (and pass-idx ice-count) (format " %d of %d" pass-idx ice-count) "")
             ice-tag  (if ice-name (format " [%s]" ice-name) "")
             label    {:begin           "#1 Run begins"
@@ -2128,12 +2199,12 @@
         ;; needs BOTH sides), but only the Runner gets the already-passed-aware hint
         ;; here — once it has passed, "use continue" is a no-op loop (issue #31 / g3).
         ;; The Corp keeps the generic continue/monitor-run steer at initiation (it
-        ;; may still want to rez/fire a paid ability there).
+        ;; may still want to rez/fire a paid ability there). Membership comes from
+        ;; both-pass-window?, shared with print-run-window-priority! — this copy of
+        ;; the set was the one left behind when approach-ice was added (#115), and
+        ;; `diagnose` is exactly the surface a stuck seat reaches for.
         (cond
-          (contains? (if (= my-side-lc "runner")
-                       #{"initiation" "movement" "approach-server"}
-                       #{"movement" "approach-server"})
-                     run-phase)
+          (both-pass-window? run-phase my-side-lc)
           (do
             (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
             (doseq [line (run-priority-hint-lines run my-side-lc)]

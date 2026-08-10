@@ -1378,3 +1378,34 @@
   ;; Run from main
   (-main)
   )
+
+;; ============================================================================
+;; #115: the ICE line a Runner actually sees at approach-ice.
+;;
+;; Pinning core/describe-approached-ice alone would not have caught this — the
+;; handler is the surface the seat reaches, and the previous round's lesson was
+;; exactly that (a fix and its green test both landed on a sender the CLI never
+;; calls, #113). Drive the handler.
+;; ============================================================================
+
+(deftest test-approach-ice-handler-ice-line-is-readable
+  (testing "#115: unrezzed ICE renders as fog, in the run ladder's index convention
+            — not as the literal 'ICE: ICE (position 2/2, unrezzed)'"
+    (runner-handlers/reset-state!)
+    (let [state {:side "runner"
+                 :game-state {:run {:phase "approach-ice" :position 2
+                                    :server ["rd"] :no-action false}
+                              :corp {:servers {:rd {:ices [{:title nil :rezzed false}
+                                                           {:title nil :rezzed false}]}}}}}
+          out (with-out-str
+                (runner-handlers/handle-runner-approach-ice
+                 {:side "runner" :run-phase "approach-ice" :state state}))]
+      (is (clojure.string/includes? out "Waiting for corp rez decision")
+          (str "fixture sanity: this is the approach-ice wait, got:\n" out))
+      (is (not (clojure.string/includes? out "ICE: ICE"))
+          (str "the placeholder-as-name rendering is gone, got:\n" out))
+      (is (not (clojure.string/includes? out "position 2/2"))
+          (str "the countdown convention contradicted the ladder's 'ICE 1 of 2'
+                two lines below it, got:\n" out))
+      (is (clojure.string/includes? out "ICE 1 of 2")
+          (str "outermost of two ICE, in the ladder's convention, got:\n" out)))))
