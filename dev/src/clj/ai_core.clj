@@ -524,33 +524,67 @@
     (or (= :auto-pump-and-break (:dynamic ability))
         (some-> (:label ability) str/lower-case (str/starts-with? "break ")))))
 
-(defn break-phase-block
-  "Lines explaining why a BREAK ability cannot fire right now, or nil if the run
-   phase permits breaking.
+(defn normalize-phase
+  "Run phase as a plain string. The wire sends strings, the engine and our own
+   fixtures use keywords (memory engine-rate-of-change: wire shape is the
+   volatile coupling). Neither shape may be silently read as legal.
 
-   This is the one refusal we make WITHOUT asking the server, because it rests on
-   an engine invariant rather than on a possibly-stale flag:
-   game.core.ice/break-sub's `:break-req` requires `(peek (:encounters @state))`,
-   so with no live encounter a break is impossible — there is no state of the
-   world where sending it would have worked. Contrast `:playable`, which is a
-   snapshot value and could be stale-false on a legal ability; refusing on THAT
-   could cost a seat a break it was entitled to, so we never do."
-  [game-state]
-  (let [run (:run game-state)
-        phase (:phase run)]
-    (cond
-      (nil? run)
-      ["No run is active — subroutines only exist to break during a run."
-       "→ Start a run first ('run <server>'); breaking is legal only while"
-       "  ENCOUNTERING a piece of ice."]
+   Lives here rather than in ai-runs (which owned the only copy, privately)
+   because ai-runs requires ai-core and not the reverse — the same layering that
+   forced get-turn-status to grow a duplicate predicate in #117. One definition,
+   at the bottom."
+  [phase]
+  (cond
+    (nil? phase) nil
+    (keyword? phase) (name phase)
+    :else (str phase)))
 
-      (not= "encounter-ice" phase)
-      [(format "The run is at phase '%s', not 'encounter-ice'." phase)
-       "Subroutines can only be broken during the ENCOUNTER. Approaching a"
-       "piece of ice is not encountering it."
-       "→ 'continue' to enter the encounter, then retry the break."]
+(defn break-refusal-lines
+  "Lines explaining why a BREAK ability cannot fire right now, or nil to allow
+   the send.
 
-      :else nil)))
+   Keyed on the WIRE'S LIVE ENCOUNTER, not the run phase. game.core.ice's
+   `break-sub` builds `:break-req` as `(and current-ice (peek (:encounters
+   @state)) ...)` — it never mentions the run phase, or even a run. Those
+   coincide in an ordinary run and diverge exactly where #100 already taught us
+   they diverge: `runs/force-ice-encounter` calls `set-phase` only `(when
+   new-state)`, and ALL SIX call sites in the card pool (Ganked!, Chrysalis and
+   friends) pass four args, so a forced encounter is live while `:phase` still
+   reads \"success\" — or while there is no `:run` at all, off a Gang Sign
+   breach. Keying on phase refused a legal and often mandatory break there, and
+   told the seat to 'continue', which during a forced encounter passes priority
+   and lets the subs fire. Both guest seats found this independently.
+
+   ALSO requires the server's own `:playable` to be absent. That is the
+   Boomerang guard: hardware.clj gives it a hand-written `Break 0 subroutines`
+   ability that is not built by `break-sub`, does not break anything, and is
+   legal outside any encounter — a label-shaped false positive that this
+   predicate cannot distinguish on its own. When such an ability really is
+   legal, the server marks it `:playable`, so requiring both signals means a
+   refusal needs the rules AND the server to agree.
+
+   `:phase` is now used for WORDING ONLY. A wrong phase string can no longer
+   refuse anything."
+  [ability game-state]
+  (let [live-encounter? (some? (get-in game-state [:encounters :ice]))
+        run (:run game-state)
+        phase (normalize-phase (:phase run))]
+    (when (and (not live-encounter?)
+               ;; Never refuse something the server has told us is legal.
+               (not (:playable ability)))
+      (concat
+        (if run
+          [(format "You are not encountering a piece of ice (run phase '%s')." phase)
+           "Subroutines can only be broken during the ENCOUNTER — approaching a"
+           "piece of ice is not encountering it."
+           "→ 'continue' to advance to the encounter, then retry the break."]
+          ["No run is active and you are not encountering any piece of ice."
+           "→ Breaking is legal only while ENCOUNTERING ice."])
+        ;; Both signals come from the SAME snapshot, so they can be stale
+        ;; together — the case is the opponent advancing us into an encounter
+        ;; before we saw the diff. Name the escape rather than dead-ending.
+        ["   (This reads your latest snapshot. If you believe you ARE in an"
+         "    encounter, re-check with 'status' or 'wait' and retry.)"]))))
 
 (defn ability-failure-lines
   "Extra lines to print when an ability failed to confirm, or nil to leave the
@@ -575,9 +609,10 @@
   ;; `seq`, not truthiness: {} is truthy in Clojure, so a bare `(and ability ...)`
   ;; still fabricates the claim for an empty map.
   (when (and (seq ability) (not (:playable ability)))
-    ["ℹ️  The server reports this ability as not currently usable (it carries no"
-     "   :playable flag — the same value that greys the button out in the web UI),"
-     "   so this is a RULES refusal, not a lost message. Do not just retry."
+    ["ℹ️  The server reported this ability as not usable WHEN WE LAST LOOKED (it"
+     "   carries no :playable flag — the same value that greys the button out in"
+     "   the web UI), so this is very likely a RULES refusal rather than a lost"
+     "   message. Re-check state before retrying; a blind retry is the wrong move."
      "   Usual causes: cost you can't pay, once-per-turn already used, a timing"
      "   window that isn't open, or an icebreaker below the ice's strength."]))
 

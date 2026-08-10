@@ -56,52 +56,135 @@
     (is (not (core/break-ability? {:label "Prevent the Runner from breaking subroutines"})))
     (is (not (core/break-ability? {:label "Give -1 strength to current piece of ice"})))
     (is (not (core/break-ability? {:label nil})))
-    (is (not (core/break-ability? {})))))
+    (is (not (core/break-ability? {}))))
+
+  (testing "Boomerang's 'Break 0 subroutines' IS matched here — and that is why"
+    ;; game.cards.hardware gives Boomerang a hand-written ability labelled
+    ;; "Break 0 subroutines" that is NOT built by break-sub, breaks nothing, and
+    ;; is legal outside any encounter. Both guest seats found it independently.
+    ;; The label test cannot tell it apart, so the REFUSAL must not rest on the
+    ;; label alone — see boomerang-is-not-refused below.
+    (is (core/break-ability? {:label "Break 0 subroutines"}))))
 
 ;; ---------------------------------------------------------------------------
 ;; break-phase-block — the refusal, and its limits
 ;; ---------------------------------------------------------------------------
 
+;; An unplayable break ability — the shape a real breaker has out of encounter,
+;; verified live against game d840fc14's rig (Break abilities carry no :playable
+;; there while their pump siblings carry :playable true).
+(def ^:private unplayable-break {:label "Break 1 Sentry subroutine"})
+
 (deftest break-outside-an-encounter-is-refused
   (testing "approach-ice: the exact state the Luna seat hit"
-    (let [lines (core/break-phase-block {:run {:phase "approach-ice" :server [:hq]}})]
+    (let [lines (core/break-refusal-lines
+                  unplayable-break {:run {:phase "approach-ice" :server [:hq]}})]
       (is (seq lines))
       (let [out (str/join " " lines)]
         (is (str/includes? out "approach-ice") "names the phase we are actually at")
-        (is (str/includes? out "ENCOUNTER") "names the phase breaking requires")
+        (is (str/includes? out "ENCOUNTER") "names what breaking requires")
         (is (str/includes? out "continue") "names the command that gets there")
         (is (not (str/includes? (str/lower-case out) "timeout"))
             "must not blame the detection mechanism")
-        (is (not (str/includes? (str/lower-case out) "log"))
+        (is (not (str/includes? (str/lower-case out) "game log"))
             "must not blame the game log"))))
 
   (testing "movement (the approach-server window is a movement phase, not its own)"
-    (is (seq (core/break-phase-block {:run {:phase "movement" :position 0}}))))
+    (is (seq (core/break-refusal-lines unplayable-break {:run {:phase "movement" :position 0}}))))
 
   (testing "initiation"
-    (is (seq (core/break-phase-block {:run {:phase "initiation"}}))))
+    (is (seq (core/break-refusal-lines unplayable-break {:run {:phase "initiation"}}))))
 
   (testing "no run at all"
-    (let [lines (core/break-phase-block {})]
+    (let [lines (core/break-refusal-lines unplayable-break {})]
       (is (seq lines))
-      (is (str/includes? (str/join " " lines) "No run is active"))))
+      (is (str/includes? (str/join " " lines) "No run is active"))
+      (is (not (str/includes? (str/join " " lines) "'continue'"))
+          "there is no run to continue")))
 
-  (testing "encounter-ice is the ONE phase that permits it"
-    ;; The over-correction to guard against: refusing a legal break costs a seat
-    ;; the encounter it was entitled to fight.
-    (is (nil? (core/break-phase-block {:run {:phase "encounter-ice" :position 1}})))))
+  (testing "a keyword phase cannot change the verdict, only the wording"
+    ;; The wire sends strings; the engine and our fixtures use keywords. Since
+    ;; the refusal is keyed on :encounters, a keyword phase can no longer refuse
+    ;; anything it shouldn't — it must only render cleanly.
+    (let [out (str/join " " (core/break-refusal-lines
+                              unplayable-break {:run {:phase :approach-ice}}))]
+      (is (str/includes? out "approach-ice"))
+      (is (not (str/includes? out ":approach-ice")) "no stray keyword colon"))))
+
+(deftest a-live-encounter-is-never-refused
+  ;; GUEST-PANEL CRITICAL, found independently by both seats. break-sub's
+  ;; :break-req requires `(peek (:encounters @state))` — it never mentions the
+  ;; run phase. runs/force-ice-encounter calls set-phase only `(when new-state)`,
+  ;; and all six card-pool call sites pass four args, so a FORCED encounter
+  ;; (Ganked!, Chrysalis) is live while :phase still reads something else — or
+  ;; while there is no :run at all, off a Gang Sign breach.
+  ;;
+  ;; Refusing there blocks a legal and often mandatory break, and the old advice
+  ;; ("continue to enter the encounter") is actively harmful during a forced
+  ;; encounter: it passes priority and lets the subs fire. The heuristic bot
+  ;; routes its breaks through use-ability! too (ai_run_tactics), so this would
+  ;; have tanked autonomous encounters that used to work.
+  (testing "ordinary encounter"
+    (is (nil? (core/break-refusal-lines
+                unplayable-break
+                {:run {:phase "encounter-ice" :position 1}
+                 :encounters {:ice {:cid 1 :title "Palisade"}}}))))
+
+  (testing "forced encounter with the phase still reading 'success'"
+    (is (nil? (core/break-refusal-lines
+                unplayable-break
+                {:run {:phase "success"}
+                 :encounters {:ice {:cid 2 :title "Chrysalis"}}}))))
+
+  (testing "forced encounter with NO run at all (breach off Gang Sign)"
+    (is (nil? (core/break-refusal-lines
+                unplayable-break
+                {:encounters {:ice {:cid 3 :title "Ganked!"}}}))))
+
+  (testing "phase says encounter-ice but no encounter is live -> still refused"
+    ;; The converse: the phase alone must not authorise a break either.
+    (is (seq (core/break-refusal-lines
+               unplayable-break {:run {:phase "encounter-ice" :position 1}})))))
+
+(deftest boomerang-is-not-refused
+  ;; GUEST-PANEL CRITICAL. Boomerang's hand-written "Break 0 subroutines" is not
+  ;; a break-sub ability, breaks nothing, and is legal outside any encounter.
+  ;; break-ability? matches it on the label and cannot tell it apart — so the
+  ;; refusal additionally requires the server's own :playable to be ABSENT. When
+  ;; the ability really is legal the server marks it playable, and we stand down.
+  (testing "legal outside a run: server says playable, so no refusal"
+    (is (nil? (core/break-refusal-lines
+                {:label "Break 0 subroutines" :playable true}
+                {}))))
+
+  (testing "the same guard protects any label-shaped false positive mid-run"
+    (is (nil? (core/break-refusal-lines
+                {:label "Break 0 subroutines" :playable true}
+                {:run {:phase "approach-ice"}}))))
+
+  (testing "a genuinely unusable break at the wrong moment is still refused"
+    (is (seq (core/break-refusal-lines
+               {:label "Break 0 subroutines"} {:run {:phase "approach-ice"}})))))
 
 ;; ---------------------------------------------------------------------------
 ;; ability-failure-lines — diagnosis, keyed on the server's own verdict
 ;; ---------------------------------------------------------------------------
 
 (deftest failure-diagnosis-follows-the-servers-playable-flag
-  (testing "no :playable => the server would refuse; say so and say don't retry"
+  (testing "no :playable => the server would refuse; say so, and hedge honestly"
     (let [out (str/join " " (core/ability-failure-lines {:label "Break 1 Sentry subroutine"}))]
-      (is (str/includes? out "not currently usable"))
+      (is (str/includes? out "not usable"))
       (is (str/includes? out "RULES refusal"))
-      (is (str/includes? out "Do not just retry")
-          "the whole point: a timeout invites the retry that mints phantom prompts")))
+      (is (str/includes? out "Re-check state before retrying")
+          "the whole point: a timeout invites the retry that mints phantom prompts")
+      ;; Guest-panel: the diff's own rationale calls :playable a snapshot that
+      ;; can be stale, so the message must not then assert certainty about it.
+      ;; A seat that is genuinely mid-encounter must not be told flatly that the
+      ;; rules forbade what it just tried.
+      (is (str/includes? out "WHEN WE LAST LOOKED")
+          "the claim is scoped to the snapshot it is actually based on")
+      (is (str/includes? out "very likely")
+          "hedged, because a lost message is still possible")))
 
   (testing ":playable true => a genuine timeout; leave the generic wording alone"
     ;; If the server said the ability WAS legal and it still didn't confirm, the

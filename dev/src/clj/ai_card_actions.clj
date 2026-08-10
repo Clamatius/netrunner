@@ -364,11 +364,11 @@
                      (nth abilities ability-index))
             ability-label (when ability (:label ability))
             dynamic-type (:dynamic ability)
-            ;; #116: a break outside an encounter cannot succeed — break-sub's
-            ;; :break-req requires a live encounter — so report the rules cause
-            ;; instead of sending and then blaming a timeout on the game log.
+            ;; #116: a break outside a live ENCOUNTER cannot succeed — break-sub's
+            ;; :break-req requires one — so report the rules cause instead of
+            ;; sending and then blaming a timeout on the game log.
             break-block (when (and ability (core/break-ability? ability))
-                          (core/break-phase-block (state/get-game-state)))
+                          (core/break-refusal-lines ability (state/get-game-state)))
             ;; Capture state BEFORE sending to avoid race condition where
             ;; response arrives before we start polling (fixes false timeouts)
             pre-log-size (core/get-log-size)
@@ -458,7 +458,9 @@
   (let [client-state @state/client-state
         card (core/find-installed-corp-card card-name)
         runner-abilities (:runner-abilities card)
-        ability (when card (nth runner-abilities ability-index nil))]
+        ability (when card (nth runner-abilities ability-index nil))
+        break-block (when (core/break-ability? ability)
+                      (core/break-refusal-lines ability (state/get-game-state)))]
     (cond
       (not card)
       (ambiguous-or-missing-error card-name)
@@ -473,6 +475,21 @@
                         " (only bioroids and similar cards do)")))
         (flush)
         {:status :error :reason (str "No runner-ability " ability-index " on " card-name)})
+
+      ;; #116: bioroid click-to-break is `bioroid-break` (game.core.ice), which
+      ;; wraps `break-sub` and adds a `currently-encountering-card` requirement —
+      ;; so it is constrained MORE strictly than an ordinary breaker, not less.
+      ;; I originally withheld this refusal here for lack of evidence; both guest
+      ;; seats independently checked the engine and supplied it.
+      break-block
+      (do
+        (println (format "❌ Cannot use %s's break ability right now: %s"
+                         card-name (:label ability)))
+        (doseq [line break-block] (println (str "   " line)))
+        (flush)
+        {:status :error
+         :reason (str "Break ability is not legal right now: " (first break-block))
+         :card-name card-name})
 
       :else
       (let [gameid (:gameid client-state)
