@@ -263,7 +263,14 @@
         (is (true? (:waiting-to-start? status)))
         (is (= "runner" (:next-player status))))))
 
-  (testing "both at 0 clicks -> waiting-to-start?, next-player=corp"
+  ;; #117 INVERTED. This case used to assert that both sides at 0 clicks, with
+  ;; no :end-turn flag, is a boundary owed to the Corp. It isn't — it is the
+  ;; Runner's turn, out of clicks, not yet ended. The engine only ever ends a
+  ;; turn by setting :end-turn (game.core.turns/end-turn-continue), so "both at
+  ;; 0 clicks" cannot distinguish a boundary from a turn whose owner has simply
+  ;; run out, and this assertion is what licensed every surface to name the
+  ;; wrong player. See ai-turn-boundary-test for the full shape.
+  (testing "both at 0 clicks with no end-turn flag -> NOT a boundary (#117)"
     (with-mock-state (mock-client-state
                       :side "corp"
                       :active-player "runner"
@@ -272,8 +279,10 @@
                                    :corp {:click 0}
                                    :runner {:click 0}})
       (let [status (state/get-turn-status)]
-        (is (true? (:waiting-to-start? status)))
-        (is (= "corp" (:next-player status))))))
+        (is (false? (:waiting-to-start? status))
+            "the runner's turn has not ended; nobody is owed a start-turn")
+        (is (false? (:can-act? status))
+            "and the corp cannot act - my-turn-to-act? is false for BOTH sides"))))
 
   (testing "mid-turn (active player has clicks) -> not waiting-to-start?"
     (with-mock-state (mock-client-state

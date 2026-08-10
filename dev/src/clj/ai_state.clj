@@ -304,6 +304,174 @@
          ;; Engine says they've resolved => not pending, whatever our prompt says.
          (not opp-keep))))
 
+(defn my-turn-to-act?
+  "Check if it's our turn to act (need to start-turn or have clicks).
+   Handles Netrunner priority system where active-player doesn't flip until start-turn.
+
+   Wake conditions (any one is sufficient):
+     - I am the active player AND I have clicks remaining
+     - opponent set the :end-turn flag and active-player is still them
+       (engine in transition; my turn is up next)
+     - turn 0, Corp side, 0 clicks (post-mulligan: Corp goes first)
+
+   Crucially NOT a wake condition: 'both players at 0 clicks'. That
+   scenario fires every time the Runner spends their last click on a run
+   (Runner=0, Corp=0, but Runner is still resolving the run). An earlier
+   duplicate predicate had that bug and woke spuriously on every
+   opponent run-transition; this predicate is the authoritative source
+   of truth for the `wait` command (via `relevance-reason`).
+
+   Also NOT a wake condition: the opening-mulligan boundary. While our own prompt
+   is the 'waiting for opponent to keep hand or mulligan' window, start-turn is
+   refused (:opponent-mulligan), so reporting 'your move' here is a lie that
+   returns instantly and repeatedly — #87. The guard is checked FIRST so this
+   predicate agrees with can-start-turn? by construction.
+
+   Lives HERE, at the bottom of the stack, for the same reason
+   opponent-mulligan-pending? does (see its docstring): get-turn-status — which
+   backs `status`, `prompt`, `game-over-status`, `snapshot` and
+   `diagnose-blocker` — must answer 'whose move' with this predicate and not a
+   look-alike of its own. It used to live in ai-core, one layer ABOVE
+   get-turn-status, which is why get-turn-status grew a `both-zero-clicks`
+   boundary heuristic instead: exactly the divergent second copy that produced
+   #31, #68, and #117. ai-core re-exports the name, so every existing caller
+   (and the umpire's `eval` recipe) still resolves."
+  [state side]
+  ;; nil-safe on side: in the lobby / pre-game the seat may have no :side yet,
+  ;; and `(name nil)` would NPE (#46). No side => not our turn.
+  (when-let [my-side (keyword side)]
+   (let [active-player (get-in state [:game-state :active-player])
+        my-clicks (get-in state [:game-state my-side :click] 0)
+        end-turn (get-in state [:game-state :end-turn])
+        turn-number (get-in state [:game-state :turn] 0)]
+    (and
+     ;; #87: never claim it's our move while the opponent's opening mulligan is
+     ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
+     (not (opponent-mulligan-pending? state))
+     (or
+      ;; My turn and I have clicks
+      (and (= (name my-side) active-player) (> my-clicks 0))
+      ;; Opponent ended turn, waiting for me to start
+      ;; (active-player = opponent because end-turn was called, I'm next)
+      (and end-turn (not= (name my-side) active-player))
+      ;; Turn 0 with 0 clicks = post-mulligan, Corp needs to start
+      ;; (Corp always goes first)
+      (and (= 0 turn-number) (= 0 my-clicks) (= my-side :corp)))))))
+
+(defn turn-boundary?
+  "True when the engine is BETWEEN turns: someone has ended their turn and the
+   next player owes a `start-turn`.
+
+   The only signal is the engine's own `:end-turn` flag. That flag is exact —
+   `game.core.turns/end-turn-continue` sets it true, `start-turn` sets it false,
+   and a new game is built with it ALREADY true (game.core.state/new-state:
+   `:active-player :runner, :end-turn true, :turn 0`), which is what makes the
+   pre-first-turn boundary fall out of the same rule with no special case.
+
+   This replaces the `both-zero-clicks` heuristic that used to stand in for it.
+   That heuristic was never sound: 'both sides at 0 clicks' is ALSO the shape of
+   a turn whose owner is out of clicks but has not ended it (#117), and of a
+   run started with the last click. It cannot tell a boundary from either, which
+   is how `game-over-status` came to report AWAITING-START next-player=runner
+   while the Corp still owned the turn.
+
+   Carries my-turn-to-act?'s turn-0/Corp/0-clicks clause too, and that is not
+   belt-and-braces: dropping it would make THIS predicate disagree with that one
+   on the post-mulligan boundary — a fresh divergence of exactly the kind #117
+   is. (Real wire state has :end-turn true there, so the clause is unreachable in
+   a live game and reachable in every test fixture that omits the flag. Agreeing
+   with the authority on inputs the engine never produces still matters: it is
+   what stops the next reader from concluding the two predicates are different
+   things.)
+
+   Consistent with my-turn-to-act? by construction: at a boundary that predicate
+   is true for exactly the side that is NOT :active-player, and false for both
+   sides when this is false and nobody has clicks.
+
+   An active run is excluded: a run started with the last click is
+   mid-resolution, and a wedged run there must keep the tight mid-turn stall
+   budget rather than the patient boundary one."
+  [client-state]
+  (let [gs (:game-state client-state)]
+    (boolean (and (not (:run gs))
+                  (or (:end-turn gs)
+                      (and (= 0 (get gs :turn 0))
+                           (zero? (get-in gs [:corp :click] 0))))))))
+
+(defn my-turn-orphaned?
+  "True when MY turn is out of clicks but has NOT ended — so the turn still
+   belongs to me, nobody is owed a `start-turn`, and my-turn-to-act? is false for
+   BOTH sides.
+
+   This is the #117 state, and it is a real one: it is what the board looks like
+   between 'the active player spends their last click' and 'the turn actually
+   ends'. It became visible when a last click handed the OPPONENT a decision
+   (#114) — the auto-end deferred, and every surface then described the board as
+   a turn boundary that had not happened.
+
+   SIDE-RELATIVE on purpose, and that is a safety property, not a convenience.
+   The only action that resolves this state is `end-turn`, and an end-turn sent
+   by the player whose turn it ISN'T ends the OPPONENT's turn and is
+   unrecoverable. Answering 'is a turn orphaned' for either seat would let any
+   consumer that forgets to re-check ownership hand the Runner an end-turn hint
+   during the Corp's turn. Ask it side-relative and the worst a forgetful
+   consumer can do is stay quiet.
+
+   Requires no open prompt of ours. With an actionable prompt the honest answer
+   is 'resolve your prompt', and with a waiting prompt it is 'you are blocked on
+   the opponent'; both are reported by their own branches, and both are states
+   the player can still act out of."
+  [client-state]
+  (let [gs (:game-state client-state)
+        active (:active-player gs)
+        ;; :side arrives as \"corp\"/\"Corp\" depending on the path that set it;
+        ;; game-state keys are always lowercase (see my-side-kw).
+        my-side (some-> (:side client-state) clojure.string/lower-case)]
+    (boolean (and gs
+                  active
+                  my-side
+                  (= my-side (clojure.string/lower-case active))
+                  ;; Defined as the COMPLEMENT of a boundary rather than by
+                  ;; re-testing :end-turn, so the two can never both be true —
+                  ;; a surface that asked "boundary?" and a surface that asked
+                  ;; "orphaned?" disagreeing about the same instant is the whole
+                  ;; failure this issue is about.
+                  (not (turn-boundary? client-state))
+                  ;; NOT implied by the line above: turn-boundary? excludes runs
+                  ;; too, so its complement is true mid-run. A run started with
+                  ;; the last click is neither a boundary nor an orphaned turn —
+                  ;; `continue` is the move there, and offering end-turn instead
+                  ;; would end a turn with a run still live.
+                  (not (:run gs))
+                  ;; The engine's other zero-click pauses (guest-panel CRITICAL).
+                  ;; Both paid-ability windows sit at clicks=0 with :end-turn
+                  ;; still false, so they match this shape exactly — and in both
+                  ;; the resolving action is a PHASE command
+                  ;; (post-discard-pass-priority / end-phase-12), not end-turn.
+                  ;; Steering a seat to end-turn there re-enters
+                  ;; game.core.turns/end-turn and skips the window the opponent
+                  ;; is entitled to use.
+                  ;;
+                  ;; Not exotic: these are player-togglable settings, not card
+                  ;; effects — see the "PAW" checkboxes in
+                  ;; nr.gameboard.player-stats and the :force-phase-12-* /
+                  ;; :force-post-discard-* keys in core/process-actions. All four
+                  ;; state keys are serialized to us (core/diffs), so we can and
+                  ;; must check them.
+                  ;;
+                  ;; My original enumeration of "zero-click non-boundary states"
+                  ;; was clicks-out-but-not-ended and nothing else. It was
+                  ;; incomplete, and the shape of that mistake — assuming the
+                  ;; complement of one known state is a single other state — is
+                  ;; the thing to distrust here.
+                  (not (:corp-phase-12 gs))
+                  (not (:runner-phase-12 gs))
+                  (not (:corp-post-discard gs))
+                  (not (:runner-post-discard gs))
+                  (not (game-over? gs))
+                  (zero? (get-in gs [(keyword active) :click] 0))
+                  (nil? (get-in gs [(keyword my-side) :prompt-state]))))))
+
 (defn get-prompt
   "Get current prompt for our side, if any"
   []
@@ -319,6 +487,10 @@
    - :my-turn? - boolean
    - :turn-number - integer
    - :can-act? - boolean (my turn AND not waiting prompt)
+   - :waiting-to-start? - boolean (engine is between turns; someone owes start-turn)
+   - :turn-orphaned? - boolean (#117: active player is out of clicks but has NOT
+     ended their turn — nobody owes a start-turn, and my-turn-to-act? is false
+     for both sides)
    - :in-run? - boolean
    - :run-server - server name if in run
    - :status-emoji - visual indicator
@@ -328,22 +500,26 @@
         my-side (:side @client-state)
         active-side (active-player)
         turn-num (turn-number)
-        end-turn (get-in gs [:end-turn])
         winner (:winner gs)
         game-over? (game-over? gs)
         prompt (get-prompt)
         prompt-type (:prompt-type prompt)
         run-state (get-in gs [:run])
-        runner-clicks (get-in gs [:runner :click])
-        corp-clicks (get-in gs [:corp :click])
-        both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
         ;; Compare case-insensitively since my-side is "Corp"/"Runner" but active-side is "corp"/"runner"
         my-turn (and my-side active-side
                      (= (clojure.string/lower-case my-side)
                         (clojure.string/lower-case active-side)))
-        ;; When both have 0 clicks, determine who should go next
-        ;; At turn 0: Corp goes first
-        ;; Otherwise: opposite of whoever is currently active
+        ;; #117: the boundary and the orphaned turn are now read off the ENGINE's
+        ;; :end-turn flag (turn-boundary? / my-turn-orphaned?), not off a
+        ;; both-sides-at-0-clicks heuristic. Those two shapes are indistinguishable
+        ;; by click count, so the heuristic reported an orphaned turn as a boundary
+        ;; and pointed every surface at the wrong player.
+        boundary? (turn-boundary? @client-state)
+        orphaned? (my-turn-orphaned? @client-state)
+        ;; At a boundary the wire's :active-player still names the player who just
+        ;; FINISHED, so "who acts next" is the other side. At turn 0 the engine
+        ;; ships :active-player :runner / :end-turn true, so Corp-goes-first falls
+        ;; out of the same flip with no special case.
         next-player (cond
                      (= turn-num 0) "corp"
                      (= active-side "corp") "runner"
@@ -351,10 +527,20 @@
                      :else "unknown")
 
         ;; Determine status
-        ;; Check if I'm the next player (for both-zero-clicks case)
-        i-am-next (and both-zero-clicks
-                       my-side
-                       (= (clojure.string/lower-case my-side) next-player))
+        ;; Am I the one owed the start-turn? CALLS the authority rather than
+        ;; re-deriving "am I the next player" from side names (guest-panel:
+        ;; agreeing by construction is not the same as asking).
+        ;;
+        ;; HONEST NOTE, because a comment that overstates this would be the same
+        ;; species of bug as #117: today this is NOT behaviourally different from
+        ;; the name comparison it replaced. The only input where the two diverge
+        ;; is the opening mulligan — a boundary where my-turn-to-act? is
+        ;; deliberately false for the Corp (#87) but the Corp IS the next player
+        ;; by name — and the opponent-mulligan-pending? branch below already
+        ;; catches that case first. Reverting this line to the name comparison
+        ;; leaves the whole suite green; it is a structural guarantee against the
+        ;; branch order changing, not a fix for a live symptom.
+        i-am-next (and boundary? (boolean (my-turn-to-act? @client-state my-side)))
 
         [emoji text can-act]
         (cond
@@ -366,17 +552,20 @@
            false]
 
           ;; Opponent's opening mulligan is unresolved (#87). MUST precede the
-          ;; both-zero-clicks branch: at that boundary both sides ARE at 0 clicks
-          ;; and turn 0 makes the Corp "next", so this read as "🟢 Ready to start
-          ;; your turn" — on EVERY command, since show-turn-indicator appends it —
-          ;; while start-turn refused and `wait` (correctly) blocked. Fixing only
-          ;; the wake path would have moved the lie to this surface rather than
-          ;; killing it: one predicate, one answer.
+          ;; boundary branch: the pre-first-turn state IS a boundary (:end-turn
+          ;; ships true) and turn 0 makes the Corp "next", so this read as
+          ;; "🟢 Ready to start your turn" — on EVERY command, since
+          ;; show-turn-indicator appends it — while start-turn refused and `wait`
+          ;; (correctly) blocked. Fixing only the wake path would have moved the
+          ;; lie to this surface rather than killing it: one predicate, one answer.
           (opponent-mulligan-pending? @client-state)
           ["⏳" "Waiting for opponent to finish their opening mulligan" false]
 
-          ;; Both at 0 clicks - it's the next player's turn to start
-          both-zero-clicks
+          ;; Between turns: someone owes a start-turn. Both arms are needed —
+          ;; the player who just ended is still :active-player, so without the
+          ;; else arm they were told "🟢 Ready to start turn" about the turn they
+          ;; had only just finished.
+          boundary?
           (if i-am-next
             ["🟢" "Ready to start your turn" true]
             ["⏳" (str "Waiting for " next-player " to start") false])
@@ -384,11 +573,15 @@
           (not my-turn)
           ["⏳" (str "Waiting for " active-side) false]
 
-          end-turn
-          ["🟢" "Ready to start turn" true]
-
           (waiting-prompt-type? prompt-type)
           ["⏳" (or (:msg prompt) "Waiting...") false]
+
+          ;; My turn, out of clicks, not ended, nothing pending (#117). Nobody is
+          ;; owed a start-turn and my-turn-to-act? is false for BOTH sides, so
+          ;; this must not be dressed up as a boundary — the turn is still mine
+          ;; and ending it is the move.
+          orphaned?
+          ["⏳" "Your turn is out of clicks but has NOT ended yet — end it" false]
 
           :else
           ["✅" "Your turn to act" true])]
@@ -413,16 +606,16 @@
      ;; game-over first, lobby-gone second.
      :in-game? (boolean (and (or gs (:lobby-state @client-state))
                              (not (lobby-gone? @client-state))))
-     ;; A clean turn boundary (a player ended their turn, or both sides are at
-     ;; 0 clicks) is "next player to start", NOT a stall. Tooling uses this to
-     ;; avoid false-positive stall detection while a slow opponent thinks about
-     ;; its turn start. game-over takes precedence. An ACTIVE run is excluded:
-     ;; a run started with the last click leaves both sides at 0 clicks but is
-     ;; mid-resolution, not a turn boundary — a wedged run there must keep the
-     ;; tight mid-turn stall budget, not the patient boundary one.
-     :waiting-to-start? (boolean (and (not game-over?)
-                                      (not run-state)
-                                      (or end-turn both-zero-clicks)))
+     ;; A clean turn boundary is "next player to start", NOT a stall. Tooling
+     ;; uses this to avoid false-positive stall detection while a slow opponent
+     ;; thinks about its turn start. game-over takes precedence; the active-run
+     ;; exclusion lives in turn-boundary?.
+     :waiting-to-start? (boolean (and (not game-over?) boundary?))
+     ;; The turn is still the active player's, but it has no clicks left and has
+     ;; not ended (#117). Distinct from :waiting-to-start? precisely BECAUSE the
+     ;; two used to be conflated: nobody is owed a start-turn here, and telling a
+     ;; seat otherwise is what sent the umpire's instruction to the wrong player.
+     :turn-orphaned? orphaned?
      :my-turn? my-turn
      :turn-number turn-num
      :can-act? can-act

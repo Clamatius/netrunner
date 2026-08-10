@@ -34,7 +34,7 @@ check-full:
 # Run unit tests
 test:
 	@echo "Running unit tests..."
-	lein test ai-actions-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test web.lobby-disconnect-test
+	lein test ai-actions-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test web.lobby-disconnect-test
 
 # Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
 test-shell:
