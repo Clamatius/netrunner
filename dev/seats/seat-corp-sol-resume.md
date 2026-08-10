@@ -4,7 +4,7 @@ You are resuming an **in-progress** competitive Netrunner game as the **Corp**. 
 previous session of you played turns 1–9 and then ended while waiting on an
 opponent decision. The game is still live and it is your job to finish it.
 
-**Read `dev/seat-corp-terra.md` first — it is your brief.** Everything there still
+**Read `dev/seats/seat-corp-terra.md` first — it is your brief.** Everything there still
 applies (isolation contract, never re-send end-turn, escalate rather than retry,
 the deliverable). This file only adds resume-specific context.
 

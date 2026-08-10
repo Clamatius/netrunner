@@ -13,7 +13,7 @@
 #
 # After this script reports "Runner seat ready":
 #   1) Open a NEW terminal, run `claude`, and paste the contents of
-#      dev/seat-runner.md as your first message.
+#      dev/seats/seat-runner.md as your first message.
 #   2) (optional) In a THIRD terminal: ./dev/umpire.sh   # calls the game + archives logs
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,6 +62,6 @@ echo "🏃 Runner seat = LEFT FRESH (at mulligan) for the model session."
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════"
 echo " Runner seat ready. Next:"
-echo "   1) New terminal → run 'claude' → paste dev/seat-runner.md as message 1"
+echo "   1) New terminal → run 'claude' → paste dev/seats/seat-runner.md as message 1"
 echo "   2) (optional) Third terminal → ./dev/umpire.sh   # polls + archives the result"
 echo "═══════════════════════════════════════════════════════════════════════"

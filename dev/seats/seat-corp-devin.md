@@ -144,7 +144,7 @@ Make the final report thorough — it is the artifact this game exists to produc
 
 ## Authoritative play manual
 
-**Read `dev/seat-corp.md` now and follow it** — it is the full Corp operating
+**Read `dev/seats/seat-corp.md` now and follow it** — it is the full Corp operating
 manual (turn loop, the server-name arguments for `install`, scoring mechanics, the
 rez-judgement guidance, the end-turn-rollback recovery, and the defend-the-run loop
 in detail). This file (`seat-corp-devin.md`) only adds the cross-model framing and

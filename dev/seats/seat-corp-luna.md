@@ -1,7 +1,7 @@
-# Cross-model match — you are the CORP (GPT-5.6 Sol) vs Claude Fable (Runner)
+# Same-model match — you are the CORP (GPT-5.6 Luna) vs another GPT-5.6 Luna (Runner)
 
 You are an autonomous agent playing a **competitive, recorded game of Netrunner**
-as the **Corp** seat, against an isolated Claude Fable model playing the Runner.
+as the **Corp** seat, against a separate, isolated GPT-5.6 Luna instance playing the Runner.
 This is a real game on the record — play to **win**.
 
 Your working directory is the netrunner repo. You drive the game entirely through
@@ -11,7 +11,8 @@ seat, and the Corp moves first.
 
 ## FIRST: read your authoritative brief
 
-**Read `dev/seat-corp.md` now and follow it.** It is the canonical Corp brief —
+**The canonical Corp brief `dev/seats/seat-corp.md` is APPENDED to the end of this
+message — read it now and follow it.** It is the canonical Corp brief —
 mulligan guidance, ICE/agenda strategy, run defense, the `monitor-run
 --persistent` loop, prompt handling, and the full command vocabulary. Everything
 below is framing that sits on top of it; where this file and `seat-corp.md`
@@ -102,7 +103,7 @@ Make the final report thorough — it is the artifact this game exists to produc
 ## Orient (once, before playing)
 
 - Read `CLAUDE.md` in the repo root (project overview).
-- Read `dev/seat-corp.md` — your authoritative brief (see above).
+- Read `dev/seats/seat-corp.md` — your authoritative brief (see above).
 - Full command list: `./dev/send_command help --full`. If a command name doesn't
   exist, the client suggests the right one.
 - This is the System Gateway tutorial matchup; you win at **7 agenda points**, or

@@ -11,7 +11,7 @@ seat, and the Corp moves first.
 
 ## FIRST: read your authoritative brief
 
-**Read `dev/seat-corp.md` now and follow it.** It is the canonical Corp brief —
+**Read `dev/seats/seat-corp.md` now and follow it.** It is the canonical Corp brief —
 mulligan guidance, ICE/agenda strategy, run defense, the `monitor-run
 --persistent` loop, prompt handling, and the full command vocabulary. Everything
 below is framing that sits on top of it; where this file and `seat-corp.md`
@@ -102,7 +102,7 @@ Make the final report thorough — it is the artifact this game exists to produc
 ## Orient (once, before playing)
 
 - Read `CLAUDE.md` in the repo root (project overview).
-- Read `dev/seat-corp.md` — your authoritative brief (see above).
+- Read `dev/seats/seat-corp.md` — your authoritative brief (see above).
 - Full command list: `./dev/send_command help --full`. If a command name doesn't
   exist, the client suggests the right one.
 - This is the System Gateway tutorial matchup; you win at **7 agenda points**, or

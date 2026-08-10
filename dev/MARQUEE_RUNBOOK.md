@@ -5,9 +5,9 @@
 > - **Models:** Claude seat = **Fable** (background Agent subagent, `model: "fable"`);
 >   guest seat = **GPT-5.6 Sol** via devin (`--model gpt-5.6-sol` — PONG-verified
 >   2026-08-03). Codex CLI stays reserved for gpt-5.5-pinned experiments.
-> - **Seat briefs:** `dev/seat-corp-sol.md` / `dev/seat-runner-sol.md` (wrappers over
+> - **Seat briefs:** `dev/seats/seat-corp-sol.md` / `dev/seats/seat-runner-sol.md` (wrappers over
 >   the canonical `seat-corp.md`/`seat-runner.md`, adapted from the Terra briefs);
->   mid-game restart: `dev/seat-corp-sol-resume.md`.
+>   mid-game restart: `dev/seats/seat-corp-sol-resume.md`.
 > - **Babysitter (keep armed for any 5.6 seat):** `dev/marquee-babysit.sh <side>
 >   gpt-5.6-sol <tag>` — re-invokes `devin -p -c` with an action-forcing nudge
 >   whenever the seat's process exits while the game is live. Proven Terra round
@@ -46,12 +46,12 @@ which devin               # /Users/mcooper/.local/bin/devin
 Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
 
 ## Seat assignment
-- **Game 1:** Corp = **Opus** (subagent, `dev/seat-corp.md`); Runner = **GPT-5.5**
-  (`devin -p`, `dev/seat-runner-devin.md`). Rationale: GPT on the simpler proactive
+- **Game 1:** Corp = **Opus** (subagent, `dev/seats/seat-corp.md`); Runner = **GPT-5.5**
+  (`devin -p`, `dev/seats/seat-runner-devin.md`). Rationale: GPT on the simpler proactive
   Runner; the proven Opus-subagent harness takes the harder reactive Corp defense.
 - **Game 2 (the pair):** swap — Corp = GPT-5.5, Runner = Opus. Play the pair so
   seat-brief/player-doc bias cancels out. Game 2 needs a GPT **Corp** brief
-  (`dev/seat-corp.md` is Opus-flavored prose but model-agnostic instructions; a
+  (`dev/seats/seat-corp.md` is Opus-flavored prose but model-agnostic instructions; a
   thin `seat-corp-devin.md` wrapper like the runner one is the clean path if GPT
   needs the explicit loop-to-game-over framing).
 
@@ -61,7 +61,7 @@ Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
    ./dev/reset.sh           # fresh game at mulligan; note the GameID
    ```
 2. **Spawn the Corp seat FIRST** as a background Agent subagent (context-isolated
-   — fog-of-war): prompt = "read and follow `dev/seat-corp.md`; play to GAME-OVER;
+   — fog-of-war): prompt = "read and follow `dev/seats/seat-corp.md`; play to GAME-OVER;
    keep a move-by-move rationale for the final report." `run_in_background: true`.
 3. **Confirm the Corp kept its hand** before spawning the Runner — read-only via
    the idle/free REPL:
@@ -73,7 +73,7 @@ Both model strings are valid: `gpt-5.5`, `claude-opus-4.8`.
 4. **Spawn the Runner seat** (GPT-5.5) — run in background via Bash:
    ```bash
    DEVIN_PERMISSION_MODE=dangerous devin -p --model gpt-5.5 \
-     --prompt-file dev/seat-runner-devin.md > logs/marquee-runner-devin.log 2>&1
+     --prompt-file dev/seats/seat-runner-devin.md > logs/marquee-runner-devin.log 2>&1
    ```
    `DEVIN_PERMISSION_MODE=dangerous` is REQUIRED (no human to approve tool calls;
    without it the seat hangs on the first `send_command`). devin runs in repo cwd,
