@@ -132,13 +132,14 @@
              (str/trim (with-out-str (display/game-over-status))))))))
 
 (deftest test-game-over-status-awaiting-start
-  ;; At a clean turn boundary (a player has ended their turn, or both sides are
-  ;; at 0 clicks) the active-player wire field still names the player who just
-  ;; finished. Reporting `IN-PROGRESS whose-turn=corp clicks=0` there is
+  ;; At a clean turn boundary the active-player wire field still names the player
+  ;; who just finished. Reporting `IN-PROGRESS whose-turn=corp clicks=0` there is
   ;; indistinguishable from a corp stall, so the umpire's stall detector can
   ;; false-positive while a slow opponent is thinking about its turn start.
   ;; A distinct AWAITING-START token names who acts next so tooling can apply a
   ;; patient boundary budget instead of the tight mid-turn stall threshold.
+  ;;
+  ;; The boundary is the engine's :end-turn latch, NOT a click count — see #117.
   (testing "corp ended turn -> AWAITING-START next-player=runner"
     (with-mock-state (mock-client-state
                       :side "corp"
@@ -148,12 +149,17 @@
       (is (= "AWAITING-START turn=5 next-player=runner"
              (str/trim (with-out-str (display/game-over-status)))))))
 
-  (testing "both sides at 0 clicks (no end-turn flag yet) -> AWAITING-START"
+  ;; #117: this case used to assert AWAITING-START. It is the shape of an
+  ;; ORPHANED turn (#114) — the active player is out of clicks but has not
+  ;; latched :end-turn — and calling it a boundary is what made every seat-facing
+  ;; surface point at the wrong player. The clicks=0 in IN-PROGRESS is the honest
+  ;; signal: the runner's turn is open and going nowhere.
+  (testing "#117: both sides at 0 clicks with no end-turn latch -> IN-PROGRESS"
     (with-mock-state (mock-client-state
                       :side "corp"
                       :game-state {:active-player "runner" :turn 6
                                    :corp {:click 0} :runner {:click 0}})
-      (is (= "AWAITING-START turn=6 next-player=corp"
+      (is (= "IN-PROGRESS turn=6 whose-turn=runner clicks=0"
              (str/trim (with-out-str (display/game-over-status)))))))
 
   ;; #104: a boundary with our own prompt still open (end-of-turn discard) read
@@ -1976,3 +1982,163 @@
           (str "the Corp has no self-advance path, got:\n" out))
       (is (not (str/includes? out "abandoned"))
           (str "must not promise the Corp a recovery it does not have, got:\n" out)))))
+
+;; ============================================================================
+;; #117 — the three turn-boundary surfaces must AGREE
+;; ============================================================================
+;; Ground truth from the Luna-vs-Luna game (gameid d840fc14): a Corp turn was
+;; ORPHANED at 0 clicks — `active-player=corp, end-turn=false, corp clicks=0` —
+;; because the last click handed the Runner a decision and auto-end-turn declined
+;; (#114). Every seat-facing surface then pointed at the RUNNER:
+;;
+;;   game-over-status  AWAITING-START turn=10 next-player=runner
+;;   Runner `prompt`   🟢 It's YOUR turn but it hasn't started yet
+;;   Corp   `prompt`   ⏳ Waiting for runner to start their turn
+;;   Corp   `status`   "Turn: 10 - corp" AND "🟢 Waiting to start runner turn"
+;;
+;; The umpire read the Runner's `prompt`, believed it, and issued a wrong
+;; instruction. No test constructed this state, so all three surfaces stayed
+;; green through it. Each surface derives from get-turn-status, which derived
+;; the boundary from `both-zero-clicks` — a heuristic, not the engine's rule.
+
+(defn- orphaned-turn-state
+  "The #117 shape, viewed from SIDE. Corp is active with 0 clicks and has NOT
+   latched :end-turn; the Runner also holds 0 (it is not their turn)."
+  [side]
+  (mock-client-state
+   :side side
+   :active-player "corp"
+   :game-state {:active-player "corp"
+                :turn 10
+                :end-turn false
+                :corp {:click 0 :credit 3 :hand-count 5 :deck-count 30
+                       :user {:username "ai-corp"}}
+                :runner {:click 0 :credit 5 :hand-count 5 :deck-count 30
+                         :user {:username "ai-runner"}}}))
+
+(deftest test-orphaned-turn-surfaces-agree
+  (testing "#117: game-over-status does not call an orphaned turn a boundary"
+    (with-mock-state (orphaned-turn-state "corp")
+      (let [out (with-out-str (display/game-over-status))]
+        (is (not (str/includes? out "AWAITING-START"))
+            (str "no :end-turn latch => no boundary; got:\n" out))
+        (is (str/includes? out "IN-PROGRESS")
+            (str "the corp's turn is still open; got:\n" out))
+        (is (str/includes? out "whose-turn=corp")
+            (str "and it belongs to the CORP, not the runner; got:\n" out)))))
+
+  (testing "#117: the Runner's prompt does not claim the turn is theirs"
+    (with-mock-state (orphaned-turn-state "runner")
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "It's YOUR turn"))
+            (str "this is the line the umpire believed; got:\n" out))
+        (is (str/includes? out "corp")
+            (str "it must name the corp as the side to act; got:\n" out)))))
+
+  (testing "#117: the Corp's prompt points at the Corp, not at the runner"
+    (with-mock-state (orphaned-turn-state "corp")
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "Waiting for runner to start"))
+            (str "the runner owes nothing here; got:\n" out))
+        (is (str/includes? out "end-turn")
+            (str "end-turn is the only legal move; got:\n" out)))))
+
+  (testing "#117: the Corp's status block does not contradict itself"
+    (with-mock-state (orphaned-turn-state "corp")
+      (let [out (with-out-str (display/show-status))]
+        (is (str/includes? out "Turn: 10 - corp")
+            (str "ground truth line; got:\n" out))
+        (is (not (str/includes? out "Waiting to start runner turn"))
+            (str "…which the status line used to contradict; got:\n" out))
+        (is (str/includes? out "end-turn")
+            (str "the recovery hint the both-zero-clicks guard suppressed;
+                  got:\n" out)))))
+
+  (testing "#117: all three surfaces name the same side"
+    (doseq [side ["corp" "runner"]]
+      (with-mock-state (orphaned-turn-state side)
+        (let [ts (ai-state/get-turn-status)]
+          (is (false? (:waiting-to-start? ts))
+              (str side ": not a boundary"))
+          (is (= "corp" (:whose-turn ts))
+              (str side ": the corp is the active player"))
+          ;; The single-source rule (#31/#68/#114): the surfaces above all read
+          ;; get-turn-status, and it must not claim an ability to act that
+          ;; my-turn-to-act? — the predicate backing `wait` — denies. Asserted
+          ;; directionally rather than as an equality, because an equality here
+          ;; is satisfied by false=false and would go on passing if BOTH sides
+          ;; of it regressed together.
+          (is (false? (boolean (core/my-turn-to-act? @ai-state/client-state side)))
+              (str side ": nobody has clicks, so the predicate denies acting"))
+          (is (false? (:can-act? ts))
+              (str side ": …and get-turn-status must not claim otherwise")))))))
+
+(deftest test-real-boundary-still-reads-as-a-boundary
+  (testing "#117 regression guard: a LATCHED end-turn is still AWAITING-START"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :active-player "corp"
+                      :game-state {:active-player "corp"
+                                   :turn 10
+                                   :end-turn true
+                                   :corp {:click 0 :user {:username "ai-corp"}}
+                                   :runner {:click 0 :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/game-over-status))]
+        (is (str/includes? out "AWAITING-START turn=10 next-player=runner")
+            (str "the patient boundary stall budget must still be reachable;
+                  got:\n" out)))))
+
+  (testing "#117 regression guard: post-mulligan turn 0 is the Corp's to start"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "runner"
+                      :game-state {:active-player "runner"
+                                   :turn 0
+                                   :end-turn true
+                                   :corp {:click 0 :keep true :user {:username "ai-corp"}}
+                                   :runner {:click 0 :keep true :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/game-over-status))]
+        (is (str/includes? out "AWAITING-START turn=0 next-player=corp")
+            (str "corp goes first; got:\n" out))))))
+
+(deftest test-opening-mulligan-is-not-a-turn-boundary
+  ;; #117 (guest-panel catch), continuing #87. `new-state` ships :end-turn TRUE
+  ;; at turn 0, so the mulligan window satisfies every click-or-latch reading of
+  ;; "turn boundary" — the pre-#117 `(or end-turn both-zero-clicks)` included.
+  ;; get-turn-status therefore published AWAITING-START next-player=corp (and
+  ;; `prompt` said "It's YOUR turn ... use 'start-turn'") while start-turn
+  ;; refused with :opponent-mulligan, and while get-turn-status's OWN
+  ;; :status-text said we were waiting on the opponent's mulligan.
+  ;; my-turn-to-act? guards on the mulligan first; the boundary must too.
+  (let [mulligan-state
+        (mock-client-state
+         :side "corp"
+         :active-player "runner"
+         :game-state {:active-player "runner"
+                      :turn 0
+                      :end-turn true
+                      :corp {:click 0
+                             :prompt-state {:prompt-type "waiting"
+                                            :msg "Waiting for Runner to keep hand or mulligan"}}
+                      :runner {:click 0}})]
+    (testing "the predicate and the boundary agree that we cannot start yet"
+      (with-mock-state mulligan-state
+        (is (true? (ai-state/opponent-mulligan-pending? @ai-state/client-state))
+            "precondition: this IS the mulligan window")
+        (is (false? (boolean (core/my-turn-to-act? @ai-state/client-state "corp")))
+            "the authoritative predicate says no (#87)")
+        (is (false? (:waiting-to-start? (ai-state/get-turn-status)))
+            "so the boundary must say no as well")))
+
+    (testing "game-over-status does not advertise a start the engine will refuse"
+      (with-mock-state mulligan-state
+        (let [out (with-out-str (display/game-over-status))]
+          (is (not (str/includes? out "AWAITING-START"))
+              (str "tooling would apply boundary semantics to a refused start;
+                    got:\n" out)))))
+
+    (testing "prompt does not tell the seat to start-turn"
+      (with-mock-state mulligan-state
+        (let [out (with-out-str (display/show-prompt-detailed))]
+          (is (not (str/includes? out "start-turn"))
+              (str "the #87 lie, relocated to the prompt surface; got:\n" out)))))))

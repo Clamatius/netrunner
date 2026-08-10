@@ -263,7 +263,27 @@
         (is (true? (:waiting-to-start? status)))
         (is (= "runner" (:next-player status))))))
 
-  (testing "both at 0 clicks -> waiting-to-start?, next-player=corp"
+  (testing "runner ended turn -> waiting-to-start?, next-player=corp"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :active-player "runner"
+                      :game-state {:active-player "runner"
+                                   :turn 6
+                                   :end-turn true
+                                   :corp {:click 0}
+                                   :runner {:click 0}})
+      (let [status (state/get-turn-status)]
+        (is (true? (:waiting-to-start? status)))
+        (is (= "corp" (:next-player status))))))
+
+  ;; #117: this case used to assert the OPPOSITE — "both at 0 clicks" was read
+  ;; as a boundary with no :end-turn in sight. It is not one. The engine makes
+  ;; :end-turn a latch (new-state true / start-turn false / end-turn-continue
+  ;; true), so 0-clicks-without-:end-turn means the active player's turn is
+  ;; still open — orphaned at 0 clicks (#114). The test was green through the
+  ;; whole life of the bug because it encoded the heuristic rather than the
+  ;; engine's rule. Deriving from turn-awaiting-start? kills the class.
+  (testing "#117: both at 0 clicks WITHOUT end-turn is NOT a boundary"
     (with-mock-state (mock-client-state
                       :side "corp"
                       :active-player "runner"
@@ -272,8 +292,9 @@
                                    :corp {:click 0}
                                    :runner {:click 0}})
       (let [status (state/get-turn-status)]
-        (is (true? (:waiting-to-start? status)))
-        (is (= "corp" (:next-player status))))))
+        (is (false? (:waiting-to-start? status))
+            "no :end-turn latch => the runner's turn is still open")
+        (is (= "runner" (:whose-turn status))))))
 
   (testing "mid-turn (active player has clicks) -> not waiting-to-start?"
     (with-mock-state (mock-client-state

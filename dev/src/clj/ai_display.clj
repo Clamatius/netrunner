@@ -163,12 +163,13 @@
             run-state (get-in gs [:run])
             runner-clicks (get-in gs [:runner :click])
             corp-clicks (get-in gs [:corp :click])
-            both-zero-clicks (and (= 0 runner-clicks) (= 0 corp-clicks))
-            next-player (cond
-                         (= turn-num 0) "corp"
-                         (= active-side "corp") "runner"
-                         (= active-side "runner") "corp"
-                         :else "unknown")
+            ;; #117: `status` used to re-derive the turn boundary from its own
+            ;; `both-zero-clicks` copy, so it could contradict game-over-status,
+            ;; `prompt`, AND itself ("Turn: 10 - corp" over "🟢 Waiting to start
+            ;; runner turn", same output block). One predicate, one answer.
+            turn-status (state/get-turn-status)
+            at-boundary (:waiting-to-start? turn-status)
+            next-player (:next-player turn-status)
             runner-missing? (and gs (nil? (get-in gs [:runner :user])))
             corp-missing? (and gs (nil? (get-in gs [:corp :user])))]
 
@@ -213,8 +214,8 @@
               (and end-turn (= my-side active-side))
               (println "Status: ⏳ Waiting for" (if (= active-side "corp") "runner" "corp") "to start turn")
 
-              ;; Both players have 0 clicks but end-turn not called yet
-              both-zero-clicks
+              ;; A boundary the two end-turn branches above didn't catch
+              at-boundary
               (println "Status: 🟢 Waiting to start" next-player "turn (use 'start-turn' command)")
 
               ;; Waiting for opponent
@@ -224,6 +225,15 @@
               ;; Waiting prompt
               (state/waiting-prompt-type? prompt-type)
               (println "Status: ⏳" (:msg prompt))
+
+              ;; My turn, not a boundary, nothing blocking — and no clicks. The
+              ;; orphaned turn (#114/#117): the only move is end-turn. This used
+              ;; to be swallowed by the both-zero-clicks branch above and read as
+              ;; "waiting to start the OPPONENT's turn".
+              (and (= 0 (get-in gs [(keyword (str/lower-case (or my-side "corp"))) :click])))
+              (do
+                (println "Status: ⚠️  Your turn — 0 clicks left")
+                (println "💡 Use 'end-turn' to finish your turn"))
 
               ;; My turn and active
               :else
@@ -270,7 +280,7 @@
                                         (:sources hosted)))))
                 (println "Credits:" (state/runner-credits))))
             (let [clicks runner-clicks]
-              (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
+              (if (and (= "runner" active-side) (zero? clicks) (not end-turn) (not at-boundary))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
@@ -333,7 +343,7 @@
             (println "\n--- CORP ---")
             (println "Credits:" (state/corp-credits))
             (let [clicks corp-clicks]
-              (if (and (= "corp" active-side) (zero? clicks) (not end-turn) (not both-zero-clicks))
+              (if (and (= "corp" active-side) (zero? clicks) (not end-turn) (not at-boundary))
                 (do
                   (println "Clicks:" clicks "(End of Turn)")
                   (println "💡 Use 'end-turn' to finish your turn"))
