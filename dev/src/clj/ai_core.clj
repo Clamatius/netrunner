@@ -700,11 +700,14 @@
 
    Note: This does a simple counter check (counters >= requirement).
    It does NOT detect effects like 'cannot score this turn' or similar restrictions.
-   Therefore, use conservatively - if this returns agendas, assume they MIGHT be scorable."
-  []
-  (let [side (:side @state/client-state)]
+   Therefore, use conservatively - if this returns agendas, assume they MIGHT be scorable.
+
+   The 1-arg form answers about a client-state you already hold (see corp-servers)."
+  ([] (find-scorable-agendas @state/client-state))
+  ([client-state]
+   (let [side (:side client-state)]
     (if (side= "Corp" side)
-      (let [servers (state/corp-servers)
+      (let [servers (state/corp-servers client-state)
             ;; Get all content (assets/upgrades/agendas) from all servers
             all-content (mapcat :content (vals servers))
             ;; Filter for agendas only
@@ -723,7 +726,7 @@
                 :requirement (:advancementcost agenda)})
             scorable))
       ;; Not Corp, return empty
-      [])))
+      []))))
 
 (defn find-eot-rezzable-cards
   "Installed Corp assets/upgrades that are still unrezzed and affordable RIGHT NOW.
@@ -753,12 +756,15 @@
 
    Known residual, same direction: rez-cost REDUCERS are not modelled, so a card
    made cheaper by an effect can still be missed. Costs a beat, never a wrong
-   action — worth revisiting if a seat reports it."
-  []
-  (let [side (:side @state/client-state)]
+   action — worth revisiting if a seat reports it.
+
+   The 1-arg form answers about a client-state you already hold (see corp-servers)."
+  ([] (find-eot-rezzable-cards @state/client-state))
+  ([client-state]
+   (let [side (:side client-state)]
     (if (side= "Corp" side)
-      (let [pool (or (get-in @state/client-state [:game-state :corp :credit]) 0)
-            servers (vals (state/corp-servers))
+      (let [pool (or (get-in client-state [:game-state :corp :credit]) 0)
+            servers (vals (state/corp-servers client-state))
             ;; Both content and ice can carry recurring credits.
             all-cards (mapcat #(concat (:content %) (:ices %)) servers)
             recurring (->> all-cards
@@ -775,7 +781,7 @@
                     {:card card
                      :title (:title card)
                      :cost (:cost card)}))))
-      [])))
+      []))))
 
 ;; ============================================================================
 ;; Install Validation (Baby-proofing)
@@ -1761,6 +1767,10 @@
      :my-turn-start      — it's our turn at a boundary; we must call start-turn
                            before acting (we hold 0 clicks until we do)
      :my-turn            — it's our turn and we have clicks; act now
+     :my-turn-end        — our turn is out of clicks but has NOT ended (#120):
+                           nobody owes a start-turn, my-turn-to-act? is false for
+                           BOTH sides, and `end-turn` is the only move. Fires for
+                           the turn's OWNER only
      :my-run-window      — we own the un-passed pass at an active run window
                            (approach-ice / movement / approach-server). #91: a
                            seat that had passed a PREVIOUS window otherwise sleeps
@@ -1856,8 +1866,89 @@
        (my-turn-to-act? state side)
        (if (turn-awaiting-start? state side) :my-turn-start :my-turn)
 
+       ;; My turn is out of clicks but has NOT ended (#120). my-turn-to-act? is
+       ;; false for BOTH sides here — its active-player arm needs clicks, and its
+       ;; other two arms need :end-turn or turn 0 — so this cond used to fall
+       ;; through to nil on every seat and both `wait` calls slept the full 300s.
+       ;; A mutual deadlock, and the side that could break it (the one owed the
+       ;; end-turn) was the one being told it had no move.
+       ;;
+       ;; This is an END-TURN OBLIGATION, not a click count. Waking on
+       ;; 'both players at 0 clicks' is the bug my-turn-to-act?'s docstring
+       ;; explicitly refuses to reintroduce — that shape fires on every run
+       ;; started with the last click. my-turn-orphaned? is the narrower fact
+       ;; (#117): active player, 0 clicks, :end-turn false, no run, no prompt of
+       ;; ours, and none of the engine's other zero-click pauses (phase 1.2,
+       ;; post-discard priority — both resolved by a PHASE command, not end-turn).
+       ;;
+       ;; Ranked LAST on purpose, and NOT because the earlier branches are
+       ;; mutually exclusive with it — my first version of this comment claimed
+       ;; that and the guest panel falsified it. The STATE branches (run, prompt,
+       ;; game-over) are excluded by the predicate, but :run-ended and
+       ;; :game-over/:game-gone are TRANSITIONS: a run that ends on the last click
+       ;; leaves us orphaned AND reports :run-ended, which outranks this. That is
+       ;; the right precedence — the transition is the news — so the obligation is
+       ;; carried in :run-ended's guidance instead of by reordering the ladder
+       ;; (see end-turn-obligation-lines). Reordering would suppress the run-end
+       ;; report, which is a worse trade.
+       ;;
+       ;; Called with the side we were HANDED, and side-relative in the
+       ;; predicate: an end-turn from the seat whose turn it isn't ends the
+       ;; OPPONENT's turn and is unrecoverable. The opponent stays asleep here
+       ;; and wakes on :my-turn-start once the flag latches.
+       (state/my-turn-orphaned? state side)
+       :my-turn-end
+
        ;; Nothing relevant
        :else nil))))
+
+(defn- end-turn-obligation-lines
+  "The seat owns a turn that is out of clicks but has NOT ended (#120). Emitted
+   from TWO wake reasons — :my-turn-end, and :run-ended when the run that just
+   ended was the last thing standing — so it is a function, not two literals.
+
+   'Out of clicks' is NOT 'out of moves', and this is where a wake reason can lose
+   a game in one line. `check-auto-end-turn!` refuses to auto-end at 0 clicks for
+   TWO reasons, and both are still live in exactly this state:
+     - a scorable agenda — scoring costs no click (guest panel, second pass; the
+       first version of this function checked only the rez window)
+     - the end-of-turn paid window (#103 — marquee ac71ce63 lost a Nico Campaign
+       rez to an auto-end)
+   Either one is named BEFORE the end-turn steer, and end-turn is described as
+   what to do after. A wake that answers this state with a flat 'send end-turn'
+   contradicts the auto-end surface, and the seat that believes the newer surface
+   pays for it. Two surfaces, one answer: call the SAME detectors rather than
+   deciding again here.
+
+   Both detectors are handed `state` rather than re-reading the atom. The wait
+   loop classifies a snapshot and formats guidance from it later; a diff landing
+   in that gap would otherwise staple a card list from a newer board onto a
+   description of the older one (guest panel). Both are Corp-only by construction,
+   so a Runner never sees either list."
+  [state]
+  (let [scorables (find-scorable-agendas state)
+        rezzables (find-eot-rezzable-cards state)
+        closing ["      The opponent cannot move until you do, and another `wait`"
+                 "      returns here unchanged — an empty game log is expected:"
+                 "      they are already waiting on you."]]
+    (if (or (seq scorables) (seq rezzables))
+      (-> ["   👉 Your turn is out of clicks but has NOT ended — and 0 clicks does NOT"
+           "      mean 0 moves. Still available to you right now:"]
+          (into (map (fn [{:keys [title counters requirement]}]
+                       (format "        🎯 %s (%d/%d advancement) — can still be SCORED"
+                               title counters requirement))
+                     scorables))
+          (into (map (fn [{:keys [title cost]}]
+                       (format "        💰 %s can still be rezzed for %d¢" title cost))
+                     rezzables))
+          ;; Mirrors check-auto-end-turn!'s own hedge. The rez detector errs
+          ;; generous on purpose (it counts restricted recurring credits), so an
+          ;; entry here is an opportunity to CHECK, never an instruction to obey.
+          (conj "      Do those first if you want them, then `end-turn` — nothing to do? just `end-turn`.")
+          (into closing))
+      (into ["   👉 Your turn is out of clicks but has NOT ended — send `end-turn`."
+             "      Nobody owes a start-turn."]
+            closing))))
 
 (defn wake-reason-guidance-lines
   "Lines that decode a wake `reason` into the action it demands, printed under the
@@ -1895,6 +1986,24 @@
      "      Another `wait` cannot advance it, and an empty game log here means the"
      "      opponent is already waiting on you."]
 
+    ;; #120. The seat is the ACTIVE player with 0 clicks and no :end-turn — the
+    ;; state where every OTHER surface used to say "waiting". Nothing is going to
+    ;; arrive: the opponent is blocked behind this turn ending, so a seat that
+    ;; re-blocks here re-creates the deadlock the wake exists to break.
+    :my-turn-end
+    (end-turn-obligation-lines state)
+
+    ;; A run ENDING is normally self-describing, so this stayed silent. But
+    ;; :run-ended is a TRANSITION and outranks :my-turn-end in the cond, so a run
+    ;; that ends on the last click wakes here while the seat now owes the
+    ;; end-turn — and got a bare token for it (guest panel, #120; the same
+    ;; undecoded-reason trap as #115, where two seats read a token they couldn't
+    ;; decode as nothing-happened and re-blocked). The obligation is a fact about
+    ;; the CURRENT state, so ask about the current state rather than assuming the
+    ;; transition is the whole story.
+    :run-ended
+    (if (state/my-turn-orphaned? state) (end-turn-obligation-lines state) [])
+
     :encounter-decision
     ;; NOT jack-out: it is movement-window only, so at an encounter it is both
     ;; illegal and a subroutine-skip. `jack-out` refuses here with the same steer.
@@ -1920,6 +2029,8 @@
      - a run that was in progress ends (:run-ended)
      - it becomes our turn at a boundary, start-turn needed (:my-turn-start)
      - it becomes our turn to act with clicks in hand (:my-turn)
+     - our own turn is out of clicks but has not ended, so we owe the
+       end-turn (:my-turn-end, #120)
      - we acquire priority at a run pass-window we own (:my-run-window)
      - the opponent sends a 'ping' chat message (:ping wake — escape hatch
        for when an external observer wants to nudge us)

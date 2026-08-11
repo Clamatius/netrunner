@@ -420,13 +420,23 @@
    Requires no open prompt of ours. With an actionable prompt the honest answer
    is 'resolve your prompt', and with a waiting prompt it is 'you are blocked on
    the opponent'; both are reported by their own branches, and both are states
-   the player can still act out of."
-  [client-state]
-  (let [gs (:game-state client-state)
+   the player can still act out of.
+
+   Two arities, same rule. The 1-arg form asks about the seat's own
+   `(:side client-state)` — what every display surface wants. The 2-arg form
+   takes the side explicitly, for callers that are already handed one:
+   `relevance-reason` (#120) threads a `side` argument through the whole wake
+   ladder, and having this predicate quietly answer about a DIFFERENT side than
+   its caller asked about is precisely the divergence that makes a side-relative
+   safety property worthless."
+  ([client-state]
+   (my-turn-orphaned? client-state (:side client-state)))
+  ([client-state side]
+   (let [gs (:game-state client-state)
         active (:active-player gs)
-        ;; :side arrives as \"corp\"/\"Corp\" depending on the path that set it;
+        ;; side arrives as \"corp\"/\"Corp\" depending on the path that set it;
         ;; game-state keys are always lowercase (see my-side-kw).
-        my-side (some-> (:side client-state) clojure.string/lower-case)]
+        my-side (some-> side name clojure.string/lower-case)]
     (boolean (and gs
                   active
                   my-side
@@ -470,7 +480,7 @@
                   (not (:runner-post-discard gs))
                   (not (game-over? gs))
                   (zero? (get-in gs [(keyword active) :click] 0))
-                  (nil? (get-in gs [(keyword my-side) :prompt-state]))))))
+                  (nil? (get-in gs [(keyword my-side) :prompt-state])))))))
 
 (defn get-prompt
   "Get current prompt for our side, if any"
@@ -702,13 +712,19 @@
 
 (defn corp-servers
   "Returns corp's servers map. Returns {} if unavailable.
-   Structure: {:hq {...} :rd {...} :archives {...} :remote1 {...} ...}"
-  []
-  (let [servers (get-in @client-state [:game-state :corp :servers])]
-    (cond
-      (nil? servers) {}
-      (map? servers) servers
-      :else (do (warn-unexpected "corp-servers" "map" servers) {}))))
+   Structure: {:hq {...} :rd {...} :archives {...} :remote1 {...} ...}
+
+   The 1-arg form reads a client-state map you already hold. Callers that
+   classified a SNAPSHOT and then describe it must use that form: re-dereferencing
+   the atom mid-render lets a websocket diff swap the board out from under a
+   description of the old one (#120 guest panel)."
+  ([] (corp-servers @client-state))
+  ([client-state]
+   (let [servers (get-in client-state [:game-state :corp :servers])]
+     (cond
+       (nil? servers) {}
+       (map? servers) servers
+       :else (do (warn-unexpected "corp-servers" "map" servers) {})))))
 
 (defn server-cards
   "Returns cards installed in a server (content). Returns [] if unavailable.
