@@ -297,3 +297,43 @@
             (with-failed-rejoin
               (with-out-str
                 (is (false? (conn/ensure-synced!)) "game-gone ⇒ false")))))))))
+
+(deftest test-sync-verdict-boardless-started-game-is-not-synced
+  (testing "seated in a started game but holding no board is NOT :synced — the invocation after a failed resync must not act on the cleared cache"
+    ;; The hole the exit-4 refusal would otherwise leave open: resync-game! clears
+    ;; the board and keeps :gameid, and verify-in-game! only consults the LOBBY, so
+    ;; the next command sailed through with an empty board — #109's mechanism,
+    ;; one invocation later. :lobby-state is absent because it is dissoc'd the
+    ;; moment a full state arrives: the signature of a started game, not a new one.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :game-state nil
+                              :lobby-state nil
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (let [verdict (atom nil)
+                    out (with-out-str (reset! verdict (conn/sync-verdict!)))]
+                (is (not= :synced @verdict) "must not call a boardless game synced")
+                (is (= :resync-failed @verdict) "the game is still in the lobby, so this is transient, not a teardown")
+                (is (.contains out "holding no board state"))))))))))
+
+(deftest test-sync-verdict-unstarted-lobby-is-synced
+  (testing "a lobby that has not started yet has no board by definition — gating it would block the setup path"
+    ;; reset.sh's create → join → start sequence lives here; refusing it because
+    ;; there is no game-state would break the recovery route the refusal points at.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :game-state nil
+                              :lobby-state {:gameid zombie-id :started false}
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (is (= :synced (conn/sync-verdict!)))))))))

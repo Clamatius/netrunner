@@ -461,6 +461,26 @@
       (let [found-gameid (find-our-game)]
         (= (str my-gameid) (str found-gameid))))))
 
+(defn- boardless-started-game?
+  "Seated in a game that has STARTED, but holding no board.
+
+   This is what a failed resync leaves behind: `resync-game!` clears the cache
+   before requesting a replacement, and `:gameid` survives. Being in the lobby is
+   not the same as having a board, so `verify-in-game!` — which only consults the
+   lobby list — happily calls that state 'in the game'. Without this check the
+   invocation AFTER a :resync-failed gets :synced and acts on the cleared state,
+   which is the very thing the refusal was protecting it from (2nd-pass panel).
+
+   The signature is the ABSENCE of :lobby-state: it is dissoc'd the moment a full
+   game state arrives, so a started game that lost its cache has neither, whereas
+   an unstarted lobby still has its :lobby-state (and correctly has no board).
+   A lobby list requested in between re-sets :lobby-state, hence the :started arm."
+  []
+  (let [{:keys [gameid game-state lobby-state]} @state/client-state]
+    (boolean (and gameid
+                  (nil? game-state)
+                  (or (nil? lobby-state) (:started lobby-state))))))
+
 (defn- teardown-verdict
   "Classify a rejoin that came back empty-handed: the game we wanted is not there.
    A DECIDED game outranks a closed lobby — a normal ending tears the lobby down
@@ -565,11 +585,19 @@
     ;; If we think we're in a game, verify we actually are
     ;; This catches "kicked from game" scenarios
     (:gameid @state/client-state)
-    (if (verify-in-game!)
-      :synced
+    (cond
+      (not (verify-in-game!))
       (do
         (println "⚠️  Kicked from game detected - auto-resyncing...")
-        (do-rejoin-resync!)))
+        (do-rejoin-resync!))
+
+      ;; In the lobby, but with no board — don't call that synced.
+      (boardless-started-game?)
+      (do
+        (println "⚠️  Seated but holding no board state (a previous resync cleared it) - auto-resyncing...")
+        (do-rejoin-resync!))
+
+      :else :synced)
 
     ;; No game state at all - nothing to sync. NOT :game-gone: a fresh client
     ;; before its first join is unsynced, not bereaved, and gating it would
