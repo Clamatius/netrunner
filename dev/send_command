@@ -9,7 +9,11 @@ set -euo pipefail
 set +H  # Disable history expansion to allow ! in function names
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AI_EVAL="$SCRIPT_DIR/ai-eval.sh"
+# The eval backend is overridable so shell tests can drive this dispatcher with a
+# stub REPL (same seam as HEARTBEAT_DIR / PEER_STALE_SECS). A caller-supplied
+# backend owns its own liveness, so check_client's port probe skips for it.
+AI_EVAL_DEFAULT="$SCRIPT_DIR/ai-eval.sh"
+AI_EVAL="${AI_EVAL:-$AI_EVAL_DEFAULT}"
 TIMEOUT="${TIMEOUT:-20}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
@@ -135,6 +139,9 @@ warn() {
 
 # Check if AI client is running
 check_client() {
+    # A caller-supplied AI_EVAL (tests) isn't on CLIENT_PORT at all — probing the
+    # port would fail the run for a backend we aren't using.
+    [[ "$AI_EVAL" != "$AI_EVAL_DEFAULT" ]] && return 0
     if ! lsof -i :$CLIENT_PORT > /dev/null 2>&1; then
         if [[ -n "$CLIENT_NAME" ]]; then
             error "AI Client REPL '$CLIENT_NAME' not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $CLIENT_PORT"
@@ -144,8 +151,45 @@ check_client() {
     fi
 }
 
+# Refuse an action because there is no game to send it to (#109).
+#
+# The bug this exists to kill: ensure-synced! diagnosed GAME-GONE correctly,
+# printed the correct guidance, returned false — and the command ran anyway
+# against cleared state. Every action then invented its own explanation from
+# empty fields, because nothing between them agreed on "are we in a game at all?"
+# So `draw` claimed '✅ Turn started successfully' then guessed 'deck empty?',
+# and `choose 3` blamed the index. The index was fine. The game was gone.
+refuse_no_game() {   # VERDICT
+    local verdict="$1" side="${CLIENT_NAME:-<side>}"
+    case "$verdict" in
+        game-over)
+            echo -e "${YELLOW}🏁 GAME-OVER — this game is already decided; there is no move to make.${NC}" >&2
+            echo    "   '$COMMAND' was NOT sent (it would have been answered from a finished game's state)." >&2
+            echo    "   Result:  ./dev/send_command $side game-over-status" >&2
+            echo    "   Next:    ./dev/save-replay.sh   ·   ./dev/reset.sh for a fresh game" >&2
+            ;;
+        *)
+            echo -e "${YELLOW}🏚️  GAME-GONE — the server no longer hosts this game; there is nothing to act in.${NC}" >&2
+            echo    "   '$COMMAND' was NOT sent. This is the real reason, not 'not your turn' or 'deck empty'." >&2
+            echo    "   Confirm: ./dev/send_command $side game-over-status   → GAME-GONE" >&2
+            echo    "   Recover: ./dev/reset.sh for a fresh game" >&2
+            ;;
+    esac
+    exit 3
+}
+
 # Ensure WebSocket connection is active (auto-reconnect if needed)
+#
+# Pass --allow-dead for commands that must still work on a dead game: the
+# diagnostics a seat uses to CONFIRM the death (wait, get-cursor — the babysit
+# loop's only exit condition), the lobby commands that RECOVER from it
+# (create-game/join/leave-game/list-lobbies), and local control that must never
+# be hostage to server state (bot-loop-stop). Everything else is gated, so a
+# newly added command inherits the honest default instead of the lying one.
 ensure_connection() {
+    local allow_dead=0
+    [[ "${1:-}" == "--allow-dead" ]] && allow_dead=1
+
     # Use the improved ensure-connected! which checks socket health
     # This detects broken sockets where connected? returns true but socket is dead
     local connect_result
@@ -166,23 +210,37 @@ ensure_connection() {
         echo "$connect_result" | grep -v '^"ok"$' || true
     fi
 
-    # Check for stale game state and auto-resync if needed
+    # Check for stale game state and auto-resync if needed.
+    # Ask for the VERDICT, not a discarded boolean: which of "in sync" / "decided"
+    # / "gone" / "didn't land" we got decides whether this command may proceed.
     local sync_result
     if [[ -n "$CLIENT_NAME" ]]; then
         sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
           (require (quote [ai-connection :as conn]))
-          (conn/ensure-synced!)
-          "ok")' 2>&1)
+          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1)
     else
         sync_result=$(TIMEOUT=10 "$AI_EVAL" '(do
           (require (quote [ai-connection :as conn]))
-          (conn/ensure-synced!)
-          "ok")' 2>&1)
+          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1)
     fi
 
-    # Show sync messages if present (Stale, Kicked, or Resync)
-    if [[ "$sync_result" == *"Stale"* ]] || [[ "$sync_result" == *"Kicked"* ]] || [[ "$sync_result" == *"Resync"* ]]; then
-        echo "$sync_result" | grep -v '^"ok"$' || true
+    local verdict
+    verdict=$(printf '%s\n' "$sync_result" | sed -n 's/.*SYNC-VERDICT \([a-z-]*\).*/\1/p' | tail -1)
+
+    # Show sync messages if present (Stale, Kicked, Resync, or a teardown verdict).
+    # The verdict token itself is machine chatter — strip it like the "ok" it replaced.
+    if [[ "$sync_result" == *"Stale"* ]] || [[ "$sync_result" == *"Kicked"* ]] || [[ "$sync_result" == *"Resync"* ]] \
+       || [[ "$verdict" == "game-gone" ]] || [[ "$verdict" == "game-over" ]]; then
+        printf '%s\n' "$sync_result" | grep -v 'SYNC-VERDICT' | grep -v '^"ok"$' || true
+    fi
+
+    # Gate. An unparseable verdict (backend hiccup, eval timeout) deliberately
+    # falls through to the old behaviour: a broken REPL must not be able to lock
+    # a seat out of its own live game.
+    if [[ "$allow_dead" -eq 0 ]]; then
+        case "$verdict" in
+            game-gone|game-over) refuse_no_game "$verdict" ;;
+        esac
     fi
 }
 
@@ -1422,7 +1480,7 @@ case "$COMMAND" in
         ;;
 
     wait)
-        ensure_connection
+        ensure_connection --allow-dead
         TIMEOUT="300"
         SINCE=""
         while [[ $# -gt 0 ]]; do
@@ -1459,7 +1517,7 @@ case "$COMMAND" in
         ;;
 
     get-cursor)
-        ensure_connection
+        ensure_connection --allow-dead
         execute "(ai-actions/get-cursor)"
         ;;
 
@@ -1492,7 +1550,7 @@ case "$COMMAND" in
 
     # Lobby
     create-game)
-        ensure_connection
+        ensure_connection --allow-dead
         TITLE="${1:-AI Test Game}"
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
@@ -1519,7 +1577,7 @@ case "$COMMAND" in
         ;;
 
     start-game)
-        ensure_connection
+        ensure_connection --allow-dead
         info "Starting game..."
         execute '(do
                    (require (quote [ai-websocket-client-v2 :as ws]))
@@ -1535,13 +1593,13 @@ case "$COMMAND" in
         ;;
 
     auto-start)
-        ensure_connection
+        ensure_connection --allow-dead
         info "Checking if lobby is ready to auto-start..."
         execute '(ai-actions/auto-start-if-ready!)'
         ;;
 
     leave-game)
-        ensure_connection
+        ensure_connection --allow-dead
         info "Leaving game lobby..."
         # Discovers the seat server-side when the client has no local gameid
         # (fresh client after a bounce), so it can reap a zombie lobby (#88).
@@ -1552,7 +1610,7 @@ case "$COMMAND" in
         ;;
 
     list-lobbies)
-        ensure_connection
+        ensure_connection --allow-dead
         info "Fetching lobby list..."
         execute '(do
                    (require (quote [ai-connection :as conn]))
@@ -1564,7 +1622,7 @@ case "$COMMAND" in
         ;;
 
     list-game-ids)
-        ensure_connection
+        ensure_connection --allow-dead
         # Return just game IDs (one per line) for script parsing
         execute '(do
                    (require (quote [ai-connection :as conn]))
@@ -1578,7 +1636,7 @@ case "$COMMAND" in
         ;;
 
     join)
-        ensure_connection
+        ensure_connection --allow-dead
         GAME_ID="${1:-}"
         SIDE="${2:-Runner}"
         [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
@@ -1801,7 +1859,7 @@ case "$COMMAND" in
         ;;
 
     bot-status)
-        ensure_connection
+        ensure_connection --allow-dead
         execute "(do
                    (require (quote [$BOT_NS :as bot]))
                    (bot/status))"
@@ -1853,7 +1911,7 @@ case "$COMMAND" in
         ;;
 
     bot-loop-status)
-        ensure_connection
+        ensure_connection --allow-dead
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v))
                      (let [fut (deref v)]
@@ -1866,7 +1924,7 @@ case "$COMMAND" in
         ;;
 
     bot-loop-stop)
-        ensure_connection
+        ensure_connection --allow-dead
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v))
                      (do (future-cancel (deref v))
