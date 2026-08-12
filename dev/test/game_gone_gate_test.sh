@@ -41,6 +41,12 @@ else
 fi
 printf '%s\n' "$expr" >> "$STUB_LOG"
 if [[ "$expr" == *"sync-verdict!"* ]]; then
+    # STUB_VERDICT=THROW mimics a REPL that errors on the call (old code loaded,
+    # or an exception inside it): ai-eval.sh prints the trace and exits NON-ZERO.
+    if [[ "$STUB_VERDICT" == "THROW" ]]; then
+        printf 'Syntax error compiling at (form-init.clj:3:38).\nNo such var: conn/sync-verdict!\n'
+        exit 1
+    fi
     printf '"SYNC-VERDICT %s"\n' "$STUB_VERDICT"
 elif [[ "$expr" == *"ensure-connected!"* ]]; then
     printf '"ok"\n'
@@ -130,14 +136,35 @@ run synced draw
 assert_contains     "synced-draw-sent"         "$LOG" "draw-card!"
 assert_not_contains "synced-not-refused"       "$OUT" "was NOT sent"
 
-# Transient: the game may well be alive, so retrying is the seat's call, not ours.
+# Transient: resync-game! clears the cached state BEFORE asking for a fresh one, so a
+# resync that didn't land leaves the client deliberately empty — acting there is #109's
+# mechanism, not an edge case. Refused, but as a RETRY, not as a teardown.
 run resync-failed draw
-assert_contains     "transient-draw-sent"      "$LOG" "draw-card!"
+assert_contains     "transient-refused"        "$OUT" "NO STATE"
+assert_contains     "transient-says-retry"     "$OUT" "Retry the same command"
+assert_not_contains "transient-not-teardown"   "$OUT" "GAME-GONE"
+assert_code         "transient-exit-4"         4 "$CODE"
+assert_not_contains "transient-not-sent"       "$LOG" "draw-card!"
+
+# ...but the allowlist still bypasses it: a babysit `wait` through a slow resync
+# must not become a refusal loop.
+run resync-failed wait --timeout 1
+assert_contains     "transient-wait-still-runs" "$LOG" "wait"
 
 # Fail-open. An eval timeout or a REPL error yields no parseable verdict; a broken
 # backend must not be able to refuse a seat access to its own live game.
 run "" draw
 assert_contains     "no-verdict-fails-open"    "$LOG" "draw-card!"
+
+# A backend that THROWS is the case that actually shipped broken: ai-eval.sh exits
+# non-zero, and under `set -e` the unguarded capture killed the command dead —
+# no output, exit 1, nothing for a seat to read. Caught live against a REPL running
+# the pre-fix Clojure (new CLI + old REPL is the normal state mid-deploy).
+run THROW draw
+assert_contains     "throwing-backend-still-acts" "$LOG" "draw-card!"
+assert_code         "throwing-backend-not-fatal"  0 "$CODE"
+if [[ -n "${OUT//[[:space:]]/}" ]]; then echo "ok   [throwing-backend-not-silent]"
+else echo "FAIL [throwing-backend-not-silent]: command produced NO output at all"; fails=$((fails+1)); fi
 
 echo
 if [[ $fails -eq 0 ]]; then echo "✅ game-gone gate: all assertions passed"; exit 0

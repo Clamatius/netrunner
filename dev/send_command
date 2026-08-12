@@ -159,9 +159,20 @@ check_client() {
 # empty fields, because nothing between them agreed on "are we in a game at all?"
 # So `draw` claimed '✅ Turn started successfully' then guessed 'deck empty?',
 # and `choose 3` blamed the index. The index was fine. The game was gone.
-refuse_no_game() {   # VERDICT
+refuse_no_state() {   # VERDICT
     local verdict="$1" side="${CLIENT_NAME:-<side>}"
     case "$verdict" in
+        resync-failed)
+            # NOT a teardown: the game may well be alive. But resync-game! CLEARS
+            # the cached state before asking for a fresh one, so a resync that
+            # didn't land leaves the client deliberately empty — the precise
+            # precondition for #109's guesses. "The game might be fine" is not
+            # "this invocation has state to act on" (guest-panel catch).
+            echo -e "${YELLOW}⏳ NO STATE — the resync did not land, so this seat has no board to act on.${NC}" >&2
+            echo    "   '$COMMAND' was NOT sent. The game is probably still alive; the state just didn't arrive." >&2
+            echo    "   Retry the same command. If it keeps failing: ./dev/send_command $side status" >&2
+            exit 4
+            ;;
         game-over)
             echo -e "${YELLOW}🏁 GAME-OVER — this game is already decided; there is no move to make.${NC}" >&2
             echo    "   '$COMMAND' was NOT sent (it would have been answered from a finished game's state)." >&2
@@ -180,7 +191,7 @@ refuse_no_game() {   # VERDICT
 
 # Ensure WebSocket connection is active (auto-reconnect if needed)
 #
-# Pass --allow-dead for commands that must still work on a dead game: the
+# Pass --allow-dead for commands that must still work with no usable state: the
 # diagnostics a seat uses to CONFIRM the death (wait, get-cursor — the babysit
 # loop's only exit condition), the lobby commands that RECOVER from it
 # (create-game/join/leave-game/list-lobbies), and local control that must never
@@ -192,17 +203,22 @@ ensure_connection() {
 
     # Use the improved ensure-connected! which checks socket health
     # This detects broken sockets where connected? returns true but socket is dead
+    # `|| true`: ai-eval.sh exits non-zero when the REPL throws (a compile error,
+    # an exception inside the call). Under `set -e` an unguarded capture kills the
+    # command HERE — no output, exit 1, no explanation. That is the same defect
+    # #109 is about (a seat learning nothing at the moment it must diagnose),
+    # just with silence instead of a wrong guess. `execute` already guards this way.
     local connect_result
     if [[ -n "$CLIENT_NAME" ]]; then
         connect_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
           (require (quote [ai-websocket-client-v2 :as ws]))
           (ws/ensure-connected!)
-          "ok")' 2>&1)
+          "ok")' 2>&1) || true
     else
         connect_result=$(TIMEOUT=10 "$AI_EVAL" '(do
           (require (quote [ai-websocket-client-v2 :as ws]))
           (ws/ensure-connected!)
-          "ok")' 2>&1)
+          "ok")' 2>&1) || true
     fi
 
     # Show connection messages if present (they go to stdout)
@@ -217,15 +233,17 @@ ensure_connection() {
     if [[ -n "$CLIENT_NAME" ]]; then
         sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
           (require (quote [ai-connection :as conn]))
-          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1)
+          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1) || true
     else
         sync_result=$(TIMEOUT=10 "$AI_EVAL" '(do
           (require (quote [ai-connection :as conn]))
-          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1)
+          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1) || true
     fi
 
+    # Require a non-empty verdict token: a backend that echoes the expression back
+    # would otherwise match the literal in the source and capture "".
     local verdict
-    verdict=$(printf '%s\n' "$sync_result" | sed -n 's/.*SYNC-VERDICT \([a-z-]*\).*/\1/p' | tail -1)
+    verdict=$(printf '%s\n' "$sync_result" | sed -n 's/.*SYNC-VERDICT \([a-z][a-z-]*\).*/\1/p' | tail -1)
 
     # Show sync messages if present (Stale, Kicked, Resync, or a teardown verdict).
     # The verdict token itself is machine chatter — strip it like the "ok" it replaced.
@@ -239,7 +257,7 @@ ensure_connection() {
     # a seat out of its own live game.
     if [[ "$allow_dead" -eq 0 ]]; then
         case "$verdict" in
-            game-gone|game-over) refuse_no_game "$verdict" ;;
+            game-gone|game-over|resync-failed) refuse_no_state "$verdict" ;;
         esac
     fi
 }

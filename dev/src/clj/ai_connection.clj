@@ -545,7 +545,11 @@
                       :lobby-gone? flag — we tried the rejoin first, so a false
                       teardown verdict still recovers instead of locking the seat out.
      :resync-failed - transient: the rejoin or the state did not land in time.
-                      The game may well be alive; retrying the command is right.
+                      The game may well be alive — but `resync-game!` CLEARS the
+                      cached state before requesting a fresh one, so the client is
+                      deliberately empty here, which is #109's exact precondition.
+                      Retry, don't act: \"the game might be fine\" is not \"this
+                      invocation has a board to act on\".
 
    Checks the same staleness indicators as before:
    1. diff-mismatch flag (set when diffs for wrong game arrive)
