@@ -2001,8 +2001,24 @@
 ;; `show-hand` already bails with a readable line; these must agree with it.
 
 (def ^:private sideless-state
-  "What the client holds after a leave / before a join: no side, no board."
+  "A client that never joined: no side, no gameid, no board."
   {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
+
+(def ^:private left-game-state
+  "What `leave-lobby!` ACTUALLY leaves behind. Second-pass panel catch: it nils
+   :gameid/:side and dissocs :spectator but does NOT clear :game-state, so the
+   ordinary post-teardown client — the state #125 was captured in — still holds
+   a board. The first fixture modelled this as :game-state nil and hid the bug."
+  {:connected true :uid "test-user" :gameid nil :side nil
+   :game-state {:active-player "corp" :turn 10
+                :corp {:click 0 :credit 35 :hand [] :hand-count 5}
+                :runner {:click 0 :credit 5 :hand [] :hand-count 5 :rig {}}}})
+
+(def ^:private pending-watch-state
+  "`watch-game!` sets :spectator BEFORE any confirmation, so this is a watch
+   that was refused or has not landed — spectator flag, no board."
+  {:connected true :uid "watcher" :gameid "abc" :side nil
+   :spectator true :spectator-perspective nil :game-state nil})
 
 (def ^:private spectator-state
   "`watch-game!` output: a real board, :spectator true, and no :side at all."
@@ -2077,8 +2093,10 @@
       (is (<= 15 (count surfaces))
           (str "sanity: the filter must not have collapsed, saw "
                (count surfaces) " surfaces"))
-      (doseq [[label st] [["sideless (never joined / left)" sideless-state]
-                          ["spectating a live game" spectator-state]]]
+      (doseq [[label st] [["never joined" sideless-state]
+                          ["after leaving (board still cached)" left-game-state]
+                          ["spectating a live game" spectator-state]
+                          ["watch requested, no board yet" pending-watch-state]]]
         (let [throwers (with-mock-state st
                          (doall
                           (for [[sym v] surfaces
@@ -2105,7 +2123,10 @@
     (with-mock-state spectator-state
       (doseq [[label f] [["list-playables" display/list-playables]
                          ["show-credits"   display/show-credits]
-                         ["show-clicks"    display/show-clicks]]]
+                         ["show-clicks"    display/show-clicks]
+                         ;; second-pass catch: `hand` is a CLI surface and kept
+                         ;; its own bespoke false "not in a game yet" line
+                         ["show-hand"      display/show-hand]]]
         (let [out (with-out-str (f))]
           (is (not (re-find #"(?i)not in a game" out))
               (str label " denies a game the client is actively watching:\n" out))
@@ -2115,3 +2136,39 @@
               (str label " must name the actual state, got:\n" out))
           (is (re-find #"(?i)corp" out)
               (str label " should surface the perspective it is watching, got:\n" out)))))))
+
+;; Second-pass panel, both confirmed against source:
+;;   - `leave-lobby!` (ai_connection.clj:76) leaves :game-state cached, so the
+;;     ordinary post-teardown client landed in the "In a game, but no seat" branch
+;;     and was told to `resync` a game it had deliberately left.
+;;   - `watch-game!` (ai_connection.clj:200) sets :spectator before the server
+;;     confirms, so the flag alone must not promise a board.
+
+(deftest test-post-leave-is-not-mistaken-for-a-live-seatless-game
+  (testing "#125/panel2: a cached board after leaving is not evidence of a game"
+    (with-mock-state left-game-state
+      (doseq [[label f] [["list-playables" display/list-playables]
+                         ["show-credits"   display/show-credits]
+                         ["show-clicks"    display/show-clicks]
+                         ["show-hand"      display/show-hand]]]
+        (let [out (with-out-str (f))]
+          (is (not (re-find #"(?i)resync" out))
+              (str label " tells a client that LEFT to resync:\n" out))
+          (is (not (re-find #"(?i)no seat identified" out))
+              (str label " calls a left game a seat-identification problem:\n" out))
+          (is (re-find #"(?i)not in a game" out)
+              (str label " must say plainly there is no game, got:\n" out))
+          (is (re-find #"(?i)stale" out)
+              (str label " must warn the cached board is stale, got:\n" out)))))))
+
+(deftest test-unconfirmed-watch-does-not-promise-a-board
+  (testing "#125/panel2: :spectator is set before the server confirms, so it
+            alone must not claim a game is being watched"
+    (with-mock-state pending-watch-state
+      (let [out (with-out-str (display/list-playables))]
+        (is (not (re-find #"(?i)show the game you are watching" out))
+            (str "promises a board that never arrived:\n" out))
+        (is (re-find #"(?i)no board" out)
+            (str "must name the missing board, got:\n" out))
+        (is (not (re-find #"(?i)reset\.sh" out))
+            (str "a pending watch is not a reason to nuke a game:\n" out))))))

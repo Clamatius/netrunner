@@ -982,32 +982,51 @@
                    behind (it nils :gameid/:side, and a finished game's
                    teardown — save-replay.sh, concede — goes through it).
 
-   The last two causes stay deliberately un-disambiguated *from each other*:
-   both end at the same two commands, and the seat reads this while diagnosing,
-   so guessing between them buys nothing and can mislead."
+   Second-pass panel: branch on EVIDENCE, not on one flag. Two states defeat the
+   obvious cond —
+
+     - `leave-lobby!` nils :gameid/:side and dissocs :spectator but leaves
+       :game-state ALONE, so the ordinary post-teardown client (the state #125
+       was actually captured in) still holds a board. Keying 'seatless' on
+       :game-state alone sent it to `resync` after it had deliberately left.
+       :gameid is the discriminator: a client still in a game has one.
+     - `watch-game!` sets :spectator immediately after sending the request,
+       before any confirmation, so :spectator alone can mean a watch that was
+       rejected or has not landed yet. Require the board before promising one."
   [state what]
-  (cond
-    (:spectator state)
-    (do
-      (println (format "👁️  Spectating, not seated — %s is a seat-only view." what))
-      (println (format "   Perspective: %s. Spectators have no side of their own."
-                       (or (:spectator-perspective state) "neutral")))
-      (println "   → 'board' / 'log' show the game you are watching. To play, join a seat.")
-      nil)
+  (let [board? (boolean (:game-state state))
+        seated? (boolean (:gameid state))]
+    (cond
+      (and (:spectator state) board?)
+      (do
+        (println (format "👁️  Spectating, not seated — %s is a seat-only view." what))
+        (println (format "   Perspective: %s. Spectators have no side of their own."
+                         (or (:spectator-perspective state) "neutral")))
+        (println "   → 'board' / 'log' show the game you are watching. To play, join a seat.")
+        nil)
 
-    (:game-state state)
-    (do
-      (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
-      (println "   The board is here; our uid matched neither player (stripped user info?).")
-      (println "   → 'resync' to re-request the full state; 'status' still works.")
-      nil)
+      (:spectator state)
+      (do
+        (println (format "👁️  Watch requested, but no board has arrived — %s is empty." what))
+        (println "   The watch may still be in flight, or the server refused it (bad game id / password).")
+        (println "   → 'list-lobbies' to confirm the game exists, then watch it again.")
+        nil)
 
-    :else
-    (do
-      (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
-      (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
-      (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
-      nil)))
+      (and board? seated?)
+      (do
+        (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
+        (println "   The board is here; our uid matched neither player (stripped user info?).")
+        (println "   → 'resync' to re-request the full state; 'status' still works.")
+        nil)
+
+      :else
+      (do
+        (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
+        (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
+        (when board?
+          (println "   ⚠️  A board is still cached from the game you left — it is STALE, not live."))
+        (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
+        nil))))
 
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
@@ -1015,8 +1034,10 @@
   (let [state @state/client-state
         side (:side state)]
     (if-not side
-      (do (println "⚠️  No game state - not in a game yet")
-          nil)
+      ;; Was its own bespoke "No game state - not in a game yet". That is the
+      ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
+      ;; a spectator hits it with a full board — so it shares the one explainer.
+      (no-side-here! state "the hand")
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
