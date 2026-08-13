@@ -2004,6 +2004,14 @@
   "What the client holds after a leave / before a join: no side, no board."
   {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
 
+(def ^:private spectator-state
+  "`watch-game!` output: a real board, :spectator true, and no :side at all."
+  {:connected true :uid "watcher" :gameid "abc" :side nil
+   :spectator true :spectator-perspective "Corp"
+   :game-state {:active-player "corp" :turn 3
+                :corp {:click 2 :credit 9 :hand [] :hand-count 3}
+                :runner {:click 4 :credit 5 :hand [] :hand-count 5 :rig {}}}})
+
 (deftest test-sideless-surfaces-do-not-throw-raw-npe
   (testing "#125: no seat-facing display throws a bare NPE when :side is nil"
     (doseq [[label f] [["list-playables" display/list-playables]
@@ -2031,36 +2039,79 @@
             (str "precondition: show-hand is the guarded sibling, got:\n" hand-out))))))
 
 ;; The two tests above pin the three surfaces #125 actually named. This one is
-;; the reason they will not come back: it walks every zero-arg public fn in
-;; ai-display and asserts none of them throws on a sideless state, so a NEW
-;; display surface that hand-rolls the derivation fails here without anyone
-;; remembering to add a case. `list-playables` had been shipping this NPE for a
-;; while precisely because no test enumerated the family.
+;; the reason the family should not come back: it walks the display surfaces and
+;; asserts none throws on a sideless state, so a NEW surface that hand-rolls the
+;; derivation fails here without anyone remembering to add a case.
+;;
+;; Guest-panel catch: the first cut swept every zero-arg public fn and excluded
+;; action drivers by name. That is backwards on both counts — it would invoke a
+;; future zero-arg action driver unless someone remembered to extend a denylist,
+;; and it counted private-in-spirit helpers the CLI never exposes. The real
+;; contract is dev/send_command's capture heuristic: only show-/list-/hand/
+;; status/board names have their output captured, so those ARE the seat-facing
+;; display surfaces. Selecting on it makes the sweep both safer (action drivers
+;; like simple-corp-turn do not match) and honest about what it covers.
+
+(def ^:private display-name-prefixes
+  ["show-" "list-" "hand" "status" "board"])
+
+(defn- cli-display-surfaces
+  "Zero-arg public fns of ai-display whose output dev/send_command captures."
+  []
+  (->> (ns-publics 'ai-display)
+       (filter (fn [[sym v]]
+                 (and (some #(str/starts-with? (name sym) %) display-name-prefixes)
+                      (some #(= 0 (count %)) (:arglists (meta v))))))
+       (sort-by first)))
 
 (deftest test-no-display-surface-throws-on-a-sideless-state
-  (testing "#125: every zero-arg ai-display surface survives :side nil / no board"
-    (let [;; simple-corp-turn / simple-runner-turn are action drivers that happen
-          ;; to live in this namespace — they SEND commands, so a sweep must not
-          ;; invoke them. Everything else here is a read-only display.
-          action-shaped #{'simple-corp-turn 'simple-runner-turn}
-          surfaces (->> (ns-publics 'ai-display)
-                        (remove (fn [[sym _]] (contains? action-shaped sym)))
-                        (filter (fn [[_ v]]
-                                  (some #(= 0 (count %)) (:arglists (meta v)))))
-                        (sort-by first))
-          throwers (with-mock-state sideless-state
-                     (doall
-                      (for [[sym v] surfaces
-                            :let [err (try (with-out-str (v)) nil
-                                           (catch Throwable e
-                                             (str (.getSimpleName (class e)) ": "
-                                                  (.getMessage e))))]
-                            :when err]
-                        (str sym " -> " err))))]
-      (is (< 20 (count surfaces))
-          (str "sanity: the sweep must actually cover the namespace, saw "
+  (testing "#125: every CLI-captured ai-display surface survives :side nil"
+    (let [surfaces (cli-display-surfaces)
+          swept (set (map (comp name first) surfaces))]
+      ;; The sweep is only worth anything if it provably covers the three
+      ;; surfaces the issue named — a filter that silently emptied would
+      ;; otherwise pass with flying colours.
+      (doseq [required ["list-playables" "show-credits" "show-clicks" "show-hand"]]
+        (is (contains? swept required)
+            (str "the sweep must cover " required ", swept: " (sort swept))))
+      (is (<= 15 (count surfaces))
+          (str "sanity: the filter must not have collapsed, saw "
                (count surfaces) " surfaces"))
-      (is (empty? throwers)
-          (str "these display surfaces throw a raw exception at a model seat "
-               "instead of explaining themselves:\n  "
-               (str/join "\n  " throwers))))))
+      (doseq [[label st] [["sideless (never joined / left)" sideless-state]
+                          ["spectating a live game" spectator-state]]]
+        (let [throwers (with-mock-state st
+                         (doall
+                          (for [[sym v] surfaces
+                                :let [err (try (with-out-str (v)) nil
+                                               (catch Throwable e
+                                                 (str (.getSimpleName (class e)) ": "
+                                                      (.getMessage e))))]
+                                :when err]
+                            (str sym " -> " err))))]
+          (is (empty? throwers)
+              (str "on a " label " state these surfaces throw a raw exception at a "
+                   "model seat instead of explaining themselves:\n  "
+                   (str/join "\n  " throwers))))))))
+
+;; Guest-panel CRITICAL: `watch-game!` sets :gameid/:spectator and NEVER sets
+;; :side, and `detect-side` cannot match a spectator's uid — so a client happily
+;; watching a live game has a full board and a nil side. The first cut told it
+;; "Not in a game ... or ./dev/reset.sh for a fresh game", which is both false
+;; and destructive advice for the game it is watching.
+
+(deftest test-spectator-is-not-told-it-is-out-of-a-game
+  (testing "#125/panel: a sideless SPECTATOR has a board — the bail must not
+            deny the game or offer reset.sh"
+    (with-mock-state spectator-state
+      (doseq [[label f] [["list-playables" display/list-playables]
+                         ["show-credits"   display/show-credits]
+                         ["show-clicks"    display/show-clicks]]]
+        (let [out (with-out-str (f))]
+          (is (not (re-find #"(?i)not in a game" out))
+              (str label " denies a game the client is actively watching:\n" out))
+          (is (not (re-find #"(?i)reset\.sh" out))
+              (str label " steers a spectator into destroying the watched game:\n" out))
+          (is (re-find #"(?i)spectat" out)
+              (str label " must name the actual state, got:\n" out))
+          (is (re-find #"(?i)corp" out)
+              (str label " should surface the perspective it is watching, got:\n" out)))))))

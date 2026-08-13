@@ -966,17 +966,48 @@
 (defn- no-side-here!
   "One explanation for 'this client has no side, so there is nothing to show'.
 
-   #125: `:side` is nil in two real states — a REPL that never joined, and what
-   `leave-lobby!` leaves behind (a finished game's teardown, save-replay.sh or
-   concede, goes through exactly that). Do NOT name one of them: the seat hits
-   this at the moment it is trying to work out what happened, and guessing wrong
-   is the misleading-output bug this project keeps re-fixing. Say what is
-   actually known — no side — and give the way back for either case."
-  [what]
-  (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
-  (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
-  (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
-  nil)
+   #125: these surfaces used to throw a raw NPE here. The replacement has to be
+   TRUE, which means not collapsing three different states into one sentence —
+   `:side` is nil in all of them and they need opposite advice:
+
+     spectator     `watch-game!` sets :gameid/:spectator and never sets :side,
+                   and `detect-side` cannot match a spectator's uid, so a client
+                   happily watching a live game has a full board and no side.
+                   Telling it 'not in a game → reset.sh' would be a lie that
+                   destroys the game it is watching (guest-panel catch).
+     seatless      a board arrived but our uid matched neither username (e.g. a
+                   resync where the server stripped user info). In a game, no
+                   seat — retryable, NOT a teardown.
+     no game       a REPL that never joined, or what `leave-lobby!` leaves
+                   behind (it nils :gameid/:side, and a finished game's
+                   teardown — save-replay.sh, concede — goes through it).
+
+   The last two causes stay deliberately un-disambiguated *from each other*:
+   both end at the same two commands, and the seat reads this while diagnosing,
+   so guessing between them buys nothing and can mislead."
+  [state what]
+  (cond
+    (:spectator state)
+    (do
+      (println (format "👁️  Spectating, not seated — %s is a seat-only view." what))
+      (println (format "   Perspective: %s. Spectators have no side of their own."
+                       (or (:spectator-perspective state) "neutral")))
+      (println "   → 'board' / 'log' show the game you are watching. To play, join a seat.")
+      nil)
+
+    (:game-state state)
+    (do
+      (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
+      (println "   The board is here; our uid matched neither player (stripped user info?).")
+      (println "   → 'resync' to re-request the full state; 'status' still works.")
+      nil)
+
+    :else
+    (do
+      (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
+      (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
+      (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
+      nil)))
 
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
@@ -1009,7 +1040,7 @@
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
     (if-not side-kw
-      (no-side-here! "the credit pool")
+      (no-side-here! state "the credit pool")
       (let [credits (get-in state [:game-state side-kw :credit])]
         (println "💰 Credits:" credits)
         credits))))
@@ -1020,7 +1051,7 @@
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
     (if-not side-kw
-      (no-side-here! "the click count")
+      (no-side-here! state "the click count")
       (let [clicks (get-in state [:game-state side-kw :click])]
         (println "⏱️  Clicks:" clicks)
         clicks))))
@@ -2207,7 +2238,7 @@
   (let [state @state/client-state]
     (if-let [side (state/my-side-kw state)]
       (list-playables-for-side state side)
-      (no-side-here! "the playable-action list"))))
+      (no-side-here! state "the playable-action list"))))
 
 (defn show-blocker-diagnosis
   "Read-only diagnosis of why you can/can't act right now and the ONE next
