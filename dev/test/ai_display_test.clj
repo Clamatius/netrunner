@@ -1983,3 +1983,84 @@
           (str "the Corp has no self-advance path, got:\n" out))
       (is (not (str/includes? out "abandoned"))
           (str "must not promise the Corp a recovery it does not have, got:\n" out)))))
+
+;; ============================================================================
+;; #125: seat-facing surfaces must not throw a raw NPE when there is no side
+;; ============================================================================
+;; `:side` is nil in two real states: a REPL that has never joined, and the
+;; state `leave-lobby!` leaves behind (it nils :gameid/:side, and a finished
+;; game's teardown — save-replay.sh, concede — goes through exactly that path).
+;; Three surfaces re-derived the side by hand as
+;; `(keyword (clojure.string/lower-case (:side state)))`, which throws
+;;   Cannot invoke "Object.toString()" because "s" is null
+;; straight out of clojure.string/lower-case. A raw Java stack trace is
+;; unpattern-matchable by a model seat, and it arrives at the exact moment the
+;; seat is trying to work out what happened to its game.
+;;
+;; `ai-state/my-side-kw` is the guarded authority for this derivation and
+;; `show-hand` already bails with a readable line; these must agree with it.
+
+(def ^:private sideless-state
+  "What the client holds after a leave / before a join: no side, no board."
+  {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
+
+(deftest test-sideless-surfaces-do-not-throw-raw-npe
+  (testing "#125: no seat-facing display throws a bare NPE when :side is nil"
+    (doseq [[label f] [["list-playables" display/list-playables]
+                       ["show-credits"   display/show-credits]
+                       ["show-clicks"    display/show-clicks]]]
+      (with-mock-state sideless-state
+        (is (string? (try (with-out-str (f))
+                          (catch Exception e
+                            (str "THREW " (.getName (class e)) ": " (.getMessage e)))))
+            (str label " returned nothing at all"))
+        (let [out (try (with-out-str (f))
+                       (catch Exception e
+                         (str "THREW " (.getName (class e)) ": " (.getMessage e))))]
+          (is (not (str/starts-with? out "THREW"))
+              (str label " must not throw on a sideless state, got: " out))
+          (is (re-find #"(?i)not in a game" out)
+              (str label " must say plainly that there is no game, got:\n" out)))))))
+
+(deftest test-sideless-surfaces-agree-with-show-hand
+  (testing "#125: show-hand was already guarded — the other surfaces must not
+            invent a different story about the same state"
+    (with-mock-state sideless-state
+      (let [hand-out (with-out-str (display/show-hand))]
+        (is (re-find #"(?i)not in a game" hand-out)
+            (str "precondition: show-hand is the guarded sibling, got:\n" hand-out))))))
+
+;; The two tests above pin the three surfaces #125 actually named. This one is
+;; the reason they will not come back: it walks every zero-arg public fn in
+;; ai-display and asserts none of them throws on a sideless state, so a NEW
+;; display surface that hand-rolls the derivation fails here without anyone
+;; remembering to add a case. `list-playables` had been shipping this NPE for a
+;; while precisely because no test enumerated the family.
+
+(deftest test-no-display-surface-throws-on-a-sideless-state
+  (testing "#125: every zero-arg ai-display surface survives :side nil / no board"
+    (let [;; simple-corp-turn / simple-runner-turn are action drivers that happen
+          ;; to live in this namespace — they SEND commands, so a sweep must not
+          ;; invoke them. Everything else here is a read-only display.
+          action-shaped #{'simple-corp-turn 'simple-runner-turn}
+          surfaces (->> (ns-publics 'ai-display)
+                        (remove (fn [[sym _]] (contains? action-shaped sym)))
+                        (filter (fn [[_ v]]
+                                  (some #(= 0 (count %)) (:arglists (meta v)))))
+                        (sort-by first))
+          throwers (with-mock-state sideless-state
+                     (doall
+                      (for [[sym v] surfaces
+                            :let [err (try (with-out-str (v)) nil
+                                           (catch Throwable e
+                                             (str (.getSimpleName (class e)) ": "
+                                                  (.getMessage e))))]
+                            :when err]
+                        (str sym " -> " err))))]
+      (is (< 20 (count surfaces))
+          (str "sanity: the sweep must actually cover the namespace, saw "
+               (count surfaces) " surfaces"))
+      (is (empty? throwers)
+          (str "these display surfaces throw a raw exception at a model seat "
+               "instead of explaining themselves:\n  "
+               (str/join "\n  " throwers))))))

@@ -159,10 +159,20 @@
 
 (defn my-side-kw
   "Get current side as keyword, normalized to lowercase (:runner or :corp).
-   Game state keys are always lowercase, so this ensures proper access."
-  []
-  (when-let [side (:side @client-state)]
-    (keyword (clojure.string/lower-case side))))
+   Game state keys are always lowercase, so this ensures proper access.
+
+   nil when this client has no side — a REPL that never joined, or the state
+   `leave-lobby!` leaves behind (it nils :gameid/:side). The nil is meaningful,
+   so this is the ONE place the derivation is allowed to happen: hand-rolling
+   `(keyword (lower-case (:side state)))` throws a bare NPE out of
+   clojure.string/lower-case on exactly those states (#125).
+
+   The 1-arity takes an already-captured state map, so a caller that snapshotted
+   the atom classifies the same state it renders instead of re-reading."
+  ([] (my-side-kw @client-state))
+  ([state]
+   (when-let [side (:side state)]
+     (keyword (clojure.string/lower-case side)))))
 
 (defn runner-state [] (get-in @client-state [:game-state :runner]))
 (defn corp-state [] (get-in @client-state [:game-state :corp]))

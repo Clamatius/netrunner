@@ -963,6 +963,21 @@
                       ""))]
     (str "[" card-type subtypes "]" cost-info)))
 
+(defn- no-side-here!
+  "One explanation for 'this client has no side, so there is nothing to show'.
+
+   #125: `:side` is nil in two real states — a REPL that never joined, and what
+   `leave-lobby!` leaves behind (a finished game's teardown, save-replay.sh or
+   concede, goes through exactly that). Do NOT name one of them: the seat hits
+   this at the moment it is trying to work out what happened, and guessing wrong
+   is the misleading-output bug this project keeps re-fixing. Say what is
+   actually known — no side — and give the way back for either case."
+  [what]
+  (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
+  (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
+  (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
+  nil)
+
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
   []
@@ -992,19 +1007,23 @@
   "Show current credits (side-aware). Returns credits value."
   []
   (let [state @state/client-state
-        side (:side state)
-        credits (get-in state [:game-state (keyword (clojure.string/lower-case side)) :credit])]
-    (println "💰 Credits:" credits)
-    credits))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! "the credit pool")
+      (let [credits (get-in state [:game-state side-kw :credit])]
+        (println "💰 Credits:" credits)
+        credits))))
 
 (defn show-clicks
   "Show remaining clicks (side-aware). Returns clicks value."
   []
   (let [state @state/client-state
-        side (:side state)
-        clicks (get-in state [:game-state (keyword (clojure.string/lower-case side)) :click])]
-    (println "⏱️  Clicks:" clicks)
-    clicks))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! "the click count")
+      (let [clicks (get-in state [:game-state side-kw :click])]
+        (println "⏱️  Clicks:" clicks)
+        clicks))))
 
 (defn show-archives
   "Show Corp's Archives (discard pile) with faceup/facedown counts"
@@ -2017,13 +2036,13 @@
 ;; Help
 ;; ============================================================================
 
-(defn list-playables
-  "List all currently playable actions (cards, abilities, basic actions)
-   Useful for AI decision-making - shows exactly what can be done right now"
-  []
-  (let [state @state/client-state
-        side (keyword (clojure.string/lower-case (:side state)))
-        gs (:game-state state)
+(defn- list-playables-for-side
+  "The body of `list-playables`, entered only once a side is known.
+
+   Takes the captured state rather than re-reading the atom, so every section of
+   one listing describes the same snapshot."
+  [state side]
+  (let [gs (:game-state state)
         my-state (get gs side)
         clicks (:click my-state)
         credits (:credit my-state)
@@ -2180,6 +2199,15 @@
       {:playable-cards card-count
        :playable-abilities ability-count
        :clicks clicks})))
+
+(defn list-playables
+  "List all currently playable actions (cards, abilities, basic actions)
+   Useful for AI decision-making - shows exactly what can be done right now"
+  []
+  (let [state @state/client-state]
+    (if-let [side (state/my-side-kw state)]
+      (list-playables-for-side state side)
+      (no-side-here! "the playable-action list"))))
 
 (defn show-blocker-diagnosis
   "Read-only diagnosis of why you can/can't act right now and the ONE next
