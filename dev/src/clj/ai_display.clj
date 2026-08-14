@@ -963,14 +963,81 @@
                       ""))]
     (str "[" card-type subtypes "]" cost-info)))
 
+(defn- no-side-here!
+  "One explanation for 'this client has no side, so there is nothing to show'.
+
+   #125: these surfaces used to throw a raw NPE here. The replacement has to be
+   TRUE, which means not collapsing three different states into one sentence —
+   `:side` is nil in all of them and they need opposite advice:
+
+     spectator     `watch-game!` sets :gameid/:spectator and never sets :side,
+                   and `detect-side` cannot match a spectator's uid, so a client
+                   happily watching a live game has a full board and no side.
+                   Telling it 'not in a game → reset.sh' would be a lie that
+                   destroys the game it is watching (guest-panel catch).
+     seatless      a board arrived but our uid matched neither username (e.g. a
+                   resync where the server stripped user info). In a game, no
+                   seat — retryable, NOT a teardown.
+     no game       a REPL that never joined, or what `leave-lobby!` leaves
+                   behind (it nils :gameid/:side, and a finished game's
+                   teardown — save-replay.sh, concede — goes through it).
+
+   Second-pass panel: branch on EVIDENCE, not on one flag. Two states defeat the
+   obvious cond —
+
+     - `leave-lobby!` nils :gameid/:side and dissocs :spectator but leaves
+       :game-state ALONE, so the ordinary post-teardown client (the state #125
+       was actually captured in) still holds a board. Keying 'seatless' on
+       :game-state alone sent it to `resync` after it had deliberately left.
+       :gameid is the discriminator: a client still in a game has one.
+     - `watch-game!` sets :spectator immediately after sending the request,
+       before any confirmation, so :spectator alone can mean a watch that was
+       rejected or has not landed yet. Require the board before promising one."
+  [state what]
+  (let [board? (boolean (:game-state state))
+        seated? (boolean (:gameid state))]
+    (cond
+      (and (:spectator state) board?)
+      (do
+        (println (format "👁️  Spectating, not seated — %s is a seat-only view." what))
+        (println (format "   Perspective: %s. Spectators have no side of their own."
+                         (or (:spectator-perspective state) "neutral")))
+        (println "   → 'board' / 'log' show the game you are watching. To play, join a seat.")
+        nil)
+
+      (:spectator state)
+      (do
+        (println (format "👁️  Watch requested, but no board has arrived — %s is empty." what))
+        (println "   The watch may still be in flight, or the server refused it (bad game id / password).")
+        (println "   → 'list-lobbies' to confirm the game exists, then watch it again.")
+        nil)
+
+      (and board? seated?)
+      (do
+        (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
+        (println "   The board is here; our uid matched neither player (stripped user info?).")
+        (println "   → 'resync' to re-request the full state; 'status' still works.")
+        nil)
+
+      :else
+      (do
+        (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
+        (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
+        (when board?
+          (println "   ⚠️  A board is still cached from the game you left — it is STALE, not live."))
+        (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
+        nil))))
+
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
   []
   (let [state @state/client-state
         side (:side state)]
     (if-not side
-      (do (println "⚠️  No game state - not in a game yet")
-          nil)
+      ;; Was its own bespoke "No game state - not in a game yet". That is the
+      ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
+      ;; a spectator hits it with a full board — so it shares the one explainer.
+      (no-side-here! state "the hand")
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
@@ -992,19 +1059,23 @@
   "Show current credits (side-aware). Returns credits value."
   []
   (let [state @state/client-state
-        side (:side state)
-        credits (get-in state [:game-state (keyword (clojure.string/lower-case side)) :credit])]
-    (println "💰 Credits:" credits)
-    credits))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! state "the credit pool")
+      (let [credits (get-in state [:game-state side-kw :credit])]
+        (println "💰 Credits:" credits)
+        credits))))
 
 (defn show-clicks
   "Show remaining clicks (side-aware). Returns clicks value."
   []
   (let [state @state/client-state
-        side (:side state)
-        clicks (get-in state [:game-state (keyword (clojure.string/lower-case side)) :click])]
-    (println "⏱️  Clicks:" clicks)
-    clicks))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! state "the click count")
+      (let [clicks (get-in state [:game-state side-kw :click])]
+        (println "⏱️  Clicks:" clicks)
+        clicks))))
 
 (defn show-archives
   "Show Corp's Archives (discard pile) with faceup/facedown counts"
@@ -2017,13 +2088,13 @@
 ;; Help
 ;; ============================================================================
 
-(defn list-playables
-  "List all currently playable actions (cards, abilities, basic actions)
-   Useful for AI decision-making - shows exactly what can be done right now"
-  []
-  (let [state @state/client-state
-        side (keyword (clojure.string/lower-case (:side state)))
-        gs (:game-state state)
+(defn- list-playables-for-side
+  "The body of `list-playables`, entered only once a side is known.
+
+   Takes the captured state rather than re-reading the atom, so every section of
+   one listing describes the same snapshot."
+  [state side]
+  (let [gs (:game-state state)
         my-state (get gs side)
         clicks (:click my-state)
         credits (:credit my-state)
@@ -2180,6 +2251,15 @@
       {:playable-cards card-count
        :playable-abilities ability-count
        :clicks clicks})))
+
+(defn list-playables
+  "List all currently playable actions (cards, abilities, basic actions)
+   Useful for AI decision-making - shows exactly what can be done right now"
+  []
+  (let [state @state/client-state]
+    (if-let [side (state/my-side-kw state)]
+      (list-playables-for-side state side)
+      (no-side-here! state "the playable-action list"))))
 
 (defn show-blocker-diagnosis
   "Read-only diagnosis of why you can/can't act right now and the ONE next
