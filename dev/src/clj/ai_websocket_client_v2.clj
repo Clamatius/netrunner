@@ -620,7 +620,15 @@
             (Thread/sleep 500)))
         (println (format "✅ Discarded %d card(s)" cards-to-discard))
         cards-to-discard)
-      0)))
+      (do
+        ;; Guest-panel note (#127): 0 otherwise means "nothing required", and
+        ;; the caller prints "No cards to discard" on it. Say so explicitly in
+        ;; the one case where 0 means "I declined", or an autonomous prompt loop
+        ;; sees a clean no-op and spins on a discard prompt it never resolves.
+        (when (and (= "select" (:prompt-type prompt)) (nil? hand-size-max))
+          (println "⚠️  A discard prompt is up but this board reports no max hand size — declining rather than guessing which cards to bin.")
+          (println "💡 'status' to check the board landed; 'resync' if it did not; 'discard' with explicit indices to choose yourself."))
+        0))))
 
 ;; Note: Status display functions moved to ai-display namespace
 ;; Note: announce-revealed-archives and write-game-log-to-hud moved to ai-display namespace

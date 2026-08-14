@@ -11,6 +11,20 @@
 (declare turn-started-since-last-opp-end?)
 (declare get-my-username)
 
+(defn- refuse-no-seat!
+  "One refusal for 'this client holds no side, so there is no turn of ours to
+   act on' (#127). Deliberately does NOT claim the game is over: :side is nil
+   for a spectator watching a live game and for a resync that landed a board
+   before matching our uid, as well as for a REPL that never joined. Asserting
+   a teardown in those states is the #125 mistake — a confident false claim
+   whose remedy (reset.sh) destroys the game."
+  [what]
+  (println (format "⛔ Refusing %s: this client has no side — no turn of yours to act on." what))
+  (if (get-in @state/client-state [:game-state])
+    (println "   A board is cached, so you may be spectating or awaiting a seat: try 'status', then 'resync'.")
+    (println "   Not in a game. Join one, or ./dev/reset.sh for a fresh game."))
+  (core/with-cursor {:status :error :reason :no-side}))
+
 ;; ============================================================================
 ;; Auto-Start Turn Helpers
 ;; ============================================================================
@@ -258,9 +272,13 @@
 
    Returns {:status :error} if validation fails, {:status :success} if successful."
   []
-  (let [client-state @state/client-state
+  (if-not (state/my-side-kw)
+    ;; #127 (behavioural sweep): with a board cached but no seat, `my-clicks`
+    ;; read nil and the arithmetic below NPE'd before any guard could refuse.
+    (refuse-no-seat! "start-turn")
+    (let [client-state @state/client-state
         gameid (:gameid client-state)
-        my-side (keyword (:side client-state))
+        my-side (state/my-side-kw client-state)
         opp-side (if (= my-side :runner) :corp :runner)
         my-clicks (get-in client-state [:game-state my-side :click])
         opp-clicks (get-in client-state [:game-state opp-side :click])
@@ -401,7 +419,7 @@
                 (when (> after-hand before-hand)
                   (println (str "🃏 Drew: " card-title))
                   (core/show-card-on-first-sight! card-title))))
-            (core/with-cursor {:status :success})))))))
+            (core/with-cursor {:status :success}))))))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -1029,7 +1047,12 @@
   ;; descheduled.
   (when-let [armed (:auto-end-deferred @state/client-state)]
     (let [client-state @state/client-state
-          side (keyword (:side client-state))
+          ;; #127: through the authority. This one never threw (every use is
+          ;; nil-guarded) but it did not lowercase, so a capitalized :side made
+          ;; the `prompt` lookup below read nil off :Runner — `still-waiting?`
+          ;; then came back false and the #114 deferred resume would fire
+          ;; end-turn while the opponent's prompt was in fact still up.
+          side (state/my-side-kw client-state)
           gameid (:gameid client-state)
           turn (get-in client-state [:game-state :turn])
           active-player (get-in client-state [:game-state :active-player])
@@ -1083,8 +1106,17 @@
 
    Usage: (smart-end-turn!)  ; Auto-end if safe, warn if not"
   []
-  (let [client-state @state/client-state
-        side (keyword (:side client-state))
+  (if-not (state/my-side-kw)
+    ;; #127 (guest panel + behavioural sweep): this is the CLI's *recommended*
+    ;; end-turn (dev/send_command:357) and what the heuristic bots call, and it
+    ;; was the last unguarded copy. Its `my-turn?` binding is an `or` starting
+    ;; with `(nil? active-player)`, which short-circuits away the throw when
+    ;; there is no board at all — so it survived a bare sideless state and NPE'd
+    ;; only on the one that still holds a cached board. That is exactly why the
+    ;; sweep carries both fixtures.
+    (refuse-no-seat! "smart-end-turn")
+    (let [client-state @state/client-state
+        side (state/my-side-kw client-state)
         clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
         hand-size (or (get-in client-state [:game-state side :hand-count]) 0)
@@ -1211,7 +1243,7 @@
       :else
       (do
         (println "✅ Auto-ending turn (0 clicks, no prompts)")
-        (end-turn!)))))
+        (end-turn!))))))
 
 ;; Keep old function names for backwards compatibility
 (defn take-credits []

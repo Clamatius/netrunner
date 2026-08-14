@@ -730,4 +730,9 @@
             (is (= 0 @discarded)
                 (str "must not guess a hand-size max and bin cards, got: " out))
             (is (empty? @sent)
-                (str "must select nothing, sent: " @sent))))))))
+                (str "must select nothing, sent: " @sent))
+            ;; Guest-panel note: 0 otherwise means "nothing required" and the
+            ;; caller prints "No cards to discard" on it. A declined discard
+            ;; that reads as a clean no-op spins an autonomous prompt loop.
+            (is (re-find #"(?i)declin" out)
+                (str "must say it DECLINED rather than report a clean no-op, got: " out))))))))

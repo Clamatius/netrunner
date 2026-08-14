@@ -427,88 +427,124 @@
            (state/runner-hosted-credits
              {:runner {:play-area [{:title "Spent Overclock" :counter {:credit 0}}]}})))))
 
+
 ;; ============================================================================
 ;; #127: the side derivation is hand-rolled all over the client — RATCHET
 ;; ============================================================================
 ;; #125 fixed three display surfaces, #126 named `my-side-kw` the authority, and
-;; #127 called check-auto-end-turn! "a THIRD hand-rolled copy". Fixing it turned
-;; up a fifth (end-turn! itself) and a source count of fourteen live sites, so
-;; the premise that this is a handful of strays is wrong: `(keyword (:side …))`
-;; is the house style, and `my-side-kw` is the exception.
+;; #127 called check-auto-end-turn! "a THIRD hand-rolled copy". That premise is
+;; wrong by an order of magnitude: hand-rolling is the house style here and
+;; `my-side-kw` is the exception. Two distinct defects ride on the family —
 ;;
-;; Two distinct defects ride on every one of them:
-;;   nil    `(keyword nil)` is nil and does NOT throw — the NPE always lands
-;;          downstream, at the first `(name side)`. So a site is dangerous or
-;;          not depending on its callers, which is why this keeps resurfacing
-;;          as a "new" bug (#109 end-turn, #125 display, #127 auto-end).
-;;   case   none of them lowercase. `reconnect-game!` (ai_connection.clj:329,
-;;          the `make resume` path) writes `:side "Corp"`/"Runner" capitalized,
-;;          because detect-side-from-username returns the case the SERVER
-;;          matches on. Until the resync full-state lands, `set-full-state!`
-;;          has not normalized it, and :Runner misses every
-;;          [:game-state side …] lookup. That one is SILENT — no throw, just a
-;;          seat that reads 0 clicks off a live board (test-end-turn-does-not-
-;;          deny-a-live-game-over-side-casing pins the worst instance).
+;;   nil    `(keyword nil)` is nil and does NOT throw, so the NPE always lands
+;;          downstream at the first `(name side)` or arithmetic. Whether a site
+;;          is dangerous depends on its callers, which is why this keeps
+;;          resurfacing as a "new" bug (#109 end-turn, #125 display, #127
+;;          check-auto-end-turn! / smart-end-turn! / start-turn!).
+;;   case   almost none of them lowercase. `reconnect-game!`
+;;          (ai_connection.clj:329, the `make resume` path) writes
+;;          `:side "Corp"`/"Runner" capitalized, because
+;;          detect-side-from-username returns the case the SERVER matches on,
+;;          and `set-full-state!` only normalizes when the resync full-state
+;;          lands. :Runner misses every [:game-state side …] lookup. This one is
+;;          SILENT — no throw, just a seat reading 0 clicks off a live board.
 ;;
-;; Migrating all fourteen is not this issue's job — each site has its own
-;; downstream expectations (string vs keyword, `(name side)` callers) and would
-;; need its own fixture. This is a RATCHET instead: it pins today's population
-;; per file so a NEW hand-rolled copy fails the suite. When you migrate a site
-;; to `state/my-side-kw`, LOWER the number here. Never raise it.
+;; The behavioural guard is ai-actions-sad-path-test/
+;; test-no-action-surface-throws-on-a-sideless-state, which invokes the action
+;; surfaces. THIS test is the containment guard: it stops the family spreading.
+;;
+;; Guest-panel catch (GPT-5.6) on the first cut: that cut matched only the
+;; literal `(keyword (:side` on a single line, which could not have detected the
+;; very bug this issue fixed — pre-patch `end-turn!` spelled it
+;; `side (:side client-state)` then `side-kw (keyword side)` on the next line.
+;; A ratchet blind to the shape it exists for is decoration. The matcher below
+;; is whitespace-normalized (so a line break cannot hide a form) and also
+;; catches `(keyword <symbol-containing-side>)`.
+;;
+;; KNOWN HOLE, stated rather than papered over: these are per-file COUNTS, so
+;; removing one site and adding another in the same file nets zero and passes.
+;; Counts are what survives line-number churn; the behavioural sweep is the
+;; backstop for anything that slips through.
 
 (def ^:private hand-rolled-side-budget
-  "file -> number of remaining hand-rolled keyword-of-:side derivations.
-   Shrink these; a new file appearing at all is a failure."
-  {"ai_basic_actions.clj" 9
-   "ai_card_actions.clj"  2
-   "ai_core.clj"          2
-   ;; ai_state.clj owns my-side-kw; this is a separate fn in the same file that
-   ;; has not been migrated, NOT the authority itself.
-   "ai_state.clj"         1})
+  "file -> hand-rolled keyword-of-side derivations remaining. Shrink these; a
+   file appearing here that is not listed is a failure.
 
-(defn- hand-rolled-side-sites
-  "file -> [[line text] …] for every literal `(keyword (:side` in the AI source."
-  []
-  (->> (file-seq (clojure.java.io/file "dev/src/clj"))
-       (filter #(.isFile %))
-       (filter #(clojure.string/ends-with? (.getName %) ".clj"))
-       (keep (fn [f]
-               (let [hits (->> (clojure.string/split-lines (slurp f))
-                               (map-indexed (fn [i l] [(inc i) l]))
-                               (remove (fn [[_ l]]
-                                         (clojure.string/starts-with?
-                                          (clojure.string/trim l) ";;")))
-                               (filter (fn [[_ l]]
-                                         (clojure.string/includes? l "(keyword (:side"))))]
-                 (when (seq hits) [(.getName f) (vec hits)]))))
-       (into {})))
+   The count deliberately mixes two populations, because the matcher cannot
+   tell them apart and the SAFE-looking one is not actually safe:
+     - `(keyword (:side client-state))` — the defect proper, both bugs above.
+     - `(keyword side)` on an already-derived parameter — benign only for as
+       long as every caller passes something normalized, which is precisely the
+       assumption `reconnect-game!` breaks."
+  {"ai_basic_actions.clj" 20
+   "ai_card_actions.clj"   2
+   "ai_core.clj"           9
+   "ai_runs.clj"           5
+   "ai_stall.clj"          2
+   ;; ai_state.clj owns my-side-kw; these are OTHER fns in the same file.
+   "ai_state.clj"          6
+   "full_game_test.clj"    1})
+
+(def ^:private direct-derivation-re
+  #"\(keyword \(:side\b")
+
+(def ^:private symbol-derivation-re
+  #"\(keyword [A-Za-z0-9!?*<>=_+-]*side[A-Za-z0-9!?*<>=_+-]*\)")
+
+(defn- hand-rolled-side-count
+  "Count derivations in one source string, ignoring ;; comments and collapsing
+   whitespace so a multi-line form cannot hide. Forms wrapped in lower-case do
+   not match either pattern — that is the point: those already normalize."
+  [src]
+  (let [text (-> (->> (clojure.string/split-lines src)
+                      (map #(clojure.string/replace % #";;.*$" ""))
+                      (clojure.string/join "\n"))
+                 (clojure.string/replace #"\s+" " "))]
+    (+ (count (re-seq direct-derivation-re text))
+       (count (re-seq symbol-derivation-re text)))))
+
+(deftest test-hand-rolled-side-derivation-matcher-sees-the-real-shapes
+  (testing "#127: the matcher catches the forms this bug actually took"
+    ;; Without this the ratchet can rot into a regex that matches nothing.
+    (are [src] (= 1 (hand-rolled-side-count src))
+      "(let [side (keyword (:side client-state))] side)"
+      ;; the pre-patch end-turn! shape the first cut was blind to
+      "(let [side (:side client-state)\n      side-kw (keyword side)] side-kw)"
+      ;; a line break must not hide it
+      "(let [side (keyword\n              (:side client-state))] side)"
+      "(get-in s [:game-state (keyword my-side) :click])")
+    (are [src] (= 0 (hand-rolled-side-count src))
+      ;; the authority's own shape normalizes, so it is not a defect
+      "(keyword (clojure.string/lower-case side))"
+      "(keyword (clojure.string/lower-case (:side state)))"
+      ;; commented-out code and prose must not inflate the budget
+      ";; (keyword (:side client-state)) is the old way"
+      "(keyword :some-other-thing)")))
 
 (deftest test-hand-rolled-side-derivation-does-not-spread
-  (testing "#127: no NEW hand-rolled keyword-of-:side derivation may be added"
-    (let [sites (hand-rolled-side-sites)
-          counts (into {} (map (fn [[f hits]] [f (count hits)]) sites))]
-      ;; The sweep is only worth anything if it can still see the family it was
-      ;; written for — an over-eager filter that emptied would otherwise pass.
+  (testing "#127: no NEW hand-rolled side derivation may be added"
+    (let [counts (->> (file-seq (clojure.java.io/file "dev/src/clj"))
+                      (filter #(.isFile %))
+                      (filter #(clojure.string/ends-with? (.getName %) ".clj"))
+                      (keep (fn [f]
+                              (let [n (hand-rolled-side-count (slurp f))]
+                                (when (pos? n) [(.getName f) n]))))
+                      (into {}))]
       (is (seq counts)
           "the sweep found nothing at all — the matcher or the source path is broken")
-      (doseq [[f n] counts]
+      (doseq [[f n] (sort counts)]
         (let [budget (get hand-rolled-side-budget f)]
           (is (some? budget)
-              (str f " hand-rolls the side derivation " n " time(s). Use "
-                   "`ai-state/my-side-kw` — it is nil-safe AND lowercases, and a "
-                   "bare `(keyword (:side …))` is neither. Sites:\n  "
-                   (clojure.string/join "\n  "
-                     (map (fn [[l t]] (str f ":" l " " (clojure.string/trim t)))
-                          (get sites f)))))
+              (str f " hand-rolls the side derivation " n " time(s) and is not in "
+                   "the budget. Use `ai-state/my-side-kw`: it is nil-safe AND "
+                   "lowercases, and a bare keyword-of-side is neither."))
           (when budget
             (is (<= n budget)
-                (str f " grew from " budget " to " n " hand-rolled side "
-                     "derivations. Route new code through `ai-state/my-side-kw`."))
+                (str f " grew from " budget " to " n " hand-rolled side derivations. "
+                     "Route new code through `ai-state/my-side-kw`."))
             (when (< n budget)
               (println (format "ℹ️  #127 ratchet: %s is down to %d (budget %d) — lower the budget."
                                f n budget))))))
-      ;; A file that drops to zero disappears from `sites` entirely, so the
-      ;; budget map would silently keep a stale entry. Flag it as progress.
       (doseq [[f budget] hand-rolled-side-budget]
         (when-not (contains? counts f)
           (println (format "ℹ️  #127 ratchet: %s is fully migrated (budget %d) — drop its entry."
