@@ -727,7 +727,9 @@
         (with-redefs [ws/send-message! (fn [evt data] (swap! sent conj [evt data]) true)]
           (let [discarded (atom nil)
                 out (with-out-str (reset! discarded (ws/handle-discard-prompt! :runner)))]
-            (is (= 0 @discarded)
+            ;; nil, not 0 — see test-discard-return-distinguishes-declined-from
+            ;; -nothing-to-do for why the difference is the whole contract.
+            (is (nil? @discarded)
                 (str "must not guess a hand-size max and bin cards, got: " out))
             (is (empty? @sent)
                 (str "must select nothing, sent: " @sent))
@@ -736,3 +738,43 @@
             ;; that reads as a clean no-op spins an autonomous prompt loop.
             (is (re-find #"(?i)declin" out)
                 (str "must say it DECLINED rather than report a clean no-op, got: " out))))))))
+
+;; Second-pass guest catch (#127): printing "declining" while still returning 0
+;; left the ambiguity where it does damage. ai_heuristic_runner's prompt
+;; dispatcher was `(do (prompts/discard-to-hand-size!) true)` — handled
+;; unconditionally — so a decline reported success, the bot loop came round, met
+;; the same unresolved prompt, and spun forever. That is the house autonomous-
+;; deadlock shape: a shared handler returning a pause the loop never converts
+;; into an action.
+;;
+;; 0 is TRUTHY in Clojure and nil is not, so one nil/number distinction carries
+;; the whole contract: nil = "I declined, this prompt is still yours", any
+;; number = "dealt with" (including a legitimate 0-card no-op).
+
+(deftest test-discard-return-distinguishes-declined-from-nothing-to-do
+  (testing "#127: nil means declined, 0 means genuinely nothing to discard"
+    (let [under-hand-size {:runner {:prompt-state nil
+                                    :hand [{:cid 1 :title "Sure Gamble"}]
+                                    :hand-size {:total 5}}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state under-hand-size)
+        (with-redefs [ws/send-message! (fn [_ _] true)]
+          (let [r (atom :unset)]
+            (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+            (is (= 0 @r) "a real board with nothing to discard returns 0, not nil")
+            (is (some? @r) "…and 0 must read as HANDLED to a bot loop")))))
+    ;; declined: a select prompt is up but the board reports no max hand size
+    (let [unreadable {:runner {:prompt-state {:prompt-type "select" :eid {:eid 7}}
+                               :hand [{:cid 1 :title "Sure Gamble"}
+                                      {:cid 2 :title "Diesel"}]}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state unreadable)
+        (with-redefs [ws/send-message! (fn [_ _] true)]
+          (let [r (atom :unset)]
+            (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+            (is (nil? @r)
+                "a decline must be nil so a bot loop does not read it as handled")))))
+    ;; and the sideless state, which is the same class
+    (with-mock-state no-board-state
+      (with-redefs [ws/send-message! (fn [_ _] true)]
+        (let [r (atom :unset)]
+          (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+          (is (nil? @r) "no side => declined, not a clean no-op"))))))

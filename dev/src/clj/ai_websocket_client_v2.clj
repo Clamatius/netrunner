@@ -620,14 +620,22 @@
             (Thread/sleep 500)))
         (println (format "✅ Discarded %d card(s)" cards-to-discard))
         cards-to-discard)
-      (do
-        ;; Guest-panel note (#127): 0 otherwise means "nothing required", and
-        ;; the caller prints "No cards to discard" on it. Say so explicitly in
-        ;; the one case where 0 means "I declined", or an autonomous prompt loop
-        ;; sees a clean no-op and spins on a discard prompt it never resolves.
-        (when (and (= "select" (:prompt-type prompt)) (nil? hand-size-max))
-          (println "⚠️  A discard prompt is up but this board reports no max hand size — declining rather than guessing which cards to bin.")
-          (println "💡 'status' to check the board landed; 'resync' if it did not; 'discard' with explicit indices to choose yourself."))
+      (if (or (nil? side) (nil? cards-to-discard))
+        ;; DECLINED — nil, not 0. Second-pass guest catch (#127): printing
+        ;; "declining" while still returning 0 left the ambiguity intact where
+        ;; it does damage. ai_heuristic_runner's prompt dispatcher was
+        ;; `(do (discard-to-hand-size!) true)` — handled unconditionally — so a
+        ;; decline reported success, the loop came round, met the same prompt,
+        ;; and spun forever. That is the house autonomous-deadlock shape: a
+        ;; shared handler returning a pause the bot loop never converts to an
+        ;; action. nil is falsey and 0 is TRUTHY in Clojure, so this single
+        ;; distinction is exactly what every caller needs to branch on.
+        (do
+          (when (and (= "select" (:prompt-type prompt)) (nil? hand-size-max))
+            (println "⚠️  A discard prompt is up but this board reports no max hand size — declining rather than guessing which cards to bin.")
+            (println "💡 'status' to check the board landed; 'resync' if it did not; 'discard' with explicit indices to choose yourself."))
+          nil)
+        ;; Genuinely nothing to do: a real board that is at or under hand size.
         0))))
 
 ;; Note: Status display functions moved to ai-display namespace

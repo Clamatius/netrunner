@@ -491,17 +491,30 @@
 (def ^:private symbol-derivation-re
   #"\(keyword [A-Za-z0-9!?*<>=_+-]*side[A-Za-z0-9!?*<>=_+-]*\)")
 
+(def ^:private threaded-derivation-re
+  "Second-pass guest catch: `(some-> (:side client-state) keyword)` is a real
+   unnormalized derivation that is nil-SAFE, so it passes both sideless
+   fixtures in the behavioural sweep and would reintroduce the capitalized
+   -reconnect bug with nothing to catch it. Threading is the obvious way
+   someone fixes the nil half of this family without fixing the case half.
+
+   A bounded window rather than paren matching: a threading form mentioning a
+   side AND `keyword` within 80 characters is the shape, and a regex trying to
+   balance parens here would be the more fragile artifact."
+  #"\((?:some->>|some->|->>|->) .{0,80}?side.{0,80}?keyword")
+
 (defn- hand-rolled-side-count
   "Count derivations in one source string, ignoring ;; comments and collapsing
    whitespace so a multi-line form cannot hide. Forms wrapped in lower-case do
-   not match either pattern — that is the point: those already normalize."
+   not match any pattern — that is the point: those already normalize."
   [src]
   (let [text (-> (->> (clojure.string/split-lines src)
                       (map #(clojure.string/replace % #";;.*$" ""))
                       (clojure.string/join "\n"))
                  (clojure.string/replace #"\s+" " "))]
     (+ (count (re-seq direct-derivation-re text))
-       (count (re-seq symbol-derivation-re text)))))
+       (count (re-seq symbol-derivation-re text))
+       (count (re-seq threaded-derivation-re text)))))
 
 (deftest test-hand-rolled-side-derivation-matcher-sees-the-real-shapes
   (testing "#127: the matcher catches the forms this bug actually took"
@@ -512,7 +525,11 @@
       "(let [side (:side client-state)\n      side-kw (keyword side)] side-kw)"
       ;; a line break must not hide it
       "(let [side (keyword\n              (:side client-state))] side)"
-      "(get-in s [:game-state (keyword my-side) :click])")
+      "(get-in s [:game-state (keyword my-side) :click])"
+      ;; second-pass guest catch: nil-safe but still unnormalized, so the
+      ;; behavioural sweep cannot see it and only this can
+      "(let [side (some-> (:side client-state) keyword)] side)"
+      "(let [side (-> client-state :side keyword)] side)")
     (are [src] (= 0 (hand-rolled-side-count src))
       ;; the authority's own shape normalizes, so it is not a defect
       "(keyword (clojure.string/lower-case side))"

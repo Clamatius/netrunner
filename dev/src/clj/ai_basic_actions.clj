@@ -272,11 +272,16 @@
 
    Returns {:status :error} if validation fails, {:status :success} if successful."
   []
-  (if-not (state/my-side-kw)
+  ;; ONE snapshot: the guard and the body must classify the same state. Reading
+  ;; the atom twice reopened the check/use race — a leave/resync landing between
+  ;; the two reads gives the body a nil side and the NPE is back (second-pass
+  ;; guest catch).
+  (let [snapshot @state/client-state]
+   (if-not (state/my-side-kw snapshot)
     ;; #127 (behavioural sweep): with a board cached but no seat, `my-clicks`
     ;; read nil and the arithmetic below NPE'd before any guard could refuse.
     (refuse-no-seat! "start-turn")
-    (let [client-state @state/client-state
+    (let [client-state snapshot
         gameid (:gameid client-state)
         my-side (state/my-side-kw client-state)
         opp-side (if (= my-side :runner) :corp :runner)
@@ -419,7 +424,7 @@
                 (when (> after-hand before-hand)
                   (println (str "🃏 Drew: " card-title))
                   (core/show-card-on-first-sight! card-title))))
-            (core/with-cursor {:status :success}))))))))
+            (core/with-cursor {:status :success})))))))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -1106,7 +1111,10 @@
 
    Usage: (smart-end-turn!)  ; Auto-end if safe, warn if not"
   []
-  (if-not (state/my-side-kw)
+  ;; ONE snapshot — see start-turn! for why the guard and the body may not read
+  ;; the atom separately.
+  (let [snapshot @state/client-state]
+   (if-not (state/my-side-kw snapshot)
     ;; #127 (guest panel + behavioural sweep): this is the CLI's *recommended*
     ;; end-turn (dev/send_command:357) and what the heuristic bots call, and it
     ;; was the last unguarded copy. Its `my-turn?` binding is an `or` starting
@@ -1115,7 +1123,7 @@
     ;; only on the one that still holds a cached board. That is exactly why the
     ;; sweep carries both fixtures.
     (refuse-no-seat! "smart-end-turn")
-    (let [client-state @state/client-state
+    (let [client-state snapshot
         side (state/my-side-kw client-state)
         clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
@@ -1243,7 +1251,7 @@
       :else
       (do
         (println "✅ Auto-ending turn (0 clicks, no prompts)")
-        (end-turn!))))))
+        (end-turn!)))))))
 
 ;; Keep old function names for backwards compatibility
 (defn take-credits []

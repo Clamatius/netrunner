@@ -246,14 +246,27 @@
                            :hand-size {:total 5} :installed {} :rig {}}
                   :log []}}]])
 
+(defn- zero-arg-callable?
+  "True when this arglist can be invoked with no arguments: either it is empty,
+   or it is variadic with no fixed params before the `&`.
+
+   Second-pass guest catch: the first cut tested only the empty arglist, which
+   silently skipped every `[& opts]` surface — `ai-runs/monitor-run!` among them
+   — while the count sanity-check below still passed. An exclusion nobody can
+   see is the same defect as the facade's missing :arglists."
+  [al]
+  (or (= 0 (count al))
+      (= '& (first al))))
+
 (defn- zero-arg-action-surfaces
-  "Zero-arg public fns of the action namespaces, as [label var] pairs."
+  "Public fns of the action namespaces that a seat can call with no arguments,
+   as [label var] pairs."
   []
   (doall
    (for [ns- action-namespaces
          :let [_ (require ns-)]
          [sym v] (sort-by first (ns-publics ns-))
-         :when (some #(= 0 (count %)) (:arglists (meta v)))]
+         :when (some zero-arg-callable? (:arglists (meta v)))]
      [(str ns- "/" (name sym)) v])))
 
 (defn- call-bounded
@@ -282,8 +295,12 @@
           (str "sanity: the sweep collapsed, saw " (count surfaces) " surfaces"))
       (doseq [required ["ai-basic-actions/check-auto-end-turn!"
                         "ai-basic-actions/smart-end-turn!"
+                        "ai-basic-actions/start-turn!"
                         "ai-basic-actions/end-turn"
-                        "ai-prompts/discard-to-hand-size!"]]
+                        "ai-prompts/discard-to-hand-size!"
+                        ;; variadic `[& opts]` — pins zero-arg-callable?, which
+                        ;; the empty-arglist-only filter silently skipped
+                        "ai-runs/monitor-run!"]]
         (is (contains? labels required)
             (str "the sweep must cover " required ", swept: " (sort labels))))
       (doseq [[fixture-label st] sideless-fixtures]
