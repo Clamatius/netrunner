@@ -426,3 +426,90 @@
     (is (= {:total 0 :sources []}
            (state/runner-hosted-credits
              {:runner {:play-area [{:title "Spent Overclock" :counter {:credit 0}}]}})))))
+
+;; ============================================================================
+;; #127: the side derivation is hand-rolled all over the client — RATCHET
+;; ============================================================================
+;; #125 fixed three display surfaces, #126 named `my-side-kw` the authority, and
+;; #127 called check-auto-end-turn! "a THIRD hand-rolled copy". Fixing it turned
+;; up a fifth (end-turn! itself) and a source count of fourteen live sites, so
+;; the premise that this is a handful of strays is wrong: `(keyword (:side …))`
+;; is the house style, and `my-side-kw` is the exception.
+;;
+;; Two distinct defects ride on every one of them:
+;;   nil    `(keyword nil)` is nil and does NOT throw — the NPE always lands
+;;          downstream, at the first `(name side)`. So a site is dangerous or
+;;          not depending on its callers, which is why this keeps resurfacing
+;;          as a "new" bug (#109 end-turn, #125 display, #127 auto-end).
+;;   case   none of them lowercase. `reconnect-game!` (ai_connection.clj:329,
+;;          the `make resume` path) writes `:side "Corp"`/"Runner" capitalized,
+;;          because detect-side-from-username returns the case the SERVER
+;;          matches on. Until the resync full-state lands, `set-full-state!`
+;;          has not normalized it, and :Runner misses every
+;;          [:game-state side …] lookup. That one is SILENT — no throw, just a
+;;          seat that reads 0 clicks off a live board (test-end-turn-does-not-
+;;          deny-a-live-game-over-side-casing pins the worst instance).
+;;
+;; Migrating all fourteen is not this issue's job — each site has its own
+;; downstream expectations (string vs keyword, `(name side)` callers) and would
+;; need its own fixture. This is a RATCHET instead: it pins today's population
+;; per file so a NEW hand-rolled copy fails the suite. When you migrate a site
+;; to `state/my-side-kw`, LOWER the number here. Never raise it.
+
+(def ^:private hand-rolled-side-budget
+  "file -> number of remaining hand-rolled keyword-of-:side derivations.
+   Shrink these; a new file appearing at all is a failure."
+  {"ai_basic_actions.clj" 9
+   "ai_card_actions.clj"  2
+   "ai_core.clj"          2
+   ;; ai_state.clj owns my-side-kw; this is a separate fn in the same file that
+   ;; has not been migrated, NOT the authority itself.
+   "ai_state.clj"         1})
+
+(defn- hand-rolled-side-sites
+  "file -> [[line text] …] for every literal `(keyword (:side` in the AI source."
+  []
+  (->> (file-seq (clojure.java.io/file "dev/src/clj"))
+       (filter #(.isFile %))
+       (filter #(clojure.string/ends-with? (.getName %) ".clj"))
+       (keep (fn [f]
+               (let [hits (->> (clojure.string/split-lines (slurp f))
+                               (map-indexed (fn [i l] [(inc i) l]))
+                               (remove (fn [[_ l]]
+                                         (clojure.string/starts-with?
+                                          (clojure.string/trim l) ";;")))
+                               (filter (fn [[_ l]]
+                                         (clojure.string/includes? l "(keyword (:side"))))]
+                 (when (seq hits) [(.getName f) (vec hits)]))))
+       (into {})))
+
+(deftest test-hand-rolled-side-derivation-does-not-spread
+  (testing "#127: no NEW hand-rolled keyword-of-:side derivation may be added"
+    (let [sites (hand-rolled-side-sites)
+          counts (into {} (map (fn [[f hits]] [f (count hits)]) sites))]
+      ;; The sweep is only worth anything if it can still see the family it was
+      ;; written for — an over-eager filter that emptied would otherwise pass.
+      (is (seq counts)
+          "the sweep found nothing at all — the matcher or the source path is broken")
+      (doseq [[f n] counts]
+        (let [budget (get hand-rolled-side-budget f)]
+          (is (some? budget)
+              (str f " hand-rolls the side derivation " n " time(s). Use "
+                   "`ai-state/my-side-kw` — it is nil-safe AND lowercases, and a "
+                   "bare `(keyword (:side …))` is neither. Sites:\n  "
+                   (clojure.string/join "\n  "
+                     (map (fn [[l t]] (str f ":" l " " (clojure.string/trim t)))
+                          (get sites f)))))
+          (when budget
+            (is (<= n budget)
+                (str f " grew from " budget " to " n " hand-rolled side "
+                     "derivations. Route new code through `ai-state/my-side-kw`."))
+            (when (< n budget)
+              (println (format "ℹ️  #127 ratchet: %s is down to %d (budget %d) — lower the budget."
+                               f n budget))))))
+      ;; A file that drops to zero disappears from `sites` entirely, so the
+      ;; budget map would silently keep a stale entry. Flag it as progress.
+      (doseq [[f budget] hand-rolled-side-budget]
+        (when-not (contains? counts f)
+          (println (format "ℹ️  #127 ratchet: %s is fully migrated (budget %d) — drop its entry."
+                           f budget)))))))

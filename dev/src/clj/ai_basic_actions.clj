@@ -690,8 +690,17 @@
           (end-turn! :force true)  ; Forced - burns clicks, then ends"
   [& {:keys [force] :or {force false}}]
   (let [client-state @state/client-state
-        side (:side client-state)
-        side-kw (keyword side)
+        ;; #127: through the authority, which LOWERCASES. The bare keyword-of
+        ;; -:side derivation here was nil-guarded but not case-normalized, and
+        ;; `reconnect-game!`
+        ;; (the `make resume` path) writes a capitalized :side straight into
+        ;; client-state. :Runner then misses [:game-state side-kw :click], so
+        ;; `clicks` read nil and the no-game-state branch below fired on a
+        ;; perfectly live game — telling the seat its game "has ended, been
+        ;; purged, or the resync did not complete" and offering reset.sh, which
+        ;; would destroy it. Note `my-turn?` two lines down already lower-cased
+        ;; defensively; the lookup above it did not.
+        side-kw (state/my-side-kw client-state)
         clicks (get-in client-state [:game-state side-kw :click])
         hand-size (count (get-in client-state [:game-state side-kw :hand]))
         max-hand-size (get-in client-state [:game-state side-kw :hand-size :total] 5)
@@ -820,11 +829,23 @@
    - No scorable agendas (Corp only)
 
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
-   This prevents the 'forgot to end-turn' stuck state."
+   This prevents the 'forgot to end-turn' stuck state.
+
+   No side => no turn of ours to end, so this bails before reading the board
+   (#127). It is called automatically after every clicks-consuming action, so
+   the hand-rolled keyword-of-:side derivation it used to do threw a bare
+   NPE at `(name side)` from INSIDE an install/play/advance whenever :side was
+   nil — the state `leave-lobby!` leaves behind, or a REPL that never joined.
+   `state/my-side-kw` is the guarded authority for this derivation (#125/#126)
+   and also lowercases, which the hand-rolled copy did not: `reconnect-game!`
+   writes a CAPITALIZED :side (\"Corp\"/\"Runner\") until the resync full-state
+   normalizes it, and :Runner misses every [:game-state side ...] lookup while
+   comparing \"Runner\" against an active-player of \"runner\" — a silent
+   never-auto-ends, not a crash."
   []
-  (let [client-state @state/client-state
-        side (keyword (:side client-state))
-        clicks (get-in client-state [:game-state side :click])
+  (let [client-state @state/client-state]
+   (when-let [side (state/my-side-kw client-state)]
+    (let [clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
         ;; :hand-count, NOT (count :hand): our own hand contents are hidden in
         ;; wire state (fog of war), so counting :hand reads 0 and the discard
@@ -957,7 +978,7 @@
             (println "💡 Auto-ending turn (0 clicks) — expect that discard prompt next"))
           (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
-        (end-turn!)))))
+        (end-turn!)))))))
 
 (defn- claim-deferred-arm!
   "Atomically take ARMED off the client state. Returns true for the ONE caller

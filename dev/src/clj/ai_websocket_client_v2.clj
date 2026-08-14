@@ -586,14 +586,28 @@
 (defn handle-discard-prompt!
   "Handle discard down to hand size prompt.
    Discards cards one at a time until hand size is acceptable.
-   Returns number of cards discarded."
+   Returns number of cards discarded.
+
+   Returns 0 without selecting anything when there is no side, no board, or no
+   readable hand-size max (#127). The subtraction used to happen in this `let`,
+   i.e. BEFORE the \"is there a select prompt?\" test, so a nil hand-size-max
+   threw a bare NPE out of clojure.lang.Numbers.minus on a sideless state.
+
+   Declining is deliberately NOT what the sibling lookup in
+   ai_basic_actions/check-auto-end-turn! does — that one defaults the max to 5.
+   The asymmetry is correct, not an oversight: there the value only feeds a
+   forewarning line, where a wrong guess costs a wrong hint, whereas here it
+   decides which cards get binned. An unreadable hand size is a reason to
+   refuse, not to guess: guessing 5 for a Runner under a hand-size modifier
+   discards real cards off a board we have just admitted we cannot read."
   [side]
-  (let [gs (state/get-game-state)
+  (let [gs (when side (state/get-game-state))
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])
         hand-size-max (get-in gs [side :hand-size :total])
-        cards-to-discard (- (count hand) hand-size-max)]
+        cards-to-discard (when hand-size-max (- (count hand) hand-size-max))]
     (if (and (= "select" (:prompt-type prompt))
+             cards-to-discard
              (> cards-to-discard 0))
       (do
         (println (format "Need to discard %d cards from hand of %d (max %d)"

@@ -662,3 +662,72 @@
             (is (= :success (:status @result)))
             (is (not (:duplicate-prompt @result))
                 "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))
+
+;; ============================================================================
+;; #127: discard-to-hand-size! on a sideless / boardless state
+;; ============================================================================
+;; `handle-discard-prompt!` computed
+;;   hand-size-max (get-in gs [side :hand-size :total])
+;;   cards-to-discard (- (count hand) hand-size-max)
+;; in the `let`, i.e. BEFORE the "is there actually a select prompt?" guard. With
+;; no board (or no side) hand-size-max is nil and the subtraction throws
+;;   NullPointerException: Cannot invoke "Object.getClass()"
+;; out of clojure.lang.Numbers.minus.
+;;
+;; #127 notes the asymmetry with the sibling lookup in ai_basic_actions.clj:835,
+;; which supplies a default of 5, and asks which of the two is wrong. Neither:
+;; the sibling is a FOREWARNING, where guessing 5 costs at most a wrong hint,
+;; while this one SELECTS CARDS FOR THE BIN. An unknown hand-size is a reason to
+;; decline, not to guess — so the fix here is to refuse (return 0), not to
+;; default. Guessing 5 for a Runner under a hand-size modifier would bin real
+;; cards on a state we admit we cannot read.
+
+(def ^:private no-board-state
+  {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
+
+(def ^:private left-game-board-state
+  "`leave-lobby!` nils :side but leaves the board cached — the state #125 was
+   actually captured in, so a board-only guard would miss it."
+  {:connected true :uid "test-user" :gameid nil :side nil
+   :game-state {:active-player "corp" :turn 10
+                :corp {:click 0 :credit 35 :hand [] :hand-count 5}
+                :runner {:click 0 :credit 5 :hand [] :hand-count 5}}})
+
+(deftest test-discard-to-hand-size-survives-a-sideless-state
+  (testing "#127: no side/board => say so, do not throw and do not select cards"
+    (doseq [[label st] [["never joined" no-board-state]
+                        ["after leaving (board still cached)" left-game-board-state]]]
+      (let [sent (atom [])]
+        (with-mock-state st
+          (with-redefs [ws/send-message! (fn [evt data] (swap! sent conj [evt data]) true)]
+            (let [thrown (atom nil)]
+              (with-out-str
+                (try (prompts/discard-to-hand-size!)
+                     (catch Throwable e (reset! thrown e))))
+              (is (nil? @thrown)
+                  (str "on a " label " state discard-to-hand-size! threw "
+                       (when @thrown
+                         (str (.getSimpleName (class @thrown)) ": " (.getMessage @thrown)))))
+              (is (empty? @sent)
+                  (str "on a " label " state it must not select anything, sent: " @sent)))))))))
+
+(deftest test-handle-discard-prompt-declines-an-unreadable-hand-size
+  (testing "#127: a select prompt with NO :hand-size on the board must discard nothing"
+    ;; The dangerous shape: the guard passes (there IS a select prompt) but the
+    ;; max is unreadable. Defaulting to 5 here would bin a real card.
+    (let [sent (atom [])
+          gs {:runner {:prompt-state {:prompt-type "select" :eid {:eid 7}}
+                       :hand [{:cid 1 :title "Sure Gamble"}
+                              {:cid 2 :title "Diesel"}
+                              {:cid 3 :title "Corroder"}
+                              {:cid 4 :title "Daily Casts"}
+                              {:cid 5 :title "Overclock"}
+                              {:cid 6 :title "Cache"}]}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state gs)
+        (with-redefs [ws/send-message! (fn [evt data] (swap! sent conj [evt data]) true)]
+          (let [discarded (atom nil)
+                out (with-out-str (reset! discarded (ws/handle-discard-prompt! :runner)))]
+            (is (= 0 @discarded)
+                (str "must not guess a hand-size max and bin cards, got: " out))
+            (is (empty? @sent)
+                (str "must select nothing, sent: " @sent))))))))

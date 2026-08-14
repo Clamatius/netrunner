@@ -629,11 +629,15 @@
    Auto-detects side and discards until at or below max hand size"
   []
   (let [client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        discarded (ws/handle-discard-prompt! side)]
-    (when (= discarded 0)
-      (println "No cards to discard"))))
+        side (state/my-side-kw client-state)]
+    (if (nil? side)
+      ;; #127: "No cards to discard" is a lie here — we have no seat to discard
+      ;; FROM. Say which of the two it is rather than reporting a clean no-op.
+      (println (if (:game-state client-state)
+                 "❌ This client has no side, so there is no hand to discard from (a board is still cached — try 'status', or 'resync' if you expect to be seated)."
+                 "❌ Not in a game — nothing to discard."))
+      (when (= 0 (ws/handle-discard-prompt! side))
+        (println "No cards to discard")))))
 
 (defn discard-specific-cards!
   "Discard specific cards by index positions
