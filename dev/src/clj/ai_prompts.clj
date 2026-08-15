@@ -218,13 +218,27 @@
       choice-uuid
       (press-choice! choice)
 
+      ;; #134: NOTHING TO CHOOSE. This used to share the arm below and report
+      ;; "Invalid choice index", which is a claim about the index when the real
+      ;; fact is that there is no decision pending — and the choice list that
+      ;; makes that message useful is empty here, so the seat got a bare wrong
+      ;; error. Believing it, the obvious recovery is to try 1, then 2, then 3.
+      ;; `prompt` already phrases this state correctly; say the same thing.
+      (empty? choices)
+      (do
+        (println "❌ Nothing to choose — no prompt with choices is pending for you.")
+        (println "   (The index is not the problem; there is no decision to answer.)")
+        (println "💡 Check with 'prompt'. If it's your turn, act — see 'list-playables'.")
+        (core/with-cursor {:status :error :reason "No prompt to choose from"}))
+
+      ;; A real prompt, a real index, out of range. Here the original message is
+      ;; exactly right, and the list below is what makes it actionable.
       :else
       (do
         (println (str "❌ Invalid choice index: " index))
-        (when (seq choices)
-          (println "    Available choices:")
-          (doseq [[i c] (map-indexed vector choices)]
-            (println (format "      %d. %s" i (:value c)))))
+        (println "    Available choices:")
+        (doseq [[i c] (map-indexed vector choices)]
+          (println (format "      %d. %s" i (:value c))))
         (core/with-cursor {:status :error :reason "Invalid choice index"})))))
 
 (defn normalize-choice-text

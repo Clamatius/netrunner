@@ -662,3 +662,44 @@
             (is (= :success (:status @result)))
             (is (not (:duplicate-prompt @result))
                 "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))
+
+;; ============================================================================
+;; #134 — choose-option! must not blame the index when there is no prompt.
+;;
+;; The :else arm was reached by two different states and described only one of
+;; them. With no prompt there are no :choices, so the "Available choices" block
+;; that makes "Invalid choice index" actionable printed nothing — leaving a bare
+;; error whose implied recovery (try another index) is wrong in exactly the
+;; state where a seat is least sure whose move it is.
+;; ============================================================================
+
+(deftest choose-with-no-prompt-says-there-is-no-prompt
+  (testing "no prompt at all: names the real state, not the index"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand [] :prompt-state nil}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (prompts/choose-option! 0))]
+        (is (not (str/includes? out "Invalid choice index"))
+            (str "the index is not the problem, got: " out))
+        (is (str/includes? out "Nothing to choose"))
+        (is (str/includes? out "prompt")
+            "must point at the surface that shows the real state"))))
+
+  (testing "a prompt WITH choices and an out-of-range index still blames the index"
+    ;; The over-correction guard: this is the state the original message was
+    ;; written for, and it must keep both the message and the choice list.
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand []
+                                          :prompt-state {:prompt-type "choice"
+                                                         :msg "Pick one"
+                                                         :choices [{:value "Alpha" :uuid "a"}
+                                                                   {:value "Beta" :uuid "b"}]}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (prompts/choose-option! 7))]
+        (is (str/includes? out "Invalid choice index: 7"))
+        (is (str/includes? out "Alpha") "the available choices must still be listed")
+        (is (str/includes? out "Beta"))))))

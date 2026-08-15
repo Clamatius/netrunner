@@ -2172,3 +2172,43 @@
             (str "must name the missing board, got:\n" out))
         (is (not (re-find #"(?i)reset\.sh" out))
             (str "a pending watch is not a reason to nuke a game:\n" out))))))
+
+;; ---------------------------------------------------------------------------
+;; #132 — the basic-action block must name actions the SIDE can actually take,
+;; using the verbs the CLI actually parses. These strings are not prose: a seat
+;; reads them and types them verbatim, so a wrong side gate is a wasted click
+;; and a wrong verb is an Unknown command.
+;; ---------------------------------------------------------------------------
+
+(defn- basic-actions-out [side]
+  (with-mock-state (mock-client-state
+                    :side side
+                    :game-state {:active-player side :turn 5
+                                 :corp {:click 3 :credit 5 :hand []}
+                                 :runner {:click 4 :credit 5 :hand [] :rig {}}})
+    (with-out-str (display/list-playables))))
+
+(deftest test-list-playables-basic-actions-are-side-correct
+  (testing "Corp is NOT offered run — the CLI refuses it (Only Runner can run on servers)"
+    (let [out (basic-actions-out "corp")]
+      (is (not (str/includes? out "run <server>"))
+          (str "run is Runner-only, got: " out))))
+
+  (testing "Runner IS offered run"
+    (is (str/includes? (basic-actions-out "runner") "run <server>")))
+
+  (testing "BOTH sides are offered draw — it is a basic action for each"
+    ;; The Runner half is the bug: draw sat inside a (when (= side :corp) ...)
+    ;; alongside purge, so the Runner was never told it could draw at all.
+    (is (str/includes? (basic-actions-out "corp") "draw"))
+    (is (str/includes? (basic-actions-out "runner") "draw")))
+
+  (testing "the printed verb is `draw`, not the non-existent `draw-card`"
+    ;; ./dev/send_command corp draw-card => "Unknown command: draw-card", and the
+    ;; did-you-mean list does not even contain `draw`.
+    (is (not (str/includes? (basic-actions-out "corp") "draw-card")))
+    (is (not (str/includes? (basic-actions-out "runner") "draw-card"))))
+
+  (testing "purge stays Corp-only — that gate was the correct one"
+    (is (str/includes? (basic-actions-out "corp") "purge"))
+    (is (not (str/includes? (basic-actions-out "runner") "purge")))))

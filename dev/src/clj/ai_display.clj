@@ -2222,13 +2222,23 @@
             (println (format "    use-runner-ability \"%s\" %d"
                             (:title source-card) idx))))))
 
-    ;; Basic actions (always available if clicks > 0)
+    ;; Basic actions (always available if clicks > 0).
+    ;;
+    ;; #132: every line here is gated on the side that can actually take it, and
+    ;; spells the verb the CLI parses. A seat does not read this as prose — it
+    ;; types it. `run` was ungated, so the Corp was offered an action the CLI
+    ;; then refuses ("Only Runner can run on servers"); `draw` sat inside the
+    ;; Corp-only arm next to `purge`, so the Runner was never told it could draw
+    ;; at all; and the verb printed was `draw-card`, which is not a command
+    ;; (`Unknown command: draw-card`, and the did-you-mean list omits `draw`).
+    ;; purge really is Corp-only — that gate was the one correct part.
     (when (and clicks (pos? clicks))
       (println "\n🎯 Basic Actions:")
       (println "  - take-credit (gain 1 credit, costs 1 click)")
-      (println "  - run <server> (initiate run, costs 1 click)")
+      (println "  - draw (draw 1 card, costs 1 click)")
+      (when (= side :runner)
+        (println "  - run <server> (initiate run, costs 1 click)"))
       (when (= side :corp)
-        (println "  - draw-card (draw 1 card, costs 1 click)")
         (println "  - purge (remove all virus counters, costs 3 clicks)")))
 
     ;; Always available
