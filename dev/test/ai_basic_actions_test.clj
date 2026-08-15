@@ -995,3 +995,18 @@
       (with-out-str (state/clear-game-state!))
       (is (= {:turn 10 :side :corp :gameid "g1"} (:auto-end-deferred @state/client-state))
           "cleared with the rest of game state, the resync hook has nothing to act on"))))
+
+(deftest test-can-start-turn-reports-no-game-state
+  (testing "the preflight must refuse nil state too, not just the wire"
+    ;; Guest-panel pass 2, HIGH — the half-applied half of the fix above. The
+    ;; autonomous loops gate on THIS, not on start-turn!'s return:
+    ;;   (let [c (can-start-turn?)] (when (:can-start c) ... (start-turn!)))
+    ;; so a preflight that says :first-turn on nil state leaves the bot
+    ;; announcing an auto-start, getting refused, and looping — wire safe, seat
+    ;; stuck. With no board every input defaults INTO the first-turn signature,
+    ;; which is exactly why it has to be refused before any of them are read.
+    (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+      (let [result (basic/can-start-turn?)]
+        (is (false? (:can-start result)))
+        (is (= :no-game-state (:reason result))
+            "was :first-turn — nil defaults ARE the Corp-first-turn shape")))))

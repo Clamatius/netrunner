@@ -62,6 +62,7 @@
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
+   - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
   (let [client-state @state/client-state
@@ -95,6 +96,18 @@
         already-played? (turn-started-since-last-opp-end?)]
 
     (cond
+      ;; NO GAME STATE — must mirror start-turn!'s first branch, or the fix is
+      ;; only half applied. With :game-state nil every input below defaults to
+      ;; the Corp-first-turn signature (turn 0, nil clicks, empty log), so this
+      ;; answered {:can-start true :reason :first-turn}. That is the PREFLIGHT
+      ;; the autonomous loops gate on — `(when (:can-start check) (start-turn!))`
+      ;; in ai-goldfish-corp / ai-heuristic-corp — so guarding only the wire
+      ;; leaves the bot announcing "Auto-starting turn", being refused, and
+      ;; going round again: the house autonomous-spin shape, with the wire safe
+      ;; and the seat still stuck. (Guest-panel pass 2, HIGH: half-applied fix.)
+      (nil? (:game-state client-state))
+      {:can-start false :reason :no-game-state}
+
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
