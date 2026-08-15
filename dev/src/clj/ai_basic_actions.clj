@@ -311,6 +311,27 @@
                            (not opp-ended?))]
 
     (cond
+      ;; NO GAME STATE — the guard end-turn! already has, and start-turn! did not.
+      ;; resync-game! clears :game-state but PRESERVES :gameid, so in that window
+      ;; every value below reads as its falsy default: turn defaults to 0, clicks
+      ;; are nil, no opponent end-turn is in the (empty) log — which is precisely
+      ;; the is-first-turn? signature. start-turn then went out on the preserved
+      ;; gameid, and if the real game is still at the mulligan it reproduces #131
+      ;; through the back door.
+      ;;
+      ;; This is why the :keep guard alone is not enough: my-mulligan-pending? is
+      ;; keyed on `false?`, so an ABSENT flag reads "not pending". That is the
+      ;; right answer to "does the flag say unresolved?" and the wrong answer to
+      ;; "may I send?". Unknown state is not permission — it needs its own
+      ;; refusal, ahead of every branch that sends. (Guest-panel CRITICAL.)
+      (nil? (:game-state client-state))
+      (do
+        (println "⛔ Refusing start-turn: no game state — there is no turn to start.")
+        (println "   The game has ended, been purged, or the resync did not complete.")
+        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
+        (println "   Fresh game:    ./dev/reset.sh")
+        (core/with-cursor {:status :error :reason :no-game-state}))
+
       ;; ERROR: Post-discard consent phase still active — opponent (or we) haven't acknowledged
       ;; the end-of-turn pause yet, so end-turn-continue hasn't run.
       post-discard-active?

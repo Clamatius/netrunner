@@ -393,6 +393,14 @@
      ;; #87: never claim it's our move while the opponent's opening mulligan is
      ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
      (not (opponent-mulligan-pending? state))
+     ;; #131, and the same sentence with the owner swapped. The turn-0/Corp/
+     ;; 0-clicks clause below is commented "post-mulligan" but checks nothing of
+     ;; the sort, so with our OWN mulligan unresolved this returned true: `wait`
+     ;; woke :my-turn-start and can-start-turn? then refused :my-mulligan — the
+     ;; #87 spin exactly, on the mirror side. The docstring above promises this
+     ;; predicate agrees with can-start-turn? BY CONSTRUCTION; guarding only the
+     ;; opponent's half is what made that promise false.
+     (not (my-mulligan-pending? state))
      (or
       ;; My turn and I have clicks
       (and (= (name my-side) active-player) (> my-clicks 0))

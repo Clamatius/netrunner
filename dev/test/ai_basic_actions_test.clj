@@ -137,6 +137,22 @@
         (is (false? (:can-start result)))
         (is (= :my-mulligan (:reason result)))))))
 
+(deftest test-start-turn-refuses-with-no-game-state
+  (testing "start-turn! sends NOTHING when :game-state is nil but :gameid survives"
+    ;; Guest-panel CRITICAL. resync-game! clears :game-state and keeps :gameid.
+    ;; Every input start-turn! reads then defaults falsy — turn 0, nil clicks,
+    ;; empty log — which IS the is-first-turn? signature, so it sent on the
+    ;; preserved gameid. The :keep guard cannot catch this: an absent flag is
+    ;; not `false`, so my-mulligan-pending? correctly says "not pending".
+    ;; Unknown state needs its own refusal.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :no-game-state (:reason result)))
+            (is (empty? @sent))))))))
+
 (deftest test-start-turn-refuses-over-my-own-mulligan
   (testing "start-turn! sends NOTHING while my own mulligan is unresolved"
     ;; The assertion that matters is `(empty? @sent)`. A refusal that still puts

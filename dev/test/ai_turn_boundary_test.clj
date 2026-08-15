@@ -236,6 +236,19 @@
     (is (true? (state/my-mulligan-pending? (with-side my-mulligan-unresolved "runner"))))
     (is (false? (state/my-mulligan-pending? (with-side both-kept "corp")))))
 
+  (testing "the contract is the FLAG, not the prompt"
+    ;; Guest-panel MEDIUM: every other fixture here pairs :keep false with a
+    ;; mulligan prompt, so re-adding a prompt requirement to the predicate would
+    ;; leave them all green while breaking the stated contract. This fixture has
+    ;; the flag and NO prompt — the transient window between the engine setting
+    ;; :keep and the prompt arriving, which is exactly where wake/park read.
+    (let [flag-only (assoc my-mulligan-unresolved
+                           :corp {:click 0 :hand-count 5 :keep false
+                                  :user {:username "ai-corp"}})]
+      (is (true? (state/my-mulligan-pending? (with-side flag-only "corp"))))
+      (is (not (core/my-turn-to-act? (with-side flag-only "corp") "corp"))
+          "wake/park must not call it our move when start-turn will refuse")))
+
   (testing "a capitalized :side must not fail the guard OPEN"
     ;; reconnect-game! (`make resume`) writes :side as "Corp"/"Runner" until the
     ;; resync full-state normalizes it. Hand-rolling (keyword (:side cs)) yields
