@@ -193,6 +193,82 @@
                (str/trim (with-out-str (display/game-over-status)))))))))
 
 ;; ---------------------------------------------------------------------------
+;; 1b. The MIRROR of the above: the mulligan *I* still owe.
+;; ---------------------------------------------------------------------------
+
+;; Both fixtures below carry `:keep`, which every fixture in this file used to
+;; omit. That omission is exactly why the suite stayed green through the bug:
+;; the engine ships `:keep false` for BOTH players at turn 0 (set-up.clj writes
+;; :keep/:mulligan only once the player answers), so a fixture without the field
+;; models a state that cannot occur — and it is the field the bug lives in.
+(def ^:private my-mulligan-unresolved
+  "Turn 0, nobody has answered yet. The Corp holds its OWN 'Keep hand?' decision
+   prompt — not the 'waiting for opponent' window that #87 covers."
+  (assoc pre-first-turn
+         :corp {:click 0 :hand-count 5 :keep false :user {:username "ai-corp"}
+                :prompt-state {:prompt-type "mulligan" :msg "Keep hand?"
+                               :choices [{:value "Keep"} {:value "Mulligan"}]}}
+         :runner {:click 0 :hand-count 5 :keep false :user {:username "ai-runner"}
+                  :prompt-state {:prompt-type "mulligan" :msg "Keep hand?"}}))
+
+(def ^:private both-kept
+  "Both players have answered. This is the first state in which the Corp really
+   is owed a start-turn — the over-correction guard for the branch added below."
+  (assoc pre-first-turn
+         :corp {:click 0 :hand-count 5 :keep "keep" :user {:username "ai-corp"}}
+         :runner {:click 0 :hand-count 5 :keep "keep" :user {:username "ai-runner"}}))
+
+(deftest boundary-blocked-by-my-own-opening-mulligan
+  ;; The mirror image of boundary-blocked-by-the-opening-mulligan, and the half
+  ;; that was missing. #87 enumerated "the OPPONENT still owes a mulligan" and
+  ;; stopped; when *I* am the one who owes it, opponent-mulligan-pending? is
+  ;; false, the boundary branch runs, and at turn 0 the Corp is i-am-next — so
+  ;; every surface said "🟢 Ready to start your turn".
+  ;;
+  ;; Unlike the #87 half this is not only a wording bug. The engine enforces no
+  ;; mulligan ordering (it trusts the client), and the reference client's only
+  ;; guard is that build-start-box is a modal covering the board — which a seat
+  ;; sending raw commands does not have. Taking the advice really does start the
+  ;; turn and take the mandatory draw with the mulligan still live: observed on
+  ;; game e753fdee as Turn 1 / 3 clicks / a KEPT SIX-CARD starting hand.
+  (testing "the predicate: pending for the side that has not answered, not the side that has"
+    (is (true? (state/my-mulligan-pending? (with-side my-mulligan-unresolved "corp"))))
+    (is (true? (state/my-mulligan-pending? (with-side my-mulligan-unresolved "runner"))))
+    (is (false? (state/my-mulligan-pending? (with-side both-kept "corp")))))
+
+  (testing "a capitalized :side must not fail the guard OPEN"
+    ;; reconnect-game! (`make resume`) writes :side as "Corp"/"Runner" until the
+    ;; resync full-state normalizes it. Hand-rolling (keyword (:side cs)) yields
+    ;; :Corp, misses the [:game-state side ...] lookup, and reads nil — which is
+    ;; NOT false, so the guard would silently allow the very thing it exists to
+    ;; stop. Failing open is the whole bug, so this one goes through my-side-kw.
+    (is (true? (state/my-mulligan-pending? (with-side my-mulligan-unresolved "Corp"))))
+    (is (false? (state/my-mulligan-pending? (with-side both-kept "Corp")))))
+
+  (testing "corp is not told it can act while it still owes the decision"
+    (with-mock-state (with-side my-mulligan-unresolved "corp")
+      (let [ts (state/get-turn-status)]
+        (is (false? (:can-act? ts))
+            "THE bug: this was true, and the 💡 hint said 'use start-turn'")
+        (is (not (str/includes? (:status-text ts) "Ready to start your turn"))
+            "the headline must not advise start-turn over a live mulligan")
+        (is (str/includes? (str/lower-case (:status-text ts)) "mulligan")
+            "it must name the decision the seat actually owes"))))
+
+  (testing "the machine line names this blocker too"
+    ;; open-prompt=mine rides along: the mulligan decision IS an open prompt of
+    ;; ours, so both fields are true and the contract for this line is additive.
+    (with-mock-state (with-side my-mulligan-unresolved "corp")
+      (is (= "AWAITING-START turn=0 next-player=corp open-prompt=mine blocked=my-mulligan"
+             (str/trim (with-out-str (display/game-over-status)))))))
+
+  (testing "over-correction guard: once both have kept, the Corp IS ready"
+    (with-mock-state (with-side both-kept "corp")
+      (let [ts (state/get-turn-status)]
+        (is (true? (:can-act? ts)))
+        (is (str/includes? (:status-text ts) "Ready to start your turn"))))))
+
+;; ---------------------------------------------------------------------------
 ;; 2. get-turn-status — the one derivation the surfaces share
 ;; ---------------------------------------------------------------------------
 

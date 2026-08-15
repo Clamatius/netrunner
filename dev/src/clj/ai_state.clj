@@ -314,6 +314,41 @@
          ;; Engine says they've resolved => not pending, whatever our prompt says.
          (not opp-keep))))
 
+(defn my-mulligan-pending?
+  "True when *I* have not yet answered my own opening mulligan.
+
+   The mirror of opponent-mulligan-pending?, and the half that was missing. #87
+   enumerated the opponent's mulligan and stopped; in the state where I am the
+   one who still owes the decision that predicate is false, so the turn-boundary
+   branch below ran and — at turn 0, where the Corp is legitimately the next
+   player — announced \"🟢 Ready to start your turn\" on every surface.
+
+   Unlike the #87 half, this one is not merely a wording bug. Nothing downstream
+   refuses: game.core has no ordering check (the engine trusts the client), and
+   the reference client's only guard is that build-start-box is a modal covering
+   the board. A seat sending raw commands has neither, so taking the advice
+   really does start the turn and take the mandatory draw with the mulligan
+   still live — a KEPT six-card starting hand, observed on game e753fdee.
+
+   Keyed on the engine's own flag, not on our prompt. game.core.player ships
+   `:keep false` for both players at game creation and set-up.clj overwrites it
+   with :keep/:mulligan the moment the player answers, so `false` means exactly
+   'has not answered' — and it is serialized for both players (diffs.clj
+   player-keys). `false?` rather than `not` is load-bearing: nil is 'no game
+   state / not serialized yet', which must not read as a pending mulligan or we
+   would block start-turn on every stale or mid-resync state.
+
+   Derives the side through my-side-kw, NOT the house-style
+   `(keyword (:side client-state))` that the sibling above still hand-rolls.
+   reconnect-game! (the `make resume` path) writes :side capitalized until the
+   resync full-state normalizes it, and `(keyword \"Corp\")` is :Corp, which
+   misses every [:game-state side ...] lookup — the guard would read nil, not
+   false, and silently fail OPEN in exactly the window where a resume lands
+   mid-setup. Failing open here is the whole bug, so this one has to go through
+   the authority (#129). The sibling has the identical gap; not touched here."
+  [client-state]
+  (false? (get-in client-state [:game-state (my-side-kw client-state) :keep])))
+
 (defn my-turn-to-act?
   "Check if it's our turn to act (need to start-turn or have clicks).
    Handles Netrunner priority system where active-player doesn't flip until start-turn.
@@ -570,6 +605,15 @@
           ;; lie to this surface rather than killing it: one predicate, one answer.
           (opponent-mulligan-pending? @client-state)
           ["⏳" "Waiting for opponent to finish their opening mulligan" false]
+
+          ;; MY own opening mulligan is unresolved. Must also precede the
+          ;; boundary branch, and for a sharper reason than the #87 case: at
+          ;; turn 0 the Corp genuinely IS the next player, so boundary? +
+          ;; i-am-next both hold and this read "🟢 Ready to start your turn"
+          ;; with a live "Keep hand?" prompt on the same screen. start-turn
+          ;; then went through — see my-mulligan-pending?.
+          (my-mulligan-pending? @client-state)
+          ["🔔" "Answer your opening mulligan first — 'keep-hand' or 'mulligan'" false]
 
           ;; Between turns: someone owes a start-turn. Both arms are needed —
           ;; the player who just ended is still :active-player, so without the

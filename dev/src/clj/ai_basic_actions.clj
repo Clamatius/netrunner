@@ -40,6 +40,12 @@
   [client-state]
   (core/opponent-mulligan-pending? client-state))
 
+(defn- my-mulligan-pending?
+  "True when WE have not yet answered our own opening mulligan. Same delegating
+   `defn-` discipline as its sibling above, for the same reason."
+  [client-state]
+  (state/my-mulligan-pending? client-state))
+
 (defn can-start-turn?
   "Check if we CAN legally start our turn right now.
 
@@ -102,6 +108,12 @@
       ;; every action bounces off the pending-mulligan prompt).
       (opponent-mulligan-pending? client-state)
       {:can-start false :reason :opponent-mulligan}
+
+      ;; We have not answered our OWN mulligan. The engine will not stop us —
+      ;; it grants the clicks and takes the mandatory draw with the decision
+      ;; still live, which is how a Corp came to keep a six-card starting hand.
+      (my-mulligan-pending? client-state)
+      {:can-start false :reason :my-mulligan}
 
       ;; Opponent started a new turn after ending the previous one
       opp-restarted?
@@ -287,6 +299,10 @@
         ;; "waiting for opponent to keep/mulligan" window). Starting now wedges
         ;; the turn — see opponent-mulligan-pending?.
         opp-mulligan-pending? (opponent-mulligan-pending? client-state)
+        ;; Our OWN opening mulligan, still unanswered. Nothing downstream
+        ;; refuses this — see my-mulligan-pending? — so this guard is the only
+        ;; thing standing between the seat and a six-card starting hand.
+        own-mulligan-pending? (my-mulligan-pending? client-state)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
         is-first-turn? (and (= turn-number 0)
@@ -321,6 +337,19 @@
         (println "   Starting now would race ahead of mulligan resolution and wedge your turn")
         (println "   Use 'wait' until they keep/mulligan, then start-turn")
         (core/with-cursor {:status :error :reason :opponent-mulligan}))
+
+      ;; ERROR: WE haven't answered our own opening mulligan. This must refuse
+      ;; before the is-first-turn? branch below, which sends unconditionally:
+      ;; the engine has no ordering check, so the send really starts the turn
+      ;; and really takes the mandatory draw while "Keep hand?" is still live.
+      ;; The seat then keeps a six-card hand — a permanent, game-affecting
+      ;; advantage taken by following our own "Ready to start your turn" hint.
+      own-mulligan-pending?
+      (do
+        (println "❌ ERROR: You haven't answered your own opening mulligan yet")
+        (println "   Starting now would take your mandatory draw with 'Keep hand?' still open")
+        (println "   Use 'keep-hand' (or 'mulligan') first, then start-turn")
+        (core/with-cursor {:status :error :reason :my-mulligan}))
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?

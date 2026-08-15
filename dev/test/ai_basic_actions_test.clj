@@ -115,6 +115,42 @@
           (is (false? (:can-start result)))
           (is (= :opponent-mulligan (:reason result))))))))
 
+;; The mirror: the mulligan *this* seat still owes. #87 guarded only the
+;; opponent's half. Nothing stopped a seat from starting its own turn over its
+;; own live 'Keep hand?' prompt — and the engine does not stop it either, so the
+;; turn really begins and the mandatory draw really happens. Observed live on
+;; game e753fdee: the Corp kept a SIX-card starting hand at Turn 1 / 3 clicks.
+(def ^:private my-mulligan-game-state
+  {:runner {:click 0 :credit 5 :hand [] :keep false}
+   :corp {:click 0 :credit 5 :hand [] :keep false
+          :prompt-state {:msg "Keep hand?" :prompt-type "mulligan"
+                         :choices [{:value "Keep"} {:value "Mulligan"}]}}
+   :turn 0
+   :active-player "runner"
+   :end-turn true
+   :log []})
+
+(deftest test-can-start-turn-reports-my-own-mulligan
+  (testing "can-start-turn? refuses while I still owe my own opening mulligan"
+    (with-mock-state (mock-client-state :side "corp" :game-state my-mulligan-game-state)
+      (let [result (basic/can-start-turn?)]
+        (is (false? (:can-start result)))
+        (is (= :my-mulligan (:reason result)))))))
+
+(deftest test-start-turn-refuses-over-my-own-mulligan
+  (testing "start-turn! sends NOTHING while my own mulligan is unresolved"
+    ;; The assertion that matters is `(empty? @sent)`. A refusal that still puts
+    ;; the message on the wire is not a refusal: the engine has no ordering check
+    ;; of its own, so the turn would start regardless of what we printed.
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state my-mulligan-game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :my-mulligan (:reason result)))
+            (is (empty? @sent)
+                "THE bug: start-turn went out and the engine happily granted clicks + the mandatory draw")))))))
+
 ;; ============================================================================
 ;; smart-end-turn! over-hand-size: must END (to trigger discard prompt), not refuse
 ;; ============================================================================
