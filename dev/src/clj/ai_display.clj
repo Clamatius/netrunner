@@ -441,7 +441,14 @@
                           ;; the bare line disagreed with that seat's own prompt.
                           ;; Same additive-field contract as open-prompt=mine.
                           (when (state/opponent-mulligan-pending? @state/client-state)
-                            " blocked=opponent-mulligan"))))
+                            " blocked=opponent-mulligan")
+                          ;; The mirror. Same boundary, opposite owner: here the
+                          ;; named next-player cannot start because it has not
+                          ;; answered its OWN mulligan. Reported alongside
+                          ;; open-prompt=mine rather than instead of it — the
+                          ;; fields are additive and both facts are true.
+                          (when (state/my-mulligan-pending? @state/client-state)
+                            " blocked=my-mulligan"))))
 
           :else
           ;; #117: an orphaned turn (active player out of clicks, :end-turn not
