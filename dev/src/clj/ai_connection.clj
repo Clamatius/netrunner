@@ -461,8 +461,43 @@
       (let [found-gameid (find-our-game)]
         (= (str my-gameid) (str found-gameid))))))
 
+(defn- boardless-started-game?
+  "Seated in a game that has STARTED, but holding no board.
+
+   This is what a failed resync leaves behind: `resync-game!` clears the cache
+   before requesting a replacement, and `:gameid` survives. Being in the lobby is
+   not the same as having a board, so `verify-in-game!` — which only consults the
+   lobby list — happily calls that state 'in the game'. Without this check the
+   invocation AFTER a :resync-failed gets :synced and acts on the cleared state,
+   which is the very thing the refusal was protecting it from (2nd-pass panel).
+
+   The signature is the ABSENCE of :lobby-state: it is dissoc'd the moment a full
+   game state arrives, so a started game that lost its cache has neither, whereas
+   an unstarted lobby still has its :lobby-state (and correctly has no board).
+   A lobby list requested in between re-sets :lobby-state, hence the :started arm."
+  []
+  (let [{:keys [gameid game-state lobby-state]} @state/client-state]
+    (boolean (and gameid
+                  (nil? game-state)
+                  (or (nil? lobby-state) (:started lobby-state))))))
+
+(defn- teardown-verdict
+  "Classify a rejoin that came back empty-handed: the game we wanted is not there.
+   A DECIDED game outranks a closed lobby — a normal ending tears the lobby down
+   too, and a seat that just lost/won needs the RESULT, not 'run reset.sh'. Same
+   precedence game-over-status and the wake ladder use (game-over first,
+   lobby-gone second); inverting it would hide a finished game's result behind a
+   teardown message.
+
+   Reads the cached snapshot on purpose: #93's teardown leaves it in place, which
+   is exactly why the winner is still readable here."
+  []
+  (if (state/game-over?) :game-over :game-gone))
+
 (defn- do-rejoin-resync!
-  "Internal: Perform the rejoin and resync sequence"
+  "Internal: Perform the rejoin and resync sequence.
+   Returns a verdict keyword (see `sync-verdict!`), not a boolean — callers need
+   to tell 'this game is gone' apart from 'the resync did not land this time'."
   []
   ;; Request lobby list to find our game
   (request-lobby-list!)
@@ -492,10 +527,10 @@
               (do
                 (state/clear-stale-flag!)
                 (println "✅ Resynced successfully")
-                true)
+                :synced)
               (do
                 (println "❌ Resync sent but state did not arrive in time")
-                false)))
+                :resync-failed)))
           (if (nil? found-gameid)
             ;; We never found our game in the lobby and were rejoining the stale
             ;; gameid (a corpse). The join was NOT confirmed — almost certainly the
@@ -503,28 +538,42 @@
             (do
               (println "❌ Game appears to be gone — not found in the lobby, and rejoining the stale id was not confirmed.")
               (println "   Most likely idle-purged (long pauses end the game). Run: ./dev/reset.sh for a fresh game.")
-              false)
+              (teardown-verdict))
             (do
               (println "❌ Rejoin not confirmed in lobby within 5s — resync skipped (transient; retry the command).")
-              false))))
+              :resync-failed))))
       (do
         (println "❌ Could not find any game to rejoin")
         (println "   Try: list-lobbies + join + resync manually")
-        false))))
+        (teardown-verdict)))))
 
-(defn ensure-synced!
-  "Check for staleness and auto-resync if detected.
-   Returns true if we're synced (or successfully resynced), false if can't recover.
+(defn sync-verdict!
+  "Check for staleness, auto-resync if detected, and CLASSIFY the outcome.
 
-   Checks multiple staleness indicators:
+   This is the authoritative answer to \"is there a game to act in?\" — the
+   question #109 showed nothing between the surfaces agreed on. Callers that act
+   MUST honour it; `dev/send_command`'s ensure_connection is the enforcement
+   point and refuses the command rather than letting it invent an explanation
+   from cleared state ('deck empty?', 'Invalid choice index').
+
+   Returns one of:
+     :synced        - in sync, or the resync worked. Safe to act.
+     :game-over     - the game is DECIDED. Nothing to send; the seat wants the
+                      result (game-over-status), not a reconnect.
+     :game-gone     - the server no longer hosts this game (#93 teardown, or an
+                      idle purge). PROBE-confirmed, not merely the cached
+                      :lobby-gone? flag — we tried the rejoin first, so a false
+                      teardown verdict still recovers instead of locking the seat out.
+     :resync-failed - transient: the rejoin or the state did not land in time.
+                      The game may well be alive — but `resync-game!` CLEARS the
+                      cached state before requesting a fresh one, so the client is
+                      deliberately empty here, which is #109's exact precondition.
+                      Retry, don't act: \"the game might be fine\" is not \"this
+                      invocation has a board to act on\".
+
+   Checks the same staleness indicators as before:
    1. diff-mismatch flag (set when diffs for wrong game arrive)
-   2. Kicked from game (we have gameid but aren't in lobby list)
-
-   Performs these recovery steps when stale:
-   1. Request lobby list to find our game
-   2. Rejoin the game
-   3. Request full state resync
-   4. Clear staleness flags"
+   2. Kicked from game (we have gameid but aren't in lobby list)"
   []
   (cond
     ;; Check basic staleness indicators first (cheap check)
@@ -536,11 +585,36 @@
     ;; If we think we're in a game, verify we actually are
     ;; This catches "kicked from game" scenarios
     (:gameid @state/client-state)
-    (if (verify-in-game!)
-      true
+    (cond
+      (not (verify-in-game!))
       (do
         (println "⚠️  Kicked from game detected - auto-resyncing...")
-        (do-rejoin-resync!)))
+        (do-rejoin-resync!))
 
-    ;; No game state at all - nothing to sync
-    :else true))
+      ;; In the lobby, but with no board — don't call that synced.
+      (boardless-started-game?)
+      (do
+        (println "⚠️  Seated but holding no board state (a previous resync cleared it) - auto-resyncing...")
+        (do-rejoin-resync!))
+
+      :else :synced)
+
+    ;; No game state at all - nothing to sync. NOT :game-gone: a fresh client
+    ;; before its first join is unsynced, not bereaved, and gating it would
+    ;; block the very commands (create-game/join) that fix it.
+    :else :synced))
+
+(defn ensure-synced!
+  "Boolean facade over `sync-verdict!` — true if we're synced (or successfully
+   resynced), false if we can't recover. Kept because seats and `ai-actions`
+   call it as a predicate; anything that needs to know WHY should ask
+   `sync-verdict!` instead (a keyword verdict is truthy, so callers must not
+   swap one for the other blind).
+
+   Performs these recovery steps when stale:
+   1. Request lobby list to find our game
+   2. Rejoin the game
+   3. Request full state resync
+   4. Clear staleness flags"
+  []
+  (= :synced (sync-verdict!)))

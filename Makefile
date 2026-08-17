@@ -34,7 +34,7 @@ check-full:
 # Run unit tests
 test:
 	@echo "Running unit tests..."
-	lein test ai-actions-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-ability-legality-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test web.lobby-disconnect-test
+	lein test ai-actions-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-ability-legality-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test game.ai-ability-legality-test web.lobby-disconnect-test
 
 # Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
 test-shell:
@@ -42,6 +42,7 @@ test-shell:
 	@./dev/test/send_command_filter_test.sh
 	@./dev/test/ai_eval_charset_test.sh
 	@./dev/test/peer_status_test.sh
+	@./dev/test/game_gone_gate_test.sh
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:

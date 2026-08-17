@@ -216,3 +216,124 @@
               (is (not (.contains out "✅ Left lobby")) "must not claim an action that didn't happen")
               (is (some #(= :lobby/leave (:type %)) @sent)
                   "leave is still sent — the GAME-GONE verdict can be false"))))))))
+
+;; ============================================================================
+;; sync-verdict! — #109: "is there a game to act in?" as ONE answer
+;; ============================================================================
+;; The bug was never that the Clojure lied. do-rejoin-resync! diagnosed the dead
+;; game correctly; the shell threw the verdict away and ran the command anyway,
+;; so every action invented its own explanation from cleared state. These tests
+;; pin the verdict the gate keys on — including which failures must NOT gate,
+;; since a false refusal locks a seat out of a live game.
+
+(defn- purged-server
+  "Server that hosts no lobby for us: :lobby/list pushes nothing back, so seat
+   discovery and the rejoin both come up empty — an idle-purged game."
+  [sent]
+  (fn [event-type data] (swap! sent conj {:type event-type :data data}) nil))
+
+(defmacro with-failed-rejoin
+  "Skip the 5s lobby-confirmation wait (the join is never confirmed here)."
+  [& body]
+  `(with-redefs [conn/wait-for-in-lobby (fn [_#] false)]
+     ~@body))
+
+(deftest test-sync-verdict-fresh-client-is-synced
+  (testing "a client that has never joined is unsynced, not bereaved — gating it would block create/join"
+    (with-mock-state (fresh-client-state)
+      (is (= :synced (conn/sync-verdict!))))))
+
+(deftest test-sync-verdict-seated-game-is-synced
+  (testing "the server still seats us: no teardown verdict, command proceeds"
+    ;; The live-game case, and the one a false refusal would break: the lobby
+    ;; list names us as a player in our own gameid, so verify-in-game! confirms.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (is (= :synced (conn/sync-verdict!)))))))))
+
+(deftest test-sync-verdict-purged-game-is-game-gone
+  (testing "the game is not in the lobby and the rejoin is not confirmed → :game-gone"
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state) :gameid zombie-id)
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (let [verdict (atom nil)
+                    out (with-out-str (reset! verdict (conn/sync-verdict!)))]
+                (is (= :game-gone @verdict))
+                (is (.contains out "Game appears to be gone"))))))))))
+
+(deftest test-sync-verdict-decided-game-outranks-teardown
+  (testing "a DECIDED game reports :game-over, not :game-gone — a normal ending tears the lobby down too, and the seat needs the RESULT"
+    ;; The mirror trap: gating purely on 'the lobby is gone' would hide a
+    ;; finished game's result behind 'run reset.sh'. Same precedence as
+    ;; game-over-status and the wake ladder: game-over first, lobby-gone second.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :lobby-gone? true
+                              :game-state {:winner "Corp" :active-player "corp"})
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (is (= :game-over (conn/sync-verdict!))))))))))
+
+(deftest test-ensure-synced-agrees-with-verdict
+  (testing "the boolean facade is exactly (= :synced verdict) — the two surfaces cannot drift"
+    ;; Asserted on shared fixtures rather than by inspection: a keyword verdict is
+    ;; truthy, so a caller that swaps one for the other silently inverts the gate.
+    (let [sent (atom [])]
+      (with-mock-state (fresh-client-state)
+        (is (true? (conn/ensure-synced!)) "synced ⇒ true"))
+      (with-mock-state (assoc (mock-client-state) :gameid zombie-id)
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (with-out-str
+                (is (false? (conn/ensure-synced!)) "game-gone ⇒ false")))))))))
+
+(deftest test-sync-verdict-boardless-started-game-is-not-synced
+  (testing "seated in a started game but holding no board is NOT :synced — the invocation after a failed resync must not act on the cleared cache"
+    ;; The hole the exit-4 refusal would otherwise leave open: resync-game! clears
+    ;; the board and keeps :gameid, and verify-in-game! only consults the LOBBY, so
+    ;; the next command sailed through with an empty board — #109's mechanism,
+    ;; one invocation later. :lobby-state is absent because it is dissoc'd the
+    ;; moment a full state arrives: the signature of a started game, not a new one.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :game-state nil
+                              :lobby-state nil
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (let [verdict (atom nil)
+                    out (with-out-str (reset! verdict (conn/sync-verdict!)))]
+                (is (not= :synced @verdict) "must not call a boardless game synced")
+                (is (= :resync-failed @verdict) "the game is still in the lobby, so this is transient, not a teardown")
+                (is (.contains out "holding no board state"))))))))))
+
+(deftest test-sync-verdict-unstarted-lobby-is-synced
+  (testing "a lobby that has not started yet has no board by definition — gating it would block the setup path"
+    ;; reset.sh's create → join → start sequence lives here; refusing it because
+    ;; there is no game-state would break the recovery route the refusal points at.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :game-state nil
+                              :lobby-state {:gameid zombie-id :started false}
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (is (= :synced (conn/sync-verdict!)))))))))

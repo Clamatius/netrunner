@@ -441,7 +441,14 @@
                           ;; the bare line disagreed with that seat's own prompt.
                           ;; Same additive-field contract as open-prompt=mine.
                           (when (state/opponent-mulligan-pending? @state/client-state)
-                            " blocked=opponent-mulligan"))))
+                            " blocked=opponent-mulligan")
+                          ;; The mirror. Same boundary, opposite owner: here the
+                          ;; named next-player cannot start because it has not
+                          ;; answered its OWN mulligan. Reported alongside
+                          ;; open-prompt=mine rather than instead of it — the
+                          ;; fields are additive and both facts are true.
+                          (when (state/my-mulligan-pending? @state/client-state)
+                            " blocked=my-mulligan"))))
 
           :else
           ;; #117: an orphaned turn (active player out of clicks, :end-turn not
@@ -963,14 +970,81 @@
                       ""))]
     (str "[" card-type subtypes "]" cost-info)))
 
+(defn- no-side-here!
+  "One explanation for 'this client has no side, so there is nothing to show'.
+
+   #125: these surfaces used to throw a raw NPE here. The replacement has to be
+   TRUE, which means not collapsing three different states into one sentence —
+   `:side` is nil in all of them and they need opposite advice:
+
+     spectator     `watch-game!` sets :gameid/:spectator and never sets :side,
+                   and `detect-side` cannot match a spectator's uid, so a client
+                   happily watching a live game has a full board and no side.
+                   Telling it 'not in a game → reset.sh' would be a lie that
+                   destroys the game it is watching (guest-panel catch).
+     seatless      a board arrived but our uid matched neither username (e.g. a
+                   resync where the server stripped user info). In a game, no
+                   seat — retryable, NOT a teardown.
+     no game       a REPL that never joined, or what `leave-lobby!` leaves
+                   behind (it nils :gameid/:side, and a finished game's
+                   teardown — save-replay.sh, concede — goes through it).
+
+   Second-pass panel: branch on EVIDENCE, not on one flag. Two states defeat the
+   obvious cond —
+
+     - `leave-lobby!` nils :gameid/:side and dissocs :spectator but leaves
+       :game-state ALONE, so the ordinary post-teardown client (the state #125
+       was actually captured in) still holds a board. Keying 'seatless' on
+       :game-state alone sent it to `resync` after it had deliberately left.
+       :gameid is the discriminator: a client still in a game has one.
+     - `watch-game!` sets :spectator immediately after sending the request,
+       before any confirmation, so :spectator alone can mean a watch that was
+       rejected or has not landed yet. Require the board before promising one."
+  [state what]
+  (let [board? (boolean (:game-state state))
+        seated? (boolean (:gameid state))]
+    (cond
+      (and (:spectator state) board?)
+      (do
+        (println (format "👁️  Spectating, not seated — %s is a seat-only view." what))
+        (println (format "   Perspective: %s. Spectators have no side of their own."
+                         (or (:spectator-perspective state) "neutral")))
+        (println "   → 'board' / 'log' show the game you are watching. To play, join a seat.")
+        nil)
+
+      (:spectator state)
+      (do
+        (println (format "👁️  Watch requested, but no board has arrived — %s is empty." what))
+        (println "   The watch may still be in flight, or the server refused it (bad game id / password).")
+        (println "   → 'list-lobbies' to confirm the game exists, then watch it again.")
+        nil)
+
+      (and board? seated?)
+      (do
+        (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
+        (println "   The board is here; our uid matched neither player (stripped user info?).")
+        (println "   → 'resync' to re-request the full state; 'status' still works.")
+        nil)
+
+      :else
+      (do
+        (println (format "⚠️  Not in a game — no side on this client, so %s is empty." what))
+        (println "   Never joined, or the lobby was left/torn down (a finished game does this too).")
+        (when board?
+          (println "   ⚠️  A board is still cached from the game you left — it is STALE, not live."))
+        (println "   → 'list-lobbies' then 'join <game-id> <side>', or ./dev/reset.sh for a fresh game.")
+        nil))))
+
 (defn show-hand
   "Show hand using side-aware state access. Returns hand vector."
   []
   (let [state @state/client-state
         side (:side state)]
     (if-not side
-      (do (println "⚠️  No game state - not in a game yet")
-          nil)
+      ;; Was its own bespoke "No game state - not in a game yet". That is the
+      ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
+      ;; a spectator hits it with a full board — so it shares the one explainer.
+      (no-side-here! state "the hand")
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
@@ -992,19 +1066,23 @@
   "Show current credits (side-aware). Returns credits value."
   []
   (let [state @state/client-state
-        side (:side state)
-        credits (get-in state [:game-state (keyword (clojure.string/lower-case side)) :credit])]
-    (println "💰 Credits:" credits)
-    credits))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! state "the credit pool")
+      (let [credits (get-in state [:game-state side-kw :credit])]
+        (println "💰 Credits:" credits)
+        credits))))
 
 (defn show-clicks
   "Show remaining clicks (side-aware). Returns clicks value."
   []
   (let [state @state/client-state
-        side (:side state)
-        clicks (get-in state [:game-state (keyword (clojure.string/lower-case side)) :click])]
-    (println "⏱️  Clicks:" clicks)
-    clicks))
+        side-kw (state/my-side-kw state)]
+    (if-not side-kw
+      (no-side-here! state "the click count")
+      (let [clicks (get-in state [:game-state side-kw :click])]
+        (println "⏱️  Clicks:" clicks)
+        clicks))))
 
 (defn show-archives
   "Show Corp's Archives (discard pile) with faceup/facedown counts"
@@ -2017,18 +2095,49 @@
 ;; Help
 ;; ============================================================================
 
-(defn list-playables
-  "List all currently playable actions (cards, abilities, basic actions)
-   Useful for AI decision-making - shows exactly what can be done right now"
-  []
-  (let [state @state/client-state
-        side (keyword (clojure.string/lower-case (:side state)))
-        gs (:game-state state)
+(defn- list-playables-for-side
+  "The body of `list-playables`, entered only once a side is known.
+
+   Takes the captured state rather than re-reading the atom, so every section of
+   one listing describes the same snapshot."
+  [state side]
+  (let [gs (:game-state state)
         my-state (get gs side)
         clicks (:click my-state)
         credits (:credit my-state)
         hand (:hand my-state)
-        rig (:rig my-state)]
+        rig (:rig my-state)
+        deck-count (:deck-count my-state)
+        ;; The basic actions this side can actually take right now. One value,
+        ;; printed below and counted in the total — see the comment there.
+        ;;
+        ;; `draw` is gated on the deck, because the engine gates it: the basic
+        ;; action card carries :req (req (not-empty (:deck corp))) — basic.clj:42
+        ;; for the Corp, :165 for the Runner — so offering it at 0 cards names an
+        ;; action the engine will refuse. That is the endgame state where a wasted
+        ;; command costs most: a Corp with an empty R&D is one mandatory draw from
+        ;; losing. nil deck-count is treated as "unknown, so offer it" — the wire
+        ;; always sends :deck-count for our own side, and a missing one is a stale
+        ;; fixture rather than an empty deck. (Review panel, MAJOR.)
+        basic-action-lines
+        (cond-> ["take-credit (gain 1 credit, costs 1 click)"]
+          (or (nil? deck-count) (pos? deck-count))
+          (conj "draw (draw 1 card, costs 1 click)")
+
+          (and (some? deck-count) (zero? deck-count))
+          (conj (if (= side :corp)
+                  "draw — UNAVAILABLE: R&D is empty (your next mandatory draw loses the game)"
+                  "draw — UNAVAILABLE: your stack is empty"))
+
+          (= side :runner)
+          (conj "run <server> (initiate run, costs 1 click)")
+
+          (= side :corp)
+          (conj "purge (remove all virus counters, costs 3 clicks)"))
+        ;; The UNAVAILABLE line is information, not an offer — it must not be
+        ;; counted as a playable basic action.
+        playable-basic-count (count (remove #(str/includes? % "UNAVAILABLE")
+                                            basic-action-lines))]
 
     (println "\n=== PLAYABLE ACTIONS ===")
     (println (format "Clicks: %s  Credits: %s"
@@ -2151,14 +2260,27 @@
             (println (format "    use-runner-ability \"%s\" %d"
                             (:title source-card) idx))))))
 
-    ;; Basic actions (always available if clicks > 0)
+    ;; Basic actions (always available if clicks > 0).
+    ;;
+    ;; #132: every line here is gated on the side that can actually take it, and
+    ;; spells the verb the CLI parses. A seat does not read this as prose — it
+    ;; types it. `run` was ungated, so the Corp was offered an action the CLI
+    ;; then refuses ("Only Runner can run on servers"); `draw` sat inside the
+    ;; Corp-only arm next to `purge`, so the Runner was never told it could draw
+    ;; at all; and the verb printed was `draw-card`, which is not a command
+    ;; (`Unknown command: draw-card`, and the did-you-mean list omits `draw`).
+    ;; purge really is Corp-only — that gate was the one correct part.
+    ;; Built as a collection, then printed AND counted from the same value.
+    ;; The total below used to be a second literal ("4" for Corp, "2" for
+    ;; Runner) kept in sync by hand, and the re-gating above silently falsified
+    ;; both — Corp printed 3 and claimed 4, Runner printed 3 and claimed 2. The
+    ;; total is the line a seat trusts to know whether it has seen everything,
+    ;; so it cannot be a parallel assertion about the list; it has to be the
+    ;; list. (Review panel, MAJOR — the very failure mode #132 is about.)
     (when (and clicks (pos? clicks))
       (println "\n🎯 Basic Actions:")
-      (println "  - take-credit (gain 1 credit, costs 1 click)")
-      (println "  - run <server> (initiate run, costs 1 click)")
-      (when (= side :corp)
-        (println "  - draw-card (draw 1 card, costs 1 click)")
-        (println "  - purge (remove all virus counters, costs 3 clicks)")))
+      (doseq [line basic-action-lines]
+        (println (str "  - " line))))
 
     ;; Always available
     (println "\n⏭️  Other Actions:")
@@ -2173,13 +2295,22 @@
                                     ability (:abilities card)
                                     :when (:playable ability)]
                                 ability))]
-      (println (format "Total: %d playable cards, %d playable abilities, %s basic actions"
+      (println (format "Total: %d playable cards, %d playable abilities, %d basic actions"
                       card-count
                       ability-count
-                      (if (and clicks (pos? clicks)) (if (= side :corp) "4" "2") "0")))
+                      (if (and clicks (pos? clicks)) playable-basic-count 0)))
       {:playable-cards card-count
        :playable-abilities ability-count
        :clicks clicks})))
+
+(defn list-playables
+  "List all currently playable actions (cards, abilities, basic actions)
+   Useful for AI decision-making - shows exactly what can be done right now"
+  []
+  (let [state @state/client-state]
+    (if-let [side (state/my-side-kw state)]
+      (list-playables-for-side state side)
+      (no-side-here! state "the playable-action list"))))
 
 (defn show-blocker-diagnosis
   "Read-only diagnosis of why you can/can't act right now and the ONE next

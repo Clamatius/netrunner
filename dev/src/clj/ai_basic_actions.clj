@@ -11,6 +11,20 @@
 (declare turn-started-since-last-opp-end?)
 (declare get-my-username)
 
+(defn- refuse-no-seat!
+  "One refusal for 'this client holds no side, so there is no turn of ours to
+   act on' (#127). Deliberately does NOT claim the game is over: :side is nil
+   for a spectator watching a live game and for a resync that landed a board
+   before matching our uid, as well as for a REPL that never joined. Asserting
+   a teardown in those states is the #125 mistake — a confident false claim
+   whose remedy (reset.sh) destroys the game."
+  [what]
+  (println (format "⛔ Refusing %s: this client has no side — no turn of yours to act on." what))
+  (if (get-in @state/client-state [:game-state])
+    (println "   A board is cached, so you may be spectating or awaiting a seat: try 'status', then 'resync'.")
+    (println "   Not in a game. Join one, or ./dev/reset.sh for a fresh game."))
+  (core/with-cursor {:status :error :reason :no-side}))
+
 ;; ============================================================================
 ;; Auto-Start Turn Helpers
 ;; ============================================================================
@@ -28,6 +42,32 @@
           uid)
       uid)))
 
+(defn- print-no-board-cause!
+  "Say why there is no board, claiming only as much as the state actually shows.
+
+   `:game-state` nil has a FOURTH reading the old enumeration missed: an ordinary
+   UNSTARTED LOBBY. A seated player in a waiting room has a :gameid, a side and no
+   board — the same signature — and telling it the game 'has ended, been purged, or
+   the resync did not complete', with `reset.sh` as the remedy, destroys the healthy
+   lobby it is sitting in. That is the #125 mistake exactly: a confident false claim
+   whose suggested recovery is the destructive one.
+
+   `:lobby-state` is the discriminator, the same one ai-connection's
+   boardless-started-game? keys on: it is dissoc'd the moment a full game state
+   arrives, so an unstarted lobby still carries it with :started false, while a
+   started game that lost its board has none."
+  [client-state]
+  (let [lobby (:lobby-state client-state)]
+    (if (and lobby (not (:started lobby)))
+      (do
+        (println "   The game has not started yet — you are seated in a lobby.")
+        (println "💡 Check the seats with: ./dev/send_command <side> status")
+        (println "   Both players ready:    ./dev/send_command <side> start-game"))
+      (do
+        (println "   The game has ended, been purged, or the resync did not complete.")
+        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
+        (println "   Fresh game:    ./dev/reset.sh")))))
+
 (defn- opponent-mulligan-pending?
   "True when the opponent has NOT finished their opening mulligan. Delegates to the
    single definition in ai-state (see it for the why).
@@ -39,6 +79,12 @@
    start-turn then errored :opponent-mulligan). One predicate, one answer."
   [client-state]
   (core/opponent-mulligan-pending? client-state))
+
+(defn- my-mulligan-pending?
+  "True when WE have not yet answered our own opening mulligan. Same delegating
+   `defn-` discipline as its sibling above, for the same reason."
+  [client-state]
+  (state/my-mulligan-pending? client-state))
 
 (defn can-start-turn?
   "Check if we CAN legally start our turn right now.
@@ -56,6 +102,7 @@
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
+   - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
   (let [client-state @state/client-state
@@ -89,6 +136,18 @@
         already-played? (turn-started-since-last-opp-end?)]
 
     (cond
+      ;; NO GAME STATE — must mirror start-turn!'s first branch, or the fix is
+      ;; only half applied. With :game-state nil every input below defaults to
+      ;; the Corp-first-turn signature (turn 0, nil clicks, empty log), so this
+      ;; answered {:can-start true :reason :first-turn}. That is the PREFLIGHT
+      ;; the autonomous loops gate on — `(when (:can-start check) (start-turn!))`
+      ;; in ai-goldfish-corp / ai-heuristic-corp — so guarding only the wire
+      ;; leaves the bot announcing "Auto-starting turn", being refused, and
+      ;; going round again: the house autonomous-spin shape, with the wire safe
+      ;; and the seat still stuck. (Guest-panel pass 2, HIGH: half-applied fix.)
+      (nil? (:game-state client-state))
+      {:can-start false :reason :no-game-state}
+
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
@@ -102,6 +161,12 @@
       ;; every action bounces off the pending-mulligan prompt).
       (opponent-mulligan-pending? client-state)
       {:can-start false :reason :opponent-mulligan}
+
+      ;; We have not answered our OWN mulligan. The engine will not stop us —
+      ;; it grants the clicks and takes the mandatory draw with the decision
+      ;; still live, which is how a Corp came to keep a six-card starting hand.
+      (my-mulligan-pending? client-state)
+      {:can-start false :reason :my-mulligan}
 
       ;; Opponent started a new turn after ending the previous one
       opp-restarted?
@@ -258,9 +323,18 @@
 
    Returns {:status :error} if validation fails, {:status :success} if successful."
   []
-  (let [client-state @state/client-state
+  ;; ONE snapshot: the guard and the body must classify the same state. Reading
+  ;; the atom twice reopened the check/use race — a leave/resync landing between
+  ;; the two reads gives the body a nil side and the NPE is back (second-pass
+  ;; guest catch).
+  (let [snapshot @state/client-state]
+   (if-not (state/my-side-kw snapshot)
+    ;; #127 (behavioural sweep): with a board cached but no seat, `my-clicks`
+    ;; read nil and the arithmetic below NPE'd before any guard could refuse.
+    (refuse-no-seat! "start-turn")
+    (let [client-state snapshot
         gameid (:gameid client-state)
-        my-side (keyword (:side client-state))
+        my-side (state/my-side-kw client-state)
         opp-side (if (= my-side :runner) :corp :runner)
         my-clicks (get-in client-state [:game-state my-side :click])
         opp-clicks (get-in client-state [:game-state opp-side :click])
@@ -287,6 +361,10 @@
         ;; "waiting for opponent to keep/mulligan" window). Starting now wedges
         ;; the turn — see opponent-mulligan-pending?.
         opp-mulligan-pending? (opponent-mulligan-pending? client-state)
+        ;; Our OWN opening mulligan, still unanswered. Nothing downstream
+        ;; refuses this — see my-mulligan-pending? — so this guard is the only
+        ;; thing standing between the seat and a six-card starting hand.
+        own-mulligan-pending? (my-mulligan-pending? client-state)
         ;; Turn 0 special case: no end-turn yet, both at 0 clicks (or nil before game starts)
         ;; CRITICAL: Must check turn = 0, otherwise Corp ending turn 1 looks like first-turn!
         is-first-turn? (and (= turn-number 0)
@@ -295,6 +373,25 @@
                            (not opp-ended?))]
 
     (cond
+      ;; NO GAME STATE — the guard end-turn! already has, and start-turn! did not.
+      ;; resync-game! clears :game-state but PRESERVES :gameid, so in that window
+      ;; every value below reads as its falsy default: turn defaults to 0, clicks
+      ;; are nil, no opponent end-turn is in the (empty) log — which is precisely
+      ;; the is-first-turn? signature. start-turn then went out on the preserved
+      ;; gameid, and if the real game is still at the mulligan it reproduces #131
+      ;; through the back door.
+      ;;
+      ;; This is why the :keep guard alone is not enough: my-mulligan-pending? is
+      ;; keyed on `false?`, so an ABSENT flag reads "not pending". That is the
+      ;; right answer to "does the flag say unresolved?" and the wrong answer to
+      ;; "may I send?". Unknown state is not permission — it needs its own
+      ;; refusal, ahead of every branch that sends. (Guest-panel CRITICAL.)
+      (nil? (:game-state client-state))
+      (do
+        (println "⛔ Refusing start-turn: no game state — there is no turn to start.")
+        (print-no-board-cause! client-state)
+        (core/with-cursor {:status :error :reason :no-game-state}))
+
       ;; ERROR: Post-discard consent phase still active — opponent (or we) haven't acknowledged
       ;; the end-of-turn pause yet, so end-turn-continue hasn't run.
       post-discard-active?
@@ -321,6 +418,19 @@
         (println "   Starting now would race ahead of mulligan resolution and wedge your turn")
         (println "   Use 'wait' until they keep/mulligan, then start-turn")
         (core/with-cursor {:status :error :reason :opponent-mulligan}))
+
+      ;; ERROR: WE haven't answered our own opening mulligan. This must refuse
+      ;; before the is-first-turn? branch below, which sends unconditionally:
+      ;; the engine has no ordering check, so the send really starts the turn
+      ;; and really takes the mandatory draw while "Keep hand?" is still live.
+      ;; The seat then keeps a six-card hand — a permanent, game-affecting
+      ;; advantage taken by following our own "Ready to start your turn" hint.
+      own-mulligan-pending?
+      (do
+        (println "❌ ERROR: You haven't answered your own opening mulligan yet")
+        (println "   Starting now would take your mandatory draw with 'Keep hand?' still open")
+        (println "   Use 'keep-hand' (or 'mulligan') first, then start-turn")
+        (core/with-cursor {:status :error :reason :my-mulligan}))
 
       ;; ALLOW: First turn (turn 0) - no prior end-turn exists
       is-first-turn?
@@ -401,7 +511,7 @@
                 (when (> after-hand before-hand)
                   (println (str "🃏 Drew: " card-title))
                   (core/show-card-on-first-sight! card-title))))
-            (core/with-cursor {:status :success})))))))
+            (core/with-cursor {:status :success})))))))))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
@@ -690,8 +800,17 @@
           (end-turn! :force true)  ; Forced - burns clicks, then ends"
   [& {:keys [force] :or {force false}}]
   (let [client-state @state/client-state
-        side (:side client-state)
-        side-kw (keyword side)
+        ;; #127: through the authority, which LOWERCASES. The bare keyword-of
+        ;; -:side derivation here was nil-guarded but not case-normalized, and
+        ;; `reconnect-game!`
+        ;; (the `make resume` path) writes a capitalized :side straight into
+        ;; client-state. :Runner then misses [:game-state side-kw :click], so
+        ;; `clicks` read nil and the no-game-state branch below fired on a
+        ;; perfectly live game — telling the seat its game "has ended, been
+        ;; purged, or the resync did not complete" and offering reset.sh, which
+        ;; would destroy it. Note `my-turn?` two lines down already lower-cased
+        ;; defensively; the lookup above it did not.
+        side-kw (state/my-side-kw client-state)
         clicks (get-in client-state [:game-state side-kw :click])
         hand-size (count (get-in client-state [:game-state side-kw :hand]))
         max-hand-size (get-in client-state [:game-state side-kw :hand-size :total] 5)
@@ -719,9 +838,7 @@
       (or (nil? clicks) (nil? side-kw))
       (do
         (println "⛔ Refusing end-turn: no game state — there is no turn to end.")
-        (println "   The game has ended, been purged, or the resync did not complete.")
-        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
-        (println "   Fresh game:    ./dev/reset.sh")
+        (print-no-board-cause! client-state)
         (core/with-cursor {:status :error :reason :no-game-state}))
 
       ;; OFF-TURN GUARD (game 02995207, turn 8). An end-turn sent while we are NOT
@@ -820,16 +937,44 @@
    - No scorable agendas (Corp only)
 
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
-   This prevents the 'forgot to end-turn' stuck state."
+   This prevents the 'forgot to end-turn' stuck state.
+
+   No side => no turn of ours to end, so this bails before reading the board
+   (#127). It is called automatically after every clicks-consuming action, so
+   the hand-rolled keyword-of-:side derivation it used to do threw a bare
+   NPE at `(name side)` from INSIDE an install/play/advance whenever :side was
+   nil — the state `leave-lobby!` leaves behind, or a REPL that never joined.
+   `state/my-side-kw` is the guarded authority for this derivation (#125/#126)
+   and also lowercases, which the hand-rolled copy did not: `reconnect-game!`
+   writes a CAPITALIZED :side (\"Corp\"/\"Runner\") until the resync full-state
+   normalizes it, and :Runner misses every [:game-state side ...] lookup while
+   comparing \"Runner\" against an active-player of \"runner\" — a silent
+   never-auto-ends, not a crash."
   []
-  (let [client-state @state/client-state
-        side (keyword (:side client-state))
-        clicks (get-in client-state [:game-state side :click])
+  (let [client-state @state/client-state]
+   (when-let [side (state/my-side-kw client-state)]
+    (let [clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
-        ;; :hand-count, NOT (count :hand): our own hand contents are hidden in
-        ;; wire state (fog of war), so counting :hand reads 0 and the discard
-        ;; forewarning below never fired — the seat was told "no prompts" and
-        ;; then hit the engine's discard prompt unannounced (marquee game B).
+        ;; :hand-count, the count the engine sends, with (count :hand) only as a
+        ;; fallback.
+        ;;
+        ;; The old comment here justified this with fog of war — "our own hand
+        ;; contents are hidden in wire state" — and that is FALSE. diffs.clj:
+        ;;   (defn hand-summary [hand state same-side? side player]
+        ;;     (if (or same-side? (:openhand player)) (cards-summary hand ...) []))
+        ;; and the seat receives its own side's :corp-state / :runner-state, where
+        ;; same-side? is true. Our own hand arrives with real cards; it is the
+        ;; OPPONENT's that comes back []. (Our own DECK really is stripped —
+        ;; deck-summary gates on :view-deck — so :deck-count stays mandatory there.)
+        ;;
+        ;; The marquee game B symptom the old comment cited — hand size reading 0,
+        ;; so the discard forewarning never fired and the seat met the engine's
+        ;; discard prompt unannounced — is better explained by the bug THIS commit
+        ;; fixes: the side was derived by hand, so a capitalized :Corp missed the
+        ;; [:game-state side :hand] lookup entirely and (count nil) is 0. Going
+        ;; through my-side-kw is what actually closes it. (Review panel: correct
+        ;; fix, wrong stated reason — and wrong load-bearing comments in this repo
+        ;; have a track record of getting built on.)
         hand-size (or (get-in client-state [:game-state side :hand-count])
                       (count (get-in client-state [:game-state side :hand])))
         max-hand-size (get-in client-state [:game-state side :hand-size :total] 5)
@@ -957,7 +1102,7 @@
             (println "💡 Auto-ending turn (0 clicks) — expect that discard prompt next"))
           (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
-        (end-turn!)))))
+        (end-turn!)))))))
 
 (defn- claim-deferred-arm!
   "Atomically take ARMED off the client state. Returns true for the ONE caller
@@ -1008,7 +1153,12 @@
   ;; descheduled.
   (when-let [armed (:auto-end-deferred @state/client-state)]
     (let [client-state @state/client-state
-          side (keyword (:side client-state))
+          ;; #127: through the authority. This one never threw (every use is
+          ;; nil-guarded) but it did not lowercase, so a capitalized :side made
+          ;; the `prompt` lookup below read nil off :Runner — `still-waiting?`
+          ;; then came back false and the #114 deferred resume would fire
+          ;; end-turn while the opponent's prompt was in fact still up.
+          side (state/my-side-kw client-state)
           gameid (:gameid client-state)
           turn (get-in client-state [:game-state :turn])
           active-player (get-in client-state [:game-state :active-player])
@@ -1062,8 +1212,20 @@
 
    Usage: (smart-end-turn!)  ; Auto-end if safe, warn if not"
   []
-  (let [client-state @state/client-state
-        side (keyword (:side client-state))
+  ;; ONE snapshot — see start-turn! for why the guard and the body may not read
+  ;; the atom separately.
+  (let [snapshot @state/client-state]
+   (if-not (state/my-side-kw snapshot)
+    ;; #127 (guest panel + behavioural sweep): this is the CLI's *recommended*
+    ;; end-turn (dev/send_command:357) and what the heuristic bots call, and it
+    ;; was the last unguarded copy. Its `my-turn?` binding is an `or` starting
+    ;; with `(nil? active-player)`, which short-circuits away the throw when
+    ;; there is no board at all — so it survived a bare sideless state and NPE'd
+    ;; only on the one that still holds a cached board. That is exactly why the
+    ;; sweep carries both fixtures.
+    (refuse-no-seat! "smart-end-turn")
+    (let [client-state snapshot
+        side (state/my-side-kw client-state)
         clicks (get-in client-state [:game-state side :click])
         prompt (get-in client-state [:game-state side :prompt-state])
         hand-size (or (get-in client-state [:game-state side :hand-count]) 0)
@@ -1190,7 +1352,7 @@
       :else
       (do
         (println "✅ Auto-ending turn (0 clicks, no prompts)")
-        (end-turn!)))))
+        (end-turn!)))))))
 
 ;; Keep old function names for backwards compatibility
 (defn take-credits []
