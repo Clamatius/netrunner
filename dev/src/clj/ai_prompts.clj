@@ -626,14 +626,28 @@
 
 (defn discard-to-hand-size!
   "Discard cards down to maximum hand size
-   Auto-detects side and discards until at or below max hand size"
+   Auto-detects side and discards until at or below max hand size.
+
+   Returns the number discarded (0 when there was genuinely nothing to do), or
+   NIL when it declined because the state is unreadable — no side, no board, or
+   a discard prompt on a board that reports no max hand size (#127). Callers in
+   autonomous loops must branch on that: 0 is truthy in Clojure, nil is not, so
+   `(some? (discard-to-hand-size!))` is 'this prompt is dealt with'."
   []
   (let [client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        discarded (ws/handle-discard-prompt! side)]
-    (when (= discarded 0)
-      (println "No cards to discard"))))
+        side (state/my-side-kw client-state)]
+    (if (nil? side)
+      ;; #127: "No cards to discard" is a lie here — we have no seat to discard
+      ;; FROM. Say which of the two it is rather than reporting a clean no-op.
+      (do
+        (println (if (:game-state client-state)
+                   "❌ This client has no side, so there is no hand to discard from (a board is still cached — try 'status', or 'resync' if you expect to be seated)."
+                   "❌ Not in a game — nothing to discard."))
+        nil)
+      (let [discarded (ws/handle-discard-prompt! side)]
+        (when (= 0 discarded)
+          (println "No cards to discard"))
+        discarded))))
 
 (defn discard-specific-cards!
   "Discard specific cards by index positions

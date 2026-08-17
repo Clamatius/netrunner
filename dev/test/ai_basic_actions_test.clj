@@ -1064,6 +1064,120 @@
       (is (= {:turn 10 :side :corp :gameid "g1"} (:auto-end-deferred @state/client-state))
           "cleared with the rest of game state, the resync hook has nothing to act on"))))
 
+;; ============================================================================
+;; #127: check-auto-end-turn! on a sideless state
+;; ============================================================================
+;; This is the action-path residual of #125. The display family (#126) is now
+;; guarded, but check-auto-end-turn! still derived the side by hand as
+;; `(keyword (:side client-state))` and then did `(name side)`, which throws
+;;   NullPointerException: Cannot invoke "clojure.lang.Named.getName()"
+;; on a nil side.
+;;
+;; It matters more than a display surface because it is NOT a command the seat
+;; chose to run: it is called automatically after every clicks-consuming action
+;; (ai_card_actions 108/177/416/844, ai_basic_actions 537/588/1046/1250/…), so
+;; the throw lands INSIDE the seat's install/play/advance rather than in a
+;; status readout. PR #124's CLI gate does not mediate it — it is an internal
+;; call, and `eval` and the heuristic bots reach it directly.
+;;
+;; `ai-state/my-side-kw` is the guarded authority for this derivation (#126).
+
+(def ^:private never-joined-state
+  "A REPL that never joined: no side, no gameid, no board."
+  {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
+
+(def ^:private left-game-state
+  "What `leave-lobby!` actually leaves behind — and what a finished game's
+   teardown (concede, save-replay.sh) goes through. It nils :gameid/:side but
+   does NOT clear :game-state, so the board is still cached. This is the fixture
+   that matters: a guard that only checked for a missing BOARD would pass the
+   state above and still throw here."
+  {:connected true :uid "test-user" :gameid nil :side nil
+   :game-state {:active-player "corp" :turn 10
+                :corp {:click 0 :credit 35 :hand [] :hand-count 5
+                       :hand-size {:total 5} :installed {} :prompt-state nil}
+                :runner {:click 0 :credit 5 :hand [] :hand-count 5 :rig {}}
+                :log []}})
+
+(deftest test-check-auto-end-turn-survives-a-sideless-state
+  (testing "#127: no side => no turn of ours to end, and no raw NPE"
+    (doseq [[label st] [["never joined" never-joined-state]
+                        ["after leaving (board still cached)" left-game-state]]]
+      (let [sent (atom [])]
+        (with-mock-state st
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        basic/turn-started-since-last-opp-end? (fn [] true)]
+            (let [thrown (atom nil)]
+              (with-out-str
+                (try (basic/check-auto-end-turn!)
+                     (catch Throwable e (reset! thrown e))))
+              (is (nil? @thrown)
+                  (str "on a " label " state check-auto-end-turn! threw "
+                       (when @thrown
+                         (str (.getSimpleName (class @thrown)) ": " (.getMessage @thrown)))))
+              (is (empty? @sent)
+                  (str "on a " label " state it must not act for a seat that has "
+                       "no side, sent: " @sent)))))))))
+
+;; The same derivation had a second defect the authority also fixes: it did not
+;; lowercase. `reconnect-game!` (ai_connection.clj:329 — the `make resume` path)
+;; writes a CAPITALIZED side straight into client-state (`:side "Corp"`,
+;; `"Runner"`, from detect-side-from-username, which returns capitalized because
+;; the server case-matches on it). Until the resync full-state lands,
+;; `set-full-state!` has not yet normalized it, and `(keyword "Runner")` is
+;; :Runner — which misses every [:game-state side …] lookup AND compares
+;; "Runner" against an active-player of "runner". The failure is silent: the
+;; turn simply never auto-ends.
+
+(deftest test-check-auto-end-turn-is-case-insensitive-about-its-own-side
+  (testing "#127: a capitalized :side (reconnect-game!) must behave like a lowercase one"
+    (let [game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 3
+                               :hand-size {:total 5} :installed {} :prompt-state nil}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :turn 8
+                      :active-player "runner"
+                      :log []}]
+      (doseq [side-str ["runner" "Runner"]]
+        (let [sent (atom [])]
+          (with-mock-state (mock-client-state :side side-str :game-state game-state)
+            (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                          basic/turn-started-since-last-opp-end? (fn [] true)]
+              (with-out-str (basic/check-auto-end-turn!))
+              (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                  (str ":side \"" side-str "\" must auto-end the turn; a case "
+                       "mismatch makes the seat silently sit at 0 clicks forever")))))))))
+
+;; The case bug is not confined to the automatic hook. `end-turn!` — the command
+;; a seat types — held a FIFTH hand-rolled copy of the derivation
+;; (`side-kw (keyword side)`, ai_basic_actions.clj:694). It was nil-guarded, so
+;; it never threw; it just read `clicks` as nil off a :Runner key and fell into
+;; the no-game-state branch, which tells the seat
+;;   "The game has ended, been purged, or the resync did not complete"
+;;   "Fresh game: ./dev/reset.sh"
+;; about a perfectly live game. That is the #109/#125 failure mode inverted: not
+;; a stack trace, a confident false claim about state whose remedy destroys the
+;; game. Its own `my-turn?` binding two lines below already lower-cased
+;; defensively — the lookup above it did not.
+
+(deftest test-end-turn-does-not-deny-a-live-game-over-side-casing
+  (testing "#127: :side \"Runner\" (reconnect-game!) must end the turn, not declare the game gone"
+    (let [game-state {:runner {:click 0 :credit 5 :hand [] :hand-count 3
+                               :hand-size {:total 5} :installed {} :prompt-state nil}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :turn 8
+                      :active-player "runner"
+                      :log []}]
+      (doseq [side-str ["runner" "Runner"]]
+        (let [sent (atom [])]
+          (with-mock-state (mock-client-state :side side-str :game-state game-state)
+            (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+              (let [out (with-out-str (basic/end-turn!))]
+                (is (not (re-find #"(?i)no game state|has ended, been purged" out))
+                    (str ":side \"" side-str "\" — end-turn must not deny a live game, got:\n" out))
+                (is (not (re-find #"reset\.sh" out))
+                    (str ":side \"" side-str "\" — must not offer the game-destroying remedy, got:\n" out))
+                (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
+                    (str ":side \"" side-str "\" — must actually send end-turn, got:\n" out))))))))))
 (deftest test-can-start-turn-reports-no-game-state
   (testing "the preflight must refuse nil state too, not just the wire"
     ;; Guest-panel pass 2, HIGH — the half-applied half of the fix above. The

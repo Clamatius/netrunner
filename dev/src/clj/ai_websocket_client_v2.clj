@@ -586,14 +586,28 @@
 (defn handle-discard-prompt!
   "Handle discard down to hand size prompt.
    Discards cards one at a time until hand size is acceptable.
-   Returns number of cards discarded."
+   Returns number of cards discarded.
+
+   Returns 0 without selecting anything when there is no side, no board, or no
+   readable hand-size max (#127). The subtraction used to happen in this `let`,
+   i.e. BEFORE the \"is there a select prompt?\" test, so a nil hand-size-max
+   threw a bare NPE out of clojure.lang.Numbers.minus on a sideless state.
+
+   Declining is deliberately NOT what the sibling lookup in
+   ai_basic_actions/check-auto-end-turn! does — that one defaults the max to 5.
+   The asymmetry is correct, not an oversight: there the value only feeds a
+   forewarning line, where a wrong guess costs a wrong hint, whereas here it
+   decides which cards get binned. An unreadable hand size is a reason to
+   refuse, not to guess: guessing 5 for a Runner under a hand-size modifier
+   discards real cards off a board we have just admitted we cannot read."
   [side]
-  (let [gs (state/get-game-state)
+  (let [gs (when side (state/get-game-state))
         prompt (get-in gs [side :prompt-state])
         hand (get-in gs [side :hand])
         hand-size-max (get-in gs [side :hand-size :total])
-        cards-to-discard (- (count hand) hand-size-max)]
+        cards-to-discard (when hand-size-max (- (count hand) hand-size-max))]
     (if (and (= "select" (:prompt-type prompt))
+             cards-to-discard
              (> cards-to-discard 0))
       (do
         (println (format "Need to discard %d cards from hand of %d (max %d)"
@@ -606,7 +620,23 @@
             (Thread/sleep 500)))
         (println (format "✅ Discarded %d card(s)" cards-to-discard))
         cards-to-discard)
-      0)))
+      (if (or (nil? side) (nil? cards-to-discard))
+        ;; DECLINED — nil, not 0. Second-pass guest catch (#127): printing
+        ;; "declining" while still returning 0 left the ambiguity intact where
+        ;; it does damage. ai_heuristic_runner's prompt dispatcher was
+        ;; `(do (discard-to-hand-size!) true)` — handled unconditionally — so a
+        ;; decline reported success, the loop came round, met the same prompt,
+        ;; and spun forever. That is the house autonomous-deadlock shape: a
+        ;; shared handler returning a pause the bot loop never converts to an
+        ;; action. nil is falsey and 0 is TRUTHY in Clojure, so this single
+        ;; distinction is exactly what every caller needs to branch on.
+        (do
+          (when (and (= "select" (:prompt-type prompt)) (nil? hand-size-max))
+            (println "⚠️  A discard prompt is up but this board reports no max hand size — declining rather than guessing which cards to bin.")
+            (println "💡 'status' to check the board landed; 'resync' if it did not; 'discard' with explicit indices to choose yourself."))
+          nil)
+        ;; Genuinely nothing to do: a real board that is at or under hand size.
+        0))))
 
 ;; Note: Status display functions moved to ai-display namespace
 ;; Note: announce-revealed-archives and write-game-log-to-hud moved to ai-display namespace
