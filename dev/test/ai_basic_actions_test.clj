@@ -6,6 +6,7 @@
    when a card sets :force-post-discard-{self,opponent}. Sending start-turn during
    that pause desyncs the engine."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-basic-actions :as basic]
             [ai-state :as state]
@@ -152,6 +153,73 @@
             (is (= :error (:status result)))
             (is (= :no-game-state (:reason result)))
             (is (empty? @sent))))))))
+
+;; ----------------------------------------------------------------------------
+;; The refusal must not DIAGNOSE what it cannot see (review panel, MAJOR).
+;;
+;; :game-state nil has a fourth reading the enumeration missed: an ordinary
+;; unstarted lobby, which has a :gameid, a side and no board just like a failed
+;; resync does. Telling that seat the game "has ended, been purged, or the resync
+;; did not complete" and offering ./dev/reset.sh points it at the one command that
+;; destroys the healthy lobby it is sitting in — the #125 mistake, again.
+;;
+;; These tests assert the FRAMING, not that some token appears: the lobby case
+;; must not offer the destructive remedy, and the genuinely-boardless case must
+;; keep it. Both previous no-state tests omitted :lobby-state entirely, which is
+;; why the suite stayed green through this.
+;; ----------------------------------------------------------------------------
+
+(deftest test-start-turn-in-an-unstarted-lobby-does-not-claim-the-game-died
+  (testing "seated in a waiting room: refuse, but do not diagnose a teardown"
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp")
+                              :game-state nil
+                              :lobby-state {:started false :title "test lobby"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent) "an unstarted lobby has no turn to start")
+            (is (not (str/includes? out "reset.sh"))
+                (str "THE bug: reset.sh destroys the healthy lobby the seat is in. Got:\n" out))
+            (is (not (str/includes? out "has ended"))
+                (str "must not assert a teardown it cannot see. Got:\n" out))
+            (is (str/includes? out "not started yet")
+                (str "must name the state it IS in. Got:\n" out))))))))
+
+(deftest test-start-turn-with-no-lobby-state-keeps-the-teardown-guidance
+  (testing "board gone and no lobby: the ended/purged/resync enumeration is right here"
+    ;; The complement of the test above — a fix that made every no-board refusal
+    ;; say "waiting in a lobby" would trade one false claim for another.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent))
+            (is (str/includes? out "game-over-status")
+                (str "a started game that lost its board should be diagnosed. Got:\n" out))))))))
+
+(deftest test-end-turn-in-an-unstarted-lobby-does-not-claim-the-game-died
+  (testing "end-turn's identical refusal text needs the identical discrimination"
+    ;; Same defect, second site: end-turn! printed the same four lines verbatim,
+    ;; so fixing only start-turn! would leave the neighbouring command lying.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp")
+                              :game-state nil
+                              :lobby-state {:started false :title "test lobby"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/end-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent))
+            (is (not (str/includes? out "reset.sh"))
+                (str "THE bug, second site. Got:\n" out))
+            (is (str/includes? out "not started yet")
+                (str "must name the state it IS in. Got:\n" out))))))))
 
 (deftest test-start-turn-refuses-over-my-own-mulligan
   (testing "start-turn! sends NOTHING while my own mulligan is unresolved"

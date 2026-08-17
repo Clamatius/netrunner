@@ -28,6 +28,32 @@
           uid)
       uid)))
 
+(defn- print-no-board-cause!
+  "Say why there is no board, claiming only as much as the state actually shows.
+
+   `:game-state` nil has a FOURTH reading the old enumeration missed: an ordinary
+   UNSTARTED LOBBY. A seated player in a waiting room has a :gameid, a side and no
+   board — the same signature — and telling it the game 'has ended, been purged, or
+   the resync did not complete', with `reset.sh` as the remedy, destroys the healthy
+   lobby it is sitting in. That is the #125 mistake exactly: a confident false claim
+   whose suggested recovery is the destructive one.
+
+   `:lobby-state` is the discriminator, the same one ai-connection's
+   boardless-started-game? keys on: it is dissoc'd the moment a full game state
+   arrives, so an unstarted lobby still carries it with :started false, while a
+   started game that lost its board has none."
+  [client-state]
+  (let [lobby (:lobby-state client-state)]
+    (if (and lobby (not (:started lobby)))
+      (do
+        (println "   The game has not started yet — you are seated in a lobby.")
+        (println "💡 Check the seats with: ./dev/send_command <side> status")
+        (println "   Both players ready:    ./dev/send_command <side> start-game"))
+      (do
+        (println "   The game has ended, been purged, or the resync did not complete.")
+        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
+        (println "   Fresh game:    ./dev/reset.sh")))))
+
 (defn- opponent-mulligan-pending?
   "True when the opponent has NOT finished their opening mulligan. Delegates to the
    single definition in ai-state (see it for the why).
@@ -340,9 +366,7 @@
       (nil? (:game-state client-state))
       (do
         (println "⛔ Refusing start-turn: no game state — there is no turn to start.")
-        (println "   The game has ended, been purged, or the resync did not complete.")
-        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
-        (println "   Fresh game:    ./dev/reset.sh")
+        (print-no-board-cause! client-state)
         (core/with-cursor {:status :error :reason :no-game-state}))
 
       ;; ERROR: Post-discard consent phase still active — opponent (or we) haven't acknowledged
@@ -782,9 +806,7 @@
       (or (nil? clicks) (nil? side-kw))
       (do
         (println "⛔ Refusing end-turn: no game state — there is no turn to end.")
-        (println "   The game has ended, been purged, or the resync did not complete.")
-        (println "💡 Confirm with: ./dev/send_command <side> game-over-status")
-        (println "   Fresh game:    ./dev/reset.sh")
+        (print-no-board-cause! client-state)
         (core/with-cursor {:status :error :reason :no-game-state}))
 
       ;; OFF-TURN GUARD (game 02995207, turn 8). An end-turn sent while we are NOT
