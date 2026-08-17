@@ -1934,12 +1934,20 @@
     (if (or (seq scorables) (seq rezzables))
       (-> ["   👉 Your turn is out of clicks but has NOT ended — and 0 clicks does NOT"
            "      mean 0 moves. Still available to you right now:"]
+          ;; "MAY", not "can". Both detectors are deliberately approximate and
+          ;; say so in their own docstrings — find-scorable-agendas ignores
+          ;; :cannot-score (Clot et al.) and asks callers to "assume they MIGHT
+          ;; be scorable"; find-eot-rezzable-cards counts restricted recurring
+          ;; credits on purpose. That hedge used to live only in a code comment
+          ;; the seat never sees, while the printed line was flatly categorical.
+          ;; Given what this repo has paid for guidance text that asserts more
+          ;; than it knows, the surface should say what the detector means.
           (into (map (fn [{:keys [title counters requirement]}]
-                       (format "        🎯 %s (%d/%d advancement) — can still be SCORED"
+                       (format "        🎯 %s (%d/%d advancement) — you MAY be able to score this (no click needed) — check"
                                title counters requirement))
                      scorables))
           (into (map (fn [{:keys [title cost]}]
-                       (format "        💰 %s can still be rezzed for %d¢" title cost))
+                       (format "        💰 %s may still be rezzable for %d¢ — check" title cost))
                      rezzables))
           ;; Mirrors check-auto-end-turn!'s own hedge. The rez detector errs
           ;; generous on purpose (it counts restricted recurring credits), so an
@@ -2116,9 +2124,20 @@
      ;; false-woke every --since wait that followed one of our own actions
      ;; (reason :cursor-advanced, no new log entries). When nothing is relevant
      ;; we fall through and keep waiting for a real event.
-     (if-let [since-reason (when (and since-cursor (> current-cursor since-cursor))
-                             (relevance-reason @state/client-state side false))]
-       (let [current-state @state/client-state]
+     ;;
+     ;; ONE snapshot, classified and described. This used to deref the atom
+     ;; twice — once to decide the reason, once to render it — which is exactly
+     ;; the staple-a-newer-board-onto-an-older-description race the snapshot
+     ;; arities below (corp-servers / find-scorable-agendas /
+     ;; find-eot-rezzable-cards) were added to prevent. The polling loop was
+     ;; converted; this fast path was missed, so a diff landing between the two
+     ;; derefs could classify :my-turn-end off the old state and then print
+     ;; guidance from a board where the turn had already ended. (Review MAJOR.)
+     (let [current-state @state/client-state
+           since-reason (when (and since-cursor (> current-cursor since-cursor))
+                          (relevance-reason current-state side false))]
+     (if since-reason
+       (do
          (when (:verbose opts)
            (println (format "⚡ Cursor advanced (%d → %d), %s — returning immediately"
                            since-cursor current-cursor (name since-reason)))
@@ -2230,7 +2249,7 @@
 
                ;; No change yet
                :else
-               (recur last-log-count)))))))))))
+               (recur last-log-count))))))))))))
 
 ;; ============================================================================
 ;; Run Helper Functions

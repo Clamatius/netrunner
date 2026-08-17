@@ -747,7 +747,18 @@
         (is (str/includes? text "Offworld Office")
             (str "the scorable agenda must be named before the end-turn steer, got: " text))
         (is (re-find #"(?i)score" text)
-            (str "and the seat must be told it can still score, got: " text))))))
+            (str "and the seat must be told it can still score, got: " text))
+        ;; ...but HEDGED, not commanded. find-scorable-agendas is a counter check
+        ;; that ignores :cannot-score (Clot et al.) and its own docstring says to
+        ;; treat a hit as MIGHT-be-scorable. The printed line used to be flatly
+        ;; categorical ("can still be SCORED") while the hedge lived only in a
+        ;; code comment the seat never sees. Asserting the framing, not the token:
+        ;; a categorical claim from an admittedly-approximate detector is the
+        ;; guidance-text failure this repo keeps paying for.
+        (is (re-find #"(?i)\bmay\b|might" text)
+            (str "an approximate detector must not speak categorically, got: " text))
+        (is (not (str/includes? text "can still be SCORED"))
+            (str "the old categorical phrasing, got: " text))))))
 
 (deftest test-end-turn-guidance-reads-the-snapshot-it-was-handed
   (testing "#120: the wait loop classifies a SNAPSHOT and formats guidance from it
@@ -766,3 +777,60 @@
             text (str/join " " (core/wake-reason-guidance-lines :my-turn-end snapshot))]
         (is (str/includes? text "Nico Campaign")
             (str "guidance must describe the state it was handed, got: " text))))))
+
+;; ---------------------------------------------------------------------------
+;; ...and the FAST PATH must do the same (review panel, MAJOR).
+;;
+;; The test above proves the detectors honour a snapshot they are handed. It
+;; cannot see the bug below, because it calls wake-reason-guidance-lines
+;; directly and never goes through `wait --since`. The fast path deref'd the
+;; atom twice — once to classify the reason, once to render it — which is the
+;; very race the snapshot arities exist to prevent. The polling loop was
+;; converted; this path was missed.
+;;
+;; Catching it needs the atom to CHANGE between the two reads, so the state
+;; here is not a map but a deref that answers differently once classification
+;; has happened. With one snapshot the guidance names the agenda that was on
+;; the board when the reason was decided; with two derefs it describes a board
+;; the reason was never computed from.
+;; ---------------------------------------------------------------------------
+
+(def ^:private scorable-agenda-turn-state
+  "The orphaned turn, plus an agenda that is already fully advanced."
+  (-> orphaned-turn-game-state
+      (assoc-in [:corp :credit] 5)
+      (assoc-in [:corp :servers :remote1 :content]
+                [{:title "Offworld Office" :type "Agenda"
+                  :advance-counter 4 :advancementcost 4}])))
+
+(deftest test-since-fast-path-describes-the-state-it-classified
+  (testing "#120/review: one snapshot — the fast path must not classify off one
+            board and describe another"
+    (let [classified? (atom false)
+          before (mock-game "corp" scorable-agenda-turn-state)
+          ;; What a diff landing mid-decision would leave: same orphaned turn,
+          ;; but the agenda is gone (scored, or trashed by the opponent).
+          after (mock-game "corp" orphaned-turn-game-state)
+          flipping (reify clojure.lang.IDeref
+                     (deref [_] (if @classified? after before)))
+          real-relevance @#'core/relevance-reason]
+      (with-redefs-fn {#'core/relevance-reason
+                       (fn [& args]
+                         (let [r (apply real-relevance args)]
+                           (reset! classified? true)
+                           r))
+                       #'state/get-cursor (constantly 10)
+                       #'state/client-state flipping}
+        (fn []
+          (let [result (atom nil)
+                out (with-out-str
+                      (reset! result
+                              (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose true})))]
+            (is (= :already-advanced (:status @result))
+                (str "fixture must actually exercise the fast path, got: " @result))
+            (is (= :my-turn-end (:reason @result))
+                (str "and classify off the pre-flip board, got: " @result))
+            (is (str/includes? out "Offworld Office")
+                (str "THE bug: the reason was decided on a board holding a scorable "
+                     "agenda, and the guidance then described a board without it. "
+                     "Got:\n" out))))))))

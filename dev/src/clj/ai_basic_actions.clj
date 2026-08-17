@@ -1080,7 +1080,10 @@
         (println "")
         (println "⏸️  Holding the end-of-turn paid window (0 clicks, turn NOT ended)")
         (doseq [{:keys [title cost]} eot-rezzables]
-          (println (format "   💰 %s can still be rezzed for %d¢" title cost)))
+          ;; "may", matching ai-core's wake guidance: the same detector feeds
+          ;; both, and it errs generous on purpose (restricted recurring
+          ;; credits), so one categorical copy would just relocate the overclaim.
+          (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
         (println "💡 Rez now if you want it up on the Runner's turn, then 'end-turn'")
         (println "   (nothing to do? just 'end-turn')")
         (flush)
