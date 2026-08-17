@@ -6,6 +6,7 @@
    when a card sets :force-post-discard-{self,opponent}. Sending start-turn during
    that pause desyncs the engine."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-basic-actions :as basic]
             [ai-state :as state]
@@ -114,6 +115,125 @@
         (let [result (basic/can-start-turn?)]
           (is (false? (:can-start result)))
           (is (= :opponent-mulligan (:reason result))))))))
+
+;; The mirror: the mulligan *this* seat still owes. #87 guarded only the
+;; opponent's half. Nothing stopped a seat from starting its own turn over its
+;; own live 'Keep hand?' prompt — and the engine does not stop it either, so the
+;; turn really begins and the mandatory draw really happens. Observed live on
+;; game e753fdee: the Corp kept a SIX-card starting hand at Turn 1 / 3 clicks.
+(def ^:private my-mulligan-game-state
+  {:runner {:click 0 :credit 5 :hand [] :keep false}
+   :corp {:click 0 :credit 5 :hand [] :keep false
+          :prompt-state {:msg "Keep hand?" :prompt-type "mulligan"
+                         :choices [{:value "Keep"} {:value "Mulligan"}]}}
+   :turn 0
+   :active-player "runner"
+   :end-turn true
+   :log []})
+
+(deftest test-can-start-turn-reports-my-own-mulligan
+  (testing "can-start-turn? refuses while I still owe my own opening mulligan"
+    (with-mock-state (mock-client-state :side "corp" :game-state my-mulligan-game-state)
+      (let [result (basic/can-start-turn?)]
+        (is (false? (:can-start result)))
+        (is (= :my-mulligan (:reason result)))))))
+
+(deftest test-start-turn-refuses-with-no-game-state
+  (testing "start-turn! sends NOTHING when :game-state is nil but :gameid survives"
+    ;; Guest-panel CRITICAL. resync-game! clears :game-state and keeps :gameid.
+    ;; Every input start-turn! reads then defaults falsy — turn 0, nil clicks,
+    ;; empty log — which IS the is-first-turn? signature, so it sent on the
+    ;; preserved gameid. The :keep guard cannot catch this: an absent flag is
+    ;; not `false`, so my-mulligan-pending? correctly says "not pending".
+    ;; Unknown state needs its own refusal.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :no-game-state (:reason result)))
+            (is (empty? @sent))))))))
+
+;; ----------------------------------------------------------------------------
+;; The refusal must not DIAGNOSE what it cannot see (review panel, MAJOR).
+;;
+;; :game-state nil has a fourth reading the enumeration missed: an ordinary
+;; unstarted lobby, which has a :gameid, a side and no board just like a failed
+;; resync does. Telling that seat the game "has ended, been purged, or the resync
+;; did not complete" and offering ./dev/reset.sh points it at the one command that
+;; destroys the healthy lobby it is sitting in — the #125 mistake, again.
+;;
+;; These tests assert the FRAMING, not that some token appears: the lobby case
+;; must not offer the destructive remedy, and the genuinely-boardless case must
+;; keep it. Both previous no-state tests omitted :lobby-state entirely, which is
+;; why the suite stayed green through this.
+;; ----------------------------------------------------------------------------
+
+(deftest test-start-turn-in-an-unstarted-lobby-does-not-claim-the-game-died
+  (testing "seated in a waiting room: refuse, but do not diagnose a teardown"
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp")
+                              :game-state nil
+                              :lobby-state {:started false :title "test lobby"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent) "an unstarted lobby has no turn to start")
+            (is (not (str/includes? out "reset.sh"))
+                (str "THE bug: reset.sh destroys the healthy lobby the seat is in. Got:\n" out))
+            (is (not (str/includes? out "has ended"))
+                (str "must not assert a teardown it cannot see. Got:\n" out))
+            (is (str/includes? out "not started yet")
+                (str "must name the state it IS in. Got:\n" out))))))))
+
+(deftest test-start-turn-with-no-lobby-state-keeps-the-teardown-guidance
+  (testing "board gone and no lobby: the ended/purged/resync enumeration is right here"
+    ;; The complement of the test above — a fix that made every no-board refusal
+    ;; say "waiting in a lobby" would trade one false claim for another.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent))
+            (is (str/includes? out "game-over-status")
+                (str "a started game that lost its board should be diagnosed. Got:\n" out))))))))
+
+(deftest test-end-turn-in-an-unstarted-lobby-does-not-claim-the-game-died
+  (testing "end-turn's identical refusal text needs the identical discrimination"
+    ;; Same defect, second site: end-turn! printed the same four lines verbatim,
+    ;; so fixing only start-turn! would leave the neighbouring command lying.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp")
+                              :game-state nil
+                              :lobby-state {:started false :title "test lobby"})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/end-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent))
+            (is (not (str/includes? out "reset.sh"))
+                (str "THE bug, second site. Got:\n" out))
+            (is (str/includes? out "not started yet")
+                (str "must name the state it IS in. Got:\n" out))))))))
+
+(deftest test-start-turn-refuses-over-my-own-mulligan
+  (testing "start-turn! sends NOTHING while my own mulligan is unresolved"
+    ;; The assertion that matters is `(empty? @sent)`. A refusal that still puts
+    ;; the message on the wire is not a refusal: the engine has no ordering check
+    ;; of its own, so the turn would start regardless of what we printed.
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state my-mulligan-game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :my-mulligan (:reason result)))
+            (is (empty? @sent)
+                "THE bug: start-turn went out and the engine happily granted clicks + the mandatory draw")))))))
 
 ;; ============================================================================
 ;; smart-end-turn! over-hand-size: must END (to trigger discard prompt), not refuse
@@ -1058,3 +1178,17 @@
                     (str ":side \"" side-str "\" — must not offer the game-destroying remedy, got:\n" out))
                 (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
                     (str ":side \"" side-str "\" — must actually send end-turn, got:\n" out))))))))))
+(deftest test-can-start-turn-reports-no-game-state
+  (testing "the preflight must refuse nil state too, not just the wire"
+    ;; Guest-panel pass 2, HIGH — the half-applied half of the fix above. The
+    ;; autonomous loops gate on THIS, not on start-turn!'s return:
+    ;;   (let [c (can-start-turn?)] (when (:can-start c) ... (start-turn!)))
+    ;; so a preflight that says :first-turn on nil state leaves the bot
+    ;; announcing an auto-start, getting refused, and looping — wire safe, seat
+    ;; stuck. With no board every input defaults INTO the first-turn signature,
+    ;; which is exactly why it has to be refused before any of them are read.
+    (with-mock-state (assoc (mock-client-state :side "corp") :game-state nil)
+      (let [result (basic/can-start-turn?)]
+        (is (false? (:can-start result)))
+        (is (= :no-game-state (:reason result))
+            "was :first-turn — nil defaults ARE the Corp-first-turn shape")))))

@@ -500,17 +500,63 @@
 
    A bounded window rather than paren matching: a threading form mentioning a
    side AND `keyword` within 80 characters is the shape, and a regex trying to
-   balance parens here would be the more fragile artifact."
-  #"\((?:some->>|some->|->>|->) .{0,80}?side.{0,80}?keyword")
+   balance parens here would be the more fragile artifact.
+
+   The window may not cross a `(defn`. Once prose stopped padding the distance
+   (see strip-prose) an 80-character window in ai_core.clj reached out of the
+   tail of one function, past its closing parens, and into the next definition —
+   pairing a `some->` in one function with a `keyword` in another and charging
+   the file for a derivation neither contains. A bounded window has to be bounded
+   by something structural too, and the cheapest true boundary here is the next
+   definition."
+  #"\((?:some->>|some->|->>|->) (?:(?!\(defn).){0,80}?side(?:(?!\(defn).){0,80}?keyword")
+
+(defn- strip-prose
+  "Blank out comments AND string literals, keeping newlines so line structure
+   survives.
+
+   Comments alone are not enough. This repo documents the anti-pattern in the
+   DOCSTRING of the function that avoids it — my-mulligan-pending? spells out
+   `(keyword (:side client-state))` and `(keyword \"Corp\")` precisely to say why
+   it does not do that — and a regex over raw source counts the warning as the
+   offence. That is not hypothetical: merging #135 pushed ai_state.clj from 6 to
+   7 on prose alone, i.e. the ratchet punished the file for explaining itself.
+   The matcher's own self-check already declares the rule (\"commented-out code
+   and prose must not inflate the budget\"); this makes it true for both.
+
+   A scan rather than a regex, because string literals nest escapes (\\\") and
+   docstrings span lines. Backslash outside a string is copied with its next
+   character so character literals like \\\" and \\; cannot desync the scan."
+  [^String src]
+  (let [n (count src)
+        sb (StringBuilder.)]
+    (loop [i 0, in-str? false, in-cmt? false]
+      (if (>= i n)
+        (str sb)
+        (let [c (.charAt src i)]
+          (cond
+            in-str? (cond
+                      (= c \\) (recur (+ i 2) true false)
+                      (= c \") (recur (inc i) false false)
+                      :else (do (when (= c \newline) (.append sb c))
+                                (recur (inc i) true false)))
+            in-cmt? (if (= c \newline)
+                      (do (.append sb c) (recur (inc i) false false))
+                      (recur (inc i) false true))
+            (= c \\) (do (.append sb c)
+                         (when (< (inc i) n) (.append sb (.charAt src (inc i))))
+                         (recur (+ i 2) false false))
+            (= c \") (recur (inc i) true false)
+            (= c \;) (recur (inc i) false true)
+            :else (do (.append sb c) (recur (inc i) false false))))))))
 
 (defn- hand-rolled-side-count
-  "Count derivations in one source string, ignoring ;; comments and collapsing
-   whitespace so a multi-line form cannot hide. Forms wrapped in lower-case do
-   not match any pattern — that is the point: those already normalize."
+  "Count derivations in one source string, ignoring comments and string literals
+   and collapsing whitespace so a multi-line form cannot hide. Forms wrapped in
+   lower-case do not match any pattern — that is the point: those already
+   normalize."
   [src]
-  (let [text (-> (->> (clojure.string/split-lines src)
-                      (map #(clojure.string/replace % #";;.*$" ""))
-                      (clojure.string/join "\n"))
+  (let [text (-> (strip-prose src)
                  (clojure.string/replace #"\s+" " "))]
     (+ (count (re-seq direct-derivation-re text))
        (count (re-seq symbol-derivation-re text))
@@ -536,7 +582,30 @@
       "(keyword (clojure.string/lower-case (:side state)))"
       ;; commented-out code and prose must not inflate the budget
       ";; (keyword (:side client-state)) is the old way"
-      "(keyword :some-other-thing)")))
+      ;; ...and a DOCSTRING is prose too. This is the case that actually fired:
+      ;; the function that correctly uses my-side-kw explains the trap it is
+      ;; avoiding, and the ratchet charged it for the explanation.
+      "(defn f \"Not (keyword (:side client-state)) — see #129.\" [s] (my-side-kw s))"
+      ;; escaped quotes inside that prose must not desync the scan and expose
+      ;; the following real code... (the next case proves the scan resumes)
+      "(defn f \"(keyword \\\"Corp\\\") is :Corp\" [s] (my-side-kw s))"
+      "(keyword :some-other-thing)")
+    (testing "the scan resumes after a docstring — real code AFTER prose still counts"
+      (is (= 1 (hand-rolled-side-count
+                "(defn f \"mentions (keyword (:side x)) in prose\" [cs]
+                   (keyword (:side cs)))"))))
+    (testing "the threading window does not pair two different functions"
+      ;; The ai_core.clj false positive: a `some->` at the tail of one defn and a
+      ;; `keyword` in the next were within 80 characters of each other once prose
+      ;; stopped padding the gap. Neither function derives a side.
+      ;; `side` here is only defn b's PARAMETER NAME and the `keyword` call
+      ;; normalizes something else — the shape of the real ai_core.clj pair.
+      (is (= 0 (hand-rolled-side-count
+                "(defn a [state] (some-> (owner state) nm))
+                 (defn b [state side] (= (keyword (name state)) side))")))
+      ;; ...while a genuine threaded derivation inside ONE function still counts.
+      (is (= 1 (hand-rolled-side-count
+                "(defn a [cs] (some-> (:side cs) keyword))"))))))
 
 (deftest test-hand-rolled-side-derivation-does-not-spread
   (testing "#127: no NEW hand-rolled side derivation may be added"
