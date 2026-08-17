@@ -2212,3 +2212,84 @@
   (testing "purge stays Corp-only — that gate was the correct one"
     (is (str/includes? (basic-actions-out "corp") "purge"))
     (is (not (str/includes? (basic-actions-out "runner") "purge")))))
+
+;; ---------------------------------------------------------------------------
+;; The Total line must BE the list, not a second claim about it (review MAJOR).
+;;
+;; It was a hardcoded literal — "4" for Corp, "2" for Runner — correct until the
+;; #132 re-gating above changed what actually gets printed, at which point Corp
+;; printed 3 and claimed 4 and Runner printed 3 and claimed 2. A seat doesn't
+;; read the block as prose; the total is the line it trusts to know whether it
+;; has seen everything.
+;;
+;; These assertions compare the total against the PRINTED lines rather than
+;; against an expected number, so they keep holding when the set of basic
+;; actions legitimately changes — the failure mode is drift, not any one count.
+;; ---------------------------------------------------------------------------
+
+(defn- offered-basic-actions
+  "The basic-action lines actually printed, minus the informational
+   UNAVAILABLE ones (those are not offers)."
+  [out]
+  (->> (str/split-lines out)
+       (drop-while #(not (str/includes? % "Basic Actions:")))
+       rest
+       (take-while #(str/starts-with? % "  - "))
+       (remove #(str/includes? % "UNAVAILABLE"))))
+
+(defn- reported-basic-total [out]
+  (some->> (re-find #"Total: \d+ playable cards, \d+ playable abilities, (\d+) basic actions" out)
+           second
+           Integer/parseInt))
+
+(deftest test-list-playables-basic-action-total-matches-what-was-printed
+  (doseq [side ["corp" "runner"]]
+    (testing (str side ": the total counts the lines the seat can actually see")
+      (let [out (basic-actions-out side)]
+        (is (pos? (count (offered-basic-actions out)))
+            (str "fixture printed no basic actions at all, got:\n" out))
+        (is (= (count (offered-basic-actions out)) (reported-basic-total out))
+            (str side " printed " (count (offered-basic-actions out))
+                 " basic actions and reported " (reported-basic-total out)
+                 ":\n" out))))))
+
+;; ---------------------------------------------------------------------------
+;; draw must be gated on the deck (review MAJOR). game/cards/basic.clj carries
+;; :req (req (not-empty (:deck corp))) — basic.clj:42 Corp, :165 Runner — so
+;; offering draw at 0 cards names an action the engine refuses, in precisely the
+;; endgame state where a wasted command costs most.
+;; ---------------------------------------------------------------------------
+
+(defn- basic-actions-out-with-deck [side deck-count]
+  (with-mock-state (mock-client-state
+                    :side side
+                    :game-state {:active-player side :turn 5
+                                 :corp {:click 3 :credit 5 :hand [] :deck-count deck-count}
+                                 :runner {:click 4 :credit 5 :hand [] :rig {}
+                                          :deck-count deck-count}})
+    (with-out-str (display/list-playables))))
+
+(deftest test-list-playables-does-not-offer-draw-on-an-empty-deck
+  (doseq [side ["corp" "runner"]]
+    (testing (str side ": an empty deck is not a draw")
+      (let [out (basic-actions-out-with-deck side 0)]
+        (is (not-any? #(re-find #"^  - draw \(" %) (offered-basic-actions out))
+            (str side " offered draw with an empty deck:\n" out))
+        (is (str/includes? out "UNAVAILABLE")
+            (str side " should say why draw is missing rather than silently dropping it:\n" out))
+        (is (= (count (offered-basic-actions out)) (reported-basic-total out))
+            (str side ": total must not count the unavailable draw:\n" out)))))
+
+  (testing "a non-empty deck still offers draw"
+    (doseq [side ["corp" "runner"]]
+      (let [out (basic-actions-out-with-deck side 20)]
+        (is (some #(re-find #"^  - draw \(" %) (offered-basic-actions out))
+            (str side " must still offer draw with cards left:\n" out))
+        (is (= (count (offered-basic-actions out)) (reported-basic-total out))))))
+
+  (testing "an ABSENT deck-count is unknown, not empty — still offered"
+    ;; Every previous fixture omits :deck-count; treating that as 0 would have
+    ;; silently withdrawn draw from every one of them.
+    (doseq [side ["corp" "runner"]]
+      (is (some #(re-find #"^  - draw \(" %) (offered-basic-actions (basic-actions-out side)))
+          (str side " must offer draw when deck-count is unknown")))))

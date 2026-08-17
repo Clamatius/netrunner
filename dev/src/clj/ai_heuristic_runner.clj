@@ -287,9 +287,12 @@
         
         ;; Discard
         (str/includes? msg "Discard")
-        (do
-          (prompts/discard-to-hand-size!)
-          true)
+        ;; #127: propagate, don't hardcode true. discard-to-hand-size! returns
+        ;; nil when it DECLINED (unreadable board) and a count otherwise — and 0
+        ;; is truthy in Clojure, so this reports "handled" for a real no-op and
+        ;; "not handled" only for a decline. Reporting a decline as handled sent
+        ;; this loop straight back to the same unresolved prompt, forever.
+        (some? (prompts/discard-to-hand-size!))
 
         ;; Jack out decision
         (str/includes? msg "Jack out")

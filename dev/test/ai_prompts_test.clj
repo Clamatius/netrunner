@@ -703,3 +703,172 @@
         (is (str/includes? out "Invalid choice index: 7"))
         (is (str/includes? out "Alpha") "the available choices must still be listed")
         (is (str/includes? out "Beta"))))))
+
+;; ============================================================================
+;; A live prompt with NO choices is not "no prompt" (review panel, MAJOR).
+;;
+;; The first cut keyed the nothing-to-choose arm on (empty? choices), but the
+;; engine mints a choice-less prompt for BOTH seats on every run:
+;;   show-run-prompts → (show-prompt state :runner card ... nil nil {:prompt-type :run})
+;; (nil in the choices position), and :waiting prompts share the shape. So
+;; `choose 0` during a run answered "there is no decision to answer" while a
+;; run-priority decision was live and `continue` was the move — the old message
+;; blamed the index, the new one denied the prompt existed.
+;;
+;; These fixtures are the ones the earlier tests omitted: a prompt that exists
+;; and carries no :choices.
+;; ============================================================================
+
+(defn- choose-out-with-prompt [side prompt]
+  (with-mock-state (mock-client-state
+                    :side side
+                    :game-state {:active-player "runner" :turn 5
+                                 :run {:phase "approach-ice" :server ["hq"]}
+                                 :corp {:click 0 :credit 5 :hand [] :prompt-state prompt}
+                                 :runner {:click 2 :credit 5 :hand [] :prompt-state prompt}})
+    (with-out-str (prompts/choose-option! 0))))
+
+(deftest choose-during-a-run-window-does-not-deny-the-prompt
+  (doseq [side ["corp" "runner"]]
+    (testing (str side ": a run priority window is a live decision, answered by continue")
+      (let [out (choose-out-with-prompt
+                 side {:prompt-type "run" :msg "You are approaching Ice Wall" :choices nil})]
+        (is (not (str/includes? out "no prompt is pending"))
+            (str "THE bug: a live run window denied. Got:\n" out))
+        (is (not (str/includes? out "Invalid choice index"))
+            (str "and it is not an index problem either. Got:\n" out))
+        (is (str/includes? out "continue")
+            (str "must name the verb that actually applies here. Got:\n" out))))))
+
+(deftest choose-on-a-waiting-prompt-says-wait-not-choose
+  (testing "the other choice-less shape: don't tell a waiting seat to try another index"
+    (let [out (choose-out-with-prompt
+               "corp" {:prompt-type "waiting" :msg "Waiting for Runner" :choices nil})]
+      (is (not (str/includes? out "no prompt is pending"))
+          (str "a waiting prompt exists. Got:\n" out))
+      (is (str/includes? out "wait")
+          (str "must steer to 'wait'. Got:\n" out)))))
+
+(deftest choose-with-genuinely-no-prompt-still-says-so
+  (testing "the arm must keep working for the state it was written for"
+    ;; The over-correction guard for the fix above: keying on (nil? prompt)
+    ;; must not lose the real no-prompt case.
+    (let [out (choose-out-with-prompt "corp" nil)]
+      (is (str/includes? out "Nothing to choose"))
+      (is (str/includes? out "no prompt is pending")))))
+
+;; ============================================================================
+;; #127: discard-to-hand-size! on a sideless / boardless state
+;; ============================================================================
+;; `handle-discard-prompt!` computed
+;;   hand-size-max (get-in gs [side :hand-size :total])
+;;   cards-to-discard (- (count hand) hand-size-max)
+;; in the `let`, i.e. BEFORE the "is there actually a select prompt?" guard. With
+;; no board (or no side) hand-size-max is nil and the subtraction throws
+;;   NullPointerException: Cannot invoke "Object.getClass()"
+;; out of clojure.lang.Numbers.minus.
+;;
+;; #127 notes the asymmetry with the sibling lookup in ai_basic_actions.clj:835,
+;; which supplies a default of 5, and asks which of the two is wrong. Neither:
+;; the sibling is a FOREWARNING, where guessing 5 costs at most a wrong hint,
+;; while this one SELECTS CARDS FOR THE BIN. An unknown hand-size is a reason to
+;; decline, not to guess — so the fix here is to refuse (return 0), not to
+;; default. Guessing 5 for a Runner under a hand-size modifier would bin real
+;; cards on a state we admit we cannot read.
+
+(def ^:private no-board-state
+  {:connected true :uid "test-user" :gameid nil :side nil :game-state nil})
+
+(def ^:private left-game-board-state
+  "`leave-lobby!` nils :side but leaves the board cached — the state #125 was
+   actually captured in, so a board-only guard would miss it."
+  {:connected true :uid "test-user" :gameid nil :side nil
+   :game-state {:active-player "corp" :turn 10
+                :corp {:click 0 :credit 35 :hand [] :hand-count 5}
+                :runner {:click 0 :credit 5 :hand [] :hand-count 5}}})
+
+(deftest test-discard-to-hand-size-survives-a-sideless-state
+  (testing "#127: no side/board => say so, do not throw and do not select cards"
+    (doseq [[label st] [["never joined" no-board-state]
+                        ["after leaving (board still cached)" left-game-board-state]]]
+      (let [sent (atom [])]
+        (with-mock-state st
+          (with-redefs [ws/send-message! (fn [evt data] (swap! sent conj [evt data]) true)]
+            (let [thrown (atom nil)]
+              (with-out-str
+                (try (prompts/discard-to-hand-size!)
+                     (catch Throwable e (reset! thrown e))))
+              (is (nil? @thrown)
+                  (str "on a " label " state discard-to-hand-size! threw "
+                       (when @thrown
+                         (str (.getSimpleName (class @thrown)) ": " (.getMessage @thrown)))))
+              (is (empty? @sent)
+                  (str "on a " label " state it must not select anything, sent: " @sent)))))))))
+
+(deftest test-handle-discard-prompt-declines-an-unreadable-hand-size
+  (testing "#127: a select prompt with NO :hand-size on the board must discard nothing"
+    ;; The dangerous shape: the guard passes (there IS a select prompt) but the
+    ;; max is unreadable. Defaulting to 5 here would bin a real card.
+    (let [sent (atom [])
+          gs {:runner {:prompt-state {:prompt-type "select" :eid {:eid 7}}
+                       :hand [{:cid 1 :title "Sure Gamble"}
+                              {:cid 2 :title "Diesel"}
+                              {:cid 3 :title "Corroder"}
+                              {:cid 4 :title "Daily Casts"}
+                              {:cid 5 :title "Overclock"}
+                              {:cid 6 :title "Cache"}]}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state gs)
+        (with-redefs [ws/send-message! (fn [evt data] (swap! sent conj [evt data]) true)]
+          (let [discarded (atom nil)
+                out (with-out-str (reset! discarded (ws/handle-discard-prompt! :runner)))]
+            ;; nil, not 0 — see test-discard-return-distinguishes-declined-from
+            ;; -nothing-to-do for why the difference is the whole contract.
+            (is (nil? @discarded)
+                (str "must not guess a hand-size max and bin cards, got: " out))
+            (is (empty? @sent)
+                (str "must select nothing, sent: " @sent))
+            ;; Guest-panel note: 0 otherwise means "nothing required" and the
+            ;; caller prints "No cards to discard" on it. A declined discard
+            ;; that reads as a clean no-op spins an autonomous prompt loop.
+            (is (re-find #"(?i)declin" out)
+                (str "must say it DECLINED rather than report a clean no-op, got: " out))))))))
+
+;; Second-pass guest catch (#127): printing "declining" while still returning 0
+;; left the ambiguity where it does damage. ai_heuristic_runner's prompt
+;; dispatcher was `(do (prompts/discard-to-hand-size!) true)` — handled
+;; unconditionally — so a decline reported success, the bot loop came round, met
+;; the same unresolved prompt, and spun forever. That is the house autonomous-
+;; deadlock shape: a shared handler returning a pause the loop never converts
+;; into an action.
+;;
+;; 0 is TRUTHY in Clojure and nil is not, so one nil/number distinction carries
+;; the whole contract: nil = "I declined, this prompt is still yours", any
+;; number = "dealt with" (including a legitimate 0-card no-op).
+
+(deftest test-discard-return-distinguishes-declined-from-nothing-to-do
+  (testing "#127: nil means declined, 0 means genuinely nothing to discard"
+    (let [under-hand-size {:runner {:prompt-state nil
+                                    :hand [{:cid 1 :title "Sure Gamble"}]
+                                    :hand-size {:total 5}}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state under-hand-size)
+        (with-redefs [ws/send-message! (fn [_ _] true)]
+          (let [r (atom :unset)]
+            (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+            (is (= 0 @r) "a real board with nothing to discard returns 0, not nil")
+            (is (some? @r) "…and 0 must read as HANDLED to a bot loop")))))
+    ;; declined: a select prompt is up but the board reports no max hand size
+    (let [unreadable {:runner {:prompt-state {:prompt-type "select" :eid {:eid 7}}
+                               :hand [{:cid 1 :title "Sure Gamble"}
+                                      {:cid 2 :title "Diesel"}]}}]
+      (with-mock-state (mock-client-state :side "runner" :game-state unreadable)
+        (with-redefs [ws/send-message! (fn [_ _] true)]
+          (let [r (atom :unset)]
+            (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+            (is (nil? @r)
+                "a decline must be nil so a bot loop does not read it as handled")))))
+    ;; and the sideless state, which is the same class
+    (with-mock-state no-board-state
+      (with-redefs [ws/send-message! (fn [_ _] true)]
+        (let [r (atom :unset)]
+          (with-out-str (reset! r (prompts/discard-to-hand-size!)))
+          (is (nil? @r) "no side => declined, not a clean no-op"))))))

@@ -203,7 +203,13 @@
     (cond
       ;; Select prompts need choose-card, not choose. Warn LOUDLY rather than
       ;; silently picking a meta-choice (e.g. "Done") from :choices.
-      (= "select" prompt-type)
+      ;;
+      ;; Through select-prompt-type? rather than (= "select" prompt-type): the
+      ;; wire sends the string but the server sets the keyword pre-serialization
+      ;; and fixtures use either, and the bare string check silently misses the
+      ;; keyword form — which now matters more, because a missed :select would
+      ;; fall into the choice-less arm added below rather than into this warning.
+      (state/select-prompt-type? prompt-type)
       (let [selectable (:selectable prompt)]
         (println (format "⚠️  This is a SELECT prompt (%d selectable card(s)) — use choose-card <N>, not choose <N>."
                         (count selectable)))
@@ -224,12 +230,42 @@
       ;; makes that message useful is empty here, so the seat got a bare wrong
       ;; error. Believing it, the obvious recovery is to try 1, then 2, then 3.
       ;; `prompt` already phrases this state correctly; say the same thing.
-      (empty? choices)
+      ;;
+      ;; Keyed on (nil? prompt), NOT (empty? choices). "No choices" is not "no
+      ;; prompt": the engine mints a CHOICE-LESS prompt for both seats on every
+      ;; run (show-run-prompts passes nil in the choices position), and :waiting
+      ;; prompts have the same shape. Keying on the choices denied a live prompt
+      ;; while a run-priority decision was actually owed — trading a message that
+      ;; blamed the index for one that denied the prompt exists, which is the
+      ;; same class of false claim relocated. (Review panel, MAJOR.)
+      (nil? prompt)
       (do
-        (println "❌ Nothing to choose — no prompt with choices is pending for you.")
+        (println "❌ Nothing to choose — no prompt is pending for you.")
         (println "   (The index is not the problem; there is no decision to answer.)")
         (println "💡 Check with 'prompt'. If it's your turn, act — see 'list-playables'.")
         (core/with-cursor {:status :error :reason "No prompt to choose from"}))
+
+      ;; A LIVE prompt that carries no choices. There IS a decision here; it just
+      ;; isn't answered with `choose`. Name the verb that applies, which is also
+      ;; the contradictory-continue-verb complaint in #110.
+      (empty? choices)
+      (let [waiting? (state/waiting-prompt-type? prompt-type)
+            run? (state/run-prompt-type? prompt-type)]
+        (println (format "❌ This prompt has no numbered choices — 'choose' does not apply here.%s"
+                         (if-let [m (:msg prompt)] (str "\n   Prompt: " m) "")))
+        (cond
+          waiting?
+          (println "💡 You are WAITING on the opponent. Use 'wait' until it clears; don't act through it.")
+
+          run?
+          (println (str "💡 This is a run priority window. Use 'continue' to pass priority"
+                        (if (= side-kw :corp)
+                          " (or 'continue --rez <ice>' at the approach-ice window)."
+                          " (or fire a break / paid ability first).")))
+
+          :else
+          (println "💡 Check with 'prompt' for what this window expects; 'continue' passes priority."))
+        (core/with-cursor {:status :error :reason "Prompt has no choices"}))
 
       ;; A real prompt, a real index, out of range. Here the original message is
       ;; exactly right, and the list below is what makes it actionable.
@@ -640,14 +676,28 @@
 
 (defn discard-to-hand-size!
   "Discard cards down to maximum hand size
-   Auto-detects side and discards until at or below max hand size"
+   Auto-detects side and discards until at or below max hand size.
+
+   Returns the number discarded (0 when there was genuinely nothing to do), or
+   NIL when it declined because the state is unreadable — no side, no board, or
+   a discard prompt on a board that reports no max hand size (#127). Callers in
+   autonomous loops must branch on that: 0 is truthy in Clojure, nil is not, so
+   `(some? (discard-to-hand-size!))` is 'this prompt is dealt with'."
   []
   (let [client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        discarded (ws/handle-discard-prompt! side)]
-    (when (= discarded 0)
-      (println "No cards to discard"))))
+        side (state/my-side-kw client-state)]
+    (if (nil? side)
+      ;; #127: "No cards to discard" is a lie here — we have no seat to discard
+      ;; FROM. Say which of the two it is rather than reporting a clean no-op.
+      (do
+        (println (if (:game-state client-state)
+                   "❌ This client has no side, so there is no hand to discard from (a board is still cached — try 'status', or 'resync' if you expect to be seated)."
+                   "❌ Not in a game — nothing to discard."))
+        nil)
+      (let [discarded (ws/handle-discard-prompt! side)]
+        (when (= 0 discarded)
+          (println "No cards to discard"))
+        discarded))))
 
 (defn discard-specific-cards!
   "Discard specific cards by index positions
