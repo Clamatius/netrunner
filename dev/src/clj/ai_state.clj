@@ -264,6 +264,21 @@
   [prompt-type]
   (contains? #{:select "select"} prompt-type))
 
+(defn run-prompt-type?
+  "True if a :prompt-type denotes the engine's dummy RUN prompt — the priority
+   window `show-run-prompts` mints for BOTH seats on every run:
+
+     (show-prompt state :runner card (str \"You are \" msg) nil nil {:prompt-type :run})
+     (show-prompt state :corp   card (str \"The Runner is \" msg) nil nil {:prompt-type :run})
+
+   Note the `nil` in the choices position. This is why \"no choices\" cannot be
+   read as \"no prompt\": a run window is a live prompt, owed a real decision,
+   that carries no :choices at all. The answer there is `continue`, not `choose`.
+
+   Matches the wire STRING and the keyword, same as waiting-prompt-type?."
+  [prompt-type]
+  (contains? #{:run "run"} prompt-type))
+
 (defn mulligan-wait-prompt?
   "True when PROMPT is the opening-mulligan 'waiting for opponent to keep hand or
    mulligan' window (engine: show-wait-prompt \"<side> to keep hand or mulligan\",

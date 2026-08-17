@@ -203,7 +203,13 @@
     (cond
       ;; Select prompts need choose-card, not choose. Warn LOUDLY rather than
       ;; silently picking a meta-choice (e.g. "Done") from :choices.
-      (= "select" prompt-type)
+      ;;
+      ;; Through select-prompt-type? rather than (= "select" prompt-type): the
+      ;; wire sends the string but the server sets the keyword pre-serialization
+      ;; and fixtures use either, and the bare string check silently misses the
+      ;; keyword form — which now matters more, because a missed :select would
+      ;; fall into the choice-less arm added below rather than into this warning.
+      (state/select-prompt-type? prompt-type)
       (let [selectable (:selectable prompt)]
         (println (format "⚠️  This is a SELECT prompt (%d selectable card(s)) — use choose-card <N>, not choose <N>."
                         (count selectable)))
@@ -218,13 +224,57 @@
       choice-uuid
       (press-choice! choice)
 
+      ;; #134: NOTHING TO CHOOSE. This used to share the arm below and report
+      ;; "Invalid choice index", which is a claim about the index when the real
+      ;; fact is that there is no decision pending — and the choice list that
+      ;; makes that message useful is empty here, so the seat got a bare wrong
+      ;; error. Believing it, the obvious recovery is to try 1, then 2, then 3.
+      ;; `prompt` already phrases this state correctly; say the same thing.
+      ;;
+      ;; Keyed on (nil? prompt), NOT (empty? choices). "No choices" is not "no
+      ;; prompt": the engine mints a CHOICE-LESS prompt for both seats on every
+      ;; run (show-run-prompts passes nil in the choices position), and :waiting
+      ;; prompts have the same shape. Keying on the choices denied a live prompt
+      ;; while a run-priority decision was actually owed — trading a message that
+      ;; blamed the index for one that denied the prompt exists, which is the
+      ;; same class of false claim relocated. (Review panel, MAJOR.)
+      (nil? prompt)
+      (do
+        (println "❌ Nothing to choose — no prompt is pending for you.")
+        (println "   (The index is not the problem; there is no decision to answer.)")
+        (println "💡 Check with 'prompt'. If it's your turn, act — see 'list-playables'.")
+        (core/with-cursor {:status :error :reason "No prompt to choose from"}))
+
+      ;; A LIVE prompt that carries no choices. There IS a decision here; it just
+      ;; isn't answered with `choose`. Name the verb that applies, which is also
+      ;; the contradictory-continue-verb complaint in #110.
+      (empty? choices)
+      (let [waiting? (state/waiting-prompt-type? prompt-type)
+            run? (state/run-prompt-type? prompt-type)]
+        (println (format "❌ This prompt has no numbered choices — 'choose' does not apply here.%s"
+                         (if-let [m (:msg prompt)] (str "\n   Prompt: " m) "")))
+        (cond
+          waiting?
+          (println "💡 You are WAITING on the opponent. Use 'wait' until it clears; don't act through it.")
+
+          run?
+          (println (str "💡 This is a run priority window. Use 'continue' to pass priority"
+                        (if (= side-kw :corp)
+                          " (or 'continue --rez <ice>' at the approach-ice window)."
+                          " (or fire a break / paid ability first).")))
+
+          :else
+          (println "💡 Check with 'prompt' for what this window expects; 'continue' passes priority."))
+        (core/with-cursor {:status :error :reason "Prompt has no choices"}))
+
+      ;; A real prompt, a real index, out of range. Here the original message is
+      ;; exactly right, and the list below is what makes it actionable.
       :else
       (do
         (println (str "❌ Invalid choice index: " index))
-        (when (seq choices)
-          (println "    Available choices:")
-          (doseq [[i c] (map-indexed vector choices)]
-            (println (format "      %d. %s" i (:value c)))))
+        (println "    Available choices:")
+        (doseq [[i c] (map-indexed vector choices)]
+          (println (format "      %d. %s" i (:value c))))
         (core/with-cursor {:status :error :reason "Invalid choice index"})))))
 
 (defn normalize-choice-text

@@ -664,6 +664,100 @@
                 "card-less prompts must not be identified by msg alone (nil cid = nil cid is not identity)")))))))
 
 ;; ============================================================================
+;; #134 — choose-option! must not blame the index when there is no prompt.
+;;
+;; The :else arm was reached by two different states and described only one of
+;; them. With no prompt there are no :choices, so the "Available choices" block
+;; that makes "Invalid choice index" actionable printed nothing — leaving a bare
+;; error whose implied recovery (try another index) is wrong in exactly the
+;; state where a seat is least sure whose move it is.
+;; ============================================================================
+
+(deftest choose-with-no-prompt-says-there-is-no-prompt
+  (testing "no prompt at all: names the real state, not the index"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand [] :prompt-state nil}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (prompts/choose-option! 0))]
+        (is (not (str/includes? out "Invalid choice index"))
+            (str "the index is not the problem, got: " out))
+        (is (str/includes? out "Nothing to choose"))
+        (is (str/includes? out "prompt")
+            "must point at the surface that shows the real state"))))
+
+  (testing "a prompt WITH choices and an out-of-range index still blames the index"
+    ;; The over-correction guard: this is the state the original message was
+    ;; written for, and it must keep both the message and the choice list.
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand []
+                                          :prompt-state {:prompt-type "choice"
+                                                         :msg "Pick one"
+                                                         :choices [{:value "Alpha" :uuid "a"}
+                                                                   {:value "Beta" :uuid "b"}]}}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (prompts/choose-option! 7))]
+        (is (str/includes? out "Invalid choice index: 7"))
+        (is (str/includes? out "Alpha") "the available choices must still be listed")
+        (is (str/includes? out "Beta"))))))
+
+;; ============================================================================
+;; A live prompt with NO choices is not "no prompt" (review panel, MAJOR).
+;;
+;; The first cut keyed the nothing-to-choose arm on (empty? choices), but the
+;; engine mints a choice-less prompt for BOTH seats on every run:
+;;   show-run-prompts → (show-prompt state :runner card ... nil nil {:prompt-type :run})
+;; (nil in the choices position), and :waiting prompts share the shape. So
+;; `choose 0` during a run answered "there is no decision to answer" while a
+;; run-priority decision was live and `continue` was the move — the old message
+;; blamed the index, the new one denied the prompt existed.
+;;
+;; These fixtures are the ones the earlier tests omitted: a prompt that exists
+;; and carries no :choices.
+;; ============================================================================
+
+(defn- choose-out-with-prompt [side prompt]
+  (with-mock-state (mock-client-state
+                    :side side
+                    :game-state {:active-player "runner" :turn 5
+                                 :run {:phase "approach-ice" :server ["hq"]}
+                                 :corp {:click 0 :credit 5 :hand [] :prompt-state prompt}
+                                 :runner {:click 2 :credit 5 :hand [] :prompt-state prompt}})
+    (with-out-str (prompts/choose-option! 0))))
+
+(deftest choose-during-a-run-window-does-not-deny-the-prompt
+  (doseq [side ["corp" "runner"]]
+    (testing (str side ": a run priority window is a live decision, answered by continue")
+      (let [out (choose-out-with-prompt
+                 side {:prompt-type "run" :msg "You are approaching Ice Wall" :choices nil})]
+        (is (not (str/includes? out "no prompt is pending"))
+            (str "THE bug: a live run window denied. Got:\n" out))
+        (is (not (str/includes? out "Invalid choice index"))
+            (str "and it is not an index problem either. Got:\n" out))
+        (is (str/includes? out "continue")
+            (str "must name the verb that actually applies here. Got:\n" out))))))
+
+(deftest choose-on-a-waiting-prompt-says-wait-not-choose
+  (testing "the other choice-less shape: don't tell a waiting seat to try another index"
+    (let [out (choose-out-with-prompt
+               "corp" {:prompt-type "waiting" :msg "Waiting for Runner" :choices nil})]
+      (is (not (str/includes? out "no prompt is pending"))
+          (str "a waiting prompt exists. Got:\n" out))
+      (is (str/includes? out "wait")
+          (str "must steer to 'wait'. Got:\n" out)))))
+
+(deftest choose-with-genuinely-no-prompt-still-says-so
+  (testing "the arm must keep working for the state it was written for"
+    ;; The over-correction guard for the fix above: keying on (nil? prompt)
+    ;; must not lose the real no-prompt case.
+    (let [out (choose-out-with-prompt "corp" nil)]
+      (is (str/includes? out "Nothing to choose"))
+      (is (str/includes? out "no prompt is pending")))))
+
+;; ============================================================================
 ;; #127: discard-to-hand-size! on a sideless / boardless state
 ;; ============================================================================
 ;; `handle-discard-prompt!` computed
