@@ -2293,3 +2293,51 @@
     (doseq [side ["corp" "runner"]]
       (is (some #(re-find #"^  - draw \(" %) (offered-basic-actions (basic-actions-out side)))
           (str side " must offer draw when deck-count is unknown")))))
+
+;; Per-credit payment prompts (#110 §2, corroborating #104)
+;;
+;; "Choose a credit providing card (0 of 5 [Credits])" re-asks once per credit.
+;; The count in the message was the ONLY signal that four more calls were
+;; coming, and nothing named the one-call form — so a Fable seat spent 5 calls
+;; on Overclock and a Luna seat 2 on Unity, each reporting it as friction.
+;; ============================================================================
+
+(defn- payment-prompt-output [msg]
+  (with-mock-state
+    (mock-client-state
+     :side "runner"
+     :game-state {:active-player "runner" :turn 5
+                  :runner {:hand []
+                           :prompt-state {:prompt-type "select"
+                                          :eid "pay-1"
+                                          :msg msg
+                                          :selectable [{:cid "c1" :title "Overclock"}]}}
+                  :corp {:hand []}})
+    (with-out-str (display/show-prompt-detailed))))
+
+(deftest show-prompt-detailed-explains-per-credit-payment
+  (testing "the prompt states how many credits are still owed and names --all"
+    (let [out (payment-prompt-output "Choose a credit providing card (0 of 5 [Credits])")]
+      (is (str/includes? out "5 [Credits] still owed")
+          (str "must say how many more picks are coming:\n" out))
+      (is (str/includes? out "--all")
+          (str "must name the one-call form:\n" out))
+      ;; multi-choose selects several DIFFERENT cards; it is not the verb for
+      ;; paying a cost out of one source, and steering there would waste a seat's
+      ;; turn the same way the silence did.
+      (is (not (str/includes? out "multi-choose"))
+          (str "must not steer a payment to the multi-select verb:\n" out))))
+
+  (testing "a partially-paid prompt counts the REMAINDER, not the target"
+    (let [out (payment-prompt-output "Choose a credit providing card (3 of 5 [Credits])")]
+      (is (str/includes? out "2 [Credits] still owed")
+          (str "owed is target minus paid:\n" out))))
+
+  (testing "an ordinary select is untouched — payment advice must not leak"
+    (let [out (payment-prompt-output "Choose a card to trash")]
+      (is (str/includes? out "Selectable cards")
+          (str "normal prompts keep the plain header:\n" out))
+      (is (not (str/includes? out "--all"))
+          (str "--all does nothing here and must not be advertised:\n" out))
+      (is (not (str/includes? out "still owed"))
+          (str "no payment line on a non-payment prompt:\n" out)))))

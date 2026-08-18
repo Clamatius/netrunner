@@ -573,15 +573,31 @@
 (defn select-card!
   "Select a card for prompts like discard.
    Takes a card object and prompt eid.
-   Card should have :cid, :zone, :side, :type fields."
-  [card eid]
-  (safe-action! "select"
-                {:card {:cid (:cid card)
-                        :zone (:zone card)
-                        :side (:side card)
-                        :type (:type card)}
-                 :eid eid
-                 :shift-key-held false}))
+   Card should have :cid, :zone, :side, :type fields.
+
+   `shift-key-held` mirrors the human UI's shift-click (board.cljs
+   `handle-card-click`). The engine stores it at [side :shift-key-select]
+   (game.core.actions/select) and ONE consumer reads it:
+   pick-credit-providing-cards' `should-auto-repeat?`, which keeps taking
+   credits from the SAME card until the cost is met instead of re-prompting per
+   credit. Its own comment: \"taking 5cr from miss bones with one click, instead
+   of waiting for 5 server round-trips\".
+
+   We hardcoded false here, so seats had no way to do what a human does in one
+   click — 5 separate choose-card calls for Overclock (#104), 2 for Unity
+   (#110). Nothing else in the engine reads the flag, so on a non-payment
+   prompt (a discard select) it is inert; and because `select` re-stamps the key
+   on EVERY selection, a later plain choose-card resets it to false. Default
+   stays false so existing callers are unchanged."
+  ([card eid] (select-card! card eid false))
+  ([card eid shift-key-held]
+   (safe-action! "select"
+                 {:card {:cid (:cid card)
+                         :zone (:zone card)
+                         :side (:side card)
+                         :type (:type card)}
+                  :eid eid
+                  :shift-key-held (boolean shift-key-held)})))
 
 (defn handle-discard-prompt!
   "Handle discard down to hand size prompt.

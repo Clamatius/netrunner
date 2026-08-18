@@ -251,6 +251,11 @@ When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 
 **ALWAYS use the "Fully break" ability [2] when available** (unless you want some subs to fire).
 
+> **Quote `"R&D"`.** `&` is a shell metacharacter, so `run R&D` is split by the
+> shell before `send_command` ever sees it and you get `zsh: command not found: D`
+> — an error that names neither the command nor the server. `HQ` and `Archives`
+> need no quotes, but quoting every server name is the habit that never bites.
+
 ```bash
 ./dev/send_command runner run "R&D"
 ./dev/send_command runner continue                    # Approach ICE

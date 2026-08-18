@@ -1099,6 +1099,30 @@
     (or (some #(when (:title %) %) matches)
         (first matches))))
 
+(def ^:private credit-payment-prompt-re
+  ;; game.core.pick-counters/pick-credit-providing-cards builds exactly:
+  ;;   "Choose a credit providing card (N of M [Credits])"
+  ;; with an optional ", X of Y stealth" clause before the closing paren. Anchor
+  ;; on BOTH the phrase and the bracketed count so an unrelated prompt that
+  ;; happens to say "credit" can't match.
+  #"(?i)credit providing card\s*\((\d+) of (\d+) \[Credits\]")
+
+(defn credit-payment-prompt
+  "Classify a prompt message as the engine's PER-CREDIT payment prompt.
+
+   This prompt re-asks once per credit: picking a source pays 1, then the engine
+   re-issues the same prompt with the count advanced (0 of 2 → 1 of 2 → …). Two
+   different models hit this as friction — 5 choose-card calls for Overclock
+   (#104), 2 for Unity (#110) — because nothing said how many calls were coming
+   or that one call could cover them all.
+
+   Returns {:paid N :target M :remaining (- M N)} on a match, else nil."
+  [msg]
+  (when-let [[_ paid target] (re-find credit-payment-prompt-re (str msg))]
+    (let [paid (Long/parseLong paid)
+          target (Long/parseLong target)]
+      {:paid paid :target target :remaining (max 0 (- target paid))})))
+
 (defn resolve-selectable
   "Resolve a prompt's :selectable list, separating cards this seat can actually
    pick from PHANTOM entries — CIDs absent from the seat's visible game state

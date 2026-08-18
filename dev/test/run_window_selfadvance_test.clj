@@ -528,7 +528,15 @@
           (str "a non-ICE rez must not claim to be ICE, got:\n" out))
       (is (not (str/includes? out "ICE rezzed!")))
       (is (not (str/includes? out "continue-run"))
-          "the Corp side must not be told to use the Runner's continue-run"))
+          "the Corp side must not be told to use the Runner's continue-run")
+      ;; #110: the Corp arm used to offer "monitor-run (or 'continue')" — two
+      ;; names for the SAME dispatcher branch. Offering a seat a choice between
+      ;; aliases of one command is the ambiguity #110 is about, so runtime
+      ;; guidance names exactly one verb on both arms.
+      (is (str/includes? out "'continue'")
+          (str "the Corp side gets the one documented verb, got:\n" out))
+      (is (not (str/includes? out "monitor-run"))
+          (str "naming a second alias re-creates the two-verb ambiguity, got:\n" out)))
     (runs/reset-reported-events!)
     (let [ice-rez {:user "__system__"
                    :text "ai-corp rezzes Palisade protecting Server 2."
@@ -539,7 +547,15 @@
                                                  :state state
                                                  :side "runner"}))]
       (is (str/includes? out "ICE rezzed!") "a real ICE rez keeps its banner")
-      (is (str/includes? out "continue-run") "the Runner keeps its hint")))
+      (is (str/includes? out "'continue'") "the Runner still gets a resume verb")
+      ;; #110: this assertion used to read (includes? out "continue-run") and so
+      ;; PINNED the defect — the Runner arm named the single-step alias, which
+      ;; `help --full` does not document and which contradicts the `continue`
+      ;; the prompt block prints two lines later. Assert the framing (one verb,
+      ;; the documented one), never that a token appears.
+      (is (not (str/includes? out "continue-run"))
+          (str "the Runner must be pointed at the documented verb, not the "
+               "undocumented single-step alias, got:\n" out))))
   (testing "title-substring collisions don't misclassify: rezzing the ASSET
             'Hostile Architecture' with ICE 'Architect' installed is non-ICE"
     (runs/reset-reported-events!)
