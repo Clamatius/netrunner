@@ -731,10 +731,7 @@
           (do (println (str "❌ ICE not found installed: " ice-name))
               (core/with-cursor {:status :error :reason "ICE not found"}))
           (let [gameid (:gameid client-state)
-                card-ref {:cid (:cid card)
-                         :zone (:zone card)
-                         :side (:side card)
-                         :type (:type card)}
+                card-ref (core/create-card-ref card)
                 old-cursor (state/get-cursor)
                 old-prompt (state/get-prompt)
                 old-log-count (count (get-in client-state [:game-state :log]))]
@@ -802,10 +799,7 @@
             ;; Proceed with advance
             :else
             (let [gameid (:gameid client-state)
-                  card-ref {:cid (:cid card)
-                           :zone (:zone card)
-                           :side (:side card)
-                           :type (:type card)}
+                  card-ref (core/create-card-ref card)
                   ;; Capture log size AND prompt BEFORE sending to avoid race conditions (#105)
                   initial-log-size (core/get-log-size)
                   pre-prompt (state/get-prompt)]

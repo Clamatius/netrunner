@@ -963,11 +963,19 @@
       :else nil)))
 
 (defn create-card-ref
-  "Create minimal card reference for server commands"
+  "Create minimal card reference for server commands.
+
+   Mirrors the reference client's single narrowing point
+   (`nr.gameboard.actions/send-command`: `[:cid :zone :side :host :type]`).
+   `:host` is load-bearing, not decoration: the engine's `get-card` uses it to
+   decide whether to walk a host's `:hosted` collection, and a hosted card's zone
+   is `[:onhost]` — not a real zone — so without `:host` the lookup returns nil
+   and the action is silently discarded. `:title` is ours, for logging."
   [card]
   {:cid (:cid card)
    :zone (:zone card)
    :side (:side card)
+   :host (:host card)
    :type (:type card)
    :title (:title card)})
 

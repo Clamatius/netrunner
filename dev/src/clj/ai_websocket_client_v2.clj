@@ -1,6 +1,7 @@
 (ns ai-websocket-client-v2
   "WebSocket client using gniazdo (JVM WebSocket library)"
   (:require
+   [ai-core :as core]
    [ai-debug :as debug]
    [ai-state :as state]
    [ai-hud-utils :as hud]
@@ -559,21 +560,27 @@
     (send-action! command args)))
 
 (defn choose!
-  "Make a choice from a prompt by index or UUID"
+  "Make a choice from a prompt by index or UUID.
+
+   Always names the prompt via :eid, as the reference client does. Without it the
+   engine's resolve-prompt falls back to the HEAD of the prompt queue, which is
+   not necessarily the prompt the seat was shown."
   [choice]
   (if (number? choice)
     ;; Choice by index
     (let [prompt (state/get-prompt)
           uuid (get-in prompt [:choices choice :uuid])]
       (when uuid
-        (safe-action! "choice" {:choice {:uuid uuid}})))
+        (safe-action! "choice" {:choice {:uuid uuid} :eid (:eid prompt)})))
     ;; Choice by UUID string
-    (safe-action! "choice" {:choice {:uuid choice}})))
+    (safe-action! "choice" {:choice {:uuid choice} :eid (:eid (state/get-prompt))})))
 
 (defn select-card!
   "Select a card for prompts like discard.
    Takes a card object and prompt eid.
-   Card should have :cid, :zone, :side, :type fields.
+   The card is narrowed by `ai-core/create-card-ref`, which mirrors the reference
+   client's key list — including `:host`, without which a hosted card cannot be
+   resolved server-side and the select is silently swallowed (#112 sweep).
 
    `shift-key-held` mirrors the human UI's shift-click (board.cljs
    `handle-card-click`). The engine stores it at [side :shift-key-select]
@@ -592,10 +599,7 @@
   ([card eid] (select-card! card eid false))
   ([card eid shift-key-held]
    (safe-action! "select"
-                 {:card {:cid (:cid card)
-                         :zone (:zone card)
-                         :side (:side card)
-                         :type (:type card)}
+                 {:card (core/create-card-ref card)
                   :eid eid
                   :shift-key-held (boolean shift-key-held)})))
 

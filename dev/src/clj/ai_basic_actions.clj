@@ -10,6 +10,7 @@
 (declare start-turn!)
 (declare turn-started-since-last-opp-end?)
 (declare get-my-username)
+(declare open-phase-window)
 
 (defn- refuse-no-seat!
   "One refusal for 'this client holds no side, so there is no turn of ours to
@@ -398,7 +399,9 @@
       (do
         (println "❌ ERROR: Previous turn still resolving post-discard phase")
         (println "   A card requires both players to pass priority before the turn truly ends")
-        (println "   Use 'wait' until the post-discard pause clears")
+        ;; This window has no timer: 'wait' alone never clears it (see
+        ;; game.ai-phase-windows-test). Name the command that does.
+        (println "   Use 'end-post-discard' to pass — then 'wait' if the opponent still has to")
         (core/with-cursor {:status :error :reason :post-discard-pending}))
 
       ;; ERROR: Bug #11 fix - Runner trying to start first turn (Corp always goes first)
@@ -457,6 +460,11 @@
                 (when (> after-hand before-hand)
                   (println (str "🃏 Drew: " card-title))
                   (core/show-card-on-first-sight! card-title))))
+            (when-let [w (open-phase-window :phase-12)]
+              (when (= (:owner w) my-side)
+                (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
+                (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
+                (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
             (core/with-cursor {:status :success}))))
 
       ;; ERROR: Already have clicks (turn already started)
@@ -511,7 +519,138 @@
                 (when (> after-hand before-hand)
                   (println (str "🃏 Drew: " card-title))
                   (core/show-card-on-first-sight! card-title))))
+            (when-let [w (open-phase-window :phase-12)]
+              (when (= (:owner w) my-side)
+                (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
+                (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
+                (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
             (core/with-cursor {:status :success})))))))))
+
+;; ============================================================================
+;; Phase windows (start-of-turn 1.2, and the forced post-discard pause)
+;; ============================================================================
+;;
+;; The engine opens both windows on every turn boundary and, when no card is
+;; holding one, closes it again in the same breath (turns.clj:136, :262) — which
+;; is why tutorial-deck games never saw one. When a card DOES hold it open there
+;; is no timer and no implicit exit: an explicit command is the only way out. The
+;; reference client puts a button on each (`board.cljs/basic-actions`); we had
+;; none, so a seat that hit one waited forever. Pinned in
+;; game.ai-phase-windows-test.
+;;
+;; Which command to send is not a free choice — it mirrors the button:
+;;   active player, no consent needed -> the plain "end" command
+;;   consent needed (either seat)     -> the "pass-priority" command, and the
+;;                                       window closes only once BOTH have passed.
+
+(def ^:private phase-windows
+  {:phase-12
+   {:name "start-of-turn (phase 1.2)"
+    :zone-keys {:corp :corp-phase-12 :runner :runner-phase-12}
+    :end-command "end-phase-12"
+    :pass-command "phase-12-pass-priority"
+    :what-it-unblocks {:corp "the mandatory draw and every start-of-turn trigger"
+                       :runner "the Runner's first click and every start-of-turn trigger"}}
+   :post-discard
+   {:name "end-of-turn (post-discard)"
+    :zone-keys {:corp :corp-post-discard :runner :runner-post-discard}
+    :end-command "end-post-discard"
+    :pass-command "post-discard-pass-priority"
+    :what-it-unblocks {:corp "the end of the Corp's turn"
+                       :runner "the end of the Runner's turn"}}})
+
+(defn open-phase-window
+  "The open window of the given kind (:phase-12 / :post-discard), or nil.
+
+   Returns {:owner :corp|:runner  ; whose phase it is — the active player
+            :window {...}          ; the raw state map
+            :requires-consent? bool
+            :i-passed? bool}"
+  [kind]
+  (let [{:keys [zone-keys]} (get phase-windows kind)
+        gs (get-in @state/client-state [:game-state])
+        my-side (state/my-side-kw)]
+    (some (fn [[owner k]]
+            (let [w (get gs k)]
+              (when (:active w)
+                {:owner owner
+                 :window w
+                 :requires-consent? (boolean (:requires-consent w))
+                 :i-passed? (boolean (get w my-side))})))
+          zone-keys)))
+
+(defn- close-phase-window!
+  "Send the command that closes an open phase window, mirroring board.cljs."
+  [kind]
+  (let [{:keys [name end-command pass-command what-it-unblocks]} (get phase-windows kind)
+        my-side (state/my-side-kw)
+        ;; `name` is destructured above as the window's display String, so the
+        ;; core fn must be qualified here (as it is at the not-my-window arm).
+        opponent (some-> my-side clojure.core/name core/other-side)
+        gameid (:gameid @state/client-state)
+        {:keys [owner requires-consent? i-passed?] :as open} (open-phase-window kind)]
+    (cond
+      (nil? open)
+      (do
+        (println (format "❌ ERROR: No %s window is open" name))
+        (println "   Nothing to close — check 'status' for what is actually blocking you")
+        (core/with-cursor {:status :error :reason :no-window-open}))
+
+      i-passed?
+      (do
+        (println (format "⏳ You have already passed the %s window" name))
+        (println (format "   Waiting on %s to pass too — use 'wait'" opponent))
+        (core/with-cursor {:status :waiting-input :reason :already-passed}))
+
+      ;; The opponent's window, with no consent required, is not ours to close.
+      (and (not= owner my-side) (not requires-consent?))
+      (do
+        (println (format "❌ ERROR: This %s window belongs to %s alone" name (clojure.core/name owner)))
+        (println "   No card is forcing a shared window, so only they can close it — use 'wait'")
+        (core/with-cursor {:status :error :reason :not-my-window}))
+
+      :else
+      (let [command (if requires-consent? pass-command end-command)
+            sent? (ws/send-message! :game/action
+                                    {:gameid gameid :command command :args nil})]
+        (if-not sent?
+          (do
+            (println "❌ ERROR: Failed to send (server unreachable?)")
+            (core/with-cursor {:status :error :reason :send-failed}))
+          (do
+            (Thread/sleep core/standard-delay)
+            (let [still-open (open-phase-window kind)]
+              (cond
+                (nil? still-open)
+                (do
+                  (println (format "✅ Closed the %s window — this releases %s"
+                                   name (get what-it-unblocks owner)))
+                  (core/with-cursor {:status :success}))
+
+                (:requires-consent? still-open)
+                (do
+                  (println (format "✅ Passed on the %s window" name))
+                  (println (format "   It stays open until %s passes as well — use 'wait'" opponent))
+                  (core/with-cursor {:status :waiting-input :reason :awaiting-opponent-pass}))
+
+                :else
+                (do
+                  (println (format "⚠️  Sent '%s' but the %s window is still open" command name))
+                  (println "   Check 'status'; this should not happen")
+                  (core/with-cursor {:status :error :reason :window-still-open}))))))))))
+
+(defn end-phase-12!
+  "Close the start-of-turn (phase 1.2) window.
+
+   Until this is sent, the active player's mandatory draw and ALL start-of-turn
+   triggers have not happened, however many clicks have been spent."
+  []
+  (close-phase-window! :phase-12))
+
+(defn end-post-discard!
+  "Close the forced end-of-turn (post-discard) window, so the turn can actually end."
+  []
+  (close-phase-window! :post-discard))
 
 (defn indicate-action!
   "Signal you want to use a paid ability (pauses game for priority window)"
