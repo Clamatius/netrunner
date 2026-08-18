@@ -590,6 +590,14 @@
         gameid (:gameid @state/client-state)
         {:keys [owner requires-consent? i-passed?] :as open} (open-phase-window kind)]
     (cond
+      ;; No seat, no turn of ours to act on. This must come FIRST: with my-side
+      ;; nil the two guards below both fall through on a consent-required window
+      ;; (i-passed? reads (get w nil) => false, and the not-my-window arm is
+      ;; disabled by the consent flag), so the seat would send a pass-priority
+      ;; the server discards for a spectator and then report "✅ Passed".
+      (nil? my-side)
+      (refuse-no-seat! (:end-command (get phase-windows kind)))
+
       (nil? open)
       (do
         (println (format "❌ ERROR: No %s window is open" name))
