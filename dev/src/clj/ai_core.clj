@@ -1089,7 +1089,9 @@
    Unlike find-card-by-cid, this does NOT require :title. At a multi-card remote
    breach the engine lists FACE-DOWN Corp cards as selectable; in the Runner's
    view those cards are legitimately title-less yet are real, pickable cards —
-   they carry :cid/:zone/:side/:type, which is all select-card! needs. A
+   they carry the fields create-card-ref narrows to, which is all select-card!
+   needs (the explicit list used to be spelled out here and went stale when
+   :host was added — that drift is the #113 bug in miniature). A
    title-less match must carry :zone AND :side — both present on a real board
    card and among the fields select-card! consumes — so non-card maps that merely
    carry a :cid (effects-registry entries, log refs) are still skipped. When
