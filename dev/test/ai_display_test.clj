@@ -42,6 +42,69 @@
       (is (str/includes? line "Remotes 2 unrezzed / 1 advanced"))
       (is (str/includes? line "~3 agenda cards likely drawn")))))
 
+;; ============================================================================
+;; remote-threat-counts — the servers map is KEYWORD-keyed on the wire (#137)
+;; ============================================================================
+;; The counts above were only ever tested as hand-fed integers, so the step that
+;; DERIVES them from :servers had no fixture — and that step filtered on
+;; `(string? (key %))` while the wire sends `:remote1`. Both numbers were
+;; therefore hardcoded zero for the whole life of every game. These fixtures
+;; carry the keyword keys the wire actually sends.
+
+(def ^:private unrezzed-advanced-remote
+  {:remote1 {:content [{:cid "a" :advance-counter 1}]}})
+
+(deftest remote-threat-counts-reads-keyword-keyed-servers
+  (testing "#137: a keyword-keyed remote holding an unrezzed advanced card is counted"
+    (is (= {:unrezzed 1 :advanced 1}
+           (display/remote-threat-counts unrezzed-advanced-remote))
+        "the wire sends :remote1, not \"remote1\" — filtering on string? counted nothing"))
+  (testing "string keys still work — the wire shape is the volatile coupling"
+    (is (= {:unrezzed 1 :advanced 1}
+           (display/remote-threat-counts {"remote1" {:content [{:cid "a" :advance-counter 1}]}}))))
+  (testing "centrals are never remotes, however they are keyed"
+    (is (= {:unrezzed 0 :advanced 0}
+           (display/remote-threat-counts
+            {:hq {:content [{:cid "a"}]}
+             :rd {:content [{:cid "b" :advance-counter 2}]}
+             :archives {:content [{:cid "c"}]}}))
+        "an upgrade in a central must not inflate the remote threat count"))
+  (testing "a rezzed remote card is visible, not a threat — it is not an unadvanced agenda"
+    (is (= {:unrezzed 0 :advanced 0}
+           (display/remote-threat-counts
+            {:remote1 {:content [{:cid "a" :rezzed true :advance-counter 3}]}}))))
+  (testing "unrezzed but unadvanced counts as unrezzed only"
+    (is (= {:unrezzed 1 :advanced 0}
+           (display/remote-threat-counts {:remote1 {:content [{:cid "a"}]}}))))
+  (testing "counts are SERVERS, not cards — matching the line's own wording"
+    (is (= {:unrezzed 2 :advanced 1}
+           (display/remote-threat-counts
+            {:remote1 {:content [{:cid "a" :advance-counter 1} {:cid "b"}]}
+             :remote2 {:content [{:cid "c"}]}}))
+        "remote1 holds two unrezzed cards but is one server"))
+  (testing "an empty or absent servers map is zero, not a throw"
+    (is (= {:unrezzed 0 :advanced 0} (display/remote-threat-counts {})))
+    (is (= {:unrezzed 0 :advanced 0} (display/remote-threat-counts nil)))))
+
+(deftest show-status-reports-real-remote-threat
+  ;; #137: `status` said "Remotes 0 unrezzed / 0 advanced" in the same snapshot
+  ;; where `board` printed "REMOTE1 ... Unrezzed card [1adv]". board was right.
+  (testing "the runner threat line reflects a visibly advanced remote"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "corp" :turn 1
+                                   :corp {:click 1 :credit 4 :hand [] :hand-count 5
+                                          :deck-count 38 :discard [] :agenda-point 0
+                                          :servers unrezzed-advanced-remote
+                                          :user {:username "ai-corp"}}
+                                   :runner {:click 0 :credit 5 :hand [] :hand-count 5
+                                            :agenda-point 0 :rig {}
+                                            :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/show-status))]
+        (is (str/includes? out "Remotes 1 unrezzed / 1 advanced")
+            "the one actionable pair of numbers on the line must not be a constant zero")
+        (is (not (str/includes? out "Remotes 0 unrezzed / 0 advanced")))))))
+
 (deftest show-status-turn-zero-skips-agenda-threat-noise
   ;; #104: at turn 0 every input to the threat estimate is zero, so the line
   ;; rendered as 'Unaccounted: 18 agenda pts' over an empty board.

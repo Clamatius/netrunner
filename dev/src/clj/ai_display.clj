@@ -41,6 +41,34 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn remote-threat-counts
+  "Pure: the Runner-visible remote-server threat counts, from the Corp's
+   :servers map. Returns {:unrezzed n :advanced n}, both counting SERVERS (not
+   cards) — matching the wording of the line that prints them.
+
+     :unrezzed - remotes holding at least one unrezzed card
+     :advanced - remotes holding at least one unrezzed card with advancements
+
+   Keys are matched by NAME, so both the keyword form the wire actually sends
+   (:remote1) and the string form fixtures sometimes use (\"remote1\") work.
+   This used to filter on `(string? (key %))` against a keyword-keyed map, so
+   both counts were hardcoded zero for the whole life of every game — `status`
+   read `Remotes 0 unrezzed / 0 advanced` in the same snapshot where `board`
+   showed an advanced card sitting in a remote (#137). These two numbers are
+   the only actionable ones on that line: an unrezzed, advanced remote is the
+   scoring-remote tell, so a false zero steers the seat off the one server it
+   should be pressuring."
+  [servers]
+  (let [remote? (fn [k] (and (or (keyword? k) (string? k))
+                             (boolean (re-matches #"remote\d+" (name k)))))
+        remotes (filter #(remote? (key %)) servers)
+        unrezzed-cards (fn [[_ server]] (remove :rezzed (:content server)))]
+    {:unrezzed (count (filter #(seq (unrezzed-cards %)) remotes))
+     :advanced (count (filter (fn [entry]
+                                (some #(pos? (get % :advance-counter 0))
+                                      (unrezzed-cards entry)))
+                              remotes))}))
+
 (defn format-runner-agenda-line
   "Runner's-eye agenda threat line, with units made explicit.
 
@@ -315,21 +343,8 @@
                                   (/ (float total-agendas) initial-deck-size)
                                   0)
                   expected-drawn (int (* cards-drawn agenda-density))
-                  servers (get-in gs [:corp :servers] {})
-                  remotes (filter #(and (string? (key %))
-                                      (re-matches #"remote\d+" (key %)))
-                                servers)
-                  unrezzed-remotes (filter (fn [[_ server]]
-                                            (let [content (get-in server [:content])]
-                                              (some #(not (:rezzed %)) content)))
-                                          remotes)
-                  unrezzed-count (count unrezzed-remotes)
-                  advanced-count (count (filter (fn [[_ server]]
-                                                 (let [content (get-in server [:content])]
-                                                   (some #(and (not (:rezzed %))
-                                                              (pos? (get-in % [:advance-counter] 0)))
-                                                        content)))
-                                               remotes))]
+                  {unrezzed-count :unrezzed advanced-count :advanced}
+                  (remote-threat-counts (get-in gs [:corp :servers] {}))]
               ;; The threat line is derived entirely from deck/hand counts; at
               ;; turn 0 those are all zero and it renders as pure noise
               ;; ('Unaccounted: 18 agenda pts' over an empty board — #104).
