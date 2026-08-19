@@ -1016,8 +1016,18 @@
        before any confirmation, so :spectator alone can mean a watch that was
        rejected or has not landed yet. Require the board before promising one."
   [state what]
-  (let [board? (boolean (:game-state state))
-        seated? (boolean (:gameid state))]
+  ;; `map?`, not truthiness (guest-panel CRITICAL): `apply-diff` returns the RAW
+  ;; diff when :last-state is nil, so a :game/diff landing between
+  ;; `clear-game-state!` and the replacement full state leaves :game-state
+  ;; holding an `[alterations removals]` VECTOR. That is truthy and is not a
+  ;; board — reading it yields the same `Credits: nil` this guard exists to stop.
+  (let [board? (map? (:game-state state))
+        seated? (boolean (:gameid state))
+        ;; Mirrors `boardless-started-game?`: :lobby-state is dissoc'd once a full
+        ;; game state arrives, so a started game has none; an unstarted lobby
+        ;; still carries its own with :started false.
+        lobby (:lobby-state state)
+        started? (or (nil? lobby) (boolean (:started lobby)))]
     (cond
       (and (:spectator state) board?)
       (do
@@ -1044,6 +1054,18 @@
       ;; empty table. It must come BEFORE the :else arm, which tells a client that
       ;; is still holding a :gameid it "never joined" and sends it to reset.sh —
       ;; destroying a game a retry might have recovered.
+      ;; Seated in a lobby that has not STARTED. Boardless here is correct and
+      ;; healthy — `sync-verdict!` deliberately calls it :synced so reset.sh's
+      ;; create → join → start path is not gated. Telling this seat its cache was
+      ;; cleared would send it resyncing away from a perfectly good lobby
+      ;; (guest-panel CRITICAL).
+      (and seated? (not board?) (not started?))
+      (do
+        (println (format "⏳ Seated, but the game has NOT STARTED yet — %s does not exist." what))
+        (println "   Both players need a deck, then the game must be started.")
+        (println "   → 'status' shows what the lobby is still waiting on.")
+        nil)
+
       (and seated? (not board?))
       (do
         (println (format "⚠️  Seated, but this client holds NO BOARD — %s is unknown, not empty." what))
@@ -1074,7 +1096,7 @@
         side (:side state)]
     ;; #139: a side is not enough — the board is the thing being read. A seat
     ;; whose cache was cleared has a side and nothing to show it for.
-    (if-not (and side (:game-state state))
+    (if-not (and side (map? (:game-state state)))
       ;; Was its own bespoke "No game state - not in a game yet". That is the
       ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
       ;; a spectator hits it with a full board — so it shares the one explainer.
@@ -1101,7 +1123,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not (and side-kw (:game-state state))
+    (if-not (and side-kw (map? (:game-state state)))
       (no-side-here! state "the credit pool")
       (let [credits (get-in state [:game-state side-kw :credit])]
         (println "💰 Credits:" credits)
@@ -1112,7 +1134,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not (and side-kw (:game-state state))
+    (if-not (and side-kw (map? (:game-state state)))
       (no-side-here! state "the click count")
       (let [clicks (get-in state [:game-state side-kw :click])]
         (println "⏱️  Clicks:" clicks)
@@ -2361,7 +2383,7 @@
    Useful for AI decision-making - shows exactly what can be done right now"
   []
   (let [state @state/client-state]
-    (if-let [side (and (:game-state state) (state/my-side-kw state))]
+    (if-let [side (and (map? (:game-state state)) (state/my-side-kw state))]
       (list-playables-for-side state side)
       (no-side-here! state "the playable-action list"))))
 

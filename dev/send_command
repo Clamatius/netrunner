@@ -633,6 +633,24 @@ DISPLAY_EXPR_PREFIXES='(ai-actions/show- (ai-actions/list- (ai-actions/hand (ai-
 is_display_expr() {
     # Strip leading whitespace so an indented expression still matches.
     local e="${1#"${1%%[![:space:]]*}"}"
+    # Peel leading `(do ...)` wrappers before deciding. Guest-panel CRITICAL:
+    # leaving `(do (ai-actions/status))` unwrapped does not merely add noise —
+    # `ai-actions/status` RETURNS @client-state, and the unwrapped path prints
+    # the return value, so that eval printed the session-token and csrf-token
+    # straight into the seat's context. Bounded loop: each pass must consume
+    # characters, so it cannot spin.
+    local rest
+    while [[ "$e" == "("* ]]; do
+        rest="${e#(}"
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        case "$rest" in
+            do[[:space:]]*)
+                e="${rest#do}"
+                e="${e#"${e%%[![:space:]]*}"}"
+                ;;
+            *) break ;;
+        esac
+    done
     local prefix
     for prefix in $DISPLAY_EXPR_PREFIXES; do
         [[ "$e" == "$prefix"* ]] && return 0

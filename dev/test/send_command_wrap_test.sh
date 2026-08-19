@@ -93,8 +93,36 @@ assert_bare "try-catch-around"  '(try (ai-actions/show-credits) (catch Throwable
 assert_bare "first-line-of"     '(first (clojure.string/split-lines (with-out-str (ai-actions/list-playables))))'
 assert_bare "resolve-the-var"   '(pr-str (resolve (symbol "ai-actions" "list-playables")))'
 assert_bare "do-block"          '(do (println "x") (ai-actions/show-board))'
+
+echo "--- a (do ...) around a bare display call is still a display command ---"
+# Guest-panel CRITICAL: leaving these bare does not merely add noise. `status`
+# RETURNS @client-state, and the unwrapped path prints the return value — so
+# `eval '(do (ai-actions/status))'` printed the session-token and csrf-token
+# into the seat's context. Unwrap leading (do ...) before deciding.
+assert_wraps "do-status"        '(do (ai-actions/status))'
+assert_wraps "do-show-hand"     '(do (ai-actions/show-hand))'
+assert_wraps "do-do-status"     '(do (do (ai-actions/status)))'
+assert_wraps "do-newline"       '(do
+  (ai-actions/status))'
 assert_bare "plain-state-read"  '(get-in @ai-state/client-state [:game-state :run])'
 assert_bare "other-namespace"   '(ai-display/show-credits)'
+
+echo "--- execute() must actually USE the predicate ---"
+# Guest-panel MINOR: everything above tests the helper in isolation. If execute()
+# reverted to the substring test while the (now unused) helper stayed correct,
+# every assertion above would still pass. Pin the wiring itself.
+if grep -qE '^[[:space:]]*if is_display_expr "\$expr"; then' "$SEND_CMD"; then
+    echo "ok   [execute-calls-predicate] wired"
+else
+    echo "FAIL [execute-calls-predicate]: execute() does not gate on is_display_expr"
+    fails=$((fails+1))
+fi
+if grep -qE '\$expr" == \*"\(ai-actions/' "$SEND_CMD"; then
+    echo "FAIL [no-substring-test]: the old substring wrap test is back in execute()"
+    fails=$((fails+1))
+else
+    echo "ok   [no-substring-test] substring predicate is gone"
+fi
 
 echo
 if [[ $fails -eq 0 ]]; then

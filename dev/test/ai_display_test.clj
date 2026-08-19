@@ -2138,6 +2138,46 @@
           (is (not (str/blank? out))
               (str label " said nothing at all — indistinguishable from an empty hand")))))))
 
+(def ^:private unstarted-lobby-state
+  "Guest-panel CRITICAL: a lobby that has not STARTED has no board by
+   definition, and that is healthy — `sync-verdict!` deliberately calls it
+   :synced so reset.sh's create → join → start path is not gated
+   (ai_connection_test.clj: test-sync-verdict-unstarted-lobby-is-synced).
+   Seated + boardless is therefore NOT enough to mean 'a resync cleared the
+   cache'; the :started flag is the discriminator, exactly as
+   `boardless-started-game?` uses it."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil
+   :lobby-state {:gameid "abc" :started false}})
+
+(def ^:private diff-vector-board-state
+  "Guest-panel CRITICAL: `apply-diff` returns the RAW diff when :last-state is
+   nil, so a :game/diff that lands between `clear-game-state!` and the
+   replacement full state leaves :game-state holding a `[alterations removals]`
+   VECTOR. It is truthy but it is not a board, so a truthiness gate reopens and
+   the surfaces print `Credits: nil` again."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp"
+   :game-state [{:corp {:credit 5}} {}]})
+
+(deftest test-unstarted-lobby-is-not-called-a-failed-resync
+  (testing "a seat waiting in an unstarted lobby is not told its cache was cleared"
+    (with-mock-state unstarted-lobby-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i)resync cleared|cleared the cache" out))
+            (str "nothing was cleared — the game has not started, got:\n" out))
+        (is (re-find #"(?i)not started|hasn't started|has not started|waiting to start" out)
+            (str "must name the real state: the game has not begun, got:\n" out))
+        (is (not (re-find #"(?i)never joined" out))
+            (str "this client is seated in the lobby, got:\n" out))))))
+
+(deftest test-a-raw-diff-vector-is-not-a-board
+  (testing "a truthy-but-not-a-map :game-state must not be treated as a board"
+    (with-mock-state diff-vector-board-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i):\s*nil" out))
+            (str "the vector is not a board — must not read a nil out of it, got:\n" out))
+        (is (re-find #"(?i)no board" out)
+            (str "must report the board as missing, got:\n" out))))))
+
 (deftest test-boardless-seat-is-not-described-as-never-joined
   ;; The :else arm of no-side-here! says "Never joined, or the lobby was left".
   ;; That is false for a client still holding a :gameid — it joined, and the
