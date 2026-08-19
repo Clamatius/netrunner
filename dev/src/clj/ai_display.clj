@@ -1062,8 +1062,11 @@
       (and seated? (not board?) (not started?))
       (do
         (println (format "⏳ Seated, but the game has NOT STARTED yet — %s does not exist." what))
-        (println "   Both players need a deck, then the game must be started.")
-        (println "   → 'status' shows what the lobby is still waiting on.")
+        ;; Same words the acting side already uses for this state
+        ;; (ai-basic-actions/print-no-board-cause!) — one state, one story, and
+        ;; `start-game` is the verb the CLI actually parses.
+        (println "   You are seated in a lobby that has not begun.")
+        (println "   → 'status' shows what the lobby is waiting on; 'start-game' once both seats are ready.")
         nil)
 
       (and seated? (not board?))
