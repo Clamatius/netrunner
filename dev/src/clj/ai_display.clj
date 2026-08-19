@@ -1034,6 +1034,23 @@
         (println "   → 'list-lobbies' to confirm the game exists, then watch it again.")
         nil)
 
+      ;; #139: the complement of every branch above — the side may be perfectly
+      ;; well known, and the BOARD is what is gone. This is what a failed resync
+      ;; leaves behind (`resync-game!` clears the cache before requesting a
+      ;; replacement, and :gameid survives), the state `boardless-started-game?`
+      ;; classifies and `sync-verdict!` calls :resync-failed. The action commands
+      ;; are already refused here; the read surfaces used to read a nil board and
+      ;; print what they found — "Credits: nil", "Archives: 0 cards", a rendered
+      ;; empty table. It must come BEFORE the :else arm, which tells a client that
+      ;; is still holding a :gameid it "never joined" and sends it to reset.sh —
+      ;; destroying a game a retry might have recovered.
+      (and seated? (not board?))
+      (do
+        (println (format "⚠️  Seated, but this client holds NO BOARD — %s is unknown, not empty." what))
+        (println "   A resync cleared the cache and the replacement state has not arrived.")
+        (println "   → Retry the command; if it keeps failing: 'status', then 'resync'.")
+        nil)
+
       (and board? seated?)
       (do
         (println (format "⚠️  In a game, but no seat identified — %s needs a side." what))
@@ -1055,7 +1072,9 @@
   []
   (let [state @state/client-state
         side (:side state)]
-    (if-not side
+    ;; #139: a side is not enough — the board is the thing being read. A seat
+    ;; whose cache was cleared has a side and nothing to show it for.
+    (if-not (and side (:game-state state))
       ;; Was its own bespoke "No game state - not in a game yet". That is the
       ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
       ;; a spectator hits it with a full board — so it shares the one explainer.
@@ -1082,7 +1101,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not side-kw
+    (if-not (and side-kw (:game-state state))
       (no-side-here! state "the credit pool")
       (let [credits (get-in state [:game-state side-kw :credit])]
         (println "💰 Credits:" credits)
@@ -1093,7 +1112,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not side-kw
+    (if-not (and side-kw (:game-state state))
       (no-side-here! state "the click count")
       (let [clicks (get-in state [:game-state side-kw :click])]
         (println "⏱️  Clicks:" clicks)
@@ -2342,7 +2361,7 @@
    Useful for AI decision-making - shows exactly what can be done right now"
   []
   (let [state @state/client-state]
-    (if-let [side (state/my-side-kw state)]
+    (if-let [side (and (:game-state state) (state/my-side-kw state))]
       (list-playables-for-side state side)
       (no-side-here! state "the playable-action list"))))
 

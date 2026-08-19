@@ -2109,6 +2109,48 @@
           (is (re-find #"(?i)not in a game" out)
               (str label " must say plainly that there is no game, got:\n" out)))))))
 
+(def ^:private boardless-seat-state
+  "#139: the complement of the sideless fixtures — the side is KNOWN and the
+   BOARD is the thing that is gone. This is exactly what a failed resync leaves
+   behind (`resync-game!` clears the cache before requesting a replacement and
+   :gameid survives), the state `boardless-started-game?` classifies and
+   `sync-verdict!` calls :resync-failed. The action commands are already
+   refused in it; the read surfaces described an empty game instead."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil})
+
+(deftest test-boardless-seat-surfaces-do-not-invent-a-board
+  (testing "#139: a seat holding no board must not report one"
+    (doseq [[label f] [["show-credits"   display/show-credits]
+                       ["show-clicks"    display/show-clicks]
+                       ["show-hand"      display/show-hand]
+                       ["list-playables" display/list-playables]]]
+      (with-mock-state boardless-seat-state
+        (let [out (try (with-out-str (f))
+                       (catch Exception e
+                         (str "THREW " (.getName (class e)) ": " (.getMessage e))))]
+          (is (not (str/starts-with? out "THREW"))
+              (str label " must not throw on a boardless seat, got: " out))
+          (is (re-find #"(?i)no board|board.*(gone|cleared)" out)
+              (str label " must say the board is missing, got:\n" out))
+          ;; The specific lies observed live.
+          (is (not (re-find #"(?i):\s*nil" out))
+              (str label " printed a nil where a number belongs, got:\n" out))
+          (is (not (str/blank? out))
+              (str label " said nothing at all — indistinguishable from an empty hand")))))))
+
+(deftest test-boardless-seat-is-not-described-as-never-joined
+  ;; The :else arm of no-side-here! says "Never joined, or the lobby was left".
+  ;; That is false for a client still holding a :gameid — it joined, and the
+  ;; board is what went missing. Wrong diagnosis sends the seat to reset.sh,
+  ;; which destroys a game a retry might still have recovered.
+  (testing "#139: a seated client is not told it never joined"
+    (with-mock-state boardless-seat-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i)never joined" out))
+            (str "the client holds a :gameid, got:\n" out))
+        (is (re-find #"(?i)retry|resync|status" out)
+            (str "must name a recovery that fits a transient empty board, got:\n" out))))))
+
 (deftest test-sideless-surfaces-agree-with-show-hand
   (testing "#125: show-hand was already guarded — the other surfaces must not
             invent a different story about the same state"
