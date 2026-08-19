@@ -1048,10 +1048,16 @@
       ;; well known, and the BOARD is what is gone. This is what a failed resync
       ;; leaves behind (`resync-game!` clears the cache before requesting a
       ;; replacement, and :gameid survives), the state `boardless-started-game?`
-      ;; classifies and `sync-verdict!` calls :resync-failed. The action commands
-      ;; are already refused here; the read surfaces used to read a nil board and
+      ;; classifies and `sync-verdict!` calls :resync-failed. The read surfaces
+      ;; used to read a nil board and
       ;; print what they found — "Credits: nil", "Archives: 0 cards", a rendered
-      ;; empty table. It must come BEFORE the :else arm, which tells a client that
+      ;; empty table. For the nil case the action commands are already refused; for
+      ;; the raw-diff-VECTOR case they are NOT — `has-game-state?` and the
+      ;; start-turn guards test `some?`/`nil?`, so that state reads as synced to
+      ;; them (second-pass panel CRITICAL, filed separately). This guard is
+      ;; therefore the only thing standing between that state and a confident
+      ;; answer, not a second line of defence.
+      ;; It must come BEFORE the :else arm, which tells a client that
       ;; is still holding a :gameid it "never joined" and sends it to reset.sh —
       ;; destroying a game a retry might have recovered.
       ;; Seated in a lobby that has not STARTED. Boardless here is correct and

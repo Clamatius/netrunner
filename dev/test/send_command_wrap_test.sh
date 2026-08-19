@@ -94,16 +94,19 @@ assert_bare "first-line-of"     '(first (clojure.string/split-lines (with-out-st
 assert_bare "resolve-the-var"   '(pr-str (resolve (symbol "ai-actions" "list-playables")))'
 assert_bare "do-block"          '(do (println "x") (ai-actions/show-board))'
 
-echo "--- a (do ...) around a bare display call is still a display command ---"
-# Guest-panel CRITICAL: leaving these bare does not merely add noise. `status`
-# RETURNS @client-state, and the unwrapped path prints the return value — so
-# `eval '(do (ai-actions/status))'` printed the session-token and csrf-token
-# into the seat's context. Unwrap leading (do ...) before deciding.
-assert_wraps "do-status"        '(do (ai-actions/status))'
-assert_wraps "do-show-hand"     '(do (ai-actions/show-hand))'
-assert_wraps "do-do-status"     '(do (do (ai-actions/status)))'
-assert_wraps "do-newline"       '(do
-  (ai-actions/status))'
+# NOTE on `(do ...)`: an earlier fix tried to PEEL leading `(do ...)` so that
+# `eval '(do (ai-actions/status))'` would be wrapped, because `status` returns
+# @client-state and the unwrapped path printed the session-token. A second review
+# pass showed that rule is unwinnable in bash: `(do a b)` returns its LAST form,
+# not its first, so `(do (println "x") (ai-actions/status))` still leaked; and
+# `(do,(f))` and `(do ; comment` both parse as ordinary `do` and evaded the
+# match. Worse, peeling wrapped `(do (ai-actions/status) 42)` and swallowed the
+# 42. The leak is now closed where it cannot be evaded — `redact_secrets` on the
+# OUTPUT — so the predicate goes back to the one rule it can actually enforce:
+# an expression IS a display call, or it is not.
+assert_bare "do-status"         '(do (ai-actions/status))'
+assert_bare "do-multi-form"     '(do (println "checking") (ai-actions/status))'
+
 assert_bare "plain-state-read"  '(get-in @ai-state/client-state [:game-state :run])'
 assert_bare "other-namespace"   '(ai-display/show-credits)'
 
@@ -122,6 +125,34 @@ if grep -qE '\$expr" == \*"\(ai-actions/' "$SEND_CMD"; then
     fails=$((fails+1))
 else
     echo "ok   [no-substring-test] substring predicate is gone"
+fi
+
+echo "--- credentials never reach the seat, whatever the expression ---"
+# The rule the predicate cannot enforce, enforced where it can be: on the bytes.
+REDACT_BODY=$(sed -n '/^redact_secrets() {$/,/^}$/p' "$SEND_CMD")
+if [[ -z "$REDACT_BODY" ]]; then
+    echo "FAIL: could not extract redact_secrets() from $SEND_CMD"; fails=$((fails+1))
+else
+    eval "$REDACT_BODY"
+    assert_redacted() {
+        local name="$1" input="$2" out
+        out=$(printf '%s\n' "$input" | redact_secrets)
+        if [[ "$out" == *"SUPERSECRET"* ]]; then
+            echo "FAIL [$name]: credential survived: $out"; fails=$((fails+1))
+        else
+            echo "ok   [$name] redacted"
+        fi
+    }
+    assert_redacted "edn-session-token" '{:uid "ai-corp", :session-token "SUPERSECRET.jwt.value", :side "corp"}'
+    assert_redacted "edn-csrf-token"    '{:csrf-token "SUPERSECRET+slashes/and+plus=", :connected true}'
+    assert_redacted "both-on-one-line"  '{:session-token "SUPERSECRET1", :csrf-token "SUPERSECRET2"}'
+    # And it must not eat ordinary game output.
+    keep=$(printf '%s\n' '💰 Credits: 5' | redact_secrets)
+    if [[ "$keep" == '💰 Credits: 5' ]]; then
+        echo "ok   [ordinary-output-untouched] preserved"
+    else
+        echo "FAIL [ordinary-output-untouched]: got '$keep'"; fails=$((fails+1))
+    fi
 fi
 
 echo

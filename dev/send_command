@@ -608,6 +608,24 @@ ${GREEN}Replay Recording:${NC}
 EOF
 }
 
+# Strip credentials out of anything we are about to show the seat.
+#
+# The seat's stdout IS an LLM's context, and in a cross-model marquee that context
+# goes to an external provider. @client-state carries :session-token and
+# :csrf-token next to the game data, and several routes print the whole map:
+# `eval '@ai-state/client-state'`, `inspect-state`, and any eval whose value is
+# `ai-actions/status` — which RETURNS @client-state after printing (#140).
+#
+# This is deliberately a filter on the OUTPUT rather than a smarter guess about
+# which expressions return secrets. A second review pass broke three separate
+# attempts to classify Clojure expressions in bash (`(do a b)` returns its LAST
+# form, `(do,(f))` and `(do ; comment` both parse fine and both evaded the
+# match). Classifying the expression is unwinnable; redacting the bytes is not,
+# and it covers shapes nobody has thought of yet.
+redact_secrets() {
+    sed -E 's/(:?(session-token|csrf-token)"?[[:space:]]+)"[^"]*"/\1"«redacted»"/g'
+}
+
 # Expression prefixes that mark a DISPLAY command — one whose useful output is
 # printed to stdout rather than returned, so `execute` has to capture it with
 # (with-out-str ...). Kept on ONE line and extracted verbatim by
@@ -633,24 +651,6 @@ DISPLAY_EXPR_PREFIXES='(ai-actions/show- (ai-actions/list- (ai-actions/hand (ai-
 is_display_expr() {
     # Strip leading whitespace so an indented expression still matches.
     local e="${1#"${1%%[![:space:]]*}"}"
-    # Peel leading `(do ...)` wrappers before deciding. Guest-panel CRITICAL:
-    # leaving `(do (ai-actions/status))` unwrapped does not merely add noise —
-    # `ai-actions/status` RETURNS @client-state, and the unwrapped path prints
-    # the return value, so that eval printed the session-token and csrf-token
-    # straight into the seat's context. Bounded loop: each pass must consume
-    # characters, so it cannot spin.
-    local rest
-    while [[ "$e" == "("* ]]; do
-        rest="${e#(}"
-        rest="${rest#"${rest%%[![:space:]]*}"}"
-        case "$rest" in
-            do[[:space:]]*)
-                e="${rest#do}"
-                e="${e#"${e%%[![:space:]]*}"}"
-                ;;
-            *) break ;;
-        esac
-    done
     local prefix
     for prefix in $DISPLAY_EXPR_PREFIXES; do
         [[ "$e" == "$prefix"* ]] && return 0
@@ -704,9 +704,9 @@ execute() {
             # what a seat must actually type.
             UNQUOTED="${RESULT:1:$LEN}"
             UNQUOTED="${UNQUOTED//\\\"/\"}"
-            echo -e "$UNQUOTED"
+            echo -e "$UNQUOTED" | redact_secrets
         else
-            echo "$RESULT"
+            echo "$RESULT" | redact_secrets
         fi
     else
         # Suppress all status map noise - we print human-readable messages instead.
@@ -722,7 +722,7 @@ execute() {
         # REPL's machine map. Caveat: `eval` of a raw single-line map that carries
         # a :status key is also suppressed here — an accepted tradeoff for the dev
         # escape hatch (use a wrapping form if you must see such a map verbatim).
-        echo "$RESULT" | grep -vE '^\{.*:status[ ,}]' | grep -v '^nil$' || true
+        echo "$RESULT" | grep -vE '^\{.*:status[ ,}]' | grep -v '^nil$' | redact_secrets || true
     fi
 
     return $RET
