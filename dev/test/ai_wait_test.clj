@@ -852,8 +852,11 @@
 (deftest test-relevance-reason-does-not-wake-on-a-diff-vector
   (testing "#142: a raw diff in :game-state is not 'your move'"
     (let [relevance @#'core/relevance-reason]
-      (is (not= :my-turn-start
-                (relevance (mock-game "corp" [{:corp {:credit 6}} {}]) "corp" false))
+      ;; `nil?`, not `not= :my-turn-start`: the contract is "does not wake AT
+       ;; ALL". A regression that returned :my-turn or :has-prompt instead would
+       ;; still spin the seat, and the looser assertion would stay green
+       ;; (2nd-pass guest review).
+      (is (nil? (relevance (mock-game "corp" [{:corp {:credit 6}} {}]) "corp" false))
           "THE spin: the vector's default answers ARE the Corp opening-turn shape")))
 
   (testing "the real post-mulligan board still wakes the Corp"

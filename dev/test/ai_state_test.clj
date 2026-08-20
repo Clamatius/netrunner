@@ -702,6 +702,39 @@
         (is (= board (:game-state @state/client-state))
             "an unappliable diff is no reason to throw away the board we hold"))))
 
+  (testing "#142: a LIVE baseline that fails to patch means we have DIVERGED"
+    ;; 2nd-pass guest review, MAJOR. The first cut treated both no-apply cases
+    ;; the same, so a diff that threw (or patched to a non-map) against a real
+    ;; board left that board in place, still a map, still accepted by every
+    ;; `board?` gate — and the NEXT diff patched a baseline the server no longer
+    ;; agrees with. "No baseline" is self-correcting (a resync is already in
+    ;; flight); "diverged" is not, and has to raise the staleness flag itself.
+    (let [board {:corp {:credit 5 :click 3}}]
+      (testing "patch yields a non-board"
+        (with-mock-state (assoc (mock-client-state :side "corp")
+                                :game-state board :last-state board)
+          (with-redefs [state/apply-diff (fn [_ _] "not a board")]
+            (is (false? (with-out-str-value #(state/update-game-state! sample-diff)))))
+          (is (true? (:diff-mismatch @state/client-state))
+              "THE bug: nothing flagged, so sync-verdict! saw no reason to resync")
+          (is (= board (:game-state @state/client-state))
+              "and the board we hold is not thrown away in the process")))
+
+      (testing "patch throws"
+        (with-mock-state (assoc (mock-client-state :side "corp")
+                                :game-state board :last-state board)
+          (with-redefs [state/apply-diff (fn [_ _] (throw (ex-info "malformed diff" {})))]
+            (is (false? (with-out-str-value #(state/update-game-state! sample-diff)))))
+          (is (true? (:diff-mismatch @state/client-state))
+              "the catch arm needs the same verdict — it is the same divergence")))
+
+      (testing "but NO baseline must not be flagged as divergence"
+        (with-mock-state (assoc (mock-client-state :side "corp")
+                                :game-state nil :last-state nil)
+          (with-out-str (state/update-game-state! sample-diff))
+          (is (nil? (:diff-mismatch @state/client-state))
+              "a resync is already in flight; flagging it says something untrue")))))
+
   (testing "#142: it REPORTS whether it applied — the handler branches on this"
     (with-mock-state (assoc (mock-client-state :side "corp")
                             :game-state nil :last-state nil)

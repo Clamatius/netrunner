@@ -84,6 +84,28 @@
     ;; like hand: [0 {:playable true} 1 {:playable true} ...]
     (differ/patch old-state diff)))
 
+(defn- unappliable!
+  "A diff did not apply. Say which of the two situations that is, and return
+   false either way so the caller skips its success bookkeeping.
+
+   The distinction matters and the first cut of #142 missed it (2nd-pass guest
+   review, MAJOR). With no baseline, a resync is ALREADY in flight and the
+   replacement state is on its way — nothing to flag. But with a live baseline,
+   a diff that throws or patches to a non-map means our board has DIVERGED from
+   the server's: the cache is still a map, so every `board?` gate keeps
+   accepting it, and the next diff patches a baseline the server no longer
+   agrees with. That is what :diff-mismatch is for — `sync-verdict!` reads it
+   via `stale?` and resyncs before the next command is allowed to act."
+  [old-state]
+  (if (board? old-state)
+    (do
+      (println "⚠️  Diff did not apply to a LIVE board — our state has diverged.")
+      (println "   Marking stale; the next command will resync before acting.")
+      (swap! client-state assoc :diff-mismatch true))
+    (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
+             "(the cache was cleared; waiting for the full state resync)"))
+  false)
+
 (defn update-game-state!
   "Update game state from a diff - matches web client implementation.
 
@@ -93,9 +115,12 @@
    :last-diff-time, bumping the wait cursor, printing '✓ Diff applied
    successfully' — and none of it is true of a diff we could not apply."
   [diff]
-  (try
-    (let [old-state (:last-state @client-state)
-          ;; Log state BEFORE applying diff
+  ;; Read outside the try: the catch arm needs to know whether we HAD a baseline,
+  ;; which is what separates "a resync is already in flight" from "our board just
+  ;; diverged from the server's".
+  (let [old-state (:last-state @client-state)]
+   (try
+    (let [;; Log state BEFORE applying diff
           _ (println "\n📝 Applying diff to state")
           _ (println "   BEFORE - Runner credits:" (get-in old-state [:runner :credit]))
           _ (println "   BEFORE - Runner clicks:" (get-in old-state [:runner :click]))
@@ -123,10 +148,7 @@
         ;; that lands in this window stays boardless — correctly refusing rather
         ;; than acting blind — until the next CLI invocation resyncs it or its
         ;; stall backstop stops it.
-        (do
-          (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
-                   "(the cache was cleared; waiting for the full state resync)")
-          false)))
+        (unappliable! old-state)))
     (catch Exception e
       (println "❌ Error in update-game-state!:" (.getMessage e))
       (println "   Diff type:" (type diff))
@@ -134,7 +156,7 @@
       (.printStackTrace e)
       ;; A diff that threw was not applied either — say so, so the handler does
       ;; not run the success bookkeeping over a state it never changed.
-      false)))
+      (unappliable! old-state)))))
 
 (defn detect-side
   "Detect which side we are playing by matching UID to game state"
@@ -998,7 +1020,9 @@
 (defn stale?
   "Returns true if client appears to have stale state.
    Checks:
-   - diff-mismatch flag (set when we receive diffs for wrong game)
+   - diff-mismatch flag, set for EITHER of two divergences: a diff arriving for
+     a different gameid, or (#142) a diff for OUR game that would not apply to
+     the board we hold — both mean our cache no longer tracks the server's
    - gameid mismatch (have game-state but no gameid)
 
    Can be extended with additional sensors as needed."

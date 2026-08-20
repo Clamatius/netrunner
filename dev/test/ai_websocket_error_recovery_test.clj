@@ -150,8 +150,15 @@
 ;; around it did the success bookkeeping unconditionally: it retracted the
 ;; stale/lobby-gone verdicts, stamped :last-diff-time, bumped the wait cursor
 ;; and printed "✓ Diff applied successfully" — four claims about a state that
-;; did not change. The cursor bump is the one with teeth: a parked `wait` wakes
-;; for a no-op. (Guest review of the #142 fix; confirmed against source.)
+;; did not change. (Guest review of the #142 fix; confirmed against source.)
+;;
+;; The flag retractions are the ones that reach an action: :diff-mismatch and
+;; :lobby-gone? are exactly what `sync-verdict!` consults to decide whether a
+;; command may act, and an ignored diff is no evidence either has cleared.
+;; The cursor assertion below is bookkeeping hygiene, NOT a live wake bug — a
+;; second-pass review was right that a bare cursor bump no longer wakes a
+;; parked `wait` on its own (that was fixed separately); it is asserted because
+;; the counter is meant to count state changes, and this was not one.
 
 (deftest test-ignored-diff-does-not-bookkeep-as-applied
   (testing "#142: a diff with no baseline changes nothing, and must claim nothing"
@@ -166,7 +173,7 @@
                   (ws/handle-message {:type :game/diff
                                       :data {:gameid gameid :diff [{:corp {:credit 6}} {}]}}))]
         (is (= cursor-before (state/get-cursor))
-            "THE one with teeth: a parked `wait` must not wake for a diff that did nothing")
+            "the wait counter counts state changes; this was not one")
         (is (true? (:diff-mismatch @state/client-state))
             "an ignored diff is no evidence the staleness cleared")
         (is (true? (:lobby-gone? @state/client-state))

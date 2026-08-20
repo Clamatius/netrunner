@@ -167,10 +167,16 @@
           ;; the stale/lobby-gone verdicts on no evidence, and bumping the wait
           ;; cursor so a parked seat wakes for a no-op, are four separate lies
           ;; about a state that did not change. (Guest review, confirmed.)
+          ;; Recorded UNCONDITIONALLY, outside the branch: the replay recorder
+          ;; captures the SERVER's diff stream, which is continuous whatever our
+          ;; local cache managed to do with it. Dropping one because we could not
+          ;; apply it corrupts the recording — `:game/resync` writes no checkpoint
+          ;; (only `:game/start` calls record-initial-state!), so the next diff
+          ;; would replay against a predecessor that never existed. (2nd-pass
+          ;; guest review, MAJOR — and a regression this fix introduced.)
+          (state/record-diff! diff)
           (if (state/update-game-state! diff)
             (do
-              ;; Record diff for replay if recording enabled
-              (state/record-diff! diff)
               ;; Clear lobby-state once game has started (receiving diffs means game
               ;; is active — which also retracts any stale lobby-gone verdict, #93)
               (swap! state/client-state dissoc :lobby-state :diff-mismatch :lobby-gone?)
@@ -186,7 +192,7 @@
               ;; is the only event that can tell us it cleared.
               (resume-deferred-auto-end-async!)
               (println "   ✓ Diff applied successfully"))
-            (println "   ⏭️  Diff NOT applied — state unchanged, nothing recorded")))
+            (println "   ⏭️  Diff NOT applied — state unchanged (recorded for replay)")))
         ;; Diff doesn't match our game - we might be stale
         (do
           (swap! state/client-state assoc :diff-mismatch true)
