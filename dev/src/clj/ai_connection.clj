@@ -287,9 +287,15 @@
   (some? (:gameid @state/client-state)))
 
 (defn has-game-state?
-  "Check if we have game state data (not just gameid)"
+  "Check if we have an actual BOARD (not just a gameid, and not just something
+   truthy sitting in :game-state).
+
+   This is `do-rejoin-resync!`'s wait condition — the thing that decides whether
+   a resync landed. `some?` was fooled by the `[alterations removals]` vector a
+   mid-resync `:game/diff` used to leave behind (#142), so the resync reported
+   ✅ and returned :synced over a cleared cache."
   []
-  (some? (state/get-game-state)))
+  (state/board? (state/get-game-state)))
 
 (defn connect-game!
   "Join a game by ID (with wait and status display)
@@ -478,7 +484,11 @@
   []
   (let [{:keys [gameid game-state lobby-state]} @state/client-state]
     (boolean (and gameid
-                  (nil? game-state)
+                  ;; #142: not `nil?` — a mid-resync :game/diff could leave a raw
+                  ;; [alterations removals] vector here, which is boardless in
+                  ;; every sense that matters and was not nil in the only sense
+                  ;; this gate tested.
+                  (not (state/board? game-state))
                   (or (nil? lobby-state) (:started lobby-state))))))
 
 (defn- teardown-verdict

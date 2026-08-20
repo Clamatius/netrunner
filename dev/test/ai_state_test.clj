@@ -635,3 +635,93 @@
         (when-not (contains? counts f)
           (println (format "ℹ️  #127 ratchet: %s is fully migrated (budget %d) — drop its entry."
                            f budget)))))))
+
+;; ============================================================================
+;; #142: a diff is not a board
+;;
+;; `apply-diff` returned the raw diff unchanged when there was nothing to patch,
+;; so a `:game/diff` landing in the window between `clear-game-state!` (which
+;; clears :game-state AND :last-state) and the replacement full state left
+;; :game-state holding an `[alterations removals]` VECTOR. Truthy, not a board.
+;;
+;; Every downstream gate asked "is there a game state?" with `some?`/`nil?`, so
+;; the vector read as a live board: the resync wait condition declared success,
+;; sync-verdict! returned :synced, and start-turn went out against a state
+;; nobody has — #133's falsy-default misdiagnosis reached by a different road.
+;;
+;; Two layers, tested separately: the diff must never be STORED as a state, and
+;; "do I have a board?" must be answered by `map?` rather than by truthiness.
+;; ============================================================================
+
+(def ^:private sample-diff
+  "A real `:game/diff` payload shape: [alterations removals]."
+  [{:corp {:credit 6} :log [:+ {:user "__system__" :text "corp gains 1 [Credits]."}]}
+   {}])
+
+(deftest test-apply-diff-refuses-to-invent-a-state
+  (testing "#142: with nothing to patch, a diff yields no state — not itself"
+    (is (nil? (state/apply-diff nil sample-diff))
+        "returning the diff put an [alterations removals] vector in :game-state"))
+
+  (testing "patching a real state still works"
+    (let [result (state/apply-diff {:corp {:credit 5 :click 3}} sample-diff)]
+      (is (map? result))
+      (is (= 6 (get-in result [:corp :credit])))
+      (is (= 3 (get-in result [:corp :click])) "untouched fields survive"))))
+
+(deftest test-update-game-state-holds-what-it-has-when-a-diff-cannot-apply
+  (testing "#142: an unappliable diff must not become the cached board"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :game-state nil
+                            :last-state nil)
+      (with-out-str (state/update-game-state! sample-diff))
+      (is (nil? (:game-state @state/client-state))
+          "THE bug: :game-state held the diff vector and read as a live board")
+      (is (nil? (:last-state @state/client-state))
+          "a diff we could not apply is not a baseline for the next one either")))
+
+  (testing "a normal diff still updates both caches"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :game-state {:corp {:credit 5 :click 3}}
+                            :last-state {:corp {:credit 5 :click 3}})
+      (with-out-str (state/update-game-state! sample-diff))
+      (is (= 6 (get-in @state/client-state [:game-state :corp :credit])))
+      (is (= 6 (get-in @state/client-state [:last-state :corp :credit]))))))
+
+(deftest test-board-predicate
+  (testing "#142: `board?` is the canonical answer to 'do I have a board?'"
+    (is (true? (state/board? {:corp {:credit 5}})))
+    (is (false? (state/board? nil)))
+    (is (false? (state/board? sample-diff))
+        "the whole point: a truthy non-map is not a board")))
+
+;; ----------------------------------------------------------------------------
+;; #142, second front: the turn-boundary predicates read a diff vector as
+;; "your move".
+;;
+;; Not a new bug so much as the other half of this one. Both predicates fall
+;; back to a turn-0/0-clicks/Corp clause, and a vector answers every lookup with
+;; its default: turn 0, clicks 0, no :run, no :end-turn. So both said YES.
+;;
+;; Before the guards below, `can-start-turn?` said :first-turn there too, so the
+;; two agreed — wrongly, but consistently. Refusing in can-start-turn? WITHOUT
+;; fixing these would trade a bad wire send for the #87/#131 spin: `wait` wakes
+;; the seat with :my-turn-start, start-turn refuses, repeat. my-turn-to-act?'s
+;; docstring promises it agrees with can-start-turn? BY CONSTRUCTION, and that
+;; promise is what makes this part of the same fix rather than a follow-up.
+;; ----------------------------------------------------------------------------
+
+(deftest test-turn-predicates-refuse-a-diff-vector
+  (testing "#142: my-turn-to-act? must not call a diff vector the Corp's opening turn"
+    (let [cs {:side "corp" :game-state sample-diff}]
+      (is (not (state/my-turn-to-act? cs "corp"))
+          "THE spin: turn 0 + 0 clicks + Corp is a vector's default answer to everything"))
+    (testing "and still says yes on the real post-mulligan board it is there for"
+      (let [cs {:side "corp" :game-state {:turn 0 :corp {:click 0} :runner {:click 0}}}]
+        (is (state/my-turn-to-act? cs "corp")))))
+
+  (testing "#142: turn-boundary? must not call a diff vector a boundary"
+    (is (not (state/turn-boundary? {:game-state sample-diff}))
+        "same default-value shape, same wrong answer")
+    (is (state/turn-boundary? {:game-state {:turn 0 :corp {:click 0}}})
+        "a real pre-first-turn board is still a boundary")))

@@ -1192,3 +1192,62 @@
         (is (false? (:can-start result)))
         (is (= :no-game-state (:reason result))
             "was :first-turn — nil defaults ARE the Corp-first-turn shape")))))
+
+;; ============================================================================
+;; #142: the start-turn guards must refuse a diff vector, not just nil
+;; ============================================================================
+;; Both guards asked `(nil? (:game-state client-state))`. An [alterations
+;; removals] vector — what a `:game/diff` arriving mid-resync used to leave in
+;; :game-state — is not nil, so both guards passed it through, and every field
+;; read below them defaults falsy: turn 0, nil clicks, empty log. That IS the
+;; Corp-first-turn signature, so the preflight answered {:can-start true
+;; :reason :first-turn} and the wire action sent start-turn on the preserved
+;; gameid. Same destination as #133, different road.
+;;
+;; ai-state no longer stores an unappliable diff, so this state should not arise
+;; any more; these pin the guards regardless, because they are what stands
+;; between ANY truthy non-board and a wire send. Every other no-state fixture in
+;; this file passes `nil`, which is precisely why the suite stayed green.
+
+(def ^:private diff-vector-state
+  "A `:game/diff` payload: [alterations removals]. Truthy, not a board."
+  [{:corp {:credit 6}} {}])
+
+(deftest test-can-start-turn-refuses-a-diff-vector
+  (testing "#142: the preflight the autonomous loops gate on must not read a diff as a board"
+    (with-mock-state (assoc (mock-client-state :side "corp") :game-state diff-vector-state)
+      (let [result (basic/can-start-turn?)]
+        (is (false? (:can-start result))
+            "THE bug: nil defaults under a truthy non-board ARE the first-turn shape")
+        (is (= :no-game-state (:reason result)))))))
+
+(deftest test-start-turn-refuses-a-diff-vector
+  (testing "#142: start-turn! sends NOTHING when :game-state holds a diff vector"
+    ;; `(empty? @sent)` is the assertion that matters: the engine has no ordering
+    ;; check of its own, so a refusal that still puts the message on the wire
+    ;; starts the turn anyway.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state diff-vector-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent)
+                (str "THE bug: start-turn went out against a state nobody has. Got:\n" out))))))))
+
+(deftest test-end-turn-refuses-a-diff-vector
+  (testing "#142: end-turn!, the neighbouring wire command, also sends nothing"
+    ;; end-turn! already refuses this, by a different route: it gates on
+    ;; `(nil? clicks)`, and a keyword lookup into a vector yields nil. Pinned
+    ;; anyway — that guard asks "have I clicks to reason about", not "have I a
+    ;; board", and it is one refactor away from answering the wrong question.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state :side "corp") :game-state diff-vector-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (atom nil)
+                out (with-out-str (reset! result (basic/end-turn!)))]
+            (is (= :error (:status @result)))
+            (is (= :no-game-state (:reason @result)))
+            (is (empty? @sent)
+                (str "an off-turn end-turn is the unrecoverable kind. Got:\n" out))))))))

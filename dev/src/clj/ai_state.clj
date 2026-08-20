@@ -48,14 +48,41 @@
 ;; State Diff Application
 ;; ============================================================================
 
+(defn board?
+  "Is this value an actual game board?
+
+   The question every 'do I have a game state?' gate is really asking, and the
+   reason it needs its own predicate: truthiness is not enough. `apply-diff`
+   could leave an `[alterations removals]` diff VECTOR in :game-state when a
+   `:game/diff` landed between `clear-game-state!` and the replacement full
+   state — truthy, indexable, and not a board (#142). `some?`/`nil?` gates read
+   it as a live game and let commands act on it.
+
+   A board is always a map. Nothing else is."
+  [x]
+  (map? x))
+
+
 (defn apply-diff
-  "Apply a diff to current state to get new state using differ library"
+  "Apply a diff to current state to get new state using differ library.
+
+   Returns nil when there is nothing to patch. This USED to return the diff
+   itself, which is where #142 came from: a `:game/diff` for our game landing in
+   the window between `clear-game-state!` (which clears :game-state AND
+   :last-state) and the arrival of the replacement full state left an
+   `[alterations removals]` VECTOR sitting in :game-state. Truthy, so every
+   `some?`/`nil?` gate downstream read it as a live board and let commands act
+   on it — up to and including putting `start-turn` on the wire.
+
+   There is no legitimate case to preserve: the only caller is the `:game/diff`
+   handler, and a diff is never a full state (`:game/start` and `:game/resync`
+   carry those, via `set-full-state!`). A diff with no baseline is simply
+   unappliable, and nil says so."
   [old-state diff]
-  (if old-state
+  (when old-state
     ;; Use differ/patch which properly handles sparse array updates
     ;; like hand: [0 {:playable true} 1 {:playable true} ...]
-    (differ/patch old-state diff)
-    diff))
+    (differ/patch old-state diff)))
 
 (defn update-game-state!
   "Update game state from a diff - matches web client implementation"
@@ -74,9 +101,18 @@
           _ (println "   AFTER  - Runner credits:" (get-in new-state [:runner :credit]))
           _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
           _ (println "   AFTER  - Runner hand size:" (count (get-in new-state [:runner :hand])))]
-      (swap! client-state assoc
-             :game-state new-state
-             :last-state new-state))
+      (if (board? new-state)
+        (swap! client-state assoc
+               :game-state new-state
+               :last-state new-state)
+        ;; #142: nothing to patch, so nothing was learned. HOLD what we have
+        ;; rather than caching a non-board: :game-state and :last-state move in
+        ;; lockstep everywhere, so this leaves the seat honestly boardless and
+        ;; `boardless-started-game?` will resync it — which is the recovery this
+        ;; window needs anyway. Writing the diff in was what made the resync
+        ;; report success.
+        (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
+                 "(the cache was cleared; waiting for the full state resync)")))
     (catch Exception e
       (println "❌ Error in update-game-state!:" (.getMessage e))
       (println "   Diff type:" (type diff))
@@ -405,6 +441,13 @@
         end-turn (get-in state [:game-state :end-turn])
         turn-number (get-in state [:game-state :turn] 0)]
     (and
+     ;; #142: a board first. Every lookup below answers with its DEFAULT on a
+     ;; non-map — turn 0, clicks 0, no :end-turn — and the turn-0/0-clicks/Corp
+     ;; clause at the bottom then reads that as the Corp's opening turn. This
+     ;; predicate promises to agree with can-start-turn? by construction, and
+     ;; can-start-turn? refuses a non-board; without this the two diverge and
+     ;; `wait` spins the seat on :my-turn-start against a refusal (#87/#131).
+     (board? (:game-state state))
      ;; #87: never claim it's our move while the opponent's opening mulligan is
      ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
      (not (opponent-mulligan-pending? state))
@@ -461,7 +504,8 @@
    budget rather than the patient boundary one."
   [client-state]
   (let [gs (:game-state client-state)]
-    (boolean (and (not (:run gs))
+    (boolean (and (board? gs)  ; #142 — see my-turn-to-act?; same default-value trap
+                  (not (:run gs))
                   (or (:end-turn gs)
                       (and (= 0 (get gs :turn 0))
                            (zero? (get-in gs [:corp :click] 0))))))))

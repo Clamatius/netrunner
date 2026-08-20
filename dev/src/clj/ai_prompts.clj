@@ -754,7 +754,9 @@
       ;; #127: "No cards to discard" is a lie here — we have no seat to discard
       ;; FROM. Say which of the two it is rather than reporting a clean no-op.
       (do
-        (println (if (:game-state client-state)
+        ;; #142: `board?`, not truthiness — a raw diff vector in :game-state
+        ;; would otherwise be reported to the seat as "a board is still cached".
+        (println (if (state/board? (:game-state client-state))
                    "❌ This client has no side, so there is no hand to discard from (a board is still cached — try 'status', or 'resync' if you expect to be seated)."
                    "❌ Not in a game — nothing to discard."))
         nil)
