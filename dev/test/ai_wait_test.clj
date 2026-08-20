@@ -834,3 +834,31 @@
                 (str "THE bug: the reason was decided on a board holding a scorable "
                      "agenda, and the guidance then described a board without it. "
                      "Got:\n" out))))))))
+
+;; ============================================================================
+;; #142: `wait` must not wake a seat for a diff vector
+;; ============================================================================
+;; The externally visible half of the turn-predicate fix, and the reason it is
+;; part of #142 rather than a follow-up. `my-turn-to-act?` falls through to a
+;; turn-0/0-clicks/Corp clause, and a non-map answers every lookup with that
+;; default, so `relevance-reason` classified a cleared cache as :my-turn-start.
+;; With can-start-turn? now refusing a non-board, waking here would be the
+;; #87/#131 spin exactly: wake "your move", get refused, wait, repeat.
+;;
+;; Asserted through relevance-reason rather than the state predicate alone —
+;; the helper-level test in ai-state-test cannot see a rewiring regression here
+;; (guest review of the #142 fix).
+
+(deftest test-relevance-reason-does-not-wake-on-a-diff-vector
+  (testing "#142: a raw diff in :game-state is not 'your move'"
+    (let [relevance @#'core/relevance-reason]
+      (is (not= :my-turn-start
+                (relevance (mock-game "corp" [{:corp {:credit 6}} {}]) "corp" false))
+          "THE spin: the vector's default answers ARE the Corp opening-turn shape")))
+
+  (testing "the real post-mulligan board still wakes the Corp"
+    (let [relevance @#'core/relevance-reason]
+      (is (= :my-turn-start
+             (relevance (mock-game "corp" {:turn 0 :corp {:click 0} :runner {:click 0}})
+                        "corp" false))
+          "a false refusal here parks a seat that genuinely owes a start-turn"))))

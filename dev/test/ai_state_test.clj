@@ -653,6 +653,13 @@
 ;; "do I have a board?" must be answered by `map?` rather than by truthiness.
 ;; ============================================================================
 
+(defn- with-out-str-value
+  "Run `f`, discard what it prints, return what it returned."
+  [f]
+  (let [v (atom nil)]
+    (with-out-str (reset! v (f)))
+    @v))
+
 (def ^:private sample-diff
   "A real `:game/diff` payload shape: [alterations removals]."
   [{:corp {:credit 6} :log [:+ {:user "__system__" :text "corp gains 1 [Credits]."}]}
@@ -679,6 +686,30 @@
           "THE bug: :game-state held the diff vector and read as a live board")
       (is (nil? (:last-state @state/client-state))
           "a diff we could not apply is not a baseline for the next one either")))
+
+  (testing "#142: it HOLDS an existing board rather than nil-ing it"
+    ;; This is the assertion that actually pins the `(board? new-state)`
+    ;; conditional, and the reason the case above does not: with both caches nil
+    ;; an unconditional `swap!` writes nil and every assertion there stays green,
+    ;; so reverting the conditional would go unnoticed (guest review, confirmed).
+    ;; The fixture is deliberately the state A1 says cannot occur — a board with
+    ;; no diff baseline — because surviving it is the whole job of the guard.
+    (let [board {:corp {:credit 5 :click 3}}]
+      (with-mock-state (assoc (mock-client-state :side "corp")
+                              :game-state board
+                              :last-state nil)
+        (with-out-str (state/update-game-state! sample-diff))
+        (is (= board (:game-state @state/client-state))
+            "an unappliable diff is no reason to throw away the board we hold"))))
+
+  (testing "#142: it REPORTS whether it applied — the handler branches on this"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :game-state nil :last-state nil)
+      (is (false? (with-out-str-value #(state/update-game-state! sample-diff)))))
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :game-state {:corp {:credit 5}}
+                            :last-state {:corp {:credit 5}})
+      (is (true? (with-out-str-value #(state/update-game-state! sample-diff))))))
 
   (testing "a normal diff still updates both caches"
     (with-mock-state (assoc (mock-client-state :side "corp")

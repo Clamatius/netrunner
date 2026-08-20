@@ -7,6 +7,7 @@
    autonomous loop decides against authoritative ground truth."
   (:require [clojure.test :refer :all]
             [test-helpers :refer [mock-client-state with-mock-state mock-websocket-send!]]
+            [clojure.string :as str]
             [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
             [ai-basic-actions]))
@@ -141,3 +142,57 @@
                    #(ws/handle-message {:type :game/diff
                                         :data {:gameid gameid :diff [{} {}]}})))
             "unarmed clients must not spawn a resume on every diff")))))
+
+;; ============================================================================
+;; #142: an IGNORED diff must not be bookkept as an applied one
+;; ============================================================================
+;; `update-game-state!` now refuses a diff it has no baseline for. The handler
+;; around it did the success bookkeeping unconditionally: it retracted the
+;; stale/lobby-gone verdicts, stamped :last-diff-time, bumped the wait cursor
+;; and printed "✓ Diff applied successfully" — four claims about a state that
+;; did not change. The cursor bump is the one with teeth: a parked `wait` wakes
+;; for a no-op. (Guest review of the #142 fix; confirmed against source.)
+
+(deftest test-ignored-diff-does-not-bookkeep-as-applied
+  (testing "#142: a diff with no baseline changes nothing, and must claim nothing"
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :game-state nil
+                            :last-state nil
+                            :diff-mismatch true
+                            :lobby-gone? true)
+      (let [gameid (:gameid @state/client-state)
+            cursor-before (state/get-cursor)
+            out (with-out-str
+                  (ws/handle-message {:type :game/diff
+                                      :data {:gameid gameid :diff [{:corp {:credit 6}} {}]}}))]
+        (is (= cursor-before (state/get-cursor))
+            "THE one with teeth: a parked `wait` must not wake for a diff that did nothing")
+        (is (true? (:diff-mismatch @state/client-state))
+            "an ignored diff is no evidence the staleness cleared")
+        (is (true? (:lobby-gone? @state/client-state))
+            "nor that the lobby came back (#93)")
+        (is (nil? (:last-diff-time @state/client-state))
+            "there was no last SUCCESSFUL diff")
+        (is (not (str/includes? out "Diff applied successfully"))
+            (str "the message contradicted the warning printed two lines above it. Got:\n" out))))))
+
+(deftest test-applied-diff-still-does-all-the-bookkeeping
+  (testing "#142: the live path is untouched — a false refusal here would freeze `wait`"
+    ;; The complement, and the one that matters more: gating the bookkeeping on
+    ;; a predicate that is wrong in the other direction stops the cursor for
+    ;; every real diff, and every `wait` in the game hangs to timeout.
+    (with-mock-state (assoc (mock-client-state :side "corp")
+                            :diff-mismatch true
+                            :lobby-gone? true)
+      (let [gameid (:gameid @state/client-state)
+            cursor-before (state/get-cursor)
+            out (with-out-str
+                  (ws/handle-message {:type :game/diff
+                                      :data {:gameid gameid :diff [{:corp {:credit 6}} {}]}}))]
+        (is (> (state/get-cursor) cursor-before) "a real diff still wakes `wait`")
+        (is (nil? (:diff-mismatch @state/client-state)) "and still retracts staleness")
+        (is (nil? (:lobby-gone? @state/client-state)))
+        (is (some? (:last-diff-time @state/client-state)))
+        (is (str/includes? out "Diff applied successfully"))
+        (is (= 6 (get-in @state/client-state [:game-state :corp :credit]))
+            "and actually applies")))))

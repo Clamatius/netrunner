@@ -85,7 +85,13 @@
     (differ/patch old-state diff)))
 
 (defn update-game-state!
-  "Update game state from a diff - matches web client implementation"
+  "Update game state from a diff - matches web client implementation.
+
+   Returns TRUE when the diff was applied and cached, FALSE when it was not.
+   The caller needs that answer: the `:game/diff` handler does a pile of
+   success bookkeeping — clearing the stale/lobby-gone flags, stamping
+   :last-diff-time, bumping the wait cursor, printing '✓ Diff applied
+   successfully' — and none of it is true of a diff we could not apply."
   [diff]
   (try
     (let [old-state (:last-state @client-state)
@@ -102,22 +108,33 @@
           _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
           _ (println "   AFTER  - Runner hand size:" (count (get-in new-state [:runner :hand])))]
       (if (board? new-state)
-        (swap! client-state assoc
-               :game-state new-state
-               :last-state new-state)
+        (do (swap! client-state assoc
+                   :game-state new-state
+                   :last-state new-state)
+            true)
         ;; #142: nothing to patch, so nothing was learned. HOLD what we have
-        ;; rather than caching a non-board: :game-state and :last-state move in
-        ;; lockstep everywhere, so this leaves the seat honestly boardless and
-        ;; `boardless-started-game?` will resync it — which is the recovery this
-        ;; window needs anyway. Writing the diff in was what made the resync
-        ;; report success.
-        (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
-                 "(the cache was cleared; waiting for the full state resync)")))
+        ;; rather than caching a non-board — writing the diff in was exactly what
+        ;; made the resync report success over a cleared cache.
+        ;;
+        ;; Recovery is NOT automatic from here, and the earlier wording of this
+        ;; comment claimed it was (guest review). `boardless-started-game?` runs
+        ;; only inside `sync-verdict!`, which the CLI gate calls; the autonomous
+        ;; loops call `can-start-turn?` directly and never reach it. So a loop
+        ;; that lands in this window stays boardless — correctly refusing rather
+        ;; than acting blind — until the next CLI invocation resyncs it or its
+        ;; stall backstop stops it.
+        (do
+          (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
+                   "(the cache was cleared; waiting for the full state resync)")
+          false)))
     (catch Exception e
       (println "❌ Error in update-game-state!:" (.getMessage e))
       (println "   Diff type:" (type diff))
       (println "   Diff:" (pr-str (take 200 (pr-str diff))))
-      (.printStackTrace e))))
+      (.printStackTrace e)
+      ;; A diff that threw was not applied either — say so, so the handler does
+      ;; not run the success bookkeeping over a state it never changed.
+      false)))
 
 (defn detect-side
   "Detect which side we are playing by matching UID to game state"

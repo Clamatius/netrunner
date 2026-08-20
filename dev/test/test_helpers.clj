@@ -19,11 +19,13 @@
      (mock-client-state :game-state {...})  ; override entire game-state"
   [& {:keys [side credits clicks hand installed prompt servers active-player game-state]
       :or {side "runner" credits 5 clicks 4 hand [] installed {} servers {} active-player "runner"}}]
-  {:connected true
-   :uid "test-user"
-   :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")  ; Valid UUID for tests
-   :side side
-   :game-state (or game-state
+  ;; #142: :game-state and :last-state are LOCKSTEP in production — every write
+  ;; site (set-full-state!, update-game-state!, clear-game-state!, the ws
+  ;; :on-close handler) sets both. This fixture used to set only :game-state,
+  ;; which is a state the client cannot actually be in: a board with no diff
+  ;; baseline. That gap hid the fact that a diff arriving with a nil :last-state
+  ;; is unappliable, and it made the #114 resume test pass for the wrong reason.
+  (let [board (or game-state
                    {:runner {:credit (if (= side "runner") credits 5)
                             :click (if (= side "runner") clicks 4)
                             :hand (if (= side "runner") hand [])
@@ -34,7 +36,13 @@
                            :hand (if (= side "corp") hand [])
                            :servers servers
                            :prompt-state prompt}
-                    :active-player active-player})})
+                    :active-player active-player})]
+    {:connected true
+     :uid "test-user"
+     :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")  ; Valid UUID for tests
+     :side side
+     :game-state board
+     :last-state board}))
 
 ;; ============================================================================
 ;; State Manipulation Macros

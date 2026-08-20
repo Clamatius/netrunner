@@ -160,24 +160,33 @@
           (println "   Diff sample:" (pr-str (if (coll? diff)
                                                 (take 5 diff)
                                                 diff)))
-          (state/update-game-state! diff)
-          ;; Record diff for replay if recording enabled
-          (state/record-diff! diff)
-          ;; Clear lobby-state once game has started (receiving diffs means game
-          ;; is active — which also retracts any stale lobby-gone verdict, #93)
-          (swap! state/client-state dissoc :lobby-state :diff-mismatch :lobby-gone?)
-          ;; Track last successful diff time
-          (swap! state/client-state assoc :last-diff-time (System/currentTimeMillis))
-          ;; Announce newly revealed cards in Archives
-          (hud/announce-revealed-archives diff)
-          ;; Auto-update game log HUD
-          (hud/write-game-log-to-hud 30)
-          ;; Bump cursor for wait synchronization
-          (state/bump-cursor!)
-          ;; #114: if our turn is orphaned behind an opponent-owed decision, this
-          ;; is the only event that can tell us it cleared.
-          (resume-deferred-auto-end-async!)
-          (println "   ✓ Diff applied successfully"))
+          ;; #142: every line below is SUCCESS bookkeeping, and none of it is
+          ;; true of a diff we could not apply. When the cache has been cleared
+          ;; (a resync in flight) `update-game-state!` ignores the diff and says
+          ;; so — announcing "✓ Diff applied successfully" over that, retracting
+          ;; the stale/lobby-gone verdicts on no evidence, and bumping the wait
+          ;; cursor so a parked seat wakes for a no-op, are four separate lies
+          ;; about a state that did not change. (Guest review, confirmed.)
+          (if (state/update-game-state! diff)
+            (do
+              ;; Record diff for replay if recording enabled
+              (state/record-diff! diff)
+              ;; Clear lobby-state once game has started (receiving diffs means game
+              ;; is active — which also retracts any stale lobby-gone verdict, #93)
+              (swap! state/client-state dissoc :lobby-state :diff-mismatch :lobby-gone?)
+              ;; Track last successful diff time
+              (swap! state/client-state assoc :last-diff-time (System/currentTimeMillis))
+              ;; Announce newly revealed cards in Archives
+              (hud/announce-revealed-archives diff)
+              ;; Auto-update game log HUD
+              (hud/write-game-log-to-hud 30)
+              ;; Bump cursor for wait synchronization
+              (state/bump-cursor!)
+              ;; #114: if our turn is orphaned behind an opponent-owed decision, this
+              ;; is the only event that can tell us it cleared.
+              (resume-deferred-auto-end-async!)
+              (println "   ✓ Diff applied successfully"))
+            (println "   ⏭️  Diff NOT applied — state unchanged, nothing recorded")))
         ;; Diff doesn't match our game - we might be stale
         (do
           (swap! state/client-state assoc :diff-mismatch true)
