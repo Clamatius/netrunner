@@ -42,6 +42,69 @@
       (is (str/includes? line "Remotes 2 unrezzed / 1 advanced"))
       (is (str/includes? line "~3 agenda cards likely drawn")))))
 
+;; ============================================================================
+;; remote-threat-counts — the servers map is KEYWORD-keyed on the wire (#137)
+;; ============================================================================
+;; The counts above were only ever tested as hand-fed integers, so the step that
+;; DERIVES them from :servers had no fixture — and that step filtered on
+;; `(string? (key %))` while the wire sends `:remote1`. Both numbers were
+;; therefore hardcoded zero for the whole life of every game. These fixtures
+;; carry the keyword keys the wire actually sends.
+
+(def ^:private unrezzed-advanced-remote
+  {:remote1 {:content [{:cid "a" :advance-counter 1}]}})
+
+(deftest remote-threat-counts-reads-keyword-keyed-servers
+  (testing "#137: a keyword-keyed remote holding an unrezzed advanced card is counted"
+    (is (= {:unrezzed 1 :advanced 1}
+           (display/remote-threat-counts unrezzed-advanced-remote))
+        "the wire sends :remote1, not \"remote1\" — filtering on string? counted nothing"))
+  (testing "string keys still work — the wire shape is the volatile coupling"
+    (is (= {:unrezzed 1 :advanced 1}
+           (display/remote-threat-counts {"remote1" {:content [{:cid "a" :advance-counter 1}]}}))))
+  (testing "centrals are never remotes, however they are keyed"
+    (is (= {:unrezzed 0 :advanced 0}
+           (display/remote-threat-counts
+            {:hq {:content [{:cid "a"}]}
+             :rd {:content [{:cid "b" :advance-counter 2}]}
+             :archives {:content [{:cid "c"}]}}))
+        "an upgrade in a central must not inflate the remote threat count"))
+  (testing "a rezzed remote card is visible, not a threat — it is not an unadvanced agenda"
+    (is (= {:unrezzed 0 :advanced 0}
+           (display/remote-threat-counts
+            {:remote1 {:content [{:cid "a" :rezzed true :advance-counter 3}]}}))))
+  (testing "unrezzed but unadvanced counts as unrezzed only"
+    (is (= {:unrezzed 1 :advanced 0}
+           (display/remote-threat-counts {:remote1 {:content [{:cid "a"}]}}))))
+  (testing "counts are SERVERS, not cards — matching the line's own wording"
+    (is (= {:unrezzed 2 :advanced 1}
+           (display/remote-threat-counts
+            {:remote1 {:content [{:cid "a" :advance-counter 1} {:cid "b"}]}
+             :remote2 {:content [{:cid "c"}]}}))
+        "remote1 holds two unrezzed cards but is one server"))
+  (testing "an empty or absent servers map is zero, not a throw"
+    (is (= {:unrezzed 0 :advanced 0} (display/remote-threat-counts {})))
+    (is (= {:unrezzed 0 :advanced 0} (display/remote-threat-counts nil)))))
+
+(deftest show-status-reports-real-remote-threat
+  ;; #137: `status` said "Remotes 0 unrezzed / 0 advanced" in the same snapshot
+  ;; where `board` printed "REMOTE1 ... Unrezzed card [1adv]". board was right.
+  (testing "the runner threat line reflects a visibly advanced remote"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "corp" :turn 1
+                                   :corp {:click 1 :credit 4 :hand [] :hand-count 5
+                                          :deck-count 38 :discard [] :agenda-point 0
+                                          :servers unrezzed-advanced-remote
+                                          :user {:username "ai-corp"}}
+                                   :runner {:click 0 :credit 5 :hand [] :hand-count 5
+                                            :agenda-point 0 :rig {}
+                                            :user {:username "ai-runner"}}})
+      (let [out (with-out-str (display/show-status))]
+        (is (str/includes? out "Remotes 1 unrezzed / 1 advanced")
+            "the one actionable pair of numbers on the line must not be a constant zero")
+        (is (not (str/includes? out "Remotes 0 unrezzed / 0 advanced")))))))
+
 (deftest show-status-turn-zero-skips-agenda-threat-noise
   ;; #104: at turn 0 every input to the threat estimate is zero, so the line
   ;; rendered as 'Unaccounted: 18 agenda pts' over an empty board.
@@ -2045,6 +2108,88 @@
               (str label " must not throw on a sideless state, got: " out))
           (is (re-find #"(?i)not in a game" out)
               (str label " must say plainly that there is no game, got:\n" out)))))))
+
+(def ^:private boardless-seat-state
+  "#139: the complement of the sideless fixtures — the side is KNOWN and the
+   BOARD is the thing that is gone. This is exactly what a failed resync leaves
+   behind (`resync-game!` clears the cache before requesting a replacement and
+   :gameid survives), the state `boardless-started-game?` classifies and
+   `sync-verdict!` calls :resync-failed. The action commands are already
+   refused in it; the read surfaces described an empty game instead."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil})
+
+(deftest test-boardless-seat-surfaces-do-not-invent-a-board
+  (testing "#139: a seat holding no board must not report one"
+    (doseq [[label f] [["show-credits"   display/show-credits]
+                       ["show-clicks"    display/show-clicks]
+                       ["show-hand"      display/show-hand]
+                       ["list-playables" display/list-playables]]]
+      (with-mock-state boardless-seat-state
+        (let [out (try (with-out-str (f))
+                       (catch Exception e
+                         (str "THREW " (.getName (class e)) ": " (.getMessage e))))]
+          (is (not (str/starts-with? out "THREW"))
+              (str label " must not throw on a boardless seat, got: " out))
+          (is (re-find #"(?i)no board|board.*(gone|cleared)" out)
+              (str label " must say the board is missing, got:\n" out))
+          ;; The specific lies observed live.
+          (is (not (re-find #"(?i):\s*nil" out))
+              (str label " printed a nil where a number belongs, got:\n" out))
+          (is (not (str/blank? out))
+              (str label " said nothing at all — indistinguishable from an empty hand")))))))
+
+(def ^:private unstarted-lobby-state
+  "Guest-panel CRITICAL: a lobby that has not STARTED has no board by
+   definition, and that is healthy — `sync-verdict!` deliberately calls it
+   :synced so reset.sh's create → join → start path is not gated
+   (ai_connection_test.clj: test-sync-verdict-unstarted-lobby-is-synced).
+   Seated + boardless is therefore NOT enough to mean 'a resync cleared the
+   cache'; the :started flag is the discriminator, exactly as
+   `boardless-started-game?` uses it."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil
+   :lobby-state {:gameid "abc" :started false}})
+
+(def ^:private diff-vector-board-state
+  "Guest-panel CRITICAL: `apply-diff` returns the RAW diff when :last-state is
+   nil, so a :game/diff that lands between `clear-game-state!` and the
+   replacement full state leaves :game-state holding a `[alterations removals]`
+   VECTOR. It is truthy but it is not a board, so a truthiness gate reopens and
+   the surfaces print `Credits: nil` again."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp"
+   :game-state [{:corp {:credit 5}} {}]})
+
+(deftest test-unstarted-lobby-is-not-called-a-failed-resync
+  (testing "a seat waiting in an unstarted lobby is not told its cache was cleared"
+    (with-mock-state unstarted-lobby-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i)resync cleared|cleared the cache" out))
+            (str "nothing was cleared — the game has not started, got:\n" out))
+        (is (re-find #"(?i)not started|hasn't started|has not started|waiting to start" out)
+            (str "must name the real state: the game has not begun, got:\n" out))
+        (is (not (re-find #"(?i)never joined" out))
+            (str "this client is seated in the lobby, got:\n" out))))))
+
+(deftest test-a-raw-diff-vector-is-not-a-board
+  (testing "a truthy-but-not-a-map :game-state must not be treated as a board"
+    (with-mock-state diff-vector-board-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i):\s*nil" out))
+            (str "the vector is not a board — must not read a nil out of it, got:\n" out))
+        (is (re-find #"(?i)no board" out)
+            (str "must report the board as missing, got:\n" out))))))
+
+(deftest test-boardless-seat-is-not-described-as-never-joined
+  ;; The :else arm of no-side-here! says "Never joined, or the lobby was left".
+  ;; That is false for a client still holding a :gameid — it joined, and the
+  ;; board is what went missing. Wrong diagnosis sends the seat to reset.sh,
+  ;; which destroys a game a retry might still have recovered.
+  (testing "#139: a seated client is not told it never joined"
+    (with-mock-state boardless-seat-state
+      (let [out (with-out-str (display/show-credits))]
+        (is (not (re-find #"(?i)never joined" out))
+            (str "the client holds a :gameid, got:\n" out))
+        (is (re-find #"(?i)retry|resync|status" out)
+            (str "must name a recovery that fits a transient empty board, got:\n" out))))))
 
 (deftest test-sideless-surfaces-agree-with-show-hand
   (testing "#125: show-hand was already guarded — the other surfaces must not

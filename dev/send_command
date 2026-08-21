@@ -608,15 +608,64 @@ ${GREEN}Replay Recording:${NC}
 EOF
 }
 
+# Strip credentials out of anything we are about to show the seat.
+#
+# The seat's stdout IS an LLM's context, and in a cross-model marquee that context
+# goes to an external provider. @client-state carries :session-token and
+# :csrf-token next to the game data, and several routes print the whole map:
+# `eval '@ai-state/client-state'`, `inspect-state`, and any eval whose value is
+# `ai-actions/status` — which RETURNS @client-state after printing (#140).
+#
+# This is deliberately a filter on the OUTPUT rather than a smarter guess about
+# which expressions return secrets. A second review pass broke three separate
+# attempts to classify Clojure expressions in bash (`(do a b)` returns its LAST
+# form, `(do,(f))` and `(do ; comment` both parse fine and both evaded the
+# match). Classifying the expression is unwinnable; redacting the bytes is not,
+# and it covers shapes nobody has thought of yet.
+redact_secrets() {
+    sed -E 's/(:?(session-token|csrf-token)"?[[:space:]]+)"[^"]*"/\1"«redacted»"/g'
+}
+
+# Expression prefixes that mark a DISPLAY command — one whose useful output is
+# printed to stdout rather than returned, so `execute` has to capture it with
+# (with-out-str ...). Kept on ONE line and extracted verbatim by
+# dev/test/send_command_wrap_test.sh, so the test cannot drift from the source.
+DISPLAY_EXPR_PREFIXES='(ai-actions/show- (ai-actions/list- (ai-actions/hand (ai-actions/status (ai-actions/board'
+
+# True if EXPR *is* a display call — matched at the LEADING position, not anywhere
+# in the string.
+#
+# This used to be a substring test, so any expression that merely MENTIONED a
+# display fn got wrapped. For `eval`, the documented escape hatch for inspecting
+# live state, that was silently destructive:
+#
+#   $ ./dev/send_command corp eval '(count (with-out-str (ai-actions/show-credits)))'
+#   $                                  # nothing at all. exit 0. no error.
+#
+# It became (with-out-str (count (with-out-str (ai-actions/show-credits)))) — the
+# inner call printed into the inner capture and the outer one swallowed `count`'s
+# return value. Silence is the worst possible answer here: eval is what a seat
+# reaches for when it is already confused, and "no output" reads as "the function
+# threw" rather than "the CLI ate it". Every real call site below passes a bare
+# (ai-actions/<fn> ...), so the leading-position match changes nothing else.
+is_display_expr() {
+    # Strip leading whitespace so an indented expression still matches.
+    local e="${1#"${1%%[![:space:]]*}"}"
+    local prefix
+    for prefix in $DISPLAY_EXPR_PREFIXES; do
+        [[ "$e" == "$prefix"* ]] && return 0
+    done
+    return 1
+}
+
 # Execute command via ai-eval.sh
 # Uses stdin mode to avoid shell escaping issues with ! in function names
 execute() {
     local expr="$1"
     local wrapped=false
 
-    # Wrap expression in with-out-str to capture stdout if it's a display command
-    # This is a heuristic: if it starts with (ai-actions/show- or (ai-actions/list-, wrap it
-    if [[ "$expr" == *"(ai-actions/show-"* ]] || [[ "$expr" == *"(ai-actions/list-"* ]] || [[ "$expr" == *"(ai-actions/hand"* ]] || [[ "$expr" == *"(ai-actions/status"* ]] || [[ "$expr" == *"(ai-actions/board"* ]]; then
+    # Wrap expression in with-out-str to capture stdout if it IS a display command.
+    if is_display_expr "$expr"; then
         # echo "DEBUG: Wrapping display command: $expr" >&2
         expr="(with-out-str $expr)"
         wrapped=true
@@ -655,9 +704,9 @@ execute() {
             # what a seat must actually type.
             UNQUOTED="${RESULT:1:$LEN}"
             UNQUOTED="${UNQUOTED//\\\"/\"}"
-            echo -e "$UNQUOTED"
+            echo -e "$UNQUOTED" | redact_secrets
         else
-            echo "$RESULT"
+            echo "$RESULT" | redact_secrets
         fi
     else
         # Suppress all status map noise - we print human-readable messages instead.
@@ -673,7 +722,7 @@ execute() {
         # REPL's machine map. Caveat: `eval` of a raw single-line map that carries
         # a :status key is also suppressed here — an accepted tradeoff for the dev
         # escape hatch (use a wrapping form if you must see such a map verbatim).
-        echo "$RESULT" | grep -vE '^\{.*:status[ ,}]' | grep -v '^nil$' || true
+        echo "$RESULT" | grep -vE '^\{.*:status[ ,}]' | grep -v '^nil$' | redact_secrets || true
     fi
 
     return $RET

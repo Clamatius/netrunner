@@ -41,6 +41,7 @@ test-shell:
 	@echo "Running shell tests..."
 	@./dev/test/send_command_filter_test.sh
 	@./dev/test/send_command_help_test.sh
+	@./dev/test/send_command_wrap_test.sh
 	@./dev/test/ai_eval_charset_test.sh
 	@./dev/test/peer_status_test.sh
 	@./dev/test/game_gone_gate_test.sh

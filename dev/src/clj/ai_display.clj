@@ -41,6 +41,34 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn remote-threat-counts
+  "Pure: the Runner-visible remote-server threat counts, from the Corp's
+   :servers map. Returns {:unrezzed n :advanced n}, both counting SERVERS (not
+   cards) — matching the wording of the line that prints them.
+
+     :unrezzed - remotes holding at least one unrezzed card
+     :advanced - remotes holding at least one unrezzed card with advancements
+
+   Keys are matched by NAME, so both the keyword form the wire actually sends
+   (:remote1) and the string form fixtures sometimes use (\"remote1\") work.
+   This used to filter on `(string? (key %))` against a keyword-keyed map, so
+   both counts were hardcoded zero for the whole life of every game — `status`
+   read `Remotes 0 unrezzed / 0 advanced` in the same snapshot where `board`
+   showed an advanced card sitting in a remote (#137). These two numbers are
+   the only actionable ones on that line: an unrezzed, advanced remote is the
+   scoring-remote tell, so a false zero steers the seat off the one server it
+   should be pressuring."
+  [servers]
+  (let [remote? (fn [k] (and (or (keyword? k) (string? k))
+                             (boolean (re-matches #"remote\d+" (name k)))))
+        remotes (filter #(remote? (key %)) servers)
+        unrezzed-cards (fn [[_ server]] (remove :rezzed (:content server)))]
+    {:unrezzed (count (filter #(seq (unrezzed-cards %)) remotes))
+     :advanced (count (filter (fn [entry]
+                                (some #(pos? (get % :advance-counter 0))
+                                      (unrezzed-cards entry)))
+                              remotes))}))
+
 (defn format-runner-agenda-line
   "Runner's-eye agenda threat line, with units made explicit.
 
@@ -315,21 +343,8 @@
                                   (/ (float total-agendas) initial-deck-size)
                                   0)
                   expected-drawn (int (* cards-drawn agenda-density))
-                  servers (get-in gs [:corp :servers] {})
-                  remotes (filter #(and (string? (key %))
-                                      (re-matches #"remote\d+" (key %)))
-                                servers)
-                  unrezzed-remotes (filter (fn [[_ server]]
-                                            (let [content (get-in server [:content])]
-                                              (some #(not (:rezzed %)) content)))
-                                          remotes)
-                  unrezzed-count (count unrezzed-remotes)
-                  advanced-count (count (filter (fn [[_ server]]
-                                                 (let [content (get-in server [:content])]
-                                                   (some #(and (not (:rezzed %))
-                                                              (pos? (get-in % [:advance-counter] 0)))
-                                                        content)))
-                                               remotes))]
+                  {unrezzed-count :unrezzed advanced-count :advanced}
+                  (remote-threat-counts (get-in gs [:corp :servers] {}))]
               ;; The threat line is derived entirely from deck/hand counts; at
               ;; turn 0 those are all zero and it renders as pure noise
               ;; ('Unaccounted: 18 agenda pts' over an empty board — #104).
@@ -1001,8 +1016,18 @@
        before any confirmation, so :spectator alone can mean a watch that was
        rejected or has not landed yet. Require the board before promising one."
   [state what]
-  (let [board? (boolean (:game-state state))
-        seated? (boolean (:gameid state))]
+  ;; `map?`, not truthiness (guest-panel CRITICAL): `apply-diff` returns the RAW
+  ;; diff when :last-state is nil, so a :game/diff landing between
+  ;; `clear-game-state!` and the replacement full state leaves :game-state
+  ;; holding an `[alterations removals]` VECTOR. That is truthy and is not a
+  ;; board — reading it yields the same `Credits: nil` this guard exists to stop.
+  (let [board? (map? (:game-state state))
+        seated? (boolean (:gameid state))
+        ;; Mirrors `boardless-started-game?`: :lobby-state is dissoc'd once a full
+        ;; game state arrives, so a started game has none; an unstarted lobby
+        ;; still carries its own with :started false.
+        lobby (:lobby-state state)
+        started? (or (nil? lobby) (boolean (:started lobby)))]
     (cond
       (and (:spectator state) board?)
       (do
@@ -1017,6 +1042,44 @@
         (println (format "👁️  Watch requested, but no board has arrived — %s is empty." what))
         (println "   The watch may still be in flight, or the server refused it (bad game id / password).")
         (println "   → 'list-lobbies' to confirm the game exists, then watch it again.")
+        nil)
+
+      ;; #139: the complement of every branch above — the side may be perfectly
+      ;; well known, and the BOARD is what is gone. This is what a failed resync
+      ;; leaves behind (`resync-game!` clears the cache before requesting a
+      ;; replacement, and :gameid survives), the state `boardless-started-game?`
+      ;; classifies and `sync-verdict!` calls :resync-failed. The read surfaces
+      ;; used to read a nil board and
+      ;; print what they found — "Credits: nil", "Archives: 0 cards", a rendered
+      ;; empty table. For the nil case the action commands are already refused; for
+      ;; the raw-diff-VECTOR case they are NOT — `has-game-state?` and the
+      ;; start-turn guards test `some?`/`nil?`, so that state reads as synced to
+      ;; them (second-pass panel CRITICAL, filed separately). This guard is
+      ;; therefore the only thing standing between that state and a confident
+      ;; answer, not a second line of defence.
+      ;; It must come BEFORE the :else arm, which tells a client that
+      ;; is still holding a :gameid it "never joined" and sends it to reset.sh —
+      ;; destroying a game a retry might have recovered.
+      ;; Seated in a lobby that has not STARTED. Boardless here is correct and
+      ;; healthy — `sync-verdict!` deliberately calls it :synced so reset.sh's
+      ;; create → join → start path is not gated. Telling this seat its cache was
+      ;; cleared would send it resyncing away from a perfectly good lobby
+      ;; (guest-panel CRITICAL).
+      (and seated? (not board?) (not started?))
+      (do
+        (println (format "⏳ Seated, but the game has NOT STARTED yet — %s does not exist." what))
+        ;; Same words the acting side already uses for this state
+        ;; (ai-basic-actions/print-no-board-cause!) — one state, one story, and
+        ;; `start-game` is the verb the CLI actually parses.
+        (println "   You are seated in a lobby that has not begun.")
+        (println "   → 'status' shows what the lobby is waiting on; 'start-game' once both seats are ready.")
+        nil)
+
+      (and seated? (not board?))
+      (do
+        (println (format "⚠️  Seated, but this client holds NO BOARD — %s is unknown, not empty." what))
+        (println "   A resync cleared the cache and the replacement state has not arrived.")
+        (println "   → Retry the command; if it keeps failing: 'status', then 'resync'.")
         nil)
 
       (and board? seated?)
@@ -1040,7 +1103,9 @@
   []
   (let [state @state/client-state
         side (:side state)]
-    (if-not side
+    ;; #139: a side is not enough — the board is the thing being read. A seat
+    ;; whose cache was cleared has a side and nothing to show it for.
+    (if-not (and side (map? (:game-state state)))
       ;; Was its own bespoke "No game state - not in a game yet". That is the
       ;; same false claim the rest of #125 removes — `hand` is a CLI surface and
       ;; a spectator hits it with a full board — so it shares the one explainer.
@@ -1067,7 +1132,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not side-kw
+    (if-not (and side-kw (map? (:game-state state)))
       (no-side-here! state "the credit pool")
       (let [credits (get-in state [:game-state side-kw :credit])]
         (println "💰 Credits:" credits)
@@ -1078,7 +1143,7 @@
   []
   (let [state @state/client-state
         side-kw (state/my-side-kw state)]
-    (if-not side-kw
+    (if-not (and side-kw (map? (:game-state state)))
       (no-side-here! state "the click count")
       (let [clicks (get-in state [:game-state side-kw :click])]
         (println "⏱️  Clicks:" clicks)
@@ -2327,7 +2392,7 @@
    Useful for AI decision-making - shows exactly what can be done right now"
   []
   (let [state @state/client-state]
-    (if-let [side (state/my-side-kw state)]
+    (if-let [side (and (map? (:game-state state)) (state/my-side-kw state))]
       (list-playables-for-side state side)
       (no-side-here! state "the playable-action list"))))
 
