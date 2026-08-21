@@ -1098,16 +1098,19 @@
    several maps share the CID, a named (:title) match is preferred so behavior for
    ordinary visible cards is unchanged. (issue #70)
 
-   Returns nil if no card-shaped map matches."
-  [cid]
-  (let [gs (state/get-game-state)
-        matches (->> (tree-seq coll? seq gs)
+   Returns nil if no card-shaped map matches.
+
+   2-arity: resolve against a CAPTURED game-state map (snapshot rendering,
+   #139 — the prompt renderer must not re-read the live atom mid-snapshot)."
+  ([cid] (find-selectable-card-by-cid cid (state/get-game-state)))
+  ([cid gs]
+  (let [matches (->> (tree-seq coll? seq gs)
                      (filter #(and (map? %)
                                    (= cid (:cid %))
                                    (or (:title %) (and (:zone %) (:side %)))))
                      seq)]
     (or (some #(when (:title %) %) matches)
-        (first matches))))
+        (first matches)))))
 
 (def ^:private credit-payment-prompt-re
   ;; game.core.pick-counters/pick-credit-providing-cards builds exactly:
@@ -1145,16 +1148,19 @@
 
    A CID string is resolved with find-selectable-card-by-cid, so a FACE-DOWN card
    the seat is accessing at a breach (title-less but zone-resident) counts as
-   pickable rather than phantom. Card-shape is judged by :title OR :zone. (#70)"
-  [selectable]
-  (reduce
-   (fn [acc [idx s]]
-     (let [card (if (string? s) (find-selectable-card-by-cid s) s)]
-       (if (and (map? card) (or (:title card) (:zone card)))
-         (update acc :pickable conj {:idx idx :card card})
-         (update acc :phantom conj idx))))
-   {:pickable [] :phantom []}
-   (map-indexed vector selectable)))
+   pickable rather than phantom. Card-shape is judged by :title OR :zone. (#70)
+
+   2-arity: resolve against a CAPTURED game-state map (#139 snapshot rendering)."
+  ([selectable] (resolve-selectable selectable (state/get-game-state)))
+  ([selectable gs]
+   (reduce
+    (fn [acc [idx s]]
+      (let [card (if (string? s) (find-selectable-card-by-cid s gs) s)]
+        (if (and (map? card) (or (:title card) (:zone card)))
+          (update acc :pickable conj {:idx idx :card card})
+          (update acc :phantom conj idx))))
+    {:pickable [] :phantom []}
+    (map-indexed vector selectable))))
 
 (defn format-selectable-card
   "Format one resolved selectable card for display: title, type, zone, rez state.

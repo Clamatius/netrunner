@@ -1898,7 +1898,10 @@
             ;; Render via the shared helper: pickable cards with their true
             ;; indices + a single warning line for phantom (unresolvable) CIDs,
             ;; instead of dumping raw "CID: <uuid>" lines that confuse indexing.
-            (let [{:keys [pickable phantom] :as parts} (core/resolve-selectable selectable)]
+            ;; Resolve CIDs against the SAME captured board we are rendering
+            ;; (third guest pass: the 1-arity consulted the live atom, so a
+            ;; resync mid-snapshot turned a valid pick into "hidden — ignore").
+            (let [{:keys [pickable phantom] :as parts} (core/resolve-selectable selectable (:game-state state))]
               (println (str "  Available ("
                             (if (seq phantom)
                               (str (count pickable) " selectable; " (count phantom) " hidden/unselectable")

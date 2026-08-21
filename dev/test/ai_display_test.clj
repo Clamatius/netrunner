@@ -2266,6 +2266,8 @@
       (let [out (with-out-str (display/show-credits))]
         (is (re-find #"(?i)still arriving|just started" out)
             (str "must allow for the first full state being in flight, got:\n" out))
+        (is (re-find #"(?i)resync cleared|cleared the cache|replacement state has not arrived" out)
+            (str "…AND still name the failed-resync reading — 'both states' is the contract (third pass), got:\n" out))
         (is (re-find #"(?i)retry" out)
             (str "retry is the move in both states, got:\n" out))
         (is (not (re-find #"(?i)never joined|reset" out))))))
@@ -2316,7 +2318,23 @@
           (is (re-find #"Choose a server" out)
               (str "must render the prompt from the argument, got:\n" out))
           (is (not (re-find #"(?i)no board|not in a game" out))
-              (str "must not consult the (boardless) atom, got:\n" out)))))))
+              (str "must not consult the (boardless) atom, got:\n" out))))))
+  (testing "third pass: a STRING-cid selectable resolves against the passed board, not the live atom"
+    ;; With the atom boardless, the 1-arity CID lookup found nothing and the
+    ;; prompt renderer told the seat its one valid pick was 'hidden — ignore'.
+    (let [boarded {:connected true :uid "test-user" :gameid "abc" :side "corp"
+                   :game-state {:active-player "corp" :turn 3
+                                :corp {:click 2 :credit 5
+                                       :hand [{:cid "c1" :title "Hedge Fund" :type "Operation" :zone ["hand"] :side "Corp"}]
+                                       :prompt-state {:msg "Choose a card to trash" :prompt-type "select"
+                                                      :eid 78 :choices [] :selectable ["c1"]}}
+                                :runner {:click 0}}}]
+      (with-mock-state boardless-seat-state
+        (let [out (with-out-str (display/show-prompt-detailed boarded))]
+          (is (re-find #"Hedge Fund" out)
+              (str "the selectable card must resolve from the passed board, got:\n" out))
+          (is (not (re-find #"(?i)0 selectable|ignore them" out))
+              (str "must not call the valid pick hidden, got:\n" out)))))))
 
 (deftest test-board-surfaces-gate-on-the-board-not-the-side
   ;; A spectator has a board and NO side (no-side-here!'s own spectator branch
