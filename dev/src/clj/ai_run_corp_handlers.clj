@@ -455,11 +455,25 @@
    Passes AT MOST ONCE per window: if :no-action already records the Corp's pass,
    fall through instead of re-sending — the condition (all subs resolved) stays
    true after the pass, so without the guard this handler re-continued every loop
-   iteration until the stuck-detector tripped (the frames-248-252 burst of #75)."
-  [{:keys [side run-phase state gameid]}]
+   iteration until the stuck-detector tripped (the frames-248-252 burst of #75).
+
+   The pass it must look at is the ENCOUNTER's (#150): an encounter-ice pass is
+   recorded on the current encounter ([:encounters :no-action]), not on the run,
+   and the engine never resets it when subs fire. Reading only run-level
+   :no-action left the guard blind, so every persistent tick re-entered here,
+   printed 'All subs resolved on Tithe, Corp continuing', and THEN had the send
+   suppressed by send-continue!'s #98 chokepoint (which does read the encounter)
+   — hundreds of lines until the 300s timeout, both Fable/Sol rematch games.
+   Same predicate as the chokepoint (core/i-already-passed-run-window?), so the
+   handler and the sender can no longer disagree; the waiting-prompt half of the
+   chokepoint is mirrored too, so nothing is printed that is not going to be sent.
+   Falling through lands in handle-corp-waiting-after-subs-fired's deduped
+   'Waiting for Runner to continue past <ice>' idle wait."
+  [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "corp")
              (= run-phase "encounter-ice")
-             (not= side (normalize-side (get-in state [:game-state :run :no-action]))))
+             (not (core/i-already-passed-run-window? state side))
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]

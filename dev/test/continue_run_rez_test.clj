@@ -1197,6 +1197,82 @@
                 "all subs broken and Corp hasn't spoken — passing is correct")
             (is (= :action-taken (:status r)))))))))
 
+(deftest all-subs-resolved-does-not-spam-after-corp-passed-the-encounter
+  (testing "#150: the encounter's pass is recorded at [:encounters :no-action], not [:run :no-action]. Once it names the Corp the handler must fall through SILENTLY — no 'Corp continuing' line, no continue — not print-then-get-suppressed on every persistent tick until the 300s timeout (Game D f0e820fc, hundreds of lines)"
+    (let [sent (atom [])
+          ctx (-> (all-subs-resolved-ctx nil)
+                  ;; Tithe, both subs FIRED; the Corp then passed the encounter.
+                  (assoc-in [:state :game-state :corp :servers :remote1 :ices]
+                            [{:cid 22 :title "Tithe" :rezzed true
+                              :subroutines [{:label "Do 1 net damage" :fired true}
+                                            {:label "Gain 1 [Credits]" :fired true}]}])
+                  (assoc-in [:state :game-state :encounters] {:no-action "corp" :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (let [out (with-out-str
+                      (let [r (corp-handlers/handle-corp-all-subs-resolved ctx)]
+                        (is (not= :action-taken (:status r))
+                            (str "must not claim an action, got: " r))))]
+            (is (not-any? #(= "continue" (:command %)) @sent)
+                "the Corp already passed the encounter; the Runner owes the closing continue")
+            (is (not (re-find #"Corp continuing" out))
+                (str "the #150 spam line — printed before send-continue! suppressed the send; got: "
+                     (pr-str out)))))))))
+
+(deftest all-subs-resolved-still-passes-fresh-encounter-after-fire
+  (testing "#150 non-interference: subs fired, NOBODY has passed the encounter yet — the Corp's pass is still owed and must still go out"
+    (let [sent (atom [])
+          ctx (-> (all-subs-resolved-ctx nil)
+                  (assoc-in [:state :game-state :corp :servers :remote1 :ices]
+                            [{:cid 22 :title "Tithe" :rezzed true
+                              :subroutines [{:label "Do 1 net damage" :fired true}
+                                            {:label "Gain 1 [Credits]" :fired true}]}])
+                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-all-subs-resolved ctx)]
+              (is (some #(= "continue" (:command %)) @sent)
+                  "subs resolved and the Corp hasn't spoken — passing is correct")
+              (is (= :action-taken (:status r))))))))))
+
+(def ^:private corp-passed-fired-encounter
+  "The #150 board, Corp seat: Tithe's two subs fired, the Corp passed the
+   encounter ([:encounters :no-action] corp), the Runner has not. The log carries
+   the engine's fire line so the chain's waiting-after-subs-fired handler can
+   name the ICE. The Runner owes the closing continue."
+  {:active-player "runner" :turn 9
+   :run {:phase "encounter-ice" :position 1 :server [:hq] :no-action false}
+   :encounters {:no-action "corp" :encounter-count 1}
+   :corp {:click 0
+          :prompt-state {:msg "You may use paid abilities" :prompt-type "run" :choices [] :selectable []}
+          :servers {:hq {:ices [{:cid 22 :title "Tithe" :rezzed true
+                                 :subroutines [{:label "Do 1 net damage" :fired true}
+                                               {:label "Gain 1 [Credits]" :fired true}]}]}}}
+   :runner {:click 0
+            :prompt-state {:msg "Encounter Tithe" :prompt-type "run" :choices [] :selectable []}}
+   :log [{:text "ai-corp rezzes Tithe"}
+         {:text "ai-runner indicates to fire all unbroken subroutines on Tithe"}
+         {:text "ai-corp resolves 2 unbroken subroutines on Tithe"}
+         {:text "ai-corp uses Tithe to do 1 net damage"}
+         {:text "ai-corp uses Tithe to gain 1 [Credits]"}]})
+
+(deftest continue-run-chain-idles-silently-after-corp-passed-the-encounter
+  (testing "#150 through the REAL handler chain: one persistent tick on the stalled board must send nothing, print no 'Corp continuing', and report an opponent wait (the idle status the persistent loop sleeps on)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (mock-client-state :side "corp" :game-state corp-passed-fired-encounter)
+          (let [r (atom nil)
+                out (with-out-str (reset! r (runs/continue-run!)))]
+            (is (not-any? #(= "continue" (:command %)) @sent)
+                (str "the Corp already passed; nothing may be sent, sent: " @sent))
+            (is (not (re-find #"Corp continuing" out))
+                (str "the #150 spam line must not print on the stalled board, got: " (pr-str out)))
+            (is (contains? #{:waiting-for-opponent :waiting-for-opponent-paid-abilities} (:status @r))
+                (str "expected an opponent-wait status for the persistent loop to idle on, got: " @r))))))))
+
 (deftest send-continue-chokepoint-suppresses-on-live-waiting-prompt
   (testing "belt-and-braces: even when a handler's own ctx qualifies, send-continue! consults the LIVE state and refuses to send while our prompt is a waiting prompt (#75)"
     (let [sent (atom [])

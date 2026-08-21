@@ -1531,10 +1531,18 @@
   [state]
   (get-in state [:game-state :run :phase]))
 
+(defn- own-prompt
+  "The given side's engine prompt-state (nil when it holds none). The ONE
+   side-keyed prompt read in the wake path — has-prompt? and the #102 waiting-
+   prompt guard both go through it (#127 ratchet: no new hand-rolled side
+   derivations)."
+  [state side]
+  (get-in state [:game-state (keyword side) :prompt-state]))
+
 (defn- has-prompt?
   "Check if the given side has an actionable prompt"
   [state side]
-  (let [prompt (get-in state [:game-state (keyword side) :prompt-state])]
+  (let [prompt (own-prompt state side)]
     (and prompt
          (not (state/waiting-prompt-type? (:prompt-type prompt)))
          (or (seq (:choices prompt))
@@ -1713,16 +1721,36 @@
    side that has already passed is driving the run via auto-continue-loop / park (whose
    own wake is park-wake-reason, not this), never sitting in a bare `wait` — so
    relevance-reason is not what advances it. Do not lean on :no-action to mean 'the
-   only un-passed side' beyond that."
+   only un-passed side' beyond that.
+
+   Encounter-ice (#102 items 4/6, the Runner twin of #150): the encounter is ALSO
+   a both-must-pass window, but its pass is recorded on the current encounter —
+   serialized under [:game-state :encounters :no-action] — not on the run, and
+   game.core.runs `continue :encounter-ice` never resets it when subs fire. So
+   after `tank` → Corp fires → Corp passes, the Runner owes the closing continue
+   while run-level :no-action still reads false. Reading only the run level made
+   this window nobody's: `wait` slept 300s three times in one marquee game (or,
+   with clicks in hand, fell through to :my-turn). Same ownership rule, read from
+   the encounter's own key. While subs are still unresolved the Runner's 'pass' is
+   the break/tank decision and :encounter-decision (ranked higher) reports it; this
+   owner is what remains once nothing is left to authorize."
   [state]
-  (when (run-pass-window? (run-phase state))
-    (let [no-action (get-in state [:game-state :run :no-action])
-          runner-passed? (contains? #{:runner "runner"} no-action)
-          corp-passed?   (contains? #{:corp "corp"} no-action)]
-      (cond
-        (not runner-passed?) :runner   ; nobody (or corp-only) has passed: Runner owes the first pass
-        (not corp-passed?)   :corp     ; Runner passed, Corp owes the second
-        :else nil))))                  ; both passed — window is closing, nothing to own
+  (let [phase (run-phase state)
+        owner-from (fn [no-action]
+                     (let [runner-passed? (contains? #{:runner "runner"} no-action)
+                           corp-passed?   (contains? #{:corp "corp"} no-action)]
+                       (cond
+                         (not runner-passed?) :runner   ; nobody (or corp-only) has passed: Runner owes the first pass
+                         (not corp-passed?)   :corp     ; Runner passed, Corp owes the second
+                         :else nil)))]                  ; both passed — window is closing, nothing to own
+    (cond
+      (run-pass-window? phase)
+      (owner-from (get-in state [:game-state :run :no-action]))
+
+      (= phase "encounter-ice")
+      (owner-from (get-in state [:game-state :encounters :no-action]))
+
+      :else nil)))
 
 (defn i-already-passed-run-window?
   "True when the engine has recorded THIS side as the (first) passer of the
@@ -1806,7 +1834,9 @@
                            BOTH sides, and `end-turn` is the only move. Fires for
                            the turn's OWNER only
      :my-run-window      — we own the un-passed pass at an active run window
-                           (approach-ice / movement / approach-server). #91: a
+                           (approach-ice / movement / approach-server, and the
+                           encounter's own close once its subs are resolved,
+                           #102). #91: a
                            seat that had passed a PREVIOUS window otherwise sleeps
                            through the new window it now owns and the game
                            deadlocks. Outranks :my-turn (#102) — while a run is
@@ -1890,6 +1920,20 @@
        ;; left, my-turn-to-act? false), and it does not spin — we own the window
        ;; only until we pass it, and it never fires for the side merely waiting on
        ;; the opponent to pass.
+       ;;
+       ;; Guard (#102 item 5): our OWN prompt is a 'waiting' prompt — the engine is
+       ;; blocked on the opponent's decision (Runner mid-Wildcat-Strike while the
+       ;; Corp picks the mode, marquee 471ef829). Nothing of ours is actionable
+       ;; until it clears: has-prompt? already excludes it and send-continue!'s
+       ;; #75 chokepoint refuses to pass under it. But my-turn-to-act? is true for
+       ;; the whole of our turn, so `wait --since` returned instantly and
+       ;; repeatedly with :my-turn / '(no new entries)'. The 'it is my move'
+       ;; family below stays asleep; the transitions above (run-started/-ended,
+       ;; game-over) still report, and the prompt clearing is itself a wake (the
+       ;; next tick falls through to :my-turn).
+       (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
+       nil
+
        (my-run-window? state side)
        :my-run-window
 
@@ -2024,7 +2068,8 @@
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
      "      Act — `prompt` shows the window; the verb is usually `continue`"
-     "      (Corp at an ICE approach: `continue --rez <ice>` to rez first)."
+     "      (Corp at an ICE approach: `continue --rez <ice>` to rez first;"
+     "       Corp at an ICE encounter: `fire-subs <ice>` to fire unbroken subs, then `continue`)."
      "      Another `wait` cannot advance it, and an empty game log here means the"
      "      opponent is already waiting on you."]
 
