@@ -19,7 +19,9 @@
 ;; (#31), so it is no longer a pure function. Without this fixture the
 ;; event-labeling tests below pass on a fresh JVM and FAIL on a second run in
 ;; the same REPL, because their entries are already marked as reported.
-(use-fixtures :each (fn [t] (runs/reset-reported-events!) (t)))
+;; The Corp's sent-pass latch (passed-encounter-key, #150) is likewise a
+;; per-run defonce; reset it too so one test's pass cannot silence the next.
+(use-fixtures :each (fn [t] (runs/reset-reported-events!) (corp-handlers/reset-state!) (t)))
 
 ;; =============================================================================
 ;; Test: Waiting for Opponent's Rez Decision
@@ -1219,6 +1221,43 @@
             (is (not (re-find #"Corp continuing" out))
                 (str "the #150 spam line — printed before send-continue! suppressed the send; got: "
                      (pr-str out)))))))))
+
+(deftest all-subs-resolved-passes-once-while-the-ack-is-in-flight
+  (testing "#150 guest finding (the short 12-line burst): the engine acks the Corp's continue through a diff; until it lands the encounter still reads un-passed. Repeated ticks on that pre-ack snapshot must send ONE continue and print ONE line — the Runner's passed-ice-position latch, mirrored"
+    (let [sent (atom [])
+          ctx (-> (all-subs-resolved-ctx nil)
+                  (assoc-in [:state :game-state :corp :servers :remote1 :ices]
+                            [{:cid 22 :title "Tithe" :rezzed true
+                              :subroutines [{:label "Do 1 net damage" :fired true}
+                                            {:label "Gain 1 [Credits]" :fired true}]}])
+                  ;; ack NOT yet in the mirror
+                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      (corp-handlers/reset-state!)
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (let [out (with-out-str
+                      (dotimes [_ 6]   ; > the loop's stuck-threshold (5)
+                        (corp-handlers/handle-corp-all-subs-resolved ctx)))]
+            (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+                (str "exactly one pass may go out per encounter, sent: " @sent))
+            (is (= 1 (count (re-seq #"Corp continuing" out)))
+                (str "exactly one line, got: " (pr-str out))))))
+      (corp-handlers/reset-state!)))
+  (testing "the latch is per-run: after reset-state! a fresh encounter passes again"
+    (let [sent (atom [])
+          ctx (-> (all-subs-resolved-ctx nil)
+                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (with-out-str
+            (corp-handlers/handle-corp-all-subs-resolved ctx)
+            (corp-handlers/reset-state!)
+            (corp-handlers/handle-corp-all-subs-resolved ctx))
+          (is (= 2 (count (filter #(= "continue" (:command %)) @sent)))
+              "two runs, two passes")))
+      (corp-handlers/reset-state!))))
 
 (deftest all-subs-resolved-still-passes-fresh-encounter-after-fire
   (testing "#150 non-interference: subs fired, NOBODY has passed the encounter yet — the Corp's pass is still owed and must still go out"

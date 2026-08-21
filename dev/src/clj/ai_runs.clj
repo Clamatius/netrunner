@@ -68,7 +68,7 @@
   []
   (reset! run-strategy {})
   (reset! last-waiting-status nil)
-  (corp-handlers/reset-waiting-status!)
+  (corp-handlers/reset-state!)
   (runner-handlers/reset-state!))
 
 (defn set-strategy!
@@ -1846,8 +1846,10 @@
                 ;; run!/monitor-run! only reset at their START, so a later
                 ;; run-event run (Jailbreak/Conduit) that enters via continue-run!
                 ;; would otherwise inherit stale [position ice] keys and skip a
-                ;; needed pass-continue.
+                ;; needed pass-continue. The Corp's sent-pass latch
+                ;; (passed-encounter-key, #150) has the same per-run lifetime.
                 (runner-handlers/reset-state!)
+                (corp-handlers/reset-state!)
                 ;; Same third-path hazard for the self-advance grace timer: a
                 ;; stale [phase position no-action] key (these collide readily)
                 ;; would make a card-initiated run's first window look instantly

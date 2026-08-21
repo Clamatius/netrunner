@@ -372,6 +372,27 @@
           (is (= :my-turn (:reason result))
               (str "prompt cleared -> our live turn again, got: " result)))))))
 
+(deftest test-wait-own-waiting-prompt-suppresses-encounter-decision-wake
+  ;; Guest-panel finding on the first cut: the guard sat BELOW :encounter-decision,
+  ;; so a Corp on-encounter choice that hands the Runner a waiting prompt
+  ;; (Saisentan's "choose a card type", src/clj/game/cards/ice.clj) with the subs
+  ;; still unbroken woke :encounter-decision instantly and repeatedly — item 5's
+  ;; spin one branch higher. The Runner cannot break/tank until the Corp chooses.
+  (testing "Runner at an unbroken encounter but holding a waiting prompt -> no wake until it clears"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in encounter-game-state [:runner :prompt-state]
+                                    {:msg "Waiting for Corp to make a decision"
+                                     :prompt-type "waiting" :card {:title "Saisentan"}
+                                     :choices [] :selectable []}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "the Corp owns the on-encounter choice — must not wake :encounter-decision, got: " result))))))
+  (testing "control: prompt cleared -> the encounter decision is live again"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" encounter-game-state)
+        (is (= :encounter-decision (:reason (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))))))
+
 (deftest test-wait-since-own-waiting-prompt-does-not-short-circuit
   (testing "#102 item 5 on the --since fast path: the repeated instant return was `wait --since`"
     (with-redefs [state/get-cursor (fn [] 10)]

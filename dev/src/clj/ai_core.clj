@@ -1887,6 +1887,28 @@
        has-actionable-prompt?
        :has-prompt
 
+       ;; Guard (#102 item 5): our OWN prompt is a 'waiting' prompt — the engine is
+       ;; blocked on the opponent's decision (Runner mid-Wildcat-Strike while the
+       ;; Corp picks the mode, marquee 471ef829). Nothing of ours is actionable
+       ;; until it clears: has-prompt? already excludes it and send-continue!'s
+       ;; #75 chokepoint refuses to pass under it. But my-turn-to-act? is true for
+       ;; the whole of our turn, so `wait --since` returned instantly and
+       ;; repeatedly with :my-turn / '(no new entries)'. Everything below that
+       ;; says "your move" — :encounter-decision, :my-run-window, the :my-turn
+       ;; family — stays asleep; the transitions above still report, and the
+       ;; prompt clearing is itself a wake (the next tick falls through).
+       ;;
+       ;; Placed ABOVE :encounter-decision (guest panel): an on-encounter Corp
+       ;; choice (Saisentan's "choose a card type" hands the Runner a waiting
+       ;; prompt, src/clj/game/cards/ice.clj) leaves the subs unbroken, so the
+       ;; encounter wake fired instantly and repeatedly under the Corp's prompt —
+       ;; the same spin as item 5, one branch higher. :run-ended and
+       ;; :run-phase-change sit below this too; under a waiting prompt they are
+       ;; DELAYED, not lost — they are computed against the wait's own baseline,
+       ;; so the tick on which the prompt clears reports them.
+       (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
+       nil
+
        ;; Runner is at an ICE encounter with unbroken subs that needs our
        ;; break/tank/jack-out decision, but which the engine did NOT model as a
        ;; server :prompt. `has-prompt?` misses it, so wait would otherwise sleep
@@ -1920,20 +1942,6 @@
        ;; left, my-turn-to-act? false), and it does not spin — we own the window
        ;; only until we pass it, and it never fires for the side merely waiting on
        ;; the opponent to pass.
-       ;;
-       ;; Guard (#102 item 5): our OWN prompt is a 'waiting' prompt — the engine is
-       ;; blocked on the opponent's decision (Runner mid-Wildcat-Strike while the
-       ;; Corp picks the mode, marquee 471ef829). Nothing of ours is actionable
-       ;; until it clears: has-prompt? already excludes it and send-continue!'s
-       ;; #75 chokepoint refuses to pass under it. But my-turn-to-act? is true for
-       ;; the whole of our turn, so `wait --since` returned instantly and
-       ;; repeatedly with :my-turn / '(no new entries)'. The 'it is my move'
-       ;; family below stays asleep; the transitions above (run-started/-ended,
-       ;; game-over) still report, and the prompt clearing is itself a wake (the
-       ;; next tick falls through to :my-turn).
-       (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
-       nil
-
        (my-run-window? state side)
        :my-run-window
 

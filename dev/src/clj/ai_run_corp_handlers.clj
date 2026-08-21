@@ -68,6 +68,20 @@
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
 
+;; The [position ice-cid] of the encounter whose closing pass THIS seat has
+;; already SENT (#150 guest finding): the engine acks a `continue` through a
+;; WebSocket diff, and until it lands [:encounters :no-action] still reads as
+;; un-passed, so an ack-based guard alone re-sends (and re-prints) every loop
+;; tick in that window — the short burst variant, which can trip the stuck
+;; detector. Corp twin of runner-handlers/passed-ice-position. Reset per run.
+(defonce passed-encounter-key (atom nil))
+
+(defn reset-state!
+  "Reset the Corp handler per-run atoms (run start / run end)."
+  []
+  (reset! last-waiting-status nil)
+  (reset! passed-encounter-key nil))
+
 ;; ============================================================================
 ;; Corp Rez Handlers
 ;; ============================================================================
@@ -476,13 +490,20 @@
              (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/current-run-ice state)
           subroutines (:subroutines current-ice)
-          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)]
-      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs))
+          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          pass-key [(get-in state [:game-state :run :position]) (:cid current-ice)]]
+      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs)
+                 ;; Pass already SENT for this encounter, ack not yet in the
+                 ;; mirror — fall through (idle), don't re-send/re-print.
+                 (not= @passed-encounter-key pass-key))
         (let [ice-title (:title current-ice "ICE")
               all-broken? (every? :broken subroutines)]
           (println (format "   All subs %s on %s, Corp continuing"
                           (if all-broken? "broken" "resolved") ice-title))
-          (send-continue! gameid))))))
+          (let [r (send-continue! gameid)]
+            (when (= :action-taken (:status r))
+              (reset! passed-encounter-key pass-key))
+            r))))))
 
 (defn handle-corp-waiting-after-subs-fired
   "Priority 1.75: Corp at encounter-ice after subs have fired.
