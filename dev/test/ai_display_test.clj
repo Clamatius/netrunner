@@ -2276,6 +2276,48 @@
       (is (re-find #"resync abc" (with-out-str (display/show-status)))
           "status too"))))
 
+(deftest test-snapshot-in-an-unstarted-lobby-tells-one-story
+  ;; Second pass: the unstarted-lobby path of snapshot called show-board-compact*
+  ;; directly, bypassing its guard — an empty rig beside the hand's "NOT STARTED".
+  (testing "unstarted lobby: lobby line + the not-started explainer + cursor, no board fragments"
+    (with-mock-state unstarted-lobby-state
+      (let [out (with-out-str (display/show-snapshot))]
+        (is (re-find #"Lobby:" out) (str "the lobby line IS the status here, got:\n" out))
+        (is (re-find #"(?i)not started" out) (str "one story: the game has not begun, got:\n" out))
+        (is (not (re-find #"(?i)Rig:|Corp:|Faceup" out))
+            (str "no board/rig fragments for a board that does not exist, got:\n" out))
+        (is (re-find #"cursor=" out))))))
+
+(deftest test-status-started-lobby-no-board-yet-names-both-states-and-the-id
+  ;; Second pass: :lobby-state non-nil bypassed the new boardless branch and hit
+  ;; the old "Waiting for game state... Use 'resync <game-id>'" placeholder.
+  (with-mock-state started-lobby-no-board-yet
+    (let [out (with-out-str (display/show-status))]
+      (is (re-find #"(?i)still arriving|just started" out)
+          (str "must allow for the healthy just-started window, got:\n" out))
+      (is (re-find #"resync abc" out)
+          (str "must print the id it holds, not a '<game-id>' placeholder, got:\n" out))
+      (is (not (re-find #"<game-id>" out)))
+      (is (re-find #"(?i)no board" out)))))
+
+(deftest test-prompt-detailed-renders-from-the-passed-state
+  ;; Second pass: snapshot captured `cs` but show-prompt-detailed re-read the
+  ;; atom — a resync mid-snapshot would print 'Not in a game' under a captured
+  ;; board. The 1-arity must render from its argument, not the atom.
+  (testing "atom holds no board; the passed state holds a board and a prompt → the prompt renders"
+    (let [boarded {:connected true :uid "test-user" :gameid "abc" :side "corp"
+                   :game-state {:active-player "corp" :turn 3
+                                :corp {:click 2 :credit 5
+                                       :prompt-state {:msg "Choose a server" :prompt-type "select"
+                                                      :eid 77 :choices [] :selectable [1 2]}}
+                                :runner {:click 0}}}]
+      (with-mock-state boardless-seat-state
+        (let [out (with-out-str (display/show-prompt-detailed boarded))]
+          (is (re-find #"Choose a server" out)
+              (str "must render the prompt from the argument, got:\n" out))
+          (is (not (re-find #"(?i)no board|not in a game" out))
+              (str "must not consult the (boardless) atom, got:\n" out)))))))
+
 (deftest test-board-surfaces-gate-on-the-board-not-the-side
   ;; A spectator has a board and NO side (no-side-here!'s own spectator branch
   ;; says "'board' / 'log' show the game you are watching"). Gating these

@@ -189,12 +189,19 @@
                  (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
                  :else "⏳ Waiting...")))
 
-        ;; Game started but no game state yet (post-join, pre-resync)
+        ;; Game started (:lobby-state :started) but no board yet. Two states
+        ;; share this signature (#139 guest panel): the healthy window between
+        ;; the started :lobby/state and :game/start, and a failed resync. Same
+        ;; wording as the no-lobby boardless branch, with the id we hold —
+        ;; `resync` takes it, and '<game-id>' was a placeholder a seat cannot run.
         (nil? gs)
         (do
           (println "📊 GAME STATUS")
-          (println "\n⏳ Waiting for game state...")
-          (println "💡 Use 'resync <game-id>' to fetch game state"))
+          (println (format "\n⚠️  Seated in game %s (started), but this client holds NO BOARD yet — the game state is unknown, not empty."
+                           (:gameid cs)))
+          (println "   Either the game just started and its first full state is still arriving,")
+          (println "   or a resync cleared the cache and the replacement state has not arrived.")
+          (println (format "\n💡 Retry the read; if it keeps failing: ./dev/send_command <side> resync %s" (:gameid cs))))
 
         ;; Show game status
         :else
@@ -1786,10 +1793,13 @@
     [(format "  Action: Waiting on %s — no action required from you." opp)]))
 
 (defn show-prompt-detailed
-  "Show current prompt with detailed choices"
-  []
-  (let [state @state/client-state
-        side (:side state)
+  "Show current prompt with detailed choices.
+   1-arity: render from an already-captured state (snapshot, #139 guest panel —
+   a live re-read mid-snapshot could print 'Not in a game' under a captured
+   board)."
+  ([] (show-prompt-detailed @state/client-state))
+  ([state]
+  (let [side (:side state)
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
     (if prompt
@@ -1851,7 +1861,7 @@
                 ;; Pattern 1: "choose N cards" in message
                 choose-n-match (re-find #"[Cc]hoose (\d+) cards?" prompt-msg)
                 ;; Pattern 2: Discard prompt - check hand vs max
-                gs (state/get-game-state)
+                gs (:game-state state)
                 hand-size (count (get-in gs [side :hand]))
                 max-hand-size (get-in gs [side :hand-size :total] 5)
                 is-discard? (str/includes? (str/lower-case prompt-msg) "discard")
@@ -1937,8 +1947,8 @@
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next
       ;; action so `prompt` reliably answers "what do I do now?".
-      (let [ts (state/get-turn-status)
-            side (:side @state/client-state)
+      (let [ts (state/get-turn-status state)
+            side (:side state)
             next-lc (clojure.string/lower-case (or (:next-player ts) ""))
             my-lc (clojure.string/lower-case (or side ""))]
         ;; NO GAME AT ALL must be answered before anything derived from the game
@@ -1995,7 +2005,7 @@
           (println "✅ It's your turn with clicks in hand → act (see 'list-playables').")
 
           :else
-          (println (format "ℹ️  %s" (:status-text ts))))))))))
+          (println (format "ℹ️  %s" (:status-text ts)))))))))))
 
 (defn show-prompt-if-any
   "Append the current prompt to an action's output — or print NOTHING if there
@@ -2037,22 +2047,27 @@
      ;; hand say "NO BOARD" under a fabricated compact status and board —
      ;; a single machine-read response that both described and denied a
      ;; board (guest panel). An unstarted lobby keeps its own compact line.
-     (if (and (not (map? (:game-state cs)))
-              (not (and lobby (not (:started lobby)))))
+     (if-not (map? (:game-state cs))
+       ;; No board: the lobby line if we are in an unstarted lobby (that IS
+       ;; the status), then the one explainer, then the cursor. Never the
+       ;; board/hand renderers — calling show-board-compact* directly here
+       ;; printed an empty rig beside the hand's "NOT STARTED" (second pass).
        (do
+         (when (and lobby (not (:started lobby)))
+           (show-status-compact* cs))
          (no-side-here! cs "the snapshot")
          (println (str "cursor=" (core/get-cursor)))
          nil)
-       ;; One captured state for the board-describing parts (guest panel):
-       ;; status / board / hand rendered from `cs`, so a resync landing
+       ;; One captured state for EVERY board-describing part (guest panel):
+       ;; status / prompt / board / hand rendered from `cs`, so a resync landing
        ;; mid-snapshot cannot make the response both describe and deny a
-       ;; board. The prompt and log lines still read live; neither asserts
-       ;; anything about the board's existence.
+       ;; board. Only the log tail reads live, and it asserts nothing about
+       ;; the board's existence.
        (do
          (show-status-compact* cs)
          (when (state/get-prompt cs)
            (println)
-           (show-prompt-detailed))
+           (show-prompt-detailed cs))
          (println)
          (show-board-compact* cs)
          (println)
