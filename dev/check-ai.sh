@@ -67,14 +67,6 @@ REQUIRE_EXPR="$REQUIRE_EXPR :check-success)"
 # you to commit. `pwd -P` on both sides so a symlinked path (/tmp vs /private/tmp)
 # does not read as a mismatch.
 repl_root() {
-    # Test seam: dev/test/check_ai_worktree_test.sh drives the match / mismatch /
-    # unverifiable branches against THIS script deterministically. Without it the
-    # only way to exercise the match branch is to run whichever script happens to
-    # live in the REPL's checkout — which is not the script under test (guest panel).
-    if [ -n "${CHECK_AI_REPL_ROOT_OVERRIDE:-}" ]; then
-        printf '%s' "$CHECK_AI_REPL_ROOT_OVERRIDE"
-        return 0
-    fi
     TIMEOUT=15 "$SCRIPT_DIR/ai-eval.sh" "runner" "$1" \
         '(System/getProperty "user.dir")' 2>/dev/null \
         | grep -o '"/[^"]*"' | tail -1 | tr -d '"'
