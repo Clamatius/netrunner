@@ -993,6 +993,53 @@
         (print-no-board-cause! client-state)
         (core/with-cursor {:status :error :reason :no-game-state}))
 
+      ;; NO TURN IN PROGRESS (#133). The reference client renders End Turn only
+      ;; while `:end-turn` is false (board.cljs `basic-actions`), and board.cljs
+      ;; is the wire spec: the engine itself checks nothing. `:end-turn` is TRUE
+      ;; from game creation (new-state ships it — that is what makes "Corp goes
+      ;; first" fall out of the ordinary boundary rule) until the first
+      ;; start-turn, and again from every end-turn until the next start-turn. So
+      ;; while it is set there is no turn to end, whoever the active player is.
+      ;;
+      ;; This was not covered below. At turn 0 new-state's :active-player is
+      ;; "runner", so the RUNNER seat passed the off-turn guard, the log held no
+      ;; "is ending" line for the duplicate guard, clicks were 0, and the :else
+      ;; arm SENT — the engine processed "ai-runner is ending their turn 0". That
+      ;; phantom line then fed every log-scanning boundary predicate on both
+      ;; seats, and the duplicate guard's "may have been rolled back" text is
+      ;; what the issue was filed about. Refuse here, before the off-turn guard,
+      ;; and say what the state IS rather than what it resembles: the Corp at
+      ;; turn 0 is not "off-turn", it just has not started.
+      (get-in client-state [:game-state :end-turn])
+      (let [turn (get-in client-state [:game-state :turn] 0)
+            post-discard? (or (get-in client-state [:game-state :corp-post-discard :active])
+                              (get-in client-state [:game-state :runner-post-discard :active]))]
+        (println "⛔ Refusing end-turn: no turn is in progress to end.")
+        (cond
+          (my-mulligan-pending? client-state)
+          (do (println "   The game has not started — you still owe your opening mulligan decision.")
+              (println "💡 Use: keep-hand  (or mulligan)"))
+
+          (opponent-mulligan-pending? client-state)
+          (do (println "   The game has not started — waiting for the opponent to keep or mulligan.")
+              (println "💡 Use: wait"))
+
+          (= 0 turn)
+          (do (println "   Turn 1 has not started yet — the Corp goes first.")
+              (println (if (= side-kw :corp) "💡 Use: start-turn" "💡 Use: wait")))
+
+          post-discard?
+          (do (println "   Your turn is ending, paused in the post-discard phase.")
+              (println "💡 Use: end-post-discard"))
+
+          my-turn?
+          (println "   Your turn has already ended; the opponent has not started theirs yet.")
+
+          :else
+          (do (println "   The opponent's turn has ended and yours has not been started.")
+              (println "💡 Use: start-turn")))
+        (core/with-cursor {:status :error :reason :no-turn-in-progress :turn turn}))
+
       ;; OFF-TURN GUARD (game 02995207, turn 8). An end-turn sent while we are NOT
       ;; the active player ends the OPPONENT's turn, and the engine logs it under
       ;; OUR name — leaving no "<opponent> is ending" line at all. Every consumer
