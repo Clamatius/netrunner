@@ -1903,9 +1903,13 @@
        ;; prompt, src/clj/game/cards/ice.clj) leaves the subs unbroken, so the
        ;; encounter wake fired instantly and repeatedly under the Corp's prompt —
        ;; the same spin as item 5, one branch higher. :run-ended and
-       ;; :run-phase-change sit below this too; under a waiting prompt they are
-       ;; DELAYED, not lost — they are computed against the wait's own baseline,
-       ;; so the tick on which the prompt clears reports them.
+       ;; :run-phase-change sit below this too. In the polling loop they are
+       ;; DELAYED, not lost — computed against the wait call's own baseline, so
+       ;; the tick on which the prompt clears reports them. The --since fast
+       ;; path has no historical baseline (it passes initial-run-active? false
+       ;; and no phase), so a transition that completed under a waiting prompt
+       ;; is reported there only as whatever the post-transition state wakes on
+       ;; — a limitation of that path that predates this guard.
        (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
        nil
 

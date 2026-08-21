@@ -1259,6 +1259,35 @@
               "two runs, two passes")))
       (corp-handlers/reset-state!))))
 
+(deftest all-subs-resolved-does-not-latch-a-failed-send
+  (testing "second guest pass: ws/send-message! returning false (reconnect exhausted) must NOT latch the pass — the engine never saw it, and the Corp still owes it"
+    (let [attempts (atom 0)
+          ctx (-> (all-subs-resolved-ctx nil)
+                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      (with-redefs [ws/send-message! (fn [_evt _data] (swap! attempts inc) false)]
+        (with-mock-state live
+          (with-out-str
+            (corp-handlers/handle-corp-all-subs-resolved ctx)
+            (corp-handlers/handle-corp-all-subs-resolved ctx))
+          (is (= 2 @attempts)
+              "a failed send leaves the pass owed; the next tick must try again"))))))
+
+(deftest all-subs-resolved-latch-expires
+  (testing "second guest pass: the latch only covers the ack window — a stale one (missed run-boundary reset, same ICE at the same position in a later run) must not suppress a fresh owed pass"
+    (let [sent (atom [])
+          ctx (-> (all-subs-resolved-ctx nil)
+                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+          live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
+      ;; same [position cid] as the ctx's Palisade, latched long ago
+      (reset! corp-handlers/passed-encounter-key
+              {:key [1 21] :at (- (System/currentTimeMillis) (* 2 corp-handlers/encounter-pass-latch-ms))})
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state live
+          (with-out-str (corp-handlers/handle-corp-all-subs-resolved ctx))
+          (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+              "stale latch ignored — the pass goes out"))))))
+
 (deftest all-subs-resolved-still-passes-fresh-encounter-after-fire
   (testing "#150 non-interference: subs fired, NOBODY has passed the encounter yet — the Corp's pass is still owed and must still go out"
     (let [sent (atom [])
@@ -1311,6 +1340,20 @@
                 (str "the #150 spam line must not print on the stalled board, got: " (pr-str out)))
             (is (contains? #{:waiting-for-opponent :waiting-for-opponent-paid-abilities} (:status @r))
                 (str "expected an opponent-wait status for the persistent loop to idle on, got: " @r))))))))
+
+(deftest continue-run-chain-sends-one-pass-in-runner-first-ordering-pre-ack
+  (testing "second guest pass: Runner passed FIRST (log 'has no further action', encounter :no-action runner), Corp fired; the Corp's closing pass is in flight and the mirror is pre-ack. Six chain ticks must send ONE continue — the re-send used to move from the all-subs handler to handle-corp-waiting-after-subs-fired's log branch"
+    (let [sent (atom [])
+          gs (-> corp-passed-fired-encounter
+                 (assoc :encounters {:no-action "runner" :encounter-count 1})
+                 (update :log conj {:text "ai-runner has no further action"}))]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (let [out (with-out-str (dotimes [_ 6] (runs/continue-run!)))]
+            (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+                (str "one closing pass per encounter, sent: " @sent))
+            (is (>= 1 (count (re-seq #"Corp continuing" out)))
+                (str "at most one 'continuing' line, got: " (pr-str out)))))))))
 
 (deftest send-continue-chokepoint-suppresses-on-live-waiting-prompt
   (testing "belt-and-braces: even when a handler's own ctx qualifies, send-continue! consults the LIVE state and refuses to send while our prompt is a waiting prompt (#75)"

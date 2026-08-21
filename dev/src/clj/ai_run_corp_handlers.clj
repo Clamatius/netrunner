@@ -56,25 +56,55 @@
      :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
 
     :else
-    (do
-      (ws/send-message! :game/action
-                        {:gameid gameid
-                         :command "continue"
-                         :args nil})
+    (let [sent? (boolean (ws/send-message! :game/action
+                                           {:gameid gameid
+                                            :command "continue"
+                                            :args nil}))]
       (Thread/sleep 100)
+      ;; :sent — ws/send-message! reports a failed send (reconnect exhausted)
+      ;; as false; callers that LATCH on having passed must key on this, not
+      ;; on :action-taken (guest panel, second pass).
       {:status :action-taken
-       :action :sent-continue})))
+       :action :sent-continue
+       :sent sent?})))
 
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
 
-;; The [position ice-cid] of the encounter whose closing pass THIS seat has
-;; already SENT (#150 guest finding): the engine acks a `continue` through a
-;; WebSocket diff, and until it lands [:encounters :no-action] still reads as
-;; un-passed, so an ack-based guard alone re-sends (and re-prints) every loop
-;; tick in that window — the short burst variant, which can trip the stuck
-;; detector. Corp twin of runner-handlers/passed-ice-position. Reset per run.
+;; {:key [position ice-cid] :at ms} of the encounter whose closing pass THIS
+;; seat has already SENT (#150 guest finding): the engine acks a `continue`
+;; through a WebSocket diff, and until it lands [:encounters :no-action] still
+;; reads as un-passed, so an ack-based guard alone re-sends (and re-prints)
+;; every loop tick in that window — the short burst variant, which can trip the
+;; stuck detector. Corp twin of runner-handlers/passed-ice-position.
+;;
+;; TIME-BOUNDED (second guest pass): the latch exists only to cover the ack
+;; window, so it is honoured for encounter-pass-latch-ms and then ignored. That
+;; turns every stale-latch failure mode — a send the socket dropped, a missed
+;; run-boundary reset, a later run meeting the same ICE at the same position —
+;; into a bounded idle instead of a stall; after it lapses the worst case is
+;; the pre-existing one (a duplicate continue the engine treats as a no-op).
+;; Still reset per run (start + end) as belt to the braces.
 (defonce passed-encounter-key (atom nil))
+
+(def encounter-pass-latch-ms
+  "How long a sent-but-unacked encounter pass suppresses a re-send. Longer than
+   the loop's stuck window (5 ticks of quick-delay + 100ms), far shorter than
+   the 300s wait it protects."
+  15000)
+
+(defn- passed-encounter-recently?
+  [pass-key]
+  (let [{:keys [key at]} @passed-encounter-key]
+    (boolean (and (= key pass-key) at
+                  (< (- (System/currentTimeMillis) at) encounter-pass-latch-ms)))))
+
+(defn- latch-encounter-pass!
+  "Record that the closing pass for `pass-key` went out — only on a send that
+   actually left the socket."
+  [pass-key sent?]
+  (when sent?
+    (reset! passed-encounter-key {:key pass-key :at (System/currentTimeMillis)})))
 
 (defn reset-state!
   "Reset the Corp handler per-run atoms (run start / run end)."
@@ -495,14 +525,14 @@
       (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs)
                  ;; Pass already SENT for this encounter, ack not yet in the
                  ;; mirror — fall through (idle), don't re-send/re-print.
-                 (not= @passed-encounter-key pass-key))
+                 (not (passed-encounter-recently? pass-key)))
         (let [ice-title (:title current-ice "ICE")
               all-broken? (every? :broken subroutines)]
           (println (format "   All subs %s on %s, Corp continuing"
                           (if all-broken? "broken" "resolved") ice-title))
           (let [r (send-continue! gameid)]
             (when (= :action-taken (:status r))
-              (reset! passed-encounter-key pass-key))
+              (latch-encounter-pass! pass-key (:sent r)))
             r))))))
 
 (defn handle-corp-waiting-after-subs-fired
@@ -521,11 +551,22 @@
       (when (and current-ice subs-resolved?)
         (let [recent-entries (take 5 (reverse log))
               runner-passed? (some #(re-find #"(?i)ai-runner has no further action" (str (:text %))) recent-entries)
-              position (get-in state [:game-state :run :position])]
-          (if runner-passed?
+              position (get-in state [:game-state :run :position])
+              pass-key [position (:cid current-ice)]]
+          (if (and runner-passed?
+                   ;; Same sent-pass latch as handle-corp-all-subs-resolved
+                   ;; (second guest pass): in the Runner-first ordering the log
+                   ;; still says "has no further action" while our closing pass
+                   ;; is in flight, and this branch re-sent off the log every
+                   ;; tick — the burst just moved one handler down. While the
+                   ;; latch holds, this is an opponent/ack wait, not a send.
+                   (not (passed-encounter-recently? pass-key)))
             (do
               (println (format "   Runner passed, Corp continuing past %s" ice-title))
-              (send-continue! gameid))
+              (let [r (send-continue! gameid)]
+                (when (= :action-taken (:status r))
+                  (latch-encounter-pass! pass-key (:sent r)))
+                r))
             (let [status-key [:corp-waiting-after-fire position ice-title]
                   already-printed? (= @last-waiting-status status-key)]
               (when-not already-printed?
