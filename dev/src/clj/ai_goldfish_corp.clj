@@ -4,6 +4,7 @@
    - Purpose: Baseline opponent for Runner testing."
   (:require [ai-state :as state]
             [ai-basic-actions :as actions]
+            [ai-loop-sync :as loop-sync]
             [ai-prompts :as prompts]
             [ai-runs :as runs]
             [clojure.string :as str]))
@@ -57,43 +58,56 @@
   "Main autonomous loop."
   []
   (println "🐠 GOLDFISH CORP - Starting autonomous loop")
-  (loop []
-    (let [continue? (try
-                      (let [game-state @state/client-state
-                            winner (get-in game-state [:game-state :winner])]
-                        (if winner
-                          (do
-                            (println "🐠 GOLDFISH CORP - Game over (Winner:" winner ") - Stopping loop.")
-                            false)
-                          (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
-                            ;; Handle Prompts
-                            (when (state/get-prompt)
-                              (handle-prompts)
-                              (Thread/sleep 500))
+  (loop [resync loop-sync/initial-tracker]
+    ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap when
+    ;; healthy, it REPAIRS a boardless seat, and it is bounded. It sits OUTSIDE
+    ;; the tick body's try so the tracker cannot be reverted by a body exception,
+    ;; and so an interrupt raised in here propagates and ends the loop.
+    (let [{:keys [action tracker]}
+          (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))
+          {:keys [continue?]}
+          (if (not= :act action)
+            {:continue? (not= :stop action)}
+            (try
+              (let [game-state @state/client-state
+                    winner (get-in game-state [:game-state :winner])]
+                (if winner
+                  (do
+                    (println "🐠 GOLDFISH CORP - Game over (Winner:" winner ") - Stopping loop.")
+                    {:continue? false})
+                  (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
+                    ;; Handle Prompts
+                    (when (state/get-prompt)
+                      (handle-prompts)
+                      (Thread/sleep 500))
 
-                            ;; Handle Run Responses (CRITICAL for unstucking runs)
-                            (handle-run-response)
+                    ;; Handle Run Responses (CRITICAL for unstucking runs)
+                    (handle-run-response)
 
-                            ;; Auto-start turn
-                            (let [start-check (actions/can-start-turn?)]
-                              (when (:can-start start-check)
-                                (println "🐠 GOLDFISH CORP - Auto-starting turn")
-                                (actions/start-turn!)
-                                (Thread/sleep 500)))
+                    ;; Auto-start turn
+                    (let [start-check (actions/can-start-turn?)]
+                      (when (:can-start start-check)
+                        (println "🐠 GOLDFISH CORP - Auto-starting turn")
+                        (actions/start-turn!)
+                        (Thread/sleep 500)))
 
-                            ;; Play Turn
-                            (when (and my-turn? (not (state/get-prompt)))
-                              (if (pos? (state/corp-clicks))
-                                (play-turn)
-                                (do
-                                  (println "🐠 GOLDFISH CORP - 0 clicks, ending turn")
-                                  (actions/smart-end-turn!))))
+                    ;; Play Turn
+                    (when (and my-turn? (not (state/get-prompt)))
+                      (if (pos? (state/corp-clicks))
+                        (play-turn)
+                        (do
+                          (println "🐠 GOLDFISH CORP - 0 clicks, ending turn")
+                          (actions/smart-end-turn!))))
 
-                            true))) ;; Continue loop
-                      (catch Exception e
-                        (println "❌ GOLDFISH CORP ERROR:" (.getMessage e))
-                        (Thread/sleep 5000)
-                        true))] ;; Continue loop on error
+                    {:continue? true})))
+              (catch InterruptedException e
+                (println "🛑 Loop interrupted — stopping.")
+                (.interrupt (Thread/currentThread))
+                {:continue? false})
+              (catch Exception e
+                (println "❌ GOLDFISH CORP ERROR:" (.getMessage e))
+                (Thread/sleep 5000)
+                {:continue? true})))]
       (when continue?
         (Thread/sleep 1000)
-        (recur)))))
+        (recur tracker)))))

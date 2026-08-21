@@ -21,6 +21,7 @@
             [ai-prompts :as prompts]
             [ai-runs :as runs]
             [ai-connection :as conn]
+            [ai-loop-sync :as loop-sync]
             [ai-stall :as stall]
             [clojure.string :as str]))
 
@@ -381,75 +382,98 @@
            (if patient? (str "(PATIENT: run-wait bail after "
                              (long (/ patient-ms 1000)) "s wall-clock)") ""))
   (loop [stall {:key nil :count 0}
-         spin {:key nil :count 0}]
-    (let [{:keys [continue? run-status]}
-          (try
+         spin {:key nil :count 0}
+         resync loop-sync/initial-tracker]
+    ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap
+    ;; when healthy (no round trip while the cached board is locally valid), it REPAIRS a boardless seat, and it is bounded.
+    ;;
+    ;; It sits OUTSIDE the tick body's try so an interrupt raised in here
+    ;; propagates and ends the loop, rather than being caught by the body's
+    ;; handler and read as "carry on" — bot-loop-stop cancels via future-cancel.
+    ;;
+    ;; Ahead of the run/prompt/turn priorities on purpose: every one of them
+    ;; reads the board, so none is meaningful without one.
+    (let [{:keys [action tracker]}
+          (loop-sync/report! "runner" (loop-sync/ensure-board! resync))
+          {:keys [continue? run-status]}
+          (if (not= :act action)
+            {:continue? (not= :stop action) :run-status nil}
+            (try
             (let [game-state @state/client-state
-                  winner (get-in game-state [:game-state :winner])]
-              (if winner
-                (do (println "Runner Loop Ends - Winner:" winner) {:continue? false})
-                (let [my-turn? (= "runner" (:active-player (:game-state game-state)))
-                      in-run? (state/current-run)]
+                      winner (get-in game-state [:game-state :winner])]
+                  (if winner
+                    (do (println "Runner Loop Ends - Winner:" winner) {:continue? false})
+                    (let [my-turn? (= "runner" (:active-player (:game-state game-state)))
+                          in-run? (state/current-run)]
 
-                  ;; Priority 1: Handle active runs FIRST (runs create prompts)
-                  ;; continue-run! handles run-related prompts internally
-                  (if in-run?
-                    (do
-                      (println "🏃 HEURISTIC RUNNER - In run, continuing...")
-                      (let [result (runs/continue-run!)
-                            post (case (run-result->next-action result)
-                                   :handle-prompt
-                                   (do
-                                     (println "🏃 HEURISTIC RUNNER - Decision required during run, handling prompt...")
-                                     (handle-prompt-if-needed)
-                                     nil)
+                      ;; Priority 1: Handle active runs FIRST (runs create prompts)
+                      ;; continue-run! handles run-related prompts internally
+                      (if in-run?
+                        (do
+                          (println "🏃 HEURISTIC RUNNER - In run, continuing...")
+                          (let [result (runs/continue-run!)
+                                post (case (run-result->next-action result)
+                                       :handle-prompt
+                                       (do
+                                         (println "🏃 HEURISTIC RUNNER - Decision required during run, handling prompt...")
+                                         (handle-prompt-if-needed)
+                                         nil)
 
-                                   :tank
-                                   ;; Can't break and no human to decide. Authorize tank
-                                   ;; (let subs fire) on this ICE and continue; the handler
-                                   ;; signals the Corp to fire, resolving the encounter.
-                                   (let [ice (:ice result)]
-                                     (println (format "🏃 HEURISTIC RUNNER - Can't break %s, authorizing tank (let subs fire)" ice))
-                                     (runs/set-strategy!
-                                       (update (runs/get-strategy) :tank (fnil conj #{}) ice))
-                                     (runs/continue-run!))
+                                       :tank
+                                       ;; Can't break and no human to decide. Authorize tank
+                                       ;; (let subs fire) on this ICE and continue; the handler
+                                       ;; signals the Corp to fire, resolving the encounter.
+                                       (let [ice (:ice result)]
+                                         (println (format "🏃 HEURISTIC RUNNER - Can't break %s, authorizing tank (let subs fire)" ice))
+                                         (runs/set-strategy!
+                                           (update (runs/get-strategy) :tank (fnil conj #{}) ice))
+                                         (runs/continue-run!))
 
-                                   ;; :continue - nothing special this tick
-                                   nil)]
-                        (Thread/sleep 500)
-                        ;; Surface the run status so the stall tracker can see if
-                        ;; we're stuck waiting on the Corp. After a tank authorization
-                        ;; `post` holds the follow-up continue-run! result (its
-                        ;; :waiting-for-corp-fire), so the stall clock starts on the
-                        ;; tick that signalled - not one poll later.
-                        {:continue? true :run-status (:status (if (map? post) post result))}))
+                                       ;; :continue - nothing special this tick
+                                       nil)]
+                            (Thread/sleep 500)
+                            ;; Surface the run status so the stall tracker can see if
+                            ;; we're stuck waiting on the Corp. After a tank authorization
+                            ;; `post` holds the follow-up continue-run! result (its
+                            ;; :waiting-for-corp-fire), so the stall clock starts on the
+                            ;; tick that signalled - not one poll later.
+                            {:continue? true :run-status (:status (if (map? post) post result))}))
 
-                    ;; Priority 2: Handle non-run prompts
-                    (do
-                      (when (handle-prompt-if-needed)
-                        (Thread/sleep 500))
+                        ;; Priority 2: Handle non-run prompts
+                        (do
+                          (when (handle-prompt-if-needed)
+                            (Thread/sleep 500))
 
-                      ;; Priority 3: Auto-start turn if needed
-                      (let [start-check (actions/can-start-turn?)]
-                        (when (:can-start start-check)
-                          (actions/start-turn!)
-                          (Thread/sleep 500)))
+                          ;; Priority 3: Auto-start turn if needed
+                          (let [start-check (actions/can-start-turn?)]
+                            (when (:can-start start-check)
+                              (actions/start-turn!)
+                              (Thread/sleep 500)))
 
-                      ;; Priority 4: Take actions if it's our turn
-                      (when (and my-turn? (not (state/get-prompt)))
-                        (if (pos? (my-clicks))
-                          (play-turn)
-                          (do
-                            (println "🏃 HEURISTIC RUNNER - 0 clicks, ending turn")
-                            (actions/smart-end-turn!))))
-                      ;; Not an in-run wait: turn-alternation idling is normal, so
-                      ;; nil run-status keeps the stall tracker reset.
-                      {:continue? true :run-status nil})))))
+                          ;; Priority 4: Take actions if it's our turn
+                          (when (and my-turn? (not (state/get-prompt)))
+                            (if (pos? (my-clicks))
+                              (play-turn)
+                              (do
+                                (println "🏃 HEURISTIC RUNNER - 0 clicks, ending turn")
+                                (actions/smart-end-turn!))))
+                          ;; Not an in-run wait: turn-alternation idling is normal, so
+                          ;; nil run-status keeps the stall tracker reset.
+                          {:continue? true :run-status nil})))))
+            ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
+            ;; Swallowing it here would keep a cancelled loop running, and a
+            ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).
+            (catch InterruptedException e
+              (println "🛑 Loop interrupted — stopping.")
+              (.interrupt (Thread/currentThread))
+              {:continue? false})
             (catch Exception e
               (println "❌ RUNNER ERROR:" (.getMessage e))
               (.printStackTrace e)
               (Thread/sleep 5000)
-              {:continue? true :run-status nil}))
+              ;; A tick-body exception is not a failed resync — the tracker is
+              ;; bound above and rides through untouched.
+              {:continue? true :run-status nil})))
 
           ;; Stall backstop: track 'same opponent-wait for N ticks' and nudge /
           ;; bail. Only in-run opponent-waits qualify (run-status nil resets it).
@@ -485,7 +509,7 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur next-stall next-spin)))))
+        (recur next-stall next-spin tracker)))))
 
 ;; ============================================================================
 ;; Turn Driver + Status (send_command parity with ai-heuristic-corp)
