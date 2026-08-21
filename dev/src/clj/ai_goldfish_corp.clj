@@ -59,65 +59,55 @@
   []
   (println "🐠 GOLDFISH CORP - Starting autonomous loop")
   (loop [resync loop-sync/initial-tracker]
-    (let [{:keys [continue? resync-next]}
-          (try
-            ;; #144: reach the SAME authority the CLI gate uses before acting.
-            ;; Cheap when healthy (no round trip while a board is cached), it
-            ;; REPAIRS a boardless seat, and it is bounded — a seat that cannot
-            ;; be repaired stops with a diagnostic instead of refusing forever.
-            (let [{:keys [action tracker]}
-                  (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))]
-              ;; The tracker rides EVERY path. Dropping it on the :act branch let
-              ;; the recur fall back to initial-tracker, whose :verified-at 0 is
-              ;; instantly due — so the once-a-minute membership check fired every
-              ;; tick instead (guest 2nd pass, CRITICAL).
-              (merge
-                {:resync-next tracker}
-                (if (not= :act action)
-                {:continue? (not= :stop action)}
-                (let [game-state @state/client-state
-                      winner (get-in game-state [:game-state :winner])]
-                  (if winner
-                    (do
-                      (println "🐠 GOLDFISH CORP - Game over (Winner:" winner ") - Stopping loop.")
-                      {:continue? false})
-                    (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
-                      ;; Handle Prompts
-                      (when (state/get-prompt)
-                        (handle-prompts)
-                        (Thread/sleep 500))
+    ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap when
+    ;; healthy, it REPAIRS a boardless seat, and it is bounded. It sits OUTSIDE
+    ;; the tick body's try so the tracker survives a body exception (guest 3rd
+    ;; pass, MAJOR); an interrupt raised in here propagates and ends the loop.
+    (let [{:keys [action tracker]}
+          (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))
+          {:keys [continue?]}
+          (if (not= :act action)
+            {:continue? (not= :stop action)}
+            (try
+              (let [game-state @state/client-state
+                    winner (get-in game-state [:game-state :winner])]
+                (if winner
+                  (do
+                    (println "🐠 GOLDFISH CORP - Game over (Winner:" winner ") - Stopping loop.")
+                    {:continue? false})
+                  (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
+                    ;; Handle Prompts
+                    (when (state/get-prompt)
+                      (handle-prompts)
+                      (Thread/sleep 500))
 
-                      ;; Handle Run Responses (CRITICAL for unstucking runs)
-                      (handle-run-response)
+                    ;; Handle Run Responses (CRITICAL for unstucking runs)
+                    (handle-run-response)
 
-                      ;; Auto-start turn
-                      (let [start-check (actions/can-start-turn?)]
-                        (when (:can-start start-check)
-                          (println "🐠 GOLDFISH CORP - Auto-starting turn")
-                          (actions/start-turn!)
-                          (Thread/sleep 500)))
+                    ;; Auto-start turn
+                    (let [start-check (actions/can-start-turn?)]
+                      (when (:can-start start-check)
+                        (println "🐠 GOLDFISH CORP - Auto-starting turn")
+                        (actions/start-turn!)
+                        (Thread/sleep 500)))
 
-                      ;; Play Turn
-                      (when (and my-turn? (not (state/get-prompt)))
-                        (if (pos? (state/corp-clicks))
-                          (play-turn)
-                          (do
-                            (println "🐠 GOLDFISH CORP - 0 clicks, ending turn")
-                            (actions/smart-end-turn!))))
+                    ;; Play Turn
+                    (when (and my-turn? (not (state/get-prompt)))
+                      (if (pos? (state/corp-clicks))
+                        (play-turn)
+                        (do
+                          (println "🐠 GOLDFISH CORP - 0 clicks, ending turn")
+                          (actions/smart-end-turn!))))
 
-                      {:continue? true})))))) ;; Continue loop
-            ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
-            ;; Swallowing it here would keep a cancelled loop running, and a
-            ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).
-            (catch InterruptedException e
-              (println "🛑 Loop interrupted — stopping.")
-              (.interrupt (Thread/currentThread))
-              {:continue? false :resync-next resync})
-            (catch Exception e
-              (println "❌ GOLDFISH CORP ERROR:" (.getMessage e))
-              (Thread/sleep 5000)
-              ;; An exception is not a failed resync — carry the count, don't spend it.
-              {:continue? true :resync-next resync}))] ;; Continue loop on error
+                    {:continue? true})))
+              (catch InterruptedException e
+                (println "🛑 Loop interrupted — stopping.")
+                (.interrupt (Thread/currentThread))
+                {:continue? false})
+              (catch Exception e
+                (println "❌ GOLDFISH CORP ERROR:" (.getMessage e))
+                (Thread/sleep 5000)
+                {:continue? true})))]
       (when continue?
         (Thread/sleep 1000)
-        (recur resync-next)))))
+        (recur tracker)))))

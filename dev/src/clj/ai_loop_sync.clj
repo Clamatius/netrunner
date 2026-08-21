@@ -241,43 +241,77 @@
                  :suspect? false
                  :verified-at (if failed? (:verified-at tracker 0) now)}}))
 
+(def ^:dynamic *probe-reply-timeout-ms*
+  "How long a membership probe waits for its OWN lobby-list reply before giving
+   up and reporting `:unknown`."
+  2000)
+
+(defn membership
+  "Ask the server whether this seat is still in its game, and say so HONESTLY:
+   `:seated`, `:absent`, or `:unknown`.
+
+   `verify-in-game!` cannot be used for this. It requests a lobby list, sleeps a
+   fixed 500ms, then reads whichever cached list happens to be there — it never
+   establishes that the read answers the request. A reply delayed past the sleep
+   therefore reads as `:absent`, and consecutive probes inside one delay window
+   all re-read the SAME stale value, so they are not independent samples at all
+   (guest 3rd pass, CRITICAL). Two strikes drawn from one stale read are one
+   strike wearing a hat.
+
+   `:lobby-list-rev` is bumped by the `:lobby/list` handler, so waiting for it to
+   ADVANCE is waiting for a reply that post-dates our request. If none arrives,
+   that is `:unknown` — the server is not answering, which is not evidence that
+   we were unseated, and must never be counted as though it were."
+  []
+  (let [rev0 (:lobby-list-rev @state/client-state 0)]
+    (conn/request-lobby-list!)
+    (if (loop [waited 0]
+          (or (> (:lobby-list-rev @state/client-state 0) rev0)
+              (when (< waited *probe-reply-timeout-ms*)
+                (Thread/sleep 100)
+                (recur (+ waited 100)))))
+      (let [mine (:gameid @state/client-state)
+            found (conn/find-our-game)]
+        (if (and found mine (= (str mine) (str found))) :seated :absent))
+      :unknown)))
+
 (defn- probe!
   "Non-destructive membership check for a seat that LOOKS healthy.
 
-   `verify-in-game!` requests a lobby list, sleeps a fixed 500ms, then reads
-   whichever cached list happens to be there — it does not correlate the reply
-   to the request. A slow reply therefore reads as 'not seated'. The CLI gate
-   turns that straight into a rejoin+resync, and `resync-game!` CLEARS the board
-   before asking for a replacement; a loop doing that on a schedule would wreck
-   healthy in-flight encounters roughly once a minute (guest 2nd pass, CRITICAL).
+   One fresh absence only ARMS suspicion and keeps playing; the seat re-probes
+   next tick, and only a SECOND fresh absence escalates to the destructive
+   repair. The repair CLEARS the board before requesting a replacement, so doing
+   it on a schedule off a single reading would wreck healthy in-flight
+   encounters about once a minute.
 
-   So one absence only ARMS suspicion and keeps playing; the seat re-probes on
-   the next tick, and only a SECOND consecutive absence escalates to the
-   destructive repair. Two independent samples, a tick apart, against one
-   uncorrelated read. Local invalidation signals still repair immediately — they
-   are facts, not samples, and never come here."
+   `:unknown` — no reply arrived — changes nothing and costs nothing. Local
+   invalidation signals never come here: they are facts, not samples."
   [tracker max-attempts now]
-  (let [seated? (try
-                  (conn/verify-in-game!)
-                  (catch InterruptedException e
-                    (.interrupt (Thread/currentThread))
-                    (throw e))
-                  (catch Exception e
-                    (println "⚠️  Membership probe threw:" (.getMessage e))
-                    false))]
-    (cond
-      seated?
-      {:action :act :outcome :have-board :verdict nil :repaired? false
-       :tracker {:attempts 0 :suspect? false :verified-at now}}
+  (let [seen (try
+               (membership)
+               (catch InterruptedException e
+                 (.interrupt (Thread/currentThread))
+                 (throw e))
+               (catch Exception e
+                 (println "⚠️  Membership probe threw:" (.getMessage e))
+                 :unknown))
+        keep-playing (fn [tr]
+                       {:action :act :outcome :have-board :verdict nil
+                        :repaired? false :tracker tr})]
+    (case seen
+      :seated
+      (keep-playing {:attempts 0 :suspect? false :verified-at now})
 
-      (:suspect? tracker)
-      (do (println "⚠️  Still not seated on a second check — repairing.")
-          (repair! tracker max-attempts now))
+      :unknown
+      (do (println "⚠️  No lobby reply to the membership check — assuming nothing.")
+          (keep-playing (assoc tracker :verified-at now)))
 
-      :else
-      (do (println "⚠️  Membership check came back empty; re-checking next tick before repairing.")
-          {:action :act :outcome :have-board :verdict nil :repaired? false
-           :tracker (assoc tracker :suspect? true :verified-at now)}))))
+      :absent
+      (if (:suspect? tracker)
+        (do (println "⚠️  Still not seated on a second, independent check — repairing.")
+            (repair! tracker max-attempts now))
+        (do (println "⚠️  Not seated in the lobby list; re-checking next tick before repairing.")
+            (keep-playing (assoc tracker :suspect? true :verified-at now)))))))
 
 (defn ensure-board!
   "The autonomous loops' entry to the same authority the CLI gate uses.

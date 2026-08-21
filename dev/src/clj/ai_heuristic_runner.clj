@@ -384,25 +384,25 @@
   (loop [stall {:key nil :count 0}
          spin {:key nil :count 0}
          resync loop-sync/initial-tracker]
-    (let [{:keys [continue? run-status resync-next]}
-          (try
-            ;; #144: reach the SAME authority the CLI gate uses before acting.
-            ;; Cheap when healthy (no round trip while a board is cached), it
-            ;; REPAIRS a boardless seat, and it is bounded — a seat that cannot
-            ;; be repaired stops with a diagnostic instead of refusing forever.
-            ;; Sits ahead of the run/prompt/turn priorities on purpose: every one
-            ;; of them reads the board, so none of them is meaningful without one.
-            (let [{:keys [action tracker]}
-                  (loop-sync/report! "runner" (loop-sync/ensure-board! resync))]
-              ;; The tracker rides EVERY path. Dropping it on the :act branch let
-              ;; the recur fall back to initial-tracker, whose :verified-at 0 is
-              ;; instantly due — so the once-a-minute membership check fired every
-              ;; tick instead (guest 2nd pass, CRITICAL).
-              (merge
-                {:resync-next tracker}
-                (if (not= :act action)
-                {:continue? (not= :stop action) :run-status nil}
-                (let [game-state @state/client-state
+    ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap
+    ;; when healthy (no round trip while a board is cached and recently
+    ;; verified), it REPAIRS a boardless seat, and it is bounded.
+    ;;
+    ;; It sits OUTSIDE the tick body's try so the tracker survives a body
+    ;; exception: carrying a stale one back would re-arm the membership check
+    ;; every tick and, worse, keep discarding a suspicion so a real absence never
+    ;; reaches its second strike (guest 3rd pass, MAJOR). An interrupt raised in
+    ;; here is meant to propagate and end the loop.
+    ;;
+    ;; Ahead of the run/prompt/turn priorities on purpose: every one of them
+    ;; reads the board, so none is meaningful without one.
+    (let [{:keys [action tracker]}
+          (loop-sync/report! "runner" (loop-sync/ensure-board! resync))
+          {:keys [continue? run-status]}
+          (if (not= :act action)
+            {:continue? (not= :stop action) :run-status nil}
+            (try
+            (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
                   (if winner
                     (do (println "Runner Loop Ends - Winner:" winner) {:continue? false})
@@ -462,20 +462,21 @@
                                 (actions/smart-end-turn!))))
                           ;; Not an in-run wait: turn-alternation idling is normal, so
                           ;; nil run-status keeps the stall tracker reset.
-                          {:continue? true :run-status nil}))))))))
+                          {:continue? true :run-status nil})))))
             ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
             ;; Swallowing it here would keep a cancelled loop running, and a
             ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).
             (catch InterruptedException e
               (println "🛑 Loop interrupted — stopping.")
               (.interrupt (Thread/currentThread))
-              {:continue? false :resync-next resync})
+              {:continue? false})
             (catch Exception e
               (println "❌ RUNNER ERROR:" (.getMessage e))
               (.printStackTrace e)
               (Thread/sleep 5000)
-              ;; An exception is not a failed resync — carry the count, don't spend it.
-              {:continue? true :run-status nil :resync-next resync}))
+              ;; A tick-body exception is not a failed resync. The tracker is
+              ;; bound above, so it rides through this untouched.
+              {:continue? true :run-status nil})))
 
           ;; Stall backstop: track 'same opponent-wait for N ticks' and nudge /
           ;; bail. Only in-run opponent-waits qualify (run-status nil resets it).
@@ -511,7 +512,7 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur next-stall next-spin resync-next)))))
+        (recur next-stall next-spin tracker)))))
 
 ;; ============================================================================
 ;; Turn Driver + Status (send_command parity with ai-heuristic-corp)

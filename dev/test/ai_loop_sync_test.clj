@@ -172,7 +172,7 @@
     (let [repairs (atom 0) probes (atom 0)]
       (with-mock-state (mock-client-state)
         (with-redefs [conn/sync-verdict!  (counting repairs :synced)
-                      conn/verify-in-game! (counting probes true)]
+                      sync/membership      (counting probes :seated)]
           (let [r (sync/ensure-board! fresh 3 60000 1000)]
             (is (= :act (:action r)))
             (is (zero? @repairs) "THE cost property: no repair")
@@ -206,7 +206,7 @@
       (let [repairs (atom 0) probes (atom 0)]
         (with-mock-state (merge (mock-client-state) st)
           (with-redefs [conn/sync-verdict!   (counting repairs :synced)
-                        conn/verify-in-game! (counting probes true)]
+                        sync/membership      (counting probes :seated)]
             (sync/ensure-board! fresh 3 60000 1000)
             (is (= 1 @repairs) (str what " → straight to the repair"))
             (is (zero? @probes) (str what " → not merely probed"))))))))
@@ -217,7 +217,7 @@
   (testing "#144: a loop holding a board still re-asks 'am I still seated?' eventually"
     (let [probes (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (counting probes true)]
+        (with-redefs [sync/membership      (counting probes :seated)]
           (testing "not yet due: free"
             (sync/ensure-board! fresh 3 60000 30000)
             (is (zero? @probes)))
@@ -231,7 +231,7 @@
   (testing "#144: a loop confirms its seat at startup rather than trusting the cache"
     (let [probes (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (counting probes true)]
+        (with-redefs [sync/membership      (counting probes :seated)]
           (sync/ensure-board! sync/initial-tracker 3 60000 500000)
           (is (= 1 @probes) "initial-tracker's :verified-at 0 is always due"))))))
 
@@ -244,7 +244,7 @@
     ;; that would wreck healthy in-flight encounters about once a minute.
     (let [repairs (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (constantly false)
+        (with-redefs [sync/membership      (constantly :absent)
                       conn/sync-verdict!   (counting repairs :synced)]
           (let [r (sync/ensure-board! fresh 3 60000 61000)]
             (is (zero? @repairs) "THE hazard: one sample must not clear a live board")
@@ -255,7 +255,7 @@
   (testing "#144: two independent absences a tick apart ARE evidence — then repair"
     (let [repairs (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (constantly false)
+        (with-redefs [sync/membership      (constantly :absent)
                       conn/sync-verdict!   (counting repairs :game-gone)]
           (let [r1 (sync/ensure-board! fresh 3 60000 61000)
                 r2 (sync/ensure-board! (:tracker r1) 3 60000 62000)]
@@ -266,7 +266,7 @@
 (deftest test-ensure-board-suspicion-clears-on-a-good-sample
   (testing "#144: a transient empty read must not leave the seat armed forever"
     (with-mock-state (mock-client-state)
-      (with-redefs [conn/verify-in-game! (constantly true)]
+      (with-redefs [sync/membership      (constantly :seated)]
         (let [r (sync/ensure-board! (assoc fresh :suspect? true) 3 60000 61000)]
           (is (= :act (:action r)))
           (is (false? (:suspect? (:tracker r)))))))))
@@ -296,7 +296,7 @@
     ;; Note the fixture RETAINS a board throughout: that is the state that hid it.
     (let [repairs (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (constantly false)
+        (with-redefs [sync/membership      (constantly :absent)
                       conn/sync-verdict!   (counting repairs :resync-failed)]
           (let [;; two absences to escalate, then the failure must stay sticky
                 rs (reductions (fn [prev i]
@@ -347,7 +347,7 @@
               "the interrupt must propagate, not be counted"))))
     (testing "and the probe path too"
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/verify-in-game! (fn [] (throw (InterruptedException. "cancelled")))]
+        (with-redefs [sync/membership      (fn [] (throw (InterruptedException. "cancelled")))]
           (is (thrown? InterruptedException
                        (sync/ensure-board! fresh 3 60000 61000))))))))
 
@@ -461,34 +461,62 @@
             (is (true? @repaired) (str nm ": did attempt the repair"))))))))
 
 
+(def ^:private loops-with-opponent
+  [["goldfish-runner"  #(ai-goldfish-runner/loop!)          "corp"]
+   ["goldfish-corp"    #(ai-goldfish-corp/start-autonomous!) "runner"]
+   ["heuristic-runner" #(ai-heuristic-runner/loop!)          "corp"]
+   ["heuristic-corp"   #(ai-heuristic-corp/start-autonomous!) "runner"]])
+
 (deftest test-a-healthy-loop-consults-the-authority-once-not-every-tick
   (testing "#144: the tracker must SURVIVE an :act tick, or the TTL is no throttle at all"
     ;; Guest 2nd pass, CRITICAL. Every continuing normal-body result omitted
     ;; :resync-next, so the recur substituted `initial-tracker`, whose
     ;; :verified-at 0 is instantly due. All four loops therefore ran a membership
-    ;; check EVERY tick — a lobby request and a 500ms sleep per tick, and a
-    ;; recurring destructive-probe exposure for live runs. Exactly the per-tick
-    ;; cost the whole design exists to avoid, reintroduced by a dropped key.
+    ;; check EVERY tick — the exact per-tick cost the design exists to avoid,
+    ;; reintroduced by a dropped key. Counting is the only honest way to see it:
+    ;; the module tests pass either way, because the defect lives in what the
+    ;; LOOP carries between ticks.
     ;;
-    ;; Counting is the only honest way to see this: the module tests pass either
-    ;; way, because the defect lives in what the LOOP carries between ticks.
-    ;;
-    ;; The board here is healthy and it is the OPPONENT's turn, so each tick is a
-    ;; clean no-op: the loops just sleep. Several ticks elapse inside the window.
-    (doseq [[nm f opponent] [["goldfish-runner" #(ai-goldfish-runner/loop!) "corp"]
-                             ["goldfish-corp"   #(ai-goldfish-corp/start-autonomous!) "runner"]
-                             ["heuristic-runner" #(ai-heuristic-runner/loop!) "corp"]
-                             ["heuristic-corp"  #(ai-heuristic-corp/start-autonomous!) "runner"]]]
-      (let [probes (atom 0)
-            repairs (atom 0)
-            healthy (assoc-in (mock-client-state) [:game-state :active-player] opponent)]
-        (with-mock-state healthy
-          (with-redefs [conn/verify-in-game!  (fn [] (swap! probes inc) true)
-                        conn/sync-verdict!    (fn [] (swap! repairs inc) :synced)
-                        actions/can-start-turn? (constantly {:can-start false})]
-            (is (= :spun (run-with-timeout f 3500))
-                (str nm ": a healthy loop should still be running"))
+    ;; `can-start-turn?` is the body hook: it counts real iterations and then
+    ;; ends the game, so the loop RETURNS. A test that only proved "did not
+    ;; return" would also pass if the loop blocked forever on its first tick
+    ;; (guest 3rd pass, MINOR).
+    (doseq [[nm f opponent] loops-with-opponent]
+      (let [probes (atom 0) repairs (atom 0) ticks (atom 0)]
+        (with-mock-state (assoc-in (mock-client-state) [:game-state :active-player] opponent)
+          (with-redefs [sync/membership    (fn [] (swap! probes inc) :seated)
+                        conn/sync-verdict! (fn [] (swap! repairs inc) :synced)
+                        actions/can-start-turn?
+                        (fn []
+                          (when (>= (swap! ticks inc) 4)
+                            (swap! state/client-state assoc-in [:game-state :winner] "Corp"))
+                          {:can-start false})]
+            (is (= :returned (run-with-timeout f 25000))
+                (str nm ": should end once the game is decided"))
+            (is (>= @ticks 4)
+                (str nm ": several real iterations must have elapsed"))
             (is (zero? @repairs)
                 (str nm ": a healthy seat is never destructively repaired"))
             (is (= 1 @probes)
                 (str nm ": THE bug — the startup check only, not one per tick"))))))))
+
+(deftest test-the-tracker-survives-a-tick-body-exception
+  (testing "#144: a throwing tick body must not discard what the sync check learned"
+    ;; Guest 3rd pass, MAJOR. The sync call used to sit INSIDE the tick body's
+    ;; try, and its result reached the recur through the body's return map — so
+    ;; the broad catch, which returns its own map, silently reverted the tracker.
+    ;; A repeatable body exception therefore re-armed the membership check every
+    ;; tick, and worse, kept throwing away an armed `:suspect?` so a genuine
+    ;; absence could never reach its second strike. `ensure-board!` now sits
+    ;; OUTSIDE that try and the tracker is bound before it.
+    (doseq [[nm f opponent] loops-with-opponent]
+      (let [probes (atom 0) throws (atom 0)]
+        (with-mock-state (assoc-in (mock-client-state) [:game-state :active-player] opponent)
+          (with-redefs [sync/membership (fn [] (swap! probes inc) :seated)
+                        actions/can-start-turn?
+                        (fn [] (swap! throws inc) (throw (RuntimeException. "body blew up")))]
+            (run-with-timeout f 9000)
+            (is (>= @throws 2)
+                (str nm ": the body really ran more than once"))
+            (is (= 1 @probes)
+                (str nm ": THE bug — a body exception used to revert the tracker"))))))))
