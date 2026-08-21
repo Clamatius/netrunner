@@ -2123,7 +2123,16 @@
     (doseq [[label f] [["show-credits"   display/show-credits]
                        ["show-clicks"    display/show-clicks]
                        ["show-hand"      display/show-hand]
-                       ["list-playables" display/list-playables]]]
+                       ["list-playables" display/list-playables]
+                       ;; #139 remainder — the surfaces the first cut left
+                       ;; inventing an empty game (issue table, worst first).
+                       ["show-blocker-diagnosis" display/show-blocker-diagnosis]
+                       ["status-compact"  display/status-compact]
+                       ["show-archives"   display/show-archives]
+                       ["show-heap"       display/show-heap]
+                       ["show-board"      display/show-board]
+                       ["board-compact"   display/board-compact]
+                       ["show-snapshot"   display/show-snapshot]]]
       (with-mock-state boardless-seat-state
         (let [out (try (with-out-str (f))
                        (catch Exception e
@@ -2190,6 +2199,165 @@
             (str "the client holds a :gameid, got:\n" out))
         (is (re-find #"(?i)retry|resync|status" out)
             (str "must name a recovery that fits a transient empty board, got:\n" out))))))
+
+(deftest test-boardless-seat-specific-lies
+  ;; The exact fabrications observed live (#139 table), one assertion each, so
+  ;; a regression names the surface that lied.
+  (testing "show-blocker-diagnosis must not steer a boardless seat into `wait` (a hang on a game that isn't there)"
+    (with-mock-state boardless-seat-state
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (not (re-find #"(?i)use:\s*wait|→ wait" out))
+            (str "the diagnosis command must not send a stuck seat to wait on a missing board, got:\n" out))
+        (is (not (re-find #"(?i)waiting for unknown" out))
+            (str "'Waiting for unknown to start their turn' was the live fabrication, got:\n" out)))))
+  (testing "status-compact must not claim a game phase"
+    (with-mock-state boardless-seat-state
+      (let [out (with-out-str (display/status-compact))]
+        (is (not (re-find #"(?i)awaiting-start|Tnull|Me\(C\)" out))
+            (str "'awaiting-start' is a confident phase claim about a board that isn't there, got:\n" out)))))
+  (testing "archives/heap must not assert '0 cards'"
+    (with-mock-state boardless-seat-state
+      (let [out (str (with-out-str (display/show-archives)) (with-out-str (display/show-heap)))]
+        (is (not (re-find #"(?i)Faceup: 0|Total: 0 cards" out))
+            (str "'0 cards' is an assertion, not 'unknown', got:\n" out)))))
+  (testing "snapshot tells ONE story: no board fragments, no self-contradiction"
+    (with-mock-state boardless-seat-state
+      (let [out (with-out-str (display/show-snapshot))]
+        (is (not (re-find #"(?i)awaiting-start|Me\(C\)|Corp:|Faceup" out))
+            (str "snapshot must not print compact status/board fragments for a board it doesn't have, got:\n" out))
+        (is (= 1 (count (re-seq #"(?i)NO BOARD" out)))
+            (str "exactly one explainer — the partial fix made snapshot describe AND deny a board in one response, got:\n" out))
+        (is (re-find #"cursor=" out)
+            (str "the cursor line is still the one thing a seat can act on, got:\n" out))))))
+
+(deftest test-status-boardless-started-game-does-not-say-reset
+  ;; Issue comment: `status` printed "Not in a game → ./dev/reset.sh" to a
+  ;; client holding a :gameid. reset.sh would destroy a game a retry might have
+  ;; recovered. Two boardless states share this fixture shape; the vector one
+  ;; is the raw-diff case from #142.
+  (doseq [[label st] [["nil board" boardless-seat-state]
+                      ["raw-diff vector board" diff-vector-board-state]]]
+    (testing (str "status, " label ": seated in a started game with no board → retry/resync, never reset.sh")
+      (with-mock-state st
+        (let [out (with-out-str (display/show-status))]
+          (is (not (re-find #"reset\.sh" out))
+              (str label ": reset.sh destroys the game this client is still seated in, got:\n" out))
+          (is (not (re-find #"(?i)not in a game" out))
+              (str label ": the client holds a :gameid — it IS in a game, got:\n" out))
+          (is (re-find #"(?i)no board|board.*(gone|cleared)" out)
+              (str label ": must name the real state, got:\n" out))
+          (is (re-find #"(?i)resync|retry" out)
+              (str label ": must name the recovery that fits, got:\n" out))))))
+  (testing "status with no gameid at all still says not in a game (the original branch)"
+    (with-mock-state {:connected true :uid "test-user" :gameid nil :side nil :game-state nil}
+      (is (re-find #"(?i)not in a game" (with-out-str (display/show-status)))))))
+
+(def ^:private started-lobby-no-board-yet
+  "Guest panel (pass 1 of the #139 remainder): the server sends the started
+   :lobby/state BEFORE :game/start, so a game that has JUST started holds
+   :lobby-state {:started true} and no board for a moment. That is healthy
+   startup, not a failed resync — the explainer must not diagnose it as one."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil
+   :lobby-state {:gameid "abc" :started true}})
+
+(deftest test-no-board-explainer-covers-startup-and-names-the-resync-id
+  (testing "just-started window: the explainer names BOTH possibilities and the retry, not a confident 'resync cleared the cache'"
+    (with-mock-state started-lobby-no-board-yet
+      (let [out (with-out-str (display/show-credits))]
+        (is (re-find #"(?i)still arriving|just started" out)
+            (str "must allow for the first full state being in flight, got:\n" out))
+        (is (re-find #"(?i)resync cleared|cleared the cache|replacement state has not arrived" out)
+            (str "…AND still name the failed-resync reading — 'both states' is the contract (third pass), got:\n" out))
+        (is (re-find #"(?i)retry" out)
+            (str "retry is the move in both states, got:\n" out))
+        (is (not (re-find #"(?i)never joined|reset" out))))))
+  (testing "`resync` takes the game id — the advertised recovery must be runnable as printed"
+    (with-mock-state boardless-seat-state
+      (is (re-find #"resync abc" (with-out-str (display/show-credits)))
+          "the explainer must print the id it holds, not a bare 'resync' that fails with usage help")
+      (is (re-find #"resync abc" (with-out-str (display/show-status)))
+          "status too"))))
+
+(deftest test-snapshot-in-an-unstarted-lobby-tells-one-story
+  ;; Second pass: the unstarted-lobby path of snapshot called show-board-compact*
+  ;; directly, bypassing its guard — an empty rig beside the hand's "NOT STARTED".
+  (testing "unstarted lobby: lobby line + the not-started explainer + cursor, no board fragments"
+    (with-mock-state unstarted-lobby-state
+      (let [out (with-out-str (display/show-snapshot))]
+        (is (re-find #"Lobby:" out) (str "the lobby line IS the status here, got:\n" out))
+        (is (re-find #"(?i)not started" out) (str "one story: the game has not begun, got:\n" out))
+        (is (not (re-find #"(?i)Rig:|Corp:|Faceup" out))
+            (str "no board/rig fragments for a board that does not exist, got:\n" out))
+        (is (re-find #"cursor=" out))))))
+
+(deftest test-status-started-lobby-no-board-yet-names-both-states-and-the-id
+  ;; Second pass: :lobby-state non-nil bypassed the new boardless branch and hit
+  ;; the old "Waiting for game state... Use 'resync <game-id>'" placeholder.
+  (with-mock-state started-lobby-no-board-yet
+    (let [out (with-out-str (display/show-status))]
+      (is (re-find #"(?i)still arriving|just started" out)
+          (str "must allow for the healthy just-started window, got:\n" out))
+      (is (re-find #"resync abc" out)
+          (str "must print the id it holds, not a '<game-id>' placeholder, got:\n" out))
+      (is (not (re-find #"<game-id>" out)))
+      (is (re-find #"(?i)no board" out)))))
+
+(deftest test-prompt-detailed-renders-from-the-passed-state
+  ;; Second pass: snapshot captured `cs` but show-prompt-detailed re-read the
+  ;; atom — a resync mid-snapshot would print 'Not in a game' under a captured
+  ;; board. The 1-arity must render from its argument, not the atom.
+  (testing "atom holds no board; the passed state holds a board and a prompt → the prompt renders"
+    (let [boarded {:connected true :uid "test-user" :gameid "abc" :side "corp"
+                   :game-state {:active-player "corp" :turn 3
+                                :corp {:click 2 :credit 5
+                                       :prompt-state {:msg "Choose a server" :prompt-type "select"
+                                                      :eid 77 :choices [] :selectable [1 2]}}
+                                :runner {:click 0}}}]
+      (with-mock-state boardless-seat-state
+        (let [out (with-out-str (display/show-prompt-detailed boarded))]
+          (is (re-find #"Choose a server" out)
+              (str "must render the prompt from the argument, got:\n" out))
+          (is (not (re-find #"(?i)no board|not in a game" out))
+              (str "must not consult the (boardless) atom, got:\n" out))))))
+  (testing "third pass: a STRING-cid selectable resolves against the passed board, not the live atom"
+    ;; With the atom boardless, the 1-arity CID lookup found nothing and the
+    ;; prompt renderer told the seat its one valid pick was 'hidden — ignore'.
+    (let [boarded {:connected true :uid "test-user" :gameid "abc" :side "corp"
+                   :game-state {:active-player "corp" :turn 3
+                                :corp {:click 2 :credit 5
+                                       :hand [{:cid "c1" :title "Hedge Fund" :type "Operation" :zone ["hand"] :side "Corp"}]
+                                       :prompt-state {:msg "Choose a card to trash" :prompt-type "select"
+                                                      :eid 78 :choices [] :selectable ["c1"]}}
+                                :runner {:click 0}}}]
+      (with-mock-state boardless-seat-state
+        (let [out (with-out-str (display/show-prompt-detailed boarded))]
+          (is (re-find #"Hedge Fund" out)
+              (str "the selectable card must resolve from the passed board, got:\n" out))
+          (is (not (re-find #"(?i)0 selectable|ignore them" out))
+              (str "must not call the valid pick hidden, got:\n" out)))))))
+
+(deftest test-board-surfaces-gate-on-the-board-not-the-side
+  ;; A spectator has a board and NO side (no-side-here!'s own spectator branch
+  ;; says "'board' / 'log' show the game you are watching"). Gating these
+  ;; surfaces on a side would break exactly that promise.
+  (let [spectator-with-board {:connected true :uid "watcher" :gameid "abc" :spectator true :side nil
+                              :game-state {:corp {:servers {:hq {:ices [] :content []}} :discard []}
+                                           :runner {:rig {} :discard []}}}]
+    (testing "a spectator still gets the board"
+      (with-mock-state spectator-with-board
+        (let [out (with-out-str (display/show-board))]
+          (is (re-find #"GAME BOARD" out) (str "spectators must keep the board view, got:\n" out))
+          (is (not (re-find #"(?i)no board" out))))))
+    (testing "a spectator still gets archives/heap"
+      (with-mock-state spectator-with-board
+        (is (re-find #"Archives" (with-out-str (display/show-archives))))
+        (is (re-find #"Heap" (with-out-str (display/show-heap)))))))
+  (testing "an UNSTARTED lobby: board surfaces say the game has not started, not that a cache was cleared"
+    (with-mock-state unstarted-lobby-state
+      (let [out (with-out-str (display/board-compact))]
+        (is (re-find #"(?i)not started|has not started" out)
+            (str "the lobby has not begun — that is the story, got:\n" out))
+        (is (not (re-find #"(?i)cleared the cache|resync cleared" out)))))))
 
 (deftest test-sideless-surfaces-agree-with-show-hand
   (testing "#125: show-hand was already guarded — the other surfaces must not

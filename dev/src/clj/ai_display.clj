@@ -105,18 +105,35 @@
 (defn show-status
   "Display current game status or lobby state"
   []
-  (let [lobby (:lobby-state @state/client-state)
-        gs (state/get-game-state)]
+  (let [cs @state/client-state
+        lobby (:lobby-state cs)
+        raw-gs (state/get-game-state)
+        ;; #139/#142: a raw-diff VECTOR left in :game-state is not a board —
+        ;; treat it as no board rather than rendering a status from it.
+        gs (when (map? raw-gs) raw-gs)]
     ;; Not in a game or lobby
     (if (and (nil? lobby) (nil? gs))
-      (do
-        (println "📊 STATUS")
-        (println "\n⚠️  Not in a game")
-        (println "\n💡 To start a new game:")
-        (println "   ./dev/reset.sh")
-        (println "\n   Or join an existing game:")
-        (println "   ./dev/send_command <side> list-lobbies")
-        (println "   ./dev/send_command <side> join <game-id> <Side>"))
+      (if (:gameid cs)
+        ;; #139: seated in a STARTED game (no :lobby-state) but holding no board
+        ;; — what a failed resync leaves behind. "Not in a game → reset.sh" was
+        ;; the wrong diagnosis: this client IS in a game, and reset.sh destroys
+        ;; the one a retry might have recovered.
+        (do
+          (println "📊 STATUS")
+          (println (format "\n⚠️  Seated in game %s, but this client holds NO BOARD — the game state is unknown, not empty."
+                           (:gameid cs)))
+          (println "   Either the game just started and its first full state is still arriving,")
+          (println "   or a resync cleared the cache and the replacement state has not arrived.")
+          (println (format "\n💡 Retry the read; if it keeps failing: ./dev/send_command <side> resync %s" (:gameid cs)))
+          (println "   (do NOT run the reset script — it destroys the game you are seated in)"))
+        (do
+          (println "📊 STATUS")
+          (println "\n⚠️  Not in a game")
+          (println "\n💡 To start a new game:")
+          (println "   ./dev/reset.sh")
+          (println "\n   Or join an existing game:")
+          (println "   ./dev/send_command <side> list-lobbies")
+          (println "   ./dev/send_command <side> join <game-id> <Side>")))
       ;; Check if we're in a lobby but game hasn't started yet
       (cond
         ;; Game has ended - show winner / tie banner
@@ -172,12 +189,19 @@
                  (< players-with-decks 2) (format "⏳ Waiting for deck selection (%d/2 ready)" players-with-decks)
                  :else "⏳ Waiting...")))
 
-        ;; Game started but no game state yet (post-join, pre-resync)
+        ;; Game started (:lobby-state :started) but no board yet. Two states
+        ;; share this signature (#139 guest panel): the healthy window between
+        ;; the started :lobby/state and :game/start, and a failed resync. Same
+        ;; wording as the no-lobby boardless branch, with the id we hold —
+        ;; `resync` takes it, and '<game-id>' was a placeholder a seat cannot run.
         (nil? gs)
         (do
           (println "📊 GAME STATUS")
-          (println "\n⏳ Waiting for game state...")
-          (println "💡 Use 'resync <game-id>' to fetch game state"))
+          (println (format "\n⚠️  Seated in game %s (started), but this client holds NO BOARD yet — the game state is unknown, not empty."
+                           (:gameid cs)))
+          (println "   Either the game just started and its first full state is still arriving,")
+          (println "   or a resync cleared the cache and the replacement state has not arrived.")
+          (println (format "\n💡 Retry the read; if it keeps failing: ./dev/send_command <side> resync %s" (:gameid cs))))
 
         ;; Show game status
         :else
@@ -506,11 +530,25 @@
       (= idx 0) (format " ⟵ innermost — encountered last, guards server (position %d/%d)" pos total)
       :else (format " ⟵ encounter #%d of %d (position %d/%d)" (- total idx) total pos total))))
 
+(declare show-board* no-side-here!)
+
 (defn show-board
-  "Display full game board: all servers with ICE, Corp installed cards, Runner rig"
+  "Display full game board: all servers with ICE, Corp installed cards, Runner rig.
+
+   #139: gated on the BOARD, not the side — a spectator has a board and no side
+   and must keep this view (no-side-here!'s own spectator branch promises it);
+   a client holding no board (failed resync, unstarted lobby, raw-diff vector)
+   gets the one shared explainer instead of a rendered empty table."
   []
-  (let [state @state/client-state
-        gs (:game-state state)
+  (let [state @state/client-state]
+    (if-not (map? (:game-state state))
+      (no-side-here! state "the board")
+      (show-board* state))))
+
+(defn- show-board*
+  "Render the board; the caller guarantees `state` holds one."
+  [state]
+  (let [gs (:game-state state)
         my-side (:side state)  ;; "corp" or "runner" (lowercase) - determines what we can see
         is-corp? (= "corp" (some-> my-side clojure.string/lower-case))
         corp-servers (:servers (:corp gs))
@@ -617,11 +655,22 @@
     (println (clojure.string/join "" (repeat 70 "=")))
     nil))
 
+(declare show-board-compact*)
+
 (defn show-board-compact
-  "Display ultra-compact board state (2-5 lines, no decorations)"
+  "Display ultra-compact board state (2-5 lines, no decorations).
+   #139: board-gated like show-board — an empty rig is an assertion, 'no board'
+   is the truth."
   []
-  (let [state @state/client-state
-        gs (:game-state state)
+  (let [state @state/client-state]
+    (if-not (map? (:game-state state))
+      (no-side-here! state "the compact board")
+      (show-board-compact* state))))
+
+(defn- show-board-compact*
+  "Render the compact board; the caller guarantees `state` holds one."
+  [state]
+  (let [gs (:game-state state)
         corp-servers (:servers (:corp gs))
         runner-rig (get-in gs [:runner :rig])]
 
@@ -734,11 +783,28 @@
            (println text))))
      nil)))
 
+(declare show-status-compact*)
+
 (defn show-status-compact
-  "Display ultra-compact game status (1-2 lines, no decorations)"
+  "Display ultra-compact game status (1-2 lines, no decorations).
+   #139: an unstarted lobby has its own line; a started game needs a BOARD —
+   'Tnull-unknown … awaiting-start' was a confident phase claim about a board
+   that wasn't there, in the line a seat polls in its read loop."
   []
-  (let [lobby (:lobby-state @state/client-state)
-        gs (state/get-game-state)]
+  (let [cs @state/client-state
+        lobby (:lobby-state cs)]
+    (if (or (and lobby (not (:started lobby)))
+            (map? (:game-state cs)))
+      (show-status-compact* cs)
+      (no-side-here! cs "the compact status"))))
+
+(defn- show-status-compact*
+  "Render the compact status from ONE captured state; the caller guarantees a
+   lobby line or a board. Reads nothing from the atom (guest panel: a guard on
+   one read and a renderer on a later read is a check/use race)."
+  [state]
+  (let [lobby (:lobby-state state)
+        gs (:game-state state)]
     (if (and lobby (not (:started lobby)))
       ;; Lobby compact status
       (let [players (:players lobby)
@@ -748,17 +814,17 @@
                         player-count
                         (if ready? " [READY]" ""))))
       ;; Game compact status
-      (let [my-side (:side @state/client-state)
-            active-side (state/active-player)
-            turn (state/turn-number)
-            prompt (state/get-prompt)
+      (let [my-side (:side state)
+            active-side (state/active-player state)
+            turn (state/turn-number state)
+            prompt (state/get-prompt state)
             run-state (get-in gs [:run])
 
             ;; At a clean turn boundary the active-player wire field still names
             ;; the player who just finished, so flip to who acts next (matching
             ;; game-over-status's AWAITING-START next-player). Otherwise tooling
             ;; and models reading this line mistake whose turn is starting.
-            turn-status (state/get-turn-status)
+            turn-status (state/get-turn-status state)
             waiting-start? (:waiting-to-start? turn-status)
             display-side (if waiting-start? (:next-player turn-status) active-side)
 
@@ -1078,8 +1144,15 @@
       (and seated? (not board?))
       (do
         (println (format "⚠️  Seated, but this client holds NO BOARD — %s is unknown, not empty." what))
-        (println "   A resync cleared the cache and the replacement state has not arrived.")
-        (println "   → Retry the command; if it keeps failing: 'status', then 'resync'.")
+        ;; Two states share this signature (guest panel): the first full state
+        ;; of a game that has JUST started is still arriving (the server sends
+        ;; the started :lobby/state before :game/start), or a resync cleared the
+        ;; cache and the replacement has not landed. Both want the same move.
+        (println "   Either the game just started and its first full state is still arriving,")
+        (println "   or a resync cleared the cache and the replacement state has not arrived.")
+        ;; `resync` takes the game id (send_command: "Usage: resync <game-id>");
+        ;; the bare verb fails with usage help. We hold the id — print it.
+        (println (format "   → Retry the command; if it keeps failing: 'status', then 'resync %s'." (:gameid state)))
         nil)
 
       (and board? seated?)
@@ -1099,10 +1172,11 @@
         nil))))
 
 (defn show-hand
-  "Show hand using side-aware state access. Returns hand vector."
-  []
-  (let [state @state/client-state
-        side (:side state)]
+  "Show hand using side-aware state access. Returns hand vector.
+   1-arity: render from an already-captured state (snapshot, #139)."
+  ([] (show-hand @state/client-state))
+  ([state]
+  (let [side (:side state)]
     ;; #139: a side is not enough — the board is the thing being read. A seat
     ;; whose cache was cleared has a side and nothing to show it for.
     (if-not (and side (map? (:game-state state)))
@@ -1125,7 +1199,7 @@
                 (println (str "     → " ability-info)))
               ;; Show card text for first-seen cards
               (core/show-card-on-first-sight! (:title card)))))
-        hand))))
+        hand)))))
 
 (defn show-credits
   "Show current credits (side-aware). Returns credits value."
@@ -1149,11 +1223,21 @@
         (println "⏱️  Clicks:" clicks)
         clicks))))
 
+(declare show-archives* show-heap*)
+
 (defn show-archives
-  "Show Corp's Archives (discard pile) with faceup/facedown counts"
+  "Show Corp's Archives (discard pile) with faceup/facedown counts.
+   #139: board-gated — '0 cards' is an assertion a Runner prices a run on,
+   not 'unknown'."
   []
-  (let [state @state/client-state
-        archives (get-in state [:game-state :corp :discard])
+  (let [state @state/client-state]
+    (if-not (map? (:game-state state))
+      (no-side-here! state "Archives")
+      (show-archives* state))))
+
+(defn- show-archives*
+  [state]
+  (let [archives (get-in state [:game-state :corp :discard])
         faceup (filter :seen archives)
         facedown-count (- (count archives) (count faceup))]
     (println "\n📂 Archives:")
@@ -1171,10 +1255,16 @@
       (println (str "\n  " facedown-count " card(s) facedown (hidden)")))))
 
 (defn show-heap
-  "Show Runner's Heap (discard pile)"
+  "Show Runner's Heap (discard pile). #139: board-gated like show-archives."
   []
-  (let [state @state/client-state
-        heap (get-in state [:game-state :runner :discard])]
+  (let [state @state/client-state]
+    (if-not (map? (:game-state state))
+      (no-side-here! state "the Heap")
+      (show-heap* state))))
+
+(defn- show-heap*
+  [state]
+  (let [heap (get-in state [:game-state :runner :discard])]
     (println "\n🗑️  Heap:")
     (println (str "  Total: " (count heap) " cards"))
     (when (seq heap)
@@ -1703,10 +1793,13 @@
     [(format "  Action: Waiting on %s — no action required from you." opp)]))
 
 (defn show-prompt-detailed
-  "Show current prompt with detailed choices"
-  []
-  (let [state @state/client-state
-        side (:side state)
+  "Show current prompt with detailed choices.
+   1-arity: render from an already-captured state (snapshot, #139 guest panel —
+   a live re-read mid-snapshot could print 'Not in a game' under a captured
+   board)."
+  ([] (show-prompt-detailed @state/client-state))
+  ([state]
+  (let [side (:side state)
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
     (if prompt
@@ -1768,7 +1861,7 @@
                 ;; Pattern 1: "choose N cards" in message
                 choose-n-match (re-find #"[Cc]hoose (\d+) cards?" prompt-msg)
                 ;; Pattern 2: Discard prompt - check hand vs max
-                gs (state/get-game-state)
+                gs (:game-state state)
                 hand-size (count (get-in gs [side :hand]))
                 max-hand-size (get-in gs [side :hand-size :total] 5)
                 is-discard? (str/includes? (str/lower-case prompt-msg) "discard")
@@ -1805,7 +1898,10 @@
             ;; Render via the shared helper: pickable cards with their true
             ;; indices + a single warning line for phantom (unresolvable) CIDs,
             ;; instead of dumping raw "CID: <uuid>" lines that confuse indexing.
-            (let [{:keys [pickable phantom] :as parts} (core/resolve-selectable selectable)]
+            ;; Resolve CIDs against the SAME captured board we are rendering
+            ;; (third guest pass: the 1-arity consulted the live atom, so a
+            ;; resync mid-snapshot turned a valid pick into "hidden — ignore").
+            (let [{:keys [pickable phantom] :as parts} (core/resolve-selectable selectable (:game-state state))]
               (println (str "  Available ("
                             (if (seq phantom)
                               (str (count pickable) " selectable; " (count phantom) " hidden/unselectable")
@@ -1854,8 +1950,8 @@
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next
       ;; action so `prompt` reliably answers "what do I do now?".
-      (let [ts (state/get-turn-status)
-            side (:side @state/client-state)
+      (let [ts (state/get-turn-status state)
+            side (:side state)
             next-lc (clojure.string/lower-case (or (:next-player ts) ""))
             my-lc (clojure.string/lower-case (or side ""))]
         ;; NO GAME AT ALL must be answered before anything derived from the game
@@ -1912,7 +2008,7 @@
           (println "✅ It's your turn with clicks in hand → act (see 'list-playables').")
 
           :else
-          (println (format "ℹ️  %s" (:status-text ts))))))))))
+          (println (format "ℹ️  %s" (:status-text ts)))))))))))
 
 (defn show-prompt-if-any
   "Append the current prompt to an action's output — or print NOTHING if there
@@ -1948,18 +2044,41 @@
    `wait --since` before acting."
   ([] (show-snapshot 5))
   ([n]
-   (show-status-compact)
-   (when (state/get-prompt)
-     (println)
-     (show-prompt-detailed))
-   (println)
-   (show-board-compact)
-   (println)
-   (show-hand)
-   (println)
-   (show-log-compact n)
-   (println (str "cursor=" (core/get-cursor)))
-   nil))
+   (let [cs @state/client-state
+         lobby (:lobby-state cs)]
+     ;; #139: with no board, ONE explainer. The partial fix had the guarded
+     ;; hand say "NO BOARD" under a fabricated compact status and board —
+     ;; a single machine-read response that both described and denied a
+     ;; board (guest panel). An unstarted lobby keeps its own compact line.
+     (if-not (map? (:game-state cs))
+       ;; No board: the lobby line if we are in an unstarted lobby (that IS
+       ;; the status), then the one explainer, then the cursor. Never the
+       ;; board/hand renderers — calling show-board-compact* directly here
+       ;; printed an empty rig beside the hand's "NOT STARTED" (second pass).
+       (do
+         (when (and lobby (not (:started lobby)))
+           (show-status-compact* cs))
+         (no-side-here! cs "the snapshot")
+         (println (str "cursor=" (core/get-cursor)))
+         nil)
+       ;; One captured state for EVERY board-describing part (guest panel):
+       ;; status / prompt / board / hand rendered from `cs`, so a resync landing
+       ;; mid-snapshot cannot make the response both describe and deny a
+       ;; board. Only the log tail reads live, and it asserts nothing about
+       ;; the board's existence.
+       (do
+         (show-status-compact* cs)
+         (when (state/get-prompt cs)
+           (println)
+           (show-prompt-detailed cs))
+         (println)
+         (show-board-compact* cs)
+         (println)
+         (show-hand cs)
+         (println)
+         (show-log-compact n)
+         (println (str "cursor=" (core/get-cursor)))
+         nil)))))
 
 (defn show-card-text
   "Display full card information including text, cost, and abilities
@@ -2396,21 +2515,37 @@
       (list-playables-for-side state side)
       (no-side-here! state "the playable-action list"))))
 
+(declare show-blocker-diagnosis*)
+
 (defn show-blocker-diagnosis
   "Read-only diagnosis of why you can/can't act right now and the ONE next
    command to run. Safe — never mutates state. Answers the GPT-5.5 seat's ask
    for a 'diagnose-blocker' that names who owns the blocking prompt and whether
-   it's actionable, instead of guessing from contradictory-looking status lines."
+   it's actionable, instead of guessing from contradictory-looking status lines.
+
+   #139: the worst offender of the boardless sweep — the command a seat runs
+   when it is stuck answered a cleared cache with 'Waiting for unknown to start
+   their turn → Use: wait', and `wait` on a game that isn't there is a hang. With
+   no board the only honest diagnosis is the shared explainer."
   []
-  (let [ts (state/get-turn-status)
-        prompt (state/get-prompt)
+  (let [cs @state/client-state]
+    (if-not (map? (:game-state cs))
+      (no-side-here! cs "the blocker diagnosis")
+      (show-blocker-diagnosis* cs))))
+
+(defn- show-blocker-diagnosis*
+  "The diagnosis proper, from ONE captured state; the caller guarantees a
+   board. Reads nothing from the atom (guest panel: check/use race)."
+  [cs]
+  (let [ts (state/get-turn-status cs)
+        prompt (state/get-prompt cs)
         ptype (:prompt-type prompt)
         waiting? (state/waiting-prompt-type? ptype)
-        side (:side @state/client-state)
+        side (:side cs)
         side-kw (when side (keyword (clojure.string/lower-case side)))
-        my-clicks (get-in @state/client-state [:game-state side-kw :click])
+        my-clicks (get-in cs [:game-state side-kw :click])
         next-lc (clojure.string/lower-case (or (:next-player ts) ""))
-        run (get-in @state/client-state [:game-state :run])
+        run (get-in cs [:game-state :run])
         run-phase (:phase run)
         my-side-lc (when side (clojure.string/lower-case side))
         ;; A prompt is resolvable-via-choose only if it carries actual choices or
@@ -2441,7 +2576,7 @@
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
       (and (:in-run? ts) prompt (not waiting?))
       (let [runner-unbroken (when (and (= my-side-lc "runner") (= run-phase "encounter-ice"))
-                              (runner-encounter-unbroken-count @state/client-state))]
+                              (runner-encounter-unbroken-count cs))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
         ;; `initiation` is a both-must-pass window too (engine: continue :initiation
@@ -2466,7 +2601,7 @@
           (do
             (println "   → Owner: YOU — a break/tank decision, not a both-pass window.")
             (doseq [line (runner-encounter-decline-hint-lines
-                          (:title (core/current-run-ice @state/client-state) "this ICE")
+                          (:title (core/current-run-ice cs) "this ICE")
                           runner-unbroken)]
               (println line)))
 

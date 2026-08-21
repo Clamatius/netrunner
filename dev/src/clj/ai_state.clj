@@ -228,9 +228,17 @@
   ([] (lobby-gone? @client-state))
   ([state] (boolean (:lobby-gone? state))))
 
-(defn active-player [] (get-in @client-state [:game-state :active-player]))
+;; The 1-arity forms take an already-captured client-state map so a read
+;; surface can guard and render from ONE snapshot (#139 guest panel: a guard
+;; that reads the atom and a renderer that re-reads it is a check/use race —
+;; a resync clearing the board in between puts the fabricated output back).
+(defn active-player
+  ([] (active-player @client-state))
+  ([state] (get-in state [:game-state :active-player])))
 (defn my-turn? [] (= (:side @client-state) (active-player)))
-(defn turn-number [] (get-in @client-state [:game-state :turn]))
+(defn turn-number
+  ([] (turn-number @client-state))
+  ([state] (get-in state [:game-state :turn])))
 
 (defn my-side-kw
   "Get current side as keyword, normalized to lowercase (:runner or :corp).
@@ -640,12 +648,13 @@
                   (nil? (get-in gs [(keyword my-side) :prompt-state])))))))
 
 (defn get-prompt
-  "Get current prompt for our side, if any"
-  []
-  (let [side (:side @client-state)
-        ;; Normalize to lowercase to match game state keys (:runner, :corp)
-        side-kw (when side (keyword (clojure.string/lower-case side)))]
-    (get-in @client-state [:game-state side-kw :prompt-state])))
+  "Get current prompt for our side, if any. 1-arity: from a captured state."
+  ([] (get-prompt @client-state))
+  ([state]
+   (let [side (:side state)
+         ;; Normalize to lowercase to match game state keys (:runner, :corp)
+         side-kw (when side (keyword (clojure.string/lower-case side)))]
+     (get-in state [:game-state side-kw :prompt-state]))))
 
 (defn get-turn-status
   "Get structured turn status information
@@ -661,15 +670,19 @@
    - :in-run? - boolean
    - :run-server - server name if in run
    - :status-emoji - visual indicator
-   - :status-text - human-readable status"
-  []
-  (let [gs (get-game-state)
-        my-side (:side @client-state)
-        active-side (active-player)
-        turn-num (turn-number)
+   - :status-text - human-readable status
+
+   1-arity: classify an already-captured client-state map (one snapshot for
+   guard and render, #139)."
+  ([] (get-turn-status @client-state))
+  ([state]
+  (let [gs (:game-state state)
+        my-side (:side state)
+        active-side (active-player state)
+        turn-num (turn-number state)
         winner (:winner gs)
         game-over? (game-over? gs)
-        prompt (get-prompt)
+        prompt (get-prompt state)
         prompt-type (:prompt-type prompt)
         run-state (get-in gs [:run])
         ;; Compare case-insensitively since my-side is "Corp"/"Runner" but active-side is "corp"/"runner"
@@ -681,8 +694,8 @@
         ;; both-sides-at-0-clicks heuristic. Those two shapes are indistinguishable
         ;; by click count, so the heuristic reported an orphaned turn as a boundary
         ;; and pointed every surface at the wrong player.
-        boundary? (turn-boundary? @client-state)
-        orphaned? (my-turn-orphaned? @client-state)
+        boundary? (turn-boundary? state)
+        orphaned? (my-turn-orphaned? state)
         ;; At a boundary the wire's :active-player still names the player who just
         ;; FINISHED, so "who acts next" is the other side. At turn 0 the engine
         ;; ships :active-player :runner / :end-turn true, so Corp-goes-first falls
@@ -707,7 +720,7 @@
         ;; catches that case first. Reverting this line to the name comparison
         ;; leaves the whole suite green; it is a structural guarantee against the
         ;; branch order changing, not a fix for a live symptom.
-        i-am-next (and boundary? (boolean (my-turn-to-act? @client-state my-side)))
+        i-am-next (and boundary? (boolean (my-turn-to-act? state my-side)))
 
         [emoji text can-act]
         (cond
@@ -725,7 +738,7 @@
           ;; show-turn-indicator appends it — while start-turn refused and `wait`
           ;; (correctly) blocked. Fixing only the wake path would have moved the
           ;; lie to this surface rather than killing it: one predicate, one answer.
-          (opponent-mulligan-pending? @client-state)
+          (opponent-mulligan-pending? state)
           ["⏳" "Waiting for opponent to finish their opening mulligan" false]
 
           ;; MY own opening mulligan is unresolved. Must also precede the
@@ -734,7 +747,7 @@
           ;; i-am-next both hold and this read "🟢 Ready to start your turn"
           ;; with a live "Keep hand?" prompt on the same screen. start-turn
           ;; then went through — see my-mulligan-pending?.
-          (my-mulligan-pending? @client-state)
+          (my-mulligan-pending? state)
           ["🔔" "Answer your opening mulligan first — 'keep-hand' or 'mulligan'" false]
 
           ;; Between turns: someone owes a start-turn. Both arms are needed —
@@ -780,8 +793,8 @@
      ;; lobby down too, and callers need :game-over? to win so the seat still
      ;; learns the result. Same precedence as game-over-status and wake-reason —
      ;; game-over first, lobby-gone second.
-     :in-game? (boolean (and (or gs (:lobby-state @client-state))
-                             (not (lobby-gone? @client-state))))
+     :in-game? (boolean (and (or gs (:lobby-state state))
+                             (not (lobby-gone? state))))
      ;; A clean turn boundary is "next player to start", NOT a stall. Tooling
      ;; uses this to avoid false-positive stall detection while a slow opponent
      ;; thinks about its turn start. game-over takes precedence; the active-run
@@ -800,7 +813,7 @@
      :in-run? (boolean run-state)
      :run-server (:server run-state)
      :status-emoji emoji
-     :status-text text}))
+     :status-text text})))
 
 ;; ============================================================================
 ;; Defensive Gamestate Accessors
