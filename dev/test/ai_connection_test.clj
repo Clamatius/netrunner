@@ -337,3 +337,58 @@
         (with-redefs [ws/send-message! (purged-server sent)]
           (with-fast-timeouts
             (is (= :synced (conn/sync-verdict!)))))))))
+
+;; ============================================================================
+;; #142: a raw diff vector must not read as a live board
+;; ============================================================================
+;; `apply-diff` used to store an `[alterations removals]` vector in :game-state
+;; when a `:game/diff` for our game landed between `clear-game-state!` and the
+;; replacement full state. Truthy; not a board. `has-game-state?` asked `some?`
+;; and `boardless-started-game?` asked `nil?`, so both were fooled, and the
+;; chain ran: resync "succeeded" → :synced → the CLI gate opened → start-turn
+;; went out against a state nobody has.
+;;
+;; ai-state now refuses to store the diff at all, which closes the class at the
+;; source. These pin the gates anyway: they are the surfaces that decide whether
+;; a command may act, and every OTHER fixture in this file uses `nil`, so a
+;; regression at the source would be invisible here without a vector fixture.
+
+(def ^:private diff-vector
+  "What a `:game/diff` payload looks like: [alterations removals]."
+  [{:corp {:credit 6}} {}])
+
+(deftest test-has-game-state-rejects-a-diff-vector
+  (testing "#142: the resync wait condition must not accept a diff as an arrived board"
+    ;; This is `wait-for-condition`'s predicate in do-rejoin-resync!. Satisfied by
+    ;; a diff, the resync reports ✅ and returns :synced on a cleared cache.
+    (with-mock-state (assoc (mock-client-state) :game-state diff-vector)
+      (is (false? (conn/has-game-state?))
+          "THE bug: some? counted an [alterations removals] vector as a board"))
+    (with-mock-state (assoc (mock-client-state) :game-state nil)
+      (is (false? (conn/has-game-state?))))
+    (with-mock-state (mock-client-state)
+      (is (true? (conn/has-game-state?)) "a real board still counts"))))
+
+(deftest test-sync-verdict-diff-vector-state-is-not-synced
+  (testing "#142: holding a diff vector is holding no board — must not be :synced"
+    ;; The vector twin of test-sync-verdict-boardless-started-game-is-not-synced.
+    ;; That test passes `nil`, which `nil?` catches; this state is the one the
+    ;; gate actually let through.
+    (let [sent (atom [])]
+      (with-mock-state (assoc (mock-client-state)
+                              :gameid zombie-id
+                              :game-state diff-vector
+                              :lobby-state nil
+                              :username "AI-corp"
+                              :lobby-list [{:gameid zombie-id
+                                            :players [{:user {:username "AI-corp"} :side "Corp"}]}])
+        (with-redefs [ws/send-message! (purged-server sent)]
+          (with-fast-timeouts
+            (with-failed-rejoin
+              (let [verdict (atom nil)
+                    out (with-out-str (reset! verdict (conn/sync-verdict!)))]
+                (is (not= :synced @verdict)
+                    "THE bug: nil? said 'not boardless', so the command was allowed to act")
+                (is (= :resync-failed @verdict)
+                    "still seated in the lobby ⇒ transient, not a teardown")
+                (is (.contains out "holding no board state"))))))))))

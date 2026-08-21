@@ -48,21 +48,79 @@
 ;; State Diff Application
 ;; ============================================================================
 
+(defn board?
+  "Is this value an actual game board?
+
+   The question every 'do I have a game state?' gate is really asking, and the
+   reason it needs its own predicate: truthiness is not enough. `apply-diff`
+   could leave an `[alterations removals]` diff VECTOR in :game-state when a
+   `:game/diff` landed between `clear-game-state!` and the replacement full
+   state — truthy, indexable, and not a board (#142). `some?`/`nil?` gates read
+   it as a live game and let commands act on it.
+
+   A board is always a map. Nothing else is."
+  [x]
+  (map? x))
+
+
 (defn apply-diff
-  "Apply a diff to current state to get new state using differ library"
+  "Apply a diff to current state to get new state using differ library.
+
+   Returns nil when there is nothing to patch. This USED to return the diff
+   itself, which is where #142 came from: a `:game/diff` for our game landing in
+   the window between `clear-game-state!` (which clears :game-state AND
+   :last-state) and the arrival of the replacement full state left an
+   `[alterations removals]` VECTOR sitting in :game-state. Truthy, so every
+   `some?`/`nil?` gate downstream read it as a live board and let commands act
+   on it — up to and including putting `start-turn` on the wire.
+
+   There is no legitimate case to preserve: the only caller is the `:game/diff`
+   handler, and a diff is never a full state (`:game/start` and `:game/resync`
+   carry those, via `set-full-state!`). A diff with no baseline is simply
+   unappliable, and nil says so."
   [old-state diff]
-  (if old-state
+  (when old-state
     ;; Use differ/patch which properly handles sparse array updates
     ;; like hand: [0 {:playable true} 1 {:playable true} ...]
-    (differ/patch old-state diff)
-    diff))
+    (differ/patch old-state diff)))
+
+(defn- unappliable!
+  "A diff did not apply. Say which of the two situations that is, and return
+   false either way so the caller skips its success bookkeeping.
+
+   The distinction matters and the first cut of #142 missed it (2nd-pass guest
+   review, MAJOR). With no baseline, a resync is ALREADY in flight and the
+   replacement state is on its way — nothing to flag. But with a live baseline,
+   a diff that throws or patches to a non-map means our board has DIVERGED from
+   the server's: the cache is still a map, so every `board?` gate keeps
+   accepting it, and the next diff patches a baseline the server no longer
+   agrees with. That is what :diff-mismatch is for — `sync-verdict!` reads it
+   via `stale?` and resyncs before the next command is allowed to act."
+  [old-state]
+  (if (board? old-state)
+    (do
+      (println "⚠️  Diff did not apply to a LIVE board — our state has diverged.")
+      (println "   Marking stale; the next command will resync before acting.")
+      (swap! client-state assoc :diff-mismatch true))
+    (println "⚠️  Diff arrived with no state to apply it to — ignoring it"
+             "(the cache was cleared; waiting for the full state resync)"))
+  false)
 
 (defn update-game-state!
-  "Update game state from a diff - matches web client implementation"
+  "Update game state from a diff - matches web client implementation.
+
+   Returns TRUE when the diff was applied and cached, FALSE when it was not.
+   The caller needs that answer: the `:game/diff` handler does a pile of
+   success bookkeeping — clearing the stale/lobby-gone flags, stamping
+   :last-diff-time, bumping the wait cursor, printing '✓ Diff applied
+   successfully' — and none of it is true of a diff we could not apply."
   [diff]
-  (try
-    (let [old-state (:last-state @client-state)
-          ;; Log state BEFORE applying diff
+  ;; Read outside the try: the catch arm needs to know whether we HAD a baseline,
+  ;; which is what separates "a resync is already in flight" from "our board just
+  ;; diverged from the server's".
+  (let [old-state (:last-state @client-state)]
+   (try
+    (let [;; Log state BEFORE applying diff
           _ (println "\n📝 Applying diff to state")
           _ (println "   BEFORE - Runner credits:" (get-in old-state [:runner :credit]))
           _ (println "   BEFORE - Runner clicks:" (get-in old-state [:runner :click]))
@@ -74,14 +132,31 @@
           _ (println "   AFTER  - Runner credits:" (get-in new-state [:runner :credit]))
           _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
           _ (println "   AFTER  - Runner hand size:" (count (get-in new-state [:runner :hand])))]
-      (swap! client-state assoc
-             :game-state new-state
-             :last-state new-state))
+      (if (board? new-state)
+        (do (swap! client-state assoc
+                   :game-state new-state
+                   :last-state new-state)
+            true)
+        ;; #142: nothing to patch, so nothing was learned. HOLD what we have
+        ;; rather than caching a non-board — writing the diff in was exactly what
+        ;; made the resync report success over a cleared cache.
+        ;;
+        ;; Recovery is NOT automatic from here, and the earlier wording of this
+        ;; comment claimed it was (guest review). `boardless-started-game?` runs
+        ;; only inside `sync-verdict!`, which the CLI gate calls; the autonomous
+        ;; loops call `can-start-turn?` directly and never reach it. So a loop
+        ;; that lands in this window stays boardless — correctly refusing rather
+        ;; than acting blind — until the next CLI invocation resyncs it or its
+        ;; stall backstop stops it.
+        (unappliable! old-state)))
     (catch Exception e
       (println "❌ Error in update-game-state!:" (.getMessage e))
       (println "   Diff type:" (type diff))
       (println "   Diff:" (pr-str (take 200 (pr-str diff))))
-      (.printStackTrace e))))
+      (.printStackTrace e)
+      ;; A diff that threw was not applied either — say so, so the handler does
+      ;; not run the success bookkeeping over a state it never changed.
+      (unappliable! old-state)))))
 
 (defn detect-side
   "Detect which side we are playing by matching UID to game state"
@@ -405,6 +480,13 @@
         end-turn (get-in state [:game-state :end-turn])
         turn-number (get-in state [:game-state :turn] 0)]
     (and
+     ;; #142: a board first. Every lookup below answers with its DEFAULT on a
+     ;; non-map — turn 0, clicks 0, no :end-turn — and the turn-0/0-clicks/Corp
+     ;; clause at the bottom then reads that as the Corp's opening turn. This
+     ;; predicate promises to agree with can-start-turn? by construction, and
+     ;; can-start-turn? refuses a non-board; without this the two diverge and
+     ;; `wait` spins the seat on :my-turn-start against a refusal (#87/#131).
+     (board? (:game-state state))
      ;; #87: never claim it's our move while the opponent's opening mulligan is
      ;; unresolved — start-turn will refuse, and `wait` would spin on the lie.
      (not (opponent-mulligan-pending? state))
@@ -461,7 +543,8 @@
    budget rather than the patient boundary one."
   [client-state]
   (let [gs (:game-state client-state)]
-    (boolean (and (not (:run gs))
+    (boolean (and (board? gs)  ; #142 — see my-turn-to-act?; same default-value trap
+                  (not (:run gs))
                   (or (:end-turn gs)
                       (and (= 0 (get gs :turn 0))
                            (zero? (get-in gs [:corp :click] 0))))))))
@@ -937,7 +1020,9 @@
 (defn stale?
   "Returns true if client appears to have stale state.
    Checks:
-   - diff-mismatch flag (set when we receive diffs for wrong game)
+   - diff-mismatch flag, set for EITHER of two divergences: a diff arriving for
+     a different gameid, or (#142) a diff for OUR game that would not apply to
+     the board we hold — both mean our cache no longer tracks the server's
    - gameid mismatch (have game-state but no gameid)
 
    Can be extended with additional sensors as needed."

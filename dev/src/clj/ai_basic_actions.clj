@@ -146,7 +146,10 @@
       ;; leaves the bot announcing "Auto-starting turn", being refused, and
       ;; going round again: the house autonomous-spin shape, with the wire safe
       ;; and the seat still stuck. (Guest-panel pass 2, HIGH: half-applied fix.)
-      (nil? (:game-state client-state))
+      ;; #142: `map?`, not `nil?`. A raw [alterations removals] diff vector is
+      ;; truthy, so `nil?` waved it through and every field below still read as
+      ;; its falsy default — the first-turn signature again, one step further out.
+      (not (state/board? (:game-state client-state)))
       {:can-start false :reason :no-game-state}
 
       ;; Already have clicks - turn already started
@@ -387,7 +390,9 @@
       ;; right answer to "does the flag say unresolved?" and the wrong answer to
       ;; "may I send?". Unknown state is not permission — it needs its own
       ;; refusal, ahead of every branch that sends. (Guest-panel CRITICAL.)
-      (nil? (:game-state client-state))
+      ;; #142: `map?`, not `nil?` — see can-start-turn?. A truthy non-board got
+      ;; past this guard and put `start-turn` on the wire.
+      (not (state/board? (:game-state client-state)))
       (do
         (println "⛔ Refusing start-turn: no game state — there is no turn to start.")
         (print-no-board-cause! client-state)

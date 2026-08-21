@@ -1020,3 +1020,26 @@
       (is (str/includes? out "Selected card: Palisade"))
       (is (not (str/includes? out "Paid"))
           (str "non-payment prompts must not print a payment line, got: " out)))))
+
+;; ============================================================================
+;; #142: "a board is still cached" must mean a BOARD
+;; ============================================================================
+;; discard-to-hand-size!'s no-seat branch (#127) picks between two messages on
+;; the truthiness of :game-state. A raw [alterations removals] diff vector is
+;; truthy, so a seat with no side and a mid-resync diff cached was told a board
+;; was there and pointed at `status` — which has nothing to show it.
+
+(deftest test-discard-no-side-does-not-call-a-diff-vector-a-cached-board
+  (testing "#142: with a diff vector cached, say 'not in a game', not 'a board is cached'"
+    (with-mock-state {:connected true :side nil :game-state [{:corp {:credit 6}} {}]}
+      (let [out (with-out-str (prompts/discard-to-hand-size!))]
+        (is (not (str/includes? out "board is still cached"))
+            (str "THE bug: a diff vector is not a board to go and look at. Got:\n" out))
+        (is (str/includes? out "Not in a game")
+            (str "must fall to the honest branch. Got:\n" out)))))
+
+  (testing "a real cached board still gets the spectator/unseated hint"
+    (with-mock-state {:connected true :side nil :game-state {:corp {:credit 5}}}
+      (let [out (with-out-str (prompts/discard-to-hand-size!))]
+        (is (str/includes? out "board is still cached")
+            (str "the #127 branch must survive. Got:\n" out))))))
