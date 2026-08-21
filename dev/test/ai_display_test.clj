@@ -2252,6 +2252,30 @@
     (with-mock-state {:connected true :uid "test-user" :gameid nil :side nil :game-state nil}
       (is (re-find #"(?i)not in a game" (with-out-str (display/show-status)))))))
 
+(def ^:private started-lobby-no-board-yet
+  "Guest panel (pass 1 of the #139 remainder): the server sends the started
+   :lobby/state BEFORE :game/start, so a game that has JUST started holds
+   :lobby-state {:started true} and no board for a moment. That is healthy
+   startup, not a failed resync — the explainer must not diagnose it as one."
+  {:connected true :uid "test-user" :gameid "abc" :side "corp" :game-state nil
+   :lobby-state {:gameid "abc" :started true}})
+
+(deftest test-no-board-explainer-covers-startup-and-names-the-resync-id
+  (testing "just-started window: the explainer names BOTH possibilities and the retry, not a confident 'resync cleared the cache'"
+    (with-mock-state started-lobby-no-board-yet
+      (let [out (with-out-str (display/show-credits))]
+        (is (re-find #"(?i)still arriving|just started" out)
+            (str "must allow for the first full state being in flight, got:\n" out))
+        (is (re-find #"(?i)retry" out)
+            (str "retry is the move in both states, got:\n" out))
+        (is (not (re-find #"(?i)never joined|reset" out))))))
+  (testing "`resync` takes the game id — the advertised recovery must be runnable as printed"
+    (with-mock-state boardless-seat-state
+      (is (re-find #"resync abc" (with-out-str (display/show-credits)))
+          "the explainer must print the id it holds, not a bare 'resync' that fails with usage help")
+      (is (re-find #"resync abc" (with-out-str (display/show-status)))
+          "status too"))))
+
 (deftest test-board-surfaces-gate-on-the-board-not-the-side
   ;; A spectator has a board and NO side (no-side-here!'s own spectator branch
   ;; says "'board' / 'log' show the game you are watching"). Gating these

@@ -122,8 +122,9 @@
           (println "📊 STATUS")
           (println (format "\n⚠️  Seated in game %s, but this client holds NO BOARD — the game state is unknown, not empty."
                            (:gameid cs)))
-          (println "   A resync cleared the cache and the replacement state has not arrived.")
-          (println "\n💡 Retry the read; if it keeps failing: ./dev/send_command <side> resync")
+          (println "   Either the game just started and its first full state is still arriving,")
+          (println "   or a resync cleared the cache and the replacement state has not arrived.")
+          (println (format "\n💡 Retry the read; if it keeps failing: ./dev/send_command <side> resync %s" (:gameid cs)))
           (println "   (do NOT run the reset script — it destroys the game you are seated in)"))
         (do
           (println "📊 STATUS")
@@ -787,14 +788,16 @@
         lobby (:lobby-state cs)]
     (if (or (and lobby (not (:started lobby)))
             (map? (:game-state cs)))
-      (show-status-compact*)
+      (show-status-compact* cs)
       (no-side-here! cs "the compact status"))))
 
 (defn- show-status-compact*
-  "Render the compact status; the caller guarantees a lobby line or a board."
-  []
-  (let [lobby (:lobby-state @state/client-state)
-        gs (state/get-game-state)]
+  "Render the compact status from ONE captured state; the caller guarantees a
+   lobby line or a board. Reads nothing from the atom (guest panel: a guard on
+   one read and a renderer on a later read is a check/use race)."
+  [state]
+  (let [lobby (:lobby-state state)
+        gs (:game-state state)]
     (if (and lobby (not (:started lobby)))
       ;; Lobby compact status
       (let [players (:players lobby)
@@ -804,17 +807,17 @@
                         player-count
                         (if ready? " [READY]" ""))))
       ;; Game compact status
-      (let [my-side (:side @state/client-state)
-            active-side (state/active-player)
-            turn (state/turn-number)
-            prompt (state/get-prompt)
+      (let [my-side (:side state)
+            active-side (state/active-player state)
+            turn (state/turn-number state)
+            prompt (state/get-prompt state)
             run-state (get-in gs [:run])
 
             ;; At a clean turn boundary the active-player wire field still names
             ;; the player who just finished, so flip to who acts next (matching
             ;; game-over-status's AWAITING-START next-player). Otherwise tooling
             ;; and models reading this line mistake whose turn is starting.
-            turn-status (state/get-turn-status)
+            turn-status (state/get-turn-status state)
             waiting-start? (:waiting-to-start? turn-status)
             display-side (if waiting-start? (:next-player turn-status) active-side)
 
@@ -1134,8 +1137,15 @@
       (and seated? (not board?))
       (do
         (println (format "⚠️  Seated, but this client holds NO BOARD — %s is unknown, not empty." what))
-        (println "   A resync cleared the cache and the replacement state has not arrived.")
-        (println "   → Retry the command; if it keeps failing: 'status', then 'resync'.")
+        ;; Two states share this signature (guest panel): the first full state
+        ;; of a game that has JUST started is still arriving (the server sends
+        ;; the started :lobby/state before :game/start), or a resync cleared the
+        ;; cache and the replacement has not landed. Both want the same move.
+        (println "   Either the game just started and its first full state is still arriving,")
+        (println "   or a resync cleared the cache and the replacement state has not arrived.")
+        ;; `resync` takes the game id (send_command: "Usage: resync <game-id>");
+        ;; the bare verb fails with usage help. We hold the id — print it.
+        (println (format "   → Retry the command; if it keeps failing: 'status', then 'resync %s'." (:gameid state)))
         nil)
 
       (and board? seated?)
@@ -1155,10 +1165,11 @@
         nil))))
 
 (defn show-hand
-  "Show hand using side-aware state access. Returns hand vector."
-  []
-  (let [state @state/client-state
-        side (:side state)]
+  "Show hand using side-aware state access. Returns hand vector.
+   1-arity: render from an already-captured state (snapshot, #139)."
+  ([] (show-hand @state/client-state))
+  ([state]
+  (let [side (:side state)]
     ;; #139: a side is not enough — the board is the thing being read. A seat
     ;; whose cache was cleared has a side and nothing to show it for.
     (if-not (and side (map? (:game-state state)))
@@ -1181,7 +1192,7 @@
                 (println (str "     → " ability-info)))
               ;; Show card text for first-seen cards
               (core/show-card-on-first-sight! (:title card)))))
-        hand))))
+        hand)))))
 
 (defn show-credits
   "Show current credits (side-aware). Returns credits value."
@@ -2032,15 +2043,20 @@
          (no-side-here! cs "the snapshot")
          (println (str "cursor=" (core/get-cursor)))
          nil)
+       ;; One captured state for the board-describing parts (guest panel):
+       ;; status / board / hand rendered from `cs`, so a resync landing
+       ;; mid-snapshot cannot make the response both describe and deny a
+       ;; board. The prompt and log lines still read live; neither asserts
+       ;; anything about the board's existence.
        (do
-         (show-status-compact)
-         (when (state/get-prompt)
+         (show-status-compact* cs)
+         (when (state/get-prompt cs)
            (println)
            (show-prompt-detailed))
          (println)
-         (show-board-compact)
+         (show-board-compact* cs)
          (println)
-         (show-hand)
+         (show-hand cs)
          (println)
          (show-log-compact n)
          (println (str "cursor=" (core/get-cursor)))
@@ -2497,20 +2513,21 @@
   (let [cs @state/client-state]
     (if-not (map? (:game-state cs))
       (no-side-here! cs "the blocker diagnosis")
-      (show-blocker-diagnosis*))))
+      (show-blocker-diagnosis* cs))))
 
 (defn- show-blocker-diagnosis*
-  "The diagnosis proper; the caller guarantees a board."
-  []
-  (let [ts (state/get-turn-status)
-        prompt (state/get-prompt)
+  "The diagnosis proper, from ONE captured state; the caller guarantees a
+   board. Reads nothing from the atom (guest panel: check/use race)."
+  [cs]
+  (let [ts (state/get-turn-status cs)
+        prompt (state/get-prompt cs)
         ptype (:prompt-type prompt)
         waiting? (state/waiting-prompt-type? ptype)
-        side (:side @state/client-state)
+        side (:side cs)
         side-kw (when side (keyword (clojure.string/lower-case side)))
-        my-clicks (get-in @state/client-state [:game-state side-kw :click])
+        my-clicks (get-in cs [:game-state side-kw :click])
         next-lc (clojure.string/lower-case (or (:next-player ts) ""))
-        run (get-in @state/client-state [:game-state :run])
+        run (get-in cs [:game-state :run])
         run-phase (:phase run)
         my-side-lc (when side (clojure.string/lower-case side))
         ;; A prompt is resolvable-via-choose only if it carries actual choices or
@@ -2541,7 +2558,7 @@
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
       (and (:in-run? ts) prompt (not waiting?))
       (let [runner-unbroken (when (and (= my-side-lc "runner") (= run-phase "encounter-ice"))
-                              (runner-encounter-unbroken-count @state/client-state))]
+                              (runner-encounter-unbroken-count cs))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
         ;; `initiation` is a both-must-pass window too (engine: continue :initiation
@@ -2566,7 +2583,7 @@
           (do
             (println "   → Owner: YOU — a break/tank decision, not a both-pass window.")
             (doseq [line (runner-encounter-decline-hint-lines
-                          (:title (core/current-run-ice @state/client-state) "this ICE")
+                          (:title (core/current-run-ice cs) "this ICE")
                           runner-unbroken)]
               (println line)))
 
