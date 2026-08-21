@@ -396,6 +396,29 @@
                                     :replay-shared replay-shared))))
       (response 401 {:message "Unauthorized"}))))
 
+(defn fetch-shared-replay
+  "Public twin of fetch-replay for the /replay-data route (AI-player fork, #89):
+   serves a replay ONLY if it is shared or bug-reported. Deliberately NO owner
+   clause — this route sits outside ::auth, and this fork's wrap-user mints a
+   synthetic AI user from a bare ?client-id=ai-client-* query param (the dev
+   fallback), so an owner check here would let an anonymous request read an AI
+   player's private replay (guest panel, CRITICAL). Owners fetch their private
+   replays through /profile/history/full as before."
+  [{db :system/db
+    {:keys [gameid]} :path-params}]
+  (let [{:keys [replay replay-shared bug-reported]} (fetch-replay-record db gameid)
+        replay (or replay {})]
+    (cond
+      ;; No record / no stored replay → 404 FIRST (guest panel): a missing
+      ;; record has falsey share flags, and answering 401 made the client
+      ;; treat a dead link as a private replay and ask for a login.
+      (empty? replay) (response 404 {:message "Replay not found"})
+      (or bug-reported replay-shared)
+      (json-response 200 (json/generate-string
+                           (assoc (json/parse-string replay true)
+                                  :replay-shared replay-shared)))
+      :else (response 401 {:message "Unauthorized"}))))
+
 (defn share-replay
   [{db :system/db
     {username :username} :user

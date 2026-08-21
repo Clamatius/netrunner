@@ -223,8 +223,11 @@
                                    (get-in @game-state [:runner :user :username])))))))
           ; Error handling does not work, as GET tries to parse something despite the connection
           ; timing out -- lostgeek (2021/02/14)
-          (tr-non-game-toast  [:log_remote-annotations-fail "Could not get remote annotations."]
-                             "error" {:time-out 3 :close-button true})))))
+          ;; Anonymous viewer of a shared replay (#89): the annotations route
+          ;; is behind /profile ::auth, so a 401 here is expected — no toast.
+          (when (:user @app-state)
+            (tr-non-game-toast  [:log_remote-annotations-fail "Could not get remote annotations."]
+                               "error" {:time-out 3 :close-button true}))))))
 
 (defn load-remote-annotations [pos]
   (when (< pos (count (:remote-annotations @replay-status)))

@@ -34,7 +34,7 @@ check-full:
 # Run unit tests
 test:
 	@echo "Running unit tests..."
-	lein test ai-actions-test ai-loop-sync-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-ability-legality-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test game.ai-ability-legality-test web.lobby-disconnect-test game.ai-pay-all-test ai-phase-window-test ai-wire-card-ref-test game.ai-hosted-card-ref-test game.ai-phase-windows-test
+	lein test ai-actions-test ai-loop-sync-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-ability-legality-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test game.ai-ability-legality-test web.lobby-disconnect-test game.ai-pay-all-test ai-phase-window-test ai-wire-card-ref-test game.ai-hosted-card-ref-test game.ai-phase-windows-test web.replay-share-test
 
 # Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
 test-shell:
