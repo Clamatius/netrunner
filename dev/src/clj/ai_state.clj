@@ -396,7 +396,13 @@
    holding. That makes a stale or mis-cleared wait prompt unable to deadlock us —
    this check can only ever UNBLOCK relative to the prompt alone."
   [client-state]
-  (let [my-side (keyword (:side client-state))
+  ;; #129/#133: through the authority, which LOWERCASES. `reconnect-game!` writes
+  ;; a capitalized :side until the resync full state normalizes it, and
+  ;; `(keyword "Corp")` is :Corp — which misses both lookups below, so this read
+  ;; false during exactly the reconnect window, and end-turn!'s no-turn branch
+  ;; (and start-turn!'s guard) then fell through to "start-turn" advice over a
+  ;; Runner that still owed its mulligan (guest-review catch on the #133 fix).
+  (let [my-side (my-side-kw client-state)
         opp-side (case my-side :corp :runner :runner :corp nil)
         opp-keep (get-in client-state [:game-state opp-side :keep])]
     (and (mulligan-wait-prompt?

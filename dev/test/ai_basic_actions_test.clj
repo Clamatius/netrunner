@@ -1346,3 +1346,33 @@
       (is (= :success (:status result)))
       (is (some #(= "end-turn" (get-in % [:data :command])) sent)
           "the guard must not eat a legitimate end-turn"))))
+
+(deftest test-end-turn-over-the-opponents-mulligan-says-wait
+  ;; Guest-review catch on the first cut: the two "opponent's mulligan" cases
+  ;; above both invoke from the seat that STILL OWES ITS OWN keep, so they only
+  ;; ever exercised the own-mulligan branch. This is the other one: I kept, the
+  ;; opponent has not, and I am holding the engine's "to keep hand or mulligan"
+  ;; wait prompt.
+  (let [corp-kept-runner-not
+        {:runner {:click 0 :credit 5 :hand [] :keep false}
+         :corp {:click 0 :credit 5 :hand [] :keep true
+                :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                               :prompt-type "waiting"}}
+         :turn 0 :active-player "runner" :end-turn true
+         :log [{:text "ai-corp keeps their hand."}]}]
+    (testing "Corp kept, Runner still owes: the advice is wait, not start-turn"
+      (let [[result out sent] (end-turn-capture "corp" corp-kept-runner-not)]
+        (is (= :error (:status result)))
+        (is (empty? sent))
+        (is (re-find #"(?i)waiting for the opponent|opponent to keep" out) (str "Got:\n" out))
+        (is (not (str/includes? out "start-turn"))
+            (str "start-turn over the opponent's open mulligan is the #87/#131 wedge. Got:\n" out))))
+    (testing "same state through the reconnect window's capitalized :side (#129)"
+      ;; reconnect-game! writes :side \"Corp\" until the full state normalizes it;
+      ;; the hand-rolled derivation in opponent-mulligan-pending? read :Corp and
+      ;; fell through to the turn-0 branch's start-turn advice.
+      (let [[result out sent] (end-turn-capture "Corp" corp-kept-runner-not)]
+        (is (= :error (:status result)))
+        (is (empty? sent))
+        (is (re-find #"(?i)waiting for the opponent|opponent to keep" out) (str "Got:\n" out))
+        (is (not (str/includes? out "start-turn")) (str "Got:\n" out))))))

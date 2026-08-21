@@ -482,7 +482,7 @@
    "ai_runs.clj"           5
    "ai_stall.clj"          2
    ;; ai_state.clj owns my-side-kw; these are OTHER fns in the same file.
-   "ai_state.clj"          6
+   "ai_state.clj"          5
    "full_game_test.clj"    1})
 
 (def ^:private direct-derivation-re
