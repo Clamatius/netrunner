@@ -59,7 +59,8 @@
 (defn- replay-data-request
   "Fetch the replay data. /replay-data serves SHARED and bug-reported replays
    to anyone (AI-player fork, #89); a 401 there means the replay is private, so
-   fall back to the owner-only /profile/history/full route (needs a session)."
+   fall back to the owner route /profile/history/full (behind ::auth, so it
+   answers only for the logged-in player of that game)."
   [gameid]
   (go (let [{:keys [status] :as resp} (<! (GET (str "/replay-data/" gameid)))]
         (if (= 401 status)
@@ -314,7 +315,11 @@
                replay-id (r/cursor app-state [:replay-id])]
     [:div.container
      [:div.lobby-bg]
-     (do (authenticated (fn [_] nil)) nil)
+     ;; The lobby proper needs a login; a replay LINK does not (#89, guest
+     ;; catch — this page-level gate opened the login modal over a shared
+     ;; replay even after start-shared-replay stopped asking for one).
+     (when-not @replay-id
+       (do (authenticated (fn [_] nil)) nil))
      ; TODO: make starting a game from deckbuilder work again
      ; (when (and (not (or @gameid (:editing @s)))
      ;            (some? (:create-game-deck @app-state)))

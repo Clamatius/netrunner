@@ -45,6 +45,9 @@
   (testing "a bug-reported replay is served to a request with NO user"
     (with-redefs [mc/find-one-as-map (fn [& _] bug-reported-replay)]
       (is (= 200 (:status (stats/fetch-shared-replay (anon-request "g1")))))))
+  (testing "a NONEXISTENT gameid is 404, not 401 (guest panel, pass 2): a missing record has falsey share flags, and 401 made the client treat a dead link as a private replay and ask for a login"
+    (with-redefs [mc/find-one-as-map (fn [& _] nil)]
+      (is (= 404 (:status (stats/fetch-shared-replay (anon-request "no-such-game")))))))
   (testing "a private replay is 401 for an anonymous viewer"
     (with-redefs [mc/find-one-as-map (fn [& _] private-replay)]
       (is (= 401 (:status (stats/fetch-shared-replay (anon-request "g1")))))))

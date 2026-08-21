@@ -408,13 +408,16 @@
     {:keys [gameid]} :path-params}]
   (let [{:keys [replay replay-shared bug-reported]} (fetch-replay-record db gameid)
         replay (or replay {})]
-    (if (or bug-reported replay-shared)
-      (if (empty? replay)
-        (response 404 {:message "Replay not found"})
-        (json-response 200 (json/generate-string
-                             (assoc (json/parse-string replay true)
-                                    :replay-shared replay-shared))))
-      (response 401 {:message "Unauthorized"}))))
+    (cond
+      ;; No record / no stored replay → 404 FIRST (guest panel): a missing
+      ;; record has falsey share flags, and answering 401 made the client
+      ;; treat a dead link as a private replay and ask for a login.
+      (empty? replay) (response 404 {:message "Replay not found"})
+      (or bug-reported replay-shared)
+      (json-response 200 (json/generate-string
+                           (assoc (json/parse-string replay true)
+                                  :replay-shared replay-shared)))
+      :else (response 401 {:message "Unauthorized"}))))
 
 (defn share-replay
   [{db :system/db
