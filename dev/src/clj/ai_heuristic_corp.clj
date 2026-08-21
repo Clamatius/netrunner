@@ -35,6 +35,7 @@
             [ai-prompts :as prompts]
             [ai-runs :as runs]
             [ai-connection :as conn]
+            [ai-loop-sync :as loop-sync]
             [ai-stall :as stall]
             [clojure.string :as str]))
 
@@ -1357,7 +1358,8 @@
   (log-message "HEURISTIC CORP - Starting autonomous loop")
   (loop [iter 0
          stall {:key nil :count 0}
-         spin {:key nil :count 0}]
+         spin {:key nil :count 0}
+         resync 0]
     (when (zero? (mod iter 10))
       (let [gs (:game-state @state/client-state)]
         (log-message (str "💓 Corp Loop | Turn: " (:turn gs)
@@ -1365,50 +1367,61 @@
                       " | Clicks: " (my-clicks)
                       " | Credits: " (my-credits)))))
 
-    (let [{:keys [continue? run-status]}
+    (let [{:keys [continue? run-status resync-next]}
           (try
-            (let [game-state @state/client-state
-                  winner (get-in game-state [:game-state :winner])]
+            ;; #144: reach the SAME authority the CLI gate uses before acting.
+            ;; Cheap when healthy (no round trip while a board is cached), it
+            ;; REPAIRS a boardless seat, and it is bounded — a seat that cannot
+            ;; be repaired stops with a diagnostic instead of refusing forever.
+            ;; Sits ahead of the prompt/turn/run priorities on purpose: every one
+            ;; of them reads the board, so none of them is meaningful without one.
+            (let [{:keys [action attempts]}
+                  (loop-sync/report! "corp" (loop-sync/ensure-board! resync))]
+              (if (not= :act action)
+                {:continue? (not= :stop action) :run-status nil :resync-next attempts}
+                (let [game-state @state/client-state
+                      winner (get-in game-state [:game-state :winner])]
 
-              (if winner
-                (do
-                  (log-message "HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
-                  {:continue? false})
-                (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
+                  (if winner
+                    (do
+                      (log-message "HEURISTIC CORP - Game over (Winner:" winner ") - Stopping loop.")
+                      {:continue? false})
+                    (let [my-turn? (= "corp" (:active-player (:game-state game-state)))]
 
-                  ;; 1. Handle Prompts (Priority)
-                  (when (handle-prompt-if-needed)
-                    (Thread/sleep 500))
+                      ;; 1. Handle Prompts (Priority)
+                      (when (handle-prompt-if-needed)
+                        (Thread/sleep 500))
 
-                  ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
-                  (let [start-check (actions/can-start-turn?)]
-                    (when (:can-start start-check)
-                      (log-message "HEURISTIC CORP - Auto-starting turn")
-                      (actions/start-turn!)
-                      (Thread/sleep 500)))
+                      ;; 1.5 Attempt to start turn if valid (e.g. opponent ended)
+                      (let [start-check (actions/can-start-turn?)]
+                        (when (:can-start start-check)
+                          (log-message "HEURISTIC CORP - Auto-starting turn")
+                          (actions/start-turn!)
+                          (Thread/sleep 500)))
 
-                  ;; 2. If my turn, play
-                  (when (and my-turn? (not (state/get-prompt)))
-                    (if (pos? (my-clicks))
-                      (play-turn)
-                      (do
-                        ;; Only log this occasionally to reduce spam
-                        (when (zero? (mod iter 20))
-                          (log-message "HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn"))
-                        (actions/smart-end-turn!))))
+                      ;; 2. If my turn, play
+                      (when (and my-turn? (not (state/get-prompt)))
+                        (if (pos? (my-clicks))
+                          (play-turn)
+                          (do
+                            ;; Only log this occasionally to reduce spam
+                            (when (zero? (mod iter 20))
+                              (log-message "HEURISTIC CORP - 0 clicks detected in loop, attempting end-turn"))
+                            (actions/smart-end-turn!))))
 
-                  ;; 3. If opponent turn, watch for runs. Capture the run status so
-                  ;; the stall tracker can tell if we're wedged waiting on the Runner.
-                  (let [run-status (when (and (not my-turn?) (has-active-run?))
-                                     (let [r (respond-to-run!)]
-                                       (Thread/sleep 500)
-                                       (:status r)))]
-                    {:continue? true :run-status run-status}))))
+                      ;; 3. If opponent turn, watch for runs. Capture the run status so
+                      ;; the stall tracker can tell if we're wedged waiting on the Runner.
+                      (let [run-status (when (and (not my-turn?) (has-active-run?))
+                                         (let [r (respond-to-run!)]
+                                           (Thread/sleep 500)
+                                           (:status r)))]
+                        {:continue? true :run-status run-status}))))))
             (catch Exception e
               (log-message "❌ HEURISTIC CORP ERROR:" (.getMessage e))
               (.printStackTrace e)
               (Thread/sleep 5000)
-              {:continue? true :run-status nil}))
+              ;; An exception is not a failed resync — carry the count, don't spend it.
+              {:continue? true :run-status nil :resync-next resync}))
 
           ;; Stall backstop: same as the Runner loop. Corp waits on the Runner via
           ;; :waiting-for-runner-signal / :waiting-for-opponent, and monitor-run!'s
@@ -1448,4 +1461,4 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur (inc iter) next-stall next-spin)))))
+        (recur (inc iter) next-stall next-spin (or resync-next 0))))))

@@ -4,6 +4,7 @@
    - Purpose: Baseline opponent for Corp testing."
   (:require [ai-state :as state]
             [ai-basic-actions :as actions]
+            [ai-loop-sync :as loop-sync]
             [ai-prompts :as prompts]
             [clojure.string :as str]))
 
@@ -47,40 +48,50 @@
   "Main autonomous loop."
   []
   (println "🐟 GOLDFISH - Starting autonomous loop")
-  (loop []
-    (let [continue? (try
-                      (let [game-state @state/client-state
-                            winner (get-in game-state [:game-state :winner])]
-                        (if winner
+  (loop [resync 0]
+    (let [{:keys [continue? resync-next]}
+          (try
+            ;; #144: reach the SAME authority the CLI gate uses before acting.
+            ;; Cheap when healthy (no round trip while a board is cached), it
+            ;; REPAIRS a boardless seat, and it is bounded — a seat that cannot
+            ;; be repaired stops with a diagnostic instead of refusing forever.
+            (let [{:keys [action attempts]}
+                  (loop-sync/report! "goldfish-runner" (loop-sync/ensure-board! resync))]
+              (if (not= :act action)
+                {:continue? (not= :stop action) :resync-next attempts}
+                (let [game-state @state/client-state
+                      winner (get-in game-state [:game-state :winner])]
+                  (if winner
+                    (do
+                      (println "🐟 GOLDFISH - Game over (Winner:" winner ") - Stopping loop.")
+                      {:continue? false})
+                    (let [my-turn? (= "runner" (:active-player (:game-state game-state)))]
+                      ;; Handle Prompts
+                      (when (state/get-prompt)
+                        (handle-prompts)
+                        (Thread/sleep 500))
+
+                      ;; Auto-start turn
+                      (let [start-check (actions/can-start-turn?)]
+                        (when (:can-start start-check)
+                          (println "🐟 GOLDFISH - Auto-starting turn")
+                          (actions/start-turn!)
+                          (Thread/sleep 500)))
+
+                      ;; Play Turn
+                      (when (and my-turn? (not (state/get-prompt)))
+                        (if (pos? (state/runner-clicks))
+                          (play-turn)
                           (do
-                            (println "🐟 GOLDFISH - Game over (Winner:" winner ") - Stopping loop.")
-                            false)
-                          (let [my-turn? (= "runner" (:active-player (:game-state game-state)))]
-                            ;; Handle Prompts
-                            (when (state/get-prompt)
-                              (handle-prompts)
-                              (Thread/sleep 500))
+                            (println "🐟 GOLDFISH - 0 clicks, ending turn")
+                            (actions/smart-end-turn!))))
 
-                            ;; Auto-start turn
-                            (let [start-check (actions/can-start-turn?)]
-                              (when (:can-start start-check)
-                                (println "🐟 GOLDFISH - Auto-starting turn")
-                                (actions/start-turn!)
-                                (Thread/sleep 500)))
-
-                            ;; Play Turn
-                            (when (and my-turn? (not (state/get-prompt)))
-                              (if (pos? (state/runner-clicks))
-                                (play-turn)
-                                (do
-                                  (println "🐟 GOLDFISH - 0 clicks, ending turn")
-                                  (actions/smart-end-turn!))))
-
-                            true))) ;; Continue loop
-                      (catch Exception e
-                        (println "❌ GOLDFISH ERROR:" (.getMessage e))
-                        (Thread/sleep 5000)
-                        true))] ;; Continue loop on error
+                      {:continue? true}))))) ;; Continue loop
+            (catch Exception e
+              (println "❌ GOLDFISH ERROR:" (.getMessage e))
+              (Thread/sleep 5000)
+              ;; An exception is not a failed resync — carry the count, don't spend it.
+              {:continue? true :resync-next resync}))] ;; Continue loop on error
       (when continue?
         (Thread/sleep 1000)
-        (recur)))))
+        (recur (or resync-next 0))))))
