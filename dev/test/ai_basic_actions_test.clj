@@ -1251,3 +1251,128 @@
             (is (= :no-game-state (:reason @result)))
             (is (empty? @sent)
                 (str "an off-turn end-turn is the unrecoverable kind. Got:\n" out))))))))
+
+;; ============================================================================
+;; #133: end-turn! with no turn in progress (`:end-turn` true)
+;; ============================================================================
+;; The reference client renders End Turn only while `:end-turn` is false
+;; (board.cljs basic-actions). new-state ships it TRUE, and the Runner seat
+;; passed every other guard at turn 0 (new-state's :active-player is "runner"),
+;; so `end-turn` at the mulligan went out and the ENGINE processed a "runner is
+;; ending their turn 0" — which then fed the log-scanning duplicate guard and
+;; produced the 'rolled back' misdiagnosis the issue was filed about.
+
+(def ^:private runner-mulligan-game-state
+  "new-state as the RUNNER sees it before anyone has kept: the seat the #133
+   probe was sent from."
+  {:runner {:click 0 :credit 5 :hand [] :keep false
+            :prompt-state {:msg "Keep hand?" :prompt-type "mulligan"
+                           :choices [{:value "Keep"} {:value "Mulligan"}]}}
+   :corp {:click 0 :credit 5 :hand [] :keep false}
+   :turn 0
+   :active-player "runner"
+   :end-turn true
+   :log []})
+
+(defn- end-turn-capture
+  "Run end-turn! against GAME-STATE as SIDE; return [result out sent]."
+  [side game-state]
+  (let [sent (atom [])
+        result (atom nil)]
+    (with-mock-state (mock-client-state :side side :game-state game-state)
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (reset! result (basic/end-turn!)))]
+          [@result out @sent])))))
+
+(deftest test-end-turn-at-the-mulligan-is-not-sent
+  (testing "#133 THE bug: Runner end-turn before anyone kept reached the engine"
+    (let [[result out sent] (end-turn-capture "runner" runner-mulligan-game-state)]
+      (is (= :error (:status result)))
+      (is (empty? sent)
+          (str "end-turn went out at turn 0 — the engine logs 'is ending their turn 0'. Got:\n" out))
+      (is (re-find #"(?i)mulligan|keep-hand" out)
+          (str "must name the decision actually owed. Got:\n" out))
+      (is (not (re-find #"(?i)already ended|rolled back|duplicate" out))
+          (str "no turn has ever ended — must not claim one did. Got:\n" out)))))
+
+(deftest test-end-turn-over-opponents-mulligan-names-the-wait
+  (testing "#133 exact repro: Corp kept, Runner still holds Keep hand?"
+    (let [gs (-> runner-mulligan-game-state
+                 (assoc-in [:corp :keep] true)
+                 (assoc :log [{:text "ai-corp keeps their hand."}]))
+          [result out sent] (end-turn-capture "runner" gs)]
+      (is (= :error (:status result)))
+      (is (empty? sent))
+      (is (re-find #"(?i)mulligan|keep-hand" out) (str "Got:\n" out))
+      (is (not (re-find #"(?i)already ended|rolled back|smart-end-turn" out))
+          (str "the issue's three false claims. Got:\n" out))))
+  (testing "#133 the other seat: Runner kept, Corp still holds Keep hand?"
+    (let [[result out sent] (end-turn-capture "corp" (assoc-in my-mulligan-game-state [:runner :keep] true))]
+      (is (= :error (:status result)))
+      (is (empty? sent))
+      (is (re-find #"(?i)mulligan|keep-hand" out) (str "Got:\n" out))
+      (is (not (re-find #"(?i)corrupts engine state|umpire" out))
+          (str "new-state's :active-player is 'runner'; that is not an off-turn send. Got:\n" out)))))
+
+(deftest test-end-turn-at-turn-zero-after-both-kept-points-at-start-turn
+  (testing "Corp, both kept, nobody started: the next move is start-turn, not the umpire"
+    (let [gs (-> my-mulligan-game-state
+                 (assoc-in [:corp :keep] true) (assoc-in [:runner :keep] true)
+                 (update :corp dissoc :prompt-state))
+          [result out sent] (end-turn-capture "corp" gs)]
+      (is (= :error (:status result)))
+      (is (empty? sent))
+      (is (str/includes? out "start-turn") (str "Got:\n" out))
+      (is (not (re-find #"(?i)corrupts engine state|umpire|already ended" out)) (str "Got:\n" out)))))
+
+(deftest test-end-turn-at-a-mid-game-boundary-points-at-start-turn
+  (testing "opponent ended, I have not started: no turn of mine to end yet"
+    (let [gs {:runner {:click 0 :credit 5 :hand [] :keep true}
+              :corp {:click 0 :credit 8 :hand [] :keep true}
+              :turn 4 :active-player "corp" :end-turn true
+              :log [{:text "ai-corp is ending their turn 4 with 8 [Credit] and 3 cards in HQ."}]}
+          [result out sent] (end-turn-capture "runner" gs)]
+      (is (= :error (:status result)))
+      (is (empty? sent))
+      (is (str/includes? out "start-turn") (str "Got:\n" out)))))
+
+(deftest test-end-turn-in-a-live-turn-still-sends
+  (testing "regression: :end-turn false, my turn, 0 clicks => the send happens"
+    (let [gs {:runner {:click 0 :credit 5 :hand [] :keep true}
+              :corp {:click 0 :credit 8 :hand [] :keep true}
+              :turn 4 :active-player "runner" :end-turn false
+              :log [{:text "ai-runner spends [Click] to gain 1 [Credits]."}]}
+          [result _ sent] (end-turn-capture "runner" gs)]
+      (is (= :success (:status result)))
+      (is (some #(= "end-turn" (get-in % [:data :command])) sent)
+          "the guard must not eat a legitimate end-turn"))))
+
+(deftest test-end-turn-over-the-opponents-mulligan-says-wait
+  ;; Guest-review catch on the first cut: the two "opponent's mulligan" cases
+  ;; above both invoke from the seat that STILL OWES ITS OWN keep, so they only
+  ;; ever exercised the own-mulligan branch. This is the other one: I kept, the
+  ;; opponent has not, and I am holding the engine's "to keep hand or mulligan"
+  ;; wait prompt.
+  (let [corp-kept-runner-not
+        {:runner {:click 0 :credit 5 :hand [] :keep false}
+         :corp {:click 0 :credit 5 :hand [] :keep true
+                :prompt-state {:msg "Waiting for Runner to keep hand or mulligan"
+                               :prompt-type "waiting"}}
+         :turn 0 :active-player "runner" :end-turn true
+         :log [{:text "ai-corp keeps their hand."}]}]
+    (testing "Corp kept, Runner still owes: the advice is wait, not start-turn"
+      (let [[result out sent] (end-turn-capture "corp" corp-kept-runner-not)]
+        (is (= :error (:status result)))
+        (is (empty? sent))
+        (is (re-find #"(?i)waiting for the opponent|opponent to keep" out) (str "Got:\n" out))
+        (is (not (str/includes? out "start-turn"))
+            (str "start-turn over the opponent's open mulligan is the #87/#131 wedge. Got:\n" out))))
+    (testing "same state through the reconnect window's capitalized :side (#129)"
+      ;; reconnect-game! writes :side \"Corp\" until the full state normalizes it;
+      ;; the hand-rolled derivation in opponent-mulligan-pending? read :Corp and
+      ;; fell through to the turn-0 branch's start-turn advice.
+      (let [[result out sent] (end-turn-capture "Corp" corp-kept-runner-not)]
+        (is (= :error (:status result)))
+        (is (empty? sent))
+        (is (re-find #"(?i)waiting for the opponent|opponent to keep" out) (str "Got:\n" out))
+        (is (not (str/includes? out "start-turn")) (str "Got:\n" out))))))
