@@ -72,7 +72,10 @@
               :password ""
               :allow-spectator true
               :spectatorhands true)
-       (go (let [{:keys [status json]} (<! (GET (str "/profile/history/full/" gameid)))]
+       ;; /replay-data is the public twin of /profile/history/full (AI-player
+       ;; fork, #89): same handler, outside the /profile ::auth group, so a
+       ;; shared or bug-reported replay loads for a logged-out viewer.
+       (go (let [{:keys [status json]} (<! (GET (str "/replay-data/" gameid)))]
              (case status
                200
                (let [replay (js->clj json :keywordize-keys true)

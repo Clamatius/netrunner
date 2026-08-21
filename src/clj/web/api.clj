@@ -86,6 +86,13 @@
                        :post #'auth/reset-password-handler}]
      ["/replay/:gameid" {:get #'stats/replay-handler :middleware [::forgery]}]
      ["/bug-report/:bugid" {:get #'stats/replay-handler :middleware [::forgery]}]
+     ;; Replay DATA for the /replay and /bug-report pages (AI-player fork, #89).
+     ;; fetch-replay already serves shared / bug-reported replays to anyone and
+     ;; private ones only to a player, but it lived under /profile's ::auth,
+     ;; which 401s a logged-out viewer before the handler runs — so a shared
+     ;; link never worked. Same handler, outside ::auth; wrap-user is global,
+     ;; so a logged-in owner's private replay still passes the owner clause.
+     ["/replay-data/:gameid" {:get #'stats/fetch-replay :middleware [::forgery]}]
      ["/register" {:post #'auth/register-handler :middleware [::forgery]}]
      ["/check-username/:username" {:get #'auth/check-username-handler :middleware [::forgery]}]
      ["/check-email/:email" {:get #'auth/check-email-handler :middleware [::forgery]}]
