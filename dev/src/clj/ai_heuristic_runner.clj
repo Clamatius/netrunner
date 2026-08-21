@@ -383,7 +383,7 @@
                              (long (/ patient-ms 1000)) "s wall-clock)") ""))
   (loop [stall {:key nil :count 0}
          spin {:key nil :count 0}
-         resync 0]
+         resync loop-sync/initial-tracker]
     (let [{:keys [continue? run-status resync-next]}
           (try
             ;; #144: reach the SAME authority the CLI gate uses before acting.
@@ -392,10 +392,10 @@
             ;; be repaired stops with a diagnostic instead of refusing forever.
             ;; Sits ahead of the run/prompt/turn priorities on purpose: every one
             ;; of them reads the board, so none of them is meaningful without one.
-            (let [{:keys [action attempts]}
+            (let [{:keys [action tracker]}
                   (loop-sync/report! "runner" (loop-sync/ensure-board! resync))]
               (if (not= :act action)
-                {:continue? (not= :stop action) :run-status nil :resync-next attempts}
+                {:continue? (not= :stop action) :run-status nil :resync-next tracker}
                 (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
                   (if winner
@@ -498,7 +498,7 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur next-stall next-spin (or resync-next 0))))))
+        (recur next-stall next-spin (or resync-next loop-sync/initial-tracker))))))
 
 ;; ============================================================================
 ;; Turn Driver + Status (send_command parity with ai-heuristic-corp)

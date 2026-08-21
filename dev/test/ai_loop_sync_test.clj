@@ -31,12 +31,26 @@
 ;; Pure core: classify
 ;; ============================================================================
 
-(deftest test-classify-board-outranks-verdict
-  (testing "#144: a board in hand answers the loop's question whatever route it came by"
-    ;; The loop is asking "can I act now?", not "what did the network say?".
+(deftest test-classify-verdict-outranks-a-retained-board
+  (testing "#144: a FAILED repair stays failed even though the old board is still there"
+    ;; Caught by the guest panel as a CRITICAL, and it was: this file's first cut
+    ;; let `board-after?` outrank the verdict, on the theory that a board in hand
+    ;; answers the loop's question whatever route it came by. It does not.
+    ;;
+    ;; `do-rejoin-resync!` returns :resync-failed from a path that never reaches
+    ;; `resync-game!` ("Rejoin not confirmed in lobby within 5s"), and
+    ;; `teardown-verdict` returns :game-gone while deliberately READING the
+    ;; cached snapshot. In both, the stale board is still sitting there. The old
+    ;; precedence turned that into :act on a board known not to track the
+    ;; server's, reset the budget to zero, and repeated every tick.
+    (is (= :resync-failed (sync/classify :resync-failed true))
+        "THE inverted-precedence bug: a retained board must not launder a failure")
+    (is (= :game-gone (sync/classify :game-gone true))
+        "worse still — this one kept a seat playing into a destroyed game")
+    (is (= :game-over (sync/classify :game-over true))))
+  (testing "#144: only :synced lets the board decide"
     (is (= :have-board (sync/classify :synced true)))
-    (is (= :have-board (sync/classify :resync-failed true))
-        "a resync reported as failed that nonetheless left a board is a recovery")))
+    (is (= :no-game (sync/classify :synced false)))))
 
 (deftest test-classify-synced-without-a-board-is-not-a-failure
   (testing "#144: :synced with no board means there is nothing to act in YET"
@@ -109,6 +123,14 @@
 ;; ============================================================================
 ;; ensure-board! — the behaviour the loops depend on
 ;; ============================================================================
+;;
+;; These drive the 4-arity so the membership-TTL clock is explicit. `now` and
+;; `verify-every-ms` are parameters precisely so a test never has to wait on, or
+;; race, a wall clock.
+
+(def ^:private fresh
+  "A tracker whose membership check is NOT yet due at now=1000."
+  {:attempts 0 :verified-at 1000})
 
 (defn- counting-verdict
   "Stands in for sync-verdict!, recording each call so the fast path can be
@@ -124,7 +146,7 @@
     (let [calls (atom 0)]
       (with-mock-state (mock-client-state)
         (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
-          (let [r (sync/ensure-board! 0)]
+          (let [r (sync/ensure-board! fresh 3 60000 1000)]
             (is (= :act (:action r)))
             (is (= :have-board (:outcome r)))
             (is (zero? @calls)
@@ -144,23 +166,59 @@
                         ;; a successful repair installs a board, as do-rejoin-resync! does
                         (swap! state/client-state assoc :game-state {:turn 3})
                         :synced)]
-          (let [r (sync/ensure-board! 0)]
+          (let [r (sync/ensure-board! fresh 3 60000 1000)]
             (is (= 1 @calls) "the boardless seat DID reach the authority")
             (is (= :act (:action r)) "and may act again on the recovered board")
             (is (true? (:repaired? r)))
-            (is (zero? (:attempts r)) "a recovery clears the failure count")))))))
+            (is (zero? (:attempts (:tracker r))) "a recovery clears the failure count")))))))
 
-(deftest test-ensure-board-known-divergence-also-repairs
-  (testing "#144: a board the client already knows has diverged is not actable"
-    ;; `stale?` is a local flag — no IO — so honouring it in the fast-path guard
-    ;; is free. Deliberately NOT an attempt at #138's staleness DETECTION: this
-    ;; only respects a divergence the client has already recorded.
+;; --- the local invalidation signals (guest panel, CRITICAL) -----------------
+;;
+;; `board?` + `stale?` alone were too weak: a board can be present and yet not
+;; be a game to act in. Each of these is a purely local flag, free to check, and
+;; each was a state the CLI gate caught and the loops did not.
+
+(deftest test-ensure-board-honours-every-local-invalidation-signal
+  (let [signals {"a server-closed lobby (mark-lobby-gone! RETAINS the board)"
+                 {:lobby-gone? true}
+                 "a recorded diff divergence"
+                 {:diff-mismatch true}
+                 "a dropped socket — a board cached across it is a snapshot, not a game"
+                 {:connected false}}]
+    (doseq [[what st] signals]
+      (testing (str "#144: " what " must route through the repair, board or not")
+        (let [calls (atom 0)]
+          (with-mock-state (merge (mock-client-state) st)
+            (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
+              (sync/ensure-board! fresh 3 60000 1000)
+              (is (= 1 @calls) what))))))))
+
+(deftest test-ensure-board-reverifies-membership-on-a-throttle
+  (testing "#144: a loop holding a board still re-asks 'am I still seated?' eventually"
+    ;; The CLI gate runs verify-in-game! on EVERY invocation; a loop with a board
+    ;; would otherwise run it never. The local flags cannot close that gap alone —
+    ;; a silent unseat announces nothing — so the TTL is the backstop.
     (let [calls (atom 0)]
-      (with-mock-state (assoc (mock-client-state) :diff-mismatch true)
+      (with-mock-state (mock-client-state)
         (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
-          (sync/ensure-board! 0)
-          (is (= 1 @calls)
-              "a recorded divergence must route through the repair, board or not"))))))
+          (testing "not yet due: still free"
+            (sync/ensure-board! {:attempts 0 :verified-at 1000} 3 60000 30000)
+            (is (zero? @calls)))
+          (testing "TTL expired: one round trip, and the clock restarts"
+            (let [r (sync/ensure-board! {:attempts 0 :verified-at 1000} 3 60000 61000)]
+              (is (= 1 @calls))
+              (is (= :act (:action r)) "a healthy verified seat carries on")
+              (is (= 61000 (:verified-at (:tracker r)))))))))))
+
+(deftest test-ensure-board-first-tick-verifies
+  (testing "#144: a loop confirms its seat once at startup rather than trusting the cache"
+    (let [calls (atom 0)]
+      (with-mock-state (mock-client-state)
+        (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
+          (sync/ensure-board! sync/initial-tracker 3 60000 500000)
+          (is (= 1 @calls) "initial-tracker's :verified-at 0 is always due"))))))
+
+;; --- the bound --------------------------------------------------------------
 
 (deftest test-ensure-board-counts-consecutive-failures-to-a-stop
   (testing "#144: the retry is bounded — three failures stop the loop"
@@ -168,12 +226,32 @@
           boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
         (with-redefs [conn/sync-verdict! (counting-verdict calls :resync-failed)]
-          (let [r1 (sync/ensure-board! 0 3)
-                r2 (sync/ensure-board! (:attempts r1) 3)
-                r3 (sync/ensure-board! (:attempts r2) 3)]
+          (let [r1 (sync/ensure-board! fresh 3 60000 1000)
+                r2 (sync/ensure-board! (:tracker r1) 3 60000 2000)
+                r3 (sync/ensure-board! (:tracker r2) 3 60000 3000)]
             (is (= [:retry :retry :stop] (map :action [r1 r2 r3]))
                 "THE bound: the loop stops rather than rejoining forever")
-            (is (= [1 2 3] (map :attempts [r1 r2 r3])))
+            (is (= [1 2 3] (map #(:attempts (:tracker %)) [r1 r2 r3])))
+            (is (= 3 @calls))))))))
+
+(deftest test-ensure-board-a-throwing-repair-is-a-failed-repair
+  (testing "#144: an exception must SPEND an attempt, not slip past the bound"
+    ;; Guest panel, CRITICAL. The loops' own catch blocks carry the attempt count
+    ;; without incrementing it — right for a tick-body exception, fatal for a
+    ;; recovery one: a sync-verdict! that throws every tick retried forever, and
+    ;; neither stall backstop accumulates in that state (own-turn-key needs an
+    ;; :active-player, and a boardless seat has none). So it is caught here.
+    (let [calls (atom 0)
+          boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
+      (with-mock-state boardless
+        (with-redefs [conn/sync-verdict!
+                      (fn [] (swap! calls inc) (throw (RuntimeException. "socket died")))]
+          (let [r1 (sync/ensure-board! fresh 3 60000 1000)
+                r2 (sync/ensure-board! (:tracker r1) 3 60000 2000)
+                r3 (sync/ensure-board! (:tracker r2) 3 60000 3000)]
+            (is (= [:retry :retry :stop] (map :action [r1 r2 r3]))
+                "THE bug: a throwing recovery used to retry forever, budget untouched")
+            (is (= :resync-failed (:outcome r3)) "a throw IS a failed repair")
             (is (= 3 @calls))))))))
 
 (deftest test-ensure-board-terminal-verdicts-stop-without-spending-attempts
@@ -182,10 +260,10 @@
       (doseq [v [:game-over :game-gone]]
         (with-mock-state boardless
           (with-redefs [conn/sync-verdict! (constantly v)]
-            (let [r (sync/ensure-board! 0 3)]
+            (let [r (sync/ensure-board! fresh 3 60000 1000)]
               (is (= :stop (:action r)) (str v " must not be retried"))
               (is (= v (:outcome r)))
-              (is (zero? (:attempts r))))))))))
+              (is (zero? (:attempts (:tracker r)))))))))))
 
 (deftest test-ensure-board-pre-game-idles-indefinitely
   (testing "#144: a loop waiting for its game to start must not bail"
@@ -194,13 +272,14 @@
     (let [boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
         (with-redefs [conn/sync-verdict! (constantly :synced)]
-          (let [results (reduce (fn [acc _]
-                                  (conj acc (sync/ensure-board! (:attempts (last acc) 0) 3)))
-                                [{:attempts 0}]
+          (let [results (reduce (fn [acc i]
+                                  (conj acc (sync/ensure-board!
+                                              (:tracker (last acc)) 3 60000 (* 1000 (inc i)))))
+                                [{:tracker fresh}]
                                 (range 10))]
             (is (every? #(= :idle (:action %)) (rest results))
                 "pre-game idling never becomes a bail")
-            (is (every? #(zero? (:attempts %)) (rest results))
+            (is (every? #(zero? (:attempts (:tracker %))) (rest results))
                 "and never consumes the retry budget")))))))
 
 ;; ============================================================================

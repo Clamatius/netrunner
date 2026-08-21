@@ -58,17 +58,17 @@
   "Main autonomous loop."
   []
   (println "🐠 GOLDFISH CORP - Starting autonomous loop")
-  (loop [resync 0]
+  (loop [resync loop-sync/initial-tracker]
     (let [{:keys [continue? resync-next]}
           (try
             ;; #144: reach the SAME authority the CLI gate uses before acting.
             ;; Cheap when healthy (no round trip while a board is cached), it
             ;; REPAIRS a boardless seat, and it is bounded — a seat that cannot
             ;; be repaired stops with a diagnostic instead of refusing forever.
-            (let [{:keys [action attempts]}
+            (let [{:keys [action tracker]}
                   (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))]
               (if (not= :act action)
-                {:continue? (not= :stop action) :resync-next attempts}
+                {:continue? (not= :stop action) :resync-next tracker}
                 (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
                   (if winner
@@ -107,4 +107,4 @@
               {:continue? true :resync-next resync}))] ;; Continue loop on error
       (when continue?
         (Thread/sleep 1000)
-        (recur (or resync-next 0))))))
+        (recur (or resync-next loop-sync/initial-tracker))))))

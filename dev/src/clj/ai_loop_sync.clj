@@ -56,25 +56,37 @@
   3)
 
 (defn classify
-  "Name the outcome of a boardless tick, given `sync-verdict!`'s verdict and
-   whether a board is present AFTER it ran.
+  "Name the outcome of a tick that consulted the authority, from
+   `sync-verdict!`'s verdict and whether a board is present AFTER it ran.
 
-   `board-after?` outranks the verdict on purpose: the question a loop is asking
-   is \"can I act now?\", and a board in hand answers it whatever route it
-   arrived by.
+   The VERDICT outranks the board, and that ordering is the whole point (guest
+   panel, CRITICAL — this was inverted in the first cut of this file).
+
+   `do-rejoin-resync!` returns `:resync-failed` from a path that never reaches
+   `resync-game!` (the \"Rejoin not confirmed in lobby within 5s\" arm),
+   and `teardown-verdict` returns `:game-gone`/`:game-over` while deliberately
+   reading the cached snapshot. In BOTH the old board is still sitting in
+   :game-state. Letting its presence answer the loop's question turned a failed
+   repair into `:act` on a board already known not to track the server's, reset
+   the attempt budget to zero, and — with the stale flag still set — did it
+   again every tick. The `:game-gone` form is worse still: it would keep a seat
+   playing into a game the server has already destroyed.
+
+   A board that lands concurrently, just after a timeout, is not lost: the NEXT
+   tick's fast path picks it up. It simply must not erase this tick's failure.
 
    `:synced` with no board is NOT a failure. `sync-verdict!` returns `:synced`
    for a client with no `:gameid` at all, and for a seated-but-unstarted lobby —
-   both are healthy states in which there is simply nothing to act in yet.
-   Nothing was attempted, so nothing failed; counting these would bail a loop
-   that is merely waiting for its game to begin."
+   both healthy states in which there is nothing to act in yet. Nothing was
+   attempted, so nothing failed; counting these would bail a loop that is merely
+   waiting for its game to begin."
   [verdict board-after?]
-  (cond
-    board-after?               :have-board
-    (= verdict :game-over)     :game-over
-    (= verdict :game-gone)     :game-gone
-    (= verdict :resync-failed) :resync-failed
-    :else                      :no-game))
+  (case verdict
+    :game-over     :game-over
+    :game-gone     :game-gone
+    :resync-failed :resync-failed
+    ;; :synced (and any unknown verdict — treat as "the authority is content")
+    (if board-after? :have-board :no-game)))
 
 (defn next-attempts
   "Consecutive-failure count carried to the next tick. Any outcome other than a
@@ -124,34 +136,89 @@
        "   acting on a cleared cache is what the refusal protects against (#109)."
        "   Check './dev/send_command <side> status' and the game server, then restart the loop."])))
 
+(def default-verify-every-ms
+  "How often a loop re-asks the server whether it is still seated in this
+   game, even while holding a healthy-looking board.
+
+   The CLI gate runs that membership check on EVERY invocation. A loop with a
+   board would otherwise run it never, and the local signals cannot close that
+   gap alone: `mark-lobby-gone!` fires only when the server bothers to announce
+   the closure, and a silent unseat announces nothing (guest panel, CRITICAL).
+   A throttled check keeps the authority's kicked/unseated detection at a cost
+   of one lobby round trip a minute instead of one a second — negligible next to
+   a multi-hour marquee game, and the whole point is the games nobody is
+   watching."
+  60000)
+
+(def initial-tracker
+  "What a loop starts its sync tracker at. `:verified-at 0` makes the first tick
+   due for verification, so a loop confirms its seat once at startup rather than
+   inheriting whatever a previous session left in the cache."
+  {:attempts 0 :verified-at 0})
+
+(defn due-for-verification?
+  "Has the membership TTL expired? Pure, so the clock can be driven in tests."
+  [{:keys [verified-at]} now verify-every-ms]
+  (>= (- now (or verified-at 0)) verify-every-ms))
+
+(defn must-ask-authority?
+  "Every purely LOCAL reason to stop and consult `sync-verdict!`. No IO.
+
+   `board?` and `stale?` were the original two, and they were not enough (guest
+   panel, CRITICAL): `mark-lobby-gone!` records a server-closed lobby while
+   deliberately RETAINING the cached board, and `stale?` does not look at that
+   flag — so a seat whose game the server had destroyed sailed through the fast
+   path and played on. Connection loss is the same shape: a board cached across
+   a dropped socket is a snapshot, not a game."
+  [st now verify-every-ms tracker]
+  (boolean
+    (or (not (state/board? (:game-state st)))
+        (state/stale?)
+        (state/lobby-gone? st)
+        (not (:connected st))
+        (due-for-verification? tracker now verify-every-ms))))
+
 (defn ensure-board!
   "The autonomous loops' entry to the same authority the CLI gate uses.
 
-   CHEAP when healthy: with a board cached and no recorded divergence this makes
-   no round trip at all and simply says `:act`. Only a boardless (or
-   known-divergent) seat pays for `sync-verdict!`.
+   CHEAP when healthy: with a board cached, no recorded divergence, and the
+   membership TTL unexpired, this makes no round trip at all and says `:act`.
 
-   `attempts` is the consecutive-failure count carried by the caller's loop.
-   Returns:
+   `tracker` is `{:attempts n :verified-at ms}`, carried by the caller's loop
+   (start from `initial-tracker`). Returns:
+
      {:action    :act | :idle | :retry | :stop
       :outcome   :have-board | :no-game | :game-over | :game-gone | :resync-failed
-      :attempts  count to carry to the next tick
+      :tracker   the tracker to carry to the next tick
       :verdict   the raw sync-verdict! keyword, or nil if no round trip was made
       :repaired? true when a resync ran AND produced the board we now hold}"
-  ([attempts] (ensure-board! attempts default-max-attempts))
-  ([attempts max-attempts]
-   (if (and (state/board? (state/get-game-state))
-            (not (state/stale?)))
-     {:action :act :outcome :have-board :attempts 0 :verdict nil :repaired? false}
-     (let [verdict   (conn/sync-verdict!)
+  ([tracker] (ensure-board! tracker default-max-attempts default-verify-every-ms
+                            (System/currentTimeMillis)))
+  ([tracker max-attempts verify-every-ms now]
+   (if-not (must-ask-authority? @state/client-state now verify-every-ms tracker)
+     {:action :act :outcome :have-board :verdict nil :repaired? false
+      :tracker (assoc tracker :attempts 0)}
+     (let [;; A recovery that THROWS is a recovery that failed. Carrying the
+           ;; count past it — which is what the loops' own catch blocks do, and
+           ;; correctly so for their tick bodies — made the bound bypassable:
+           ;; a `sync-verdict!` throwing every tick retried forever, and neither
+           ;; stall backstop accumulates in that state (`own-turn-key` needs an
+           ;; :active-player, and a boardless seat has none). Caught HERE, once,
+           ;; rather than taught to four catch blocks (guest panel, CRITICAL).
+           verdict   (try
+                       (conn/sync-verdict!)
+                       (catch Exception e
+                         (println "⚠️  Resync attempt threw:" (.getMessage e))
+                         :resync-failed))
            board?    (state/board? (state/get-game-state))
            outcome   (classify verdict board?)
-           attempts' (next-attempts outcome attempts)]
+           attempts' (next-attempts outcome (:attempts tracker 0))]
        {:action    (recovery-action outcome attempts' max-attempts)
         :outcome   outcome
-        :attempts  attempts'
         :verdict   verdict
-        :repaired? (= outcome :have-board)}))))
+        :repaired? (= outcome :have-board)
+        ;; We DID ask, so the TTL restarts whatever the answer was.
+        :tracker   {:attempts attempts' :verified-at now}}))))
 
 (defn report!
   "Print the one line a loop owes the reader for this tick, and return the map
@@ -165,12 +232,13 @@
    whose lobby has not started yet — and it can persist for many ticks; a line
    per tick would bury the log that a human later has to read. `sync-verdict!`
    already narrates the ticks where it actually did something."
-  [my-name {:keys [action outcome attempts repaired?] :as result}]
-  (case action
-    :act   (when repaired?
-             (println "✅ Board recovered — resuming play."))
-    :retry (println (format "⏳ No board to act on; rejoin attempt %d did not land — retrying."
-                            attempts))
-    :stop  (println (diagnostic my-name outcome attempts))
-    :idle  nil)
+  [my-name {:keys [action outcome tracker repaired?] :as result}]
+  (let [attempts (:attempts tracker 0)]
+    (case action
+      :act   (when repaired?
+               (println "✅ Board recovered — resuming play."))
+      :retry (println (format "⏳ No board to act on; rejoin attempt %d did not land — retrying."
+                              attempts))
+      :stop  (println (diagnostic my-name outcome attempts))
+      :idle  nil))
   result)

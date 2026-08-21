@@ -1359,7 +1359,7 @@
   (loop [iter 0
          stall {:key nil :count 0}
          spin {:key nil :count 0}
-         resync 0]
+         resync loop-sync/initial-tracker]
     (when (zero? (mod iter 10))
       (let [gs (:game-state @state/client-state)]
         (log-message (str "💓 Corp Loop | Turn: " (:turn gs)
@@ -1375,10 +1375,10 @@
             ;; be repaired stops with a diagnostic instead of refusing forever.
             ;; Sits ahead of the prompt/turn/run priorities on purpose: every one
             ;; of them reads the board, so none of them is meaningful without one.
-            (let [{:keys [action attempts]}
+            (let [{:keys [action tracker]}
                   (loop-sync/report! "corp" (loop-sync/ensure-board! resync))]
               (if (not= :act action)
-                {:continue? (not= :stop action) :run-status nil :resync-next attempts}
+                {:continue? (not= :stop action) :run-status nil :resync-next tracker}
                 (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
 
@@ -1461,4 +1461,4 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur (inc iter) next-stall next-spin (or resync-next 0))))))
+        (recur (inc iter) next-stall next-spin (or resync-next loop-sync/initial-tracker))))))
