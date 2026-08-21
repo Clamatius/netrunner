@@ -238,16 +238,168 @@
               (str "corp-passed (runner active) must still wake, got: " result)))))))
 
 (deftest test-wait-no-encounter-wake-when-subs-broken
-  ;; All subs broken -> nothing to authorize. No wake.
-  (testing "all subs broken -> no encounter wake"
+  ;; All subs broken -> nothing to AUTHORIZE, so no :encounter-decision. But the
+  ;; encounter is a pass window with its own :no-action, and the Runner has not
+  ;; passed it — the engine is waiting on the Runner's `continue` to end the
+  ;; encounter. Until #102 this test asserted :timeout, i.e. that the seat sleeps
+  ;; through a window it owes — the #91 deadlock shape, mirrored onto the
+  ;; encounter. The owed close now wakes as :my-run-window; the encounter-
+  ;; decision wake is still NOT the reason (that is what this test guards).
+  (testing "all subs broken -> not :encounter-decision; the owed close wakes as :my-run-window (#102)"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
                           (assoc-in encounter-game-state
                                     [:corp :servers :remote1 :ices 0 :subroutines]
                                     [{:broken true :fired false} {:broken true :fired false}]))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (not= :encounter-decision (:reason result))
+              (str "nothing to authorize — must not be :encounter-decision, got: " result))
+          (is (= :my-run-window (:reason result))
+              (str "Runner broke every sub and has NOT passed; it owes the closing continue, got: " result)))))))
+
+;; ---------------------------------------------------------------------------
+;; #102 items 4 & 6 (Runner twin of #150): after `tank`, the Corp fires the subs
+;; and passes the encounter — [:encounters :no-action] names the Corp, the engine
+;; never resets it on a fire (game.core.runs `continue :encounter-ice`), and the
+;; Runner owes the closing `continue`. `wait` slept the full 300s three times in
+;; marquee f0e820fc (T8/T9/T11) while `prompt` already said "0 unbroken of 2
+;; (2 fired) → Use 'continue'": the encounter window was not a pass window to
+;; my-run-window?, and runner-encounter-decision-pending? is (rightly) false once
+;; nothing is left to authorize. With clicks in hand the same state fell through
+;; to :my-turn (item 6) — the exact misdirection the item-1 fix already cured at
+;; movement/approach-server.
+;; ---------------------------------------------------------------------------
+
+(def ^:private fired-encounter-game-state
+  "Runner tanked Tithe; the Corp fired both subs and then passed the encounter.
+   0 clicks (the run was the last click) — no :my-turn to fall back on."
+  (-> encounter-game-state
+      (assoc-in [:corp :servers :remote1 :ices 0 :subroutines]
+                [{:broken false :fired true} {:broken false :fired true}])
+      (assoc :encounters {:no-action "corp" :encounter-count 1})))
+
+(deftest test-wait-runner-owes-encounter-close-after-subs-fired
+  (testing "#102 item 4: subs fired, Corp passed the encounter -> Runner owes the close, wakes :my-run-window"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" fired-encounter-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :relevant-change (:status result))
+              (str "the Runner owes the closing continue — must wake, not time out, got: " result))
+          (is (= :my-run-window (:reason result))
+              (str "expected :my-run-window, got: " result)))))))
+
+(deftest test-wait-runner-owes-encounter-close-with-clicks-is-run-aware
+  (testing "#102 item 6: same state with clicks in hand must still say :my-run-window, not :my-turn"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" (assoc-in fired-encounter-game-state [:runner :click] 2))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "an owed run close outranks the generic my-turn, got: " result)))))))
+
+(deftest test-wait-runner-passed-fired-encounter-sleeps
+  (testing "#102 non-interference: subs fired and the RUNNER passed -> the Corp owes the close; no wake"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc fired-encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :timeout (:status result))
-              (str "all-broken encounter must not wake, got: " result)))))))
+              (str "Runner already passed; waiting on the Corp — must not wake, got: " result)))))))
+
+(deftest test-wait-corp-owes-encounter-window-after-runner-passed
+  ;; Consequence of reading encounter ownership from the SAME predicate both
+  ;; sides use (run-window-owner): once the Runner has passed an encounter with
+  ;; subs still unresolved, the Corp owes the fire-or-pass, and a Corp sitting in
+  ;; a bare `wait` (not monitor-run) must wake rather than sleep through its own
+  ;; move. Before the Runner passes, the window is the Runner's and the Corp
+  ;; stays asleep.
+  (testing "Corp: Runner passed the encounter, subs unresolved -> Corp owes fire/pass, wakes :my-run-window"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                          (assoc encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-run-window (:reason result))
+              (str "Corp owes the encounter window, got: " result))))))
+  (testing "Corp: nobody has passed -> the Runner's window; Corp does not wake"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" encounter-game-state)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "the Runner still owes its break/tank/pass; Corp must not wake, got: " result)))))))
+
+(deftest test-my-run-window-guidance-names-the-corp-encounter-verbs
+  (testing "a Corp woken at an owed encounter window is pointed at fire-subs/continue, not only at the approach-ice rez hint"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp"
+                          (assoc encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+        (let [out (with-out-str (core/wait-for-relevant-diff {:timeout 0 :verbose true}))]
+          (is (str/includes? out "my-run-window")
+              (str "fixture sanity: this is the my-run-window wake, got:\n" out))
+          (is (str/includes? out "fire-subs")
+              (str "Corp at an encounter must be told the fire verb, got:\n" out)))))))
+
+;; ---------------------------------------------------------------------------
+;; #102 item 5: a seat holding its OWN "Waiting for <opponent> to make a
+;; decision" prompt (engine prompt-type "waiting") is blocked on the opponent —
+;; the Runner mid-Wildcat-Strike while the Corp picks the mode (marquee
+;; 471ef829). With a click still in hand my-turn-to-act? was true, so `wait
+;; --since` returned INSTANTLY and repeatedly with :my-turn / "(no new entries)".
+;; A waiting prompt means nothing of ours is actionable — the same fact
+;; send-continue!'s #75 chokepoint and has-prompt? already honour — so the
+;; "it's my move" family (:my-run-window / :my-turn*) must stay asleep until the
+;; prompt clears. Transitions (:run-started/:run-ended/:game-over) still report.
+;; ---------------------------------------------------------------------------
+
+(def ^:private runner-holding-waiting-prompt
+  {:active-player "runner" :turn 7
+   :corp {:click 0}
+   :runner {:click 1
+            :prompt-state {:msg "Waiting for Corp to make a decision"
+                           :prompt-type "waiting"
+                           :card {:title "Wildcat Strike"}
+                           :choices [] :selectable []}}})
+
+(deftest test-wait-own-waiting-prompt-suppresses-my-turn-wake
+  (testing "#102 item 5: own waiting prompt + clicks in hand -> no :my-turn wake; sleep until it clears"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" runner-holding-waiting-prompt)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "blocked on the Corp's Wildcat Strike choice — must not wake :my-turn, got: " result))))))
+  (testing "control: the SAME turn state with the prompt cleared wakes :my-turn (the guard is the only difference)"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" (assoc-in runner-holding-waiting-prompt [:runner :prompt-state] nil))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :my-turn (:reason result))
+              (str "prompt cleared -> our live turn again, got: " result)))))))
+
+(deftest test-wait-own-waiting-prompt-suppresses-encounter-decision-wake
+  ;; Guest-panel finding on the first cut: the guard sat BELOW :encounter-decision,
+  ;; so a Corp on-encounter choice that hands the Runner a waiting prompt
+  ;; (Saisentan's "choose a card type", src/clj/game/cards/ice.clj) with the subs
+  ;; still unbroken woke :encounter-decision instantly and repeatedly — item 5's
+  ;; spin one branch higher. The Runner cannot break/tank until the Corp chooses.
+  (testing "Runner at an unbroken encounter but holding a waiting prompt -> no wake until it clears"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (assoc-in encounter-game-state [:runner :prompt-state]
+                                    {:msg "Waiting for Corp to make a decision"
+                                     :prompt-type "waiting" :card {:title "Saisentan"}
+                                     :choices [] :selectable []}))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "the Corp owns the on-encounter choice — must not wake :encounter-decision, got: " result))))))
+  (testing "control: prompt cleared -> the encounter decision is live again"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" encounter-game-state)
+        (is (= :encounter-decision (:reason (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))))))
+
+(deftest test-wait-since-own-waiting-prompt-does-not-short-circuit
+  (testing "#102 item 5 on the --since fast path: the repeated instant return was `wait --since`"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" runner-holding-waiting-prompt)
+        (let [result (core/wait-for-relevant-diff {:since 5 :timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "cursor advanced but we are blocked on the Corp — must fall through to the wait, got: " result)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; #91: `wait` must wake a seat that ACQUIRES priority at a run pass-window it
@@ -352,8 +504,10 @@
               (str "Corp must not wake before the Runner passes, got: " result)))))))
 
 (deftest test-wait-encounter-ice-not-treated-as-pass-window
-  (testing "#91 non-interference: encounter-ice is handled by :encounter-decision,
-            not :my-run-window (the break/tank flow must be untouched)"
+  (testing "#91 non-interference: an encounter with UNRESOLVED subs is handled by
+            :encounter-decision, not :my-run-window (the break/tank flow must be
+            untouched; #102 gives :my-run-window the encounter only once nothing
+            is left to authorize)"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner" encounter-game-state)
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
