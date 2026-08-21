@@ -67,14 +67,32 @@
 (def initial-tracker
   "What a loop starts its sync tracker at, and threads through its own `recur`.
 
-   It must ride EVERY path, including a tick whose body threw. Losing it on the
-   `:act` path, and later losing it to a body exception, were two separate
-   CRITICALs: a reset `:attempts` lets a later tick launder a repair that failed."
+   It must ride EVERY path. Losing it on the `:act` path was a CRITICAL: a reset
+   `:attempts` lets a later tick launder a repair that failed, so a seat that can
+   never be repaired acts on its cache forever instead of reaching its stop."
   {:attempts 0})
 
 ;; ============================================================================
 ;; Pure decision core
 ;; ============================================================================
+
+(defn pre-game?
+  "Seated in a lobby that has NOT started yet. Holding no board is CORRECT here,
+   so this must not be mistaken for a seat that needs repairing.
+
+   Same signature `boardless-started-game?` uses inside the authority:
+   `:lobby-state` is dissoc'd the moment a full game state arrives, so a started
+   game that lost its cache has neither, whereas an unstarted lobby still has
+   its lobby-state (and correctly has no board). A lobby list requested in
+   between re-sets it, hence the `:started` arm.
+
+   Without this the pre-game window was the one place the design's own cost
+   promise failed: no board meant repair, repair meant `verify-in-game!`, and
+   with a `:gameid` present that is a lobby round trip and a 500ms sleep — every
+   tick, for as long as the loop waits for its game to begin (guest 5th pass)."
+  [st]
+  (let [ls (:lobby-state st)]
+    (boolean (and ls (not (:started ls))))))
 
 (defn local-invalidation
   "The first purely LOCAL reason this seat is not actable, or nil. No IO.
@@ -85,25 +103,32 @@
    board cached across a dropped socket is a snapshot, not a game."
   [st]
   (cond
-    (not (state/board? (:game-state st))) :no-board
     (state/stale?)                        :diverged
     (state/lobby-gone? st)                :lobby-gone
     (not (:connected st))                 :disconnected
+    (not (state/board? (:game-state st))) :no-board
     :else                                 nil))
 
 (defn next-step
   "Whether this tick consults the authority (`:repair` — DESTRUCTIVE, it may
-   clear the cached board) or costs nothing (`:free`).
+   clear the cached board), idles for free (`:pre-game`), or acts for free
+   (`:free`).
 
    A positive `:attempts` forces `:repair`: a repair is already in progress, and
-   letting a later tick take the free path would reset the budget to zero, so a
+   letting a later tick take a free path would reset the budget to zero, so a
    seat that could never be repaired would act on its cache forever and never
    reach its stop. That hole was closed three times in three different disguises;
-   this is the shape that holds."
-  [invalidation tracker]
-  (if (or invalidation (pos? (:attempts tracker 0)))
-    :repair
-    :free))
+   this is the shape that holds.
+
+   `:pre-game` is checked only when nothing is actually WRONG — a divergence, a
+   closed lobby or a dropped socket outranks it, so a broken seat in a lobby that
+   happens to look unstarted still gets repaired."
+  [invalidation tracker pre-game]
+  (cond
+    (pos? (:attempts tracker 0))          :repair
+    (and pre-game (= invalidation :no-board)) :pre-game
+    invalidation                          :repair
+    :else                                 :free))
 
 (defn classify
   "Name the outcome of a tick that consulted the authority, from
@@ -245,10 +270,13 @@
   ([tracker] (ensure-board! tracker default-max-attempts))
   ([tracker max-attempts]
    (let [tracker (or tracker initial-tracker)]
-     (case (next-step (local-invalidation @state/client-state) tracker)
-       :repair (repair! tracker max-attempts)
-       :free   {:action :act :outcome :have-board :verdict nil :repaired? false
-                :tracker tracker}))))
+     (let [st @state/client-state]
+       (case (next-step (local-invalidation st) tracker (pre-game? st))
+         :repair   (repair! tracker max-attempts)
+         :pre-game {:action :idle :outcome :no-game :verdict nil :repaired? false
+                    :tracker tracker}
+         :free     {:action :act :outcome :have-board :verdict nil :repaired? false
+                    :tracker tracker})))))
 
 (defn report!
   "Print the one line a loop owes the reader for this tick, and return the map

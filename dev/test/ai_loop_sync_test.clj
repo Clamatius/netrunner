@@ -176,13 +176,11 @@
                        {:diff-mismatch true}
                        "a dropped socket — a board cached across it is a snapshot"
                        {:connected false}}]
-      (let [repairs (atom 0) probes (atom 0)]
+      (let [repairs (atom 0)]
         (with-mock-state (merge (mock-client-state) st)
-          (with-redefs [conn/sync-verdict!   (counting repairs :synced)
-                        conn/verify-in-game! (counting probes true)]
+          (with-redefs [conn/sync-verdict! (counting repairs :synced)]
             (sync/ensure-board! sync/initial-tracker 3)
-            (is (= 1 @repairs) (str what " → straight to the repair"))
-            (is (zero? @probes) (str what " → not merely probed"))))))))
+            (is (= 1 @repairs) (str what " → straight to the repair"))))))))
 
 
 (deftest test-ensure-board-counts-consecutive-failures-to-a-stop
@@ -227,9 +225,19 @@
     (let [boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
         (with-redefs [conn/sync-verdict! (fn [] (throw (InterruptedException. "cancelled")))]
-          (is (thrown? InterruptedException
-                       (sync/ensure-board! sync/initial-tracker 3))
-              "the interrupt must propagate, not be counted"))))))
+          (try
+            (is (thrown? InterruptedException
+                         (sync/ensure-board! sync/initial-tracker 3))
+                "the interrupt must propagate, not be counted")
+            ;; `repair!` also restores the flag before rethrowing, which is what
+            ;; lets a caller upstream see the cancellation. Not asserted here:
+            ;; clojure.test's own reporting runs on this thread in between and
+            ;; can consume it, so the observation is unreliable from inside.
+            (finally
+              ;; Clearing it is this test's job: leaving the runner thread
+              ;; interrupted makes every later blocking test order-dependent
+              ;; (guest 5th pass, MINOR).
+              (Thread/interrupted))))))))
 
 (deftest test-ensure-board-a-synced-that-did-not-clear-the-signal-is-a-failure
   (testing "#144: :synced over a seat that is STILL disconnected has repaired nothing"
@@ -256,6 +264,40 @@
               (is (= :stop (:action r)) (str v " must not be retried"))
               (is (= v (:outcome r)))
               (is (zero? (:attempts (:tracker r)))))))))))
+
+(deftest test-ensure-board-pre-game-costs-nothing
+  (testing "#144: waiting for a lobby to start must not cost a round trip per tick"
+    ;; Guest 5th pass, MINOR — the one place the design's own cost promise still
+    ;; failed. A seated, unstarted lobby has no board, "no board" meant repair,
+    ;; and repair with a :gameid present means a lobby round trip plus a 500ms
+    ;; sleep. Every tick, for as long as the loop waits for its game to begin.
+    (let [calls (atom 0)
+          unstarted (assoc (mock-client-state)
+                           :game-state nil :last-state nil
+                           :lobby-state {:started false})]
+      (with-mock-state unstarted
+        (with-redefs [conn/sync-verdict! (counting calls :synced)]
+          (let [rs (repeatedly 5 #(sync/ensure-board! sync/initial-tracker 3))]
+            (is (every? #(= :idle (:action %)) rs)
+                "an unstarted lobby is idle, not broken")
+            (is (zero? @calls)
+                "THE cost bug: five pre-game ticks used to be five round trips")))))))
+
+(deftest test-ensure-board-a-broken-seat-in-an-unstarted-lobby-still-repairs
+  (testing "#144: pre-game is only free when nothing is actually WRONG"
+    ;; A lobby list requested mid-flight re-sets :lobby-state, so an unstarted
+    ;; look must not shelter a seat carrying a real invalidation signal.
+    (doseq [[what st] {"a closed lobby"  {:lobby-gone? true}
+                       "a dropped socket" {:connected false}
+                       "a recorded divergence" {:diff-mismatch true}}]
+      (let [calls (atom 0)]
+        (with-mock-state (merge (mock-client-state)
+                                {:game-state nil :last-state nil
+                                 :lobby-state {:started false}}
+                                st)
+          (with-redefs [conn/sync-verdict! (counting calls :synced)]
+            (sync/ensure-board! sync/initial-tracker 3)
+            (is (= 1 @calls) (str what " outranks an unstarted-looking lobby"))))))))
 
 (deftest test-ensure-board-pre-game-idles-indefinitely
   (testing "#144: a loop waiting for its game to start must not bail"

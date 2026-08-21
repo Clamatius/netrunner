@@ -385,12 +385,11 @@
          spin {:key nil :count 0}
          resync loop-sync/initial-tracker]
     ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap
-    ;; when healthy (no round trip while a board is cached and recently
-    ;; verified), it REPAIRS a boardless seat, and it is bounded.
+    ;; when healthy (no round trip while the cached board is locally valid), it REPAIRS a boardless seat, and it is bounded.
     ;;
-    ;; It sits OUTSIDE the tick body's try so the tracker cannot be reverted by
-    ;; a body exception, and so an interrupt raised in here propagates and ends
-    ;; the loop rather than being caught by the body's handler.
+    ;; It sits OUTSIDE the tick body's try so an interrupt raised in here
+    ;; propagates and ends the loop, rather than being caught by the body's
+    ;; handler and read as "carry on" — bot-loop-stop cancels via future-cancel.
     ;;
     ;; Ahead of the run/prompt/turn priorities on purpose: every one of them
     ;; reads the board, so none is meaningful without one.
@@ -472,8 +471,8 @@
               (println "❌ RUNNER ERROR:" (.getMessage e))
               (.printStackTrace e)
               (Thread/sleep 5000)
-              ;; A tick-body exception is not a failed resync. The tracker is
-              ;; bound above, so it rides through this untouched.
+              ;; A tick-body exception is not a failed resync — the tracker is
+              ;; bound above and rides through untouched.
               {:continue? true :run-status nil})))
 
           ;; Stall backstop: track 'same opponent-wait for N ticks' and nudge /
