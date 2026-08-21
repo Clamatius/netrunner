@@ -498,7 +498,13 @@
    :timestamp "2026-07-18T04:20:31.000000Z"})
 
 (def ^:private wedged-log
-  (conj wedged-log-verbatim mid-run-ability-entry))
+  ;; Keeps the ORIGINAL shape of the latch: the event is older than a newer
+  ;; non-event line (the run visibly moved past it) — guest catch: a Leech-as-
+  ;; newest fixture would let a newest-entry-only regression stay green.
+  (conj wedged-log-verbatim
+        mid-run-ability-entry
+        {:user "__system__" :text "ai-runner approaches Brân 1.0 protecting R&D at position 1."
+         :timestamp "2026-07-18T04:20:32.000000Z"}))
 
 (defn- wedged-state
   ([] (wedged-state wedged-log))

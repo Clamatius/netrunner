@@ -485,7 +485,13 @@
         ;; so take-while up to (excluding) the start line. If the start line has
         ;; already scrolled out of the 3-entry window, ≥3 entries followed it and
         ;; the window is all run.
-        recent-log (take-while #(not (text-matches? run-start-re %)) windowed)]
+        ;; Only ENGINE lines can be the boundary (guest catch): player chat shares
+        ;; the log, and "please make a run on HQ" from a human must not swallow a
+        ;; real rez/ability sitting behind it. Engine lines carry :user
+        ;; "__system__"; fixtures that omit :user are treated as engine lines.
+        run-start-line? (fn [e] (and (contains? #{nil "__system__"} (:user e))
+                                     (text-matches? run-start-re e)))
+        recent-log (take-while (complement run-start-line?) windowed)]
     {:rez-event (get-rez-event recent-log)
      ;; ability + fired un-guarded: an ability's "uses X to prevent ..." effect
      ;; and a fired sub's embedded label ("... cannot jack out ...") legitimately

@@ -1050,6 +1050,13 @@
           {:keys [ability-event]} (ai-runs/extract-run-events log)]
       (is (nil? ability-event)
           (str "the Noble Path line is the run's start, not a mid-run ability, got: " ability-event))))
+  (testing "guest catch: player CHAT containing 'make a run on' is not the run boundary — a real event behind it must survive"
+    (let [log [{:user "__system__" :text "ai-runner spends [Click] to make a run on HQ."}
+               {:user "__system__" :text "ai-runner uses Leech to place 1 virus counter on Leech."}
+               {:user "Michael" :text "Michael: please make a run on HQ next turn"}]
+          {:keys [ability-event]} (ai-runs/extract-run-events log)]
+      (is (some? ability-event) "chat must not swallow the Leech event")
+      (is (re-find #"Leech" (:text ability-event)))))
   (testing "control: an ability used DURING the run (after the run-start line) is still an event"
     (let [log [{:text "ai-runner spends [Click] to make a run on HQ."}
                {:text "ai-runner approaches HQ."}
