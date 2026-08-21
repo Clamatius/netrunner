@@ -696,6 +696,15 @@
   (let [header (format "✅ Fire request acknowledged (cursor %d → %d)" old-cursor new-cursor)
         entry-lines (map #(str "  • " (:text %)) new-entries)]
     (cond
+      ;; A new WAITING prompt is the Runner's decision (Karunā's 'jack out?'),
+      ;; not ours — say so; do not steer the Corp at choose-value (#151 item 3).
+      (and (some? new-prompt) (state/waiting-prompt-type? (:prompt-type new-prompt)))
+      {:lines (concat [header]
+                      entry-lines
+                      [(str "⏳ A subroutine handed the RUNNER a decision: " (:msg new-prompt))
+                       "   Nothing to resolve on your side — `wait` (or `monitor-run`) for them."])
+       :result {:status :success :ice ice-title :opponent-prompt new-prompt}}
+
       ;; A subroutine opened a prompt; the rest can't fire until it's resolved.
       (some? new-prompt)
       {:lines (concat [header]

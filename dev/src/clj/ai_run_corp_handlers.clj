@@ -275,13 +275,31 @@
    was fired; re-entry must not re-fire). Only :status differs: :decision-required
    pauses the loop to resolve the opened prompt; :action-taken lets it continue.
 
+   A NEW prompt of type \"waiting\" is the OPPONENT's decision, not ours (#151
+   item 3): Karunā's first sub hands the Runner 'trash 2 / jack out?', and our
+   side sees a fresh eid'd 'Waiting for Runner to make a decision'. Announcing
+   that as 'a prompt the Corp must resolve' with choose-value steering was a
+   prompt-ownership lie that could have had the Corp poking at the Runner's
+   prompt. It is an opponent wait (the loop idles on it), with the fire
+   recorded.
+
    Returns {:lines [str...] :result <status-map>}."
   [ice-title sub-count position new-prompt]
   (let [base {:action :auto-fired-subs
               :ice ice-title
               :sub-count sub-count
               :fired-at-position position}]
-    (if (some? new-prompt)
+    (cond
+      (and (some? new-prompt) (state/waiting-prompt-type? (:prompt-type new-prompt)))
+      {:lines [(format "⏳ A subroutine on %s handed the RUNNER a decision: %s"
+                       ice-title (:msg new-prompt))
+               "   Nothing to resolve on your side — waiting for the Runner."]
+       :result (assoc base
+                      :status :waiting-for-opponent
+                      :wake-reason :waiting-for-opponent
+                      :prompt new-prompt)}
+
+      (some? new-prompt)
       {:lines [(format "⏸️  A subroutine on %s opened a prompt the Corp must resolve: %s"
                        ice-title (:msg new-prompt))
                "   Resolve it (choose-value \"<label>\" / choose-card <N>), then continue the run."]
@@ -289,6 +307,8 @@
                       :status :decision-required
                       :wake-reason :sub-opened-prompt
                       :prompt new-prompt)}
+
+      :else
       {:lines []
        :result (assoc base :status :action-taken)})))
 

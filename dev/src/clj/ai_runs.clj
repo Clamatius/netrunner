@@ -398,6 +398,16 @@
   ;; Word-boundaried so it excludes "derez"/"derezzes"/"rez cost" chatter.
   #"(?i)\brezzes\b|\bto rez\b")
 (def ^:private ability-event-re #"(?i)\buses\b|\btriggers\b")
+(def ^:private run-start-re
+  ;; The run's own START line: "spends [Click] to make a run on R&D" (basic
+  ;; action), "uses Jailbreak to make a run on R&D" (card-initiated), or
+  ;; "uses The Noble Path to trash … and make a run on HQ" (guest catch — so
+  ;; no "to " anchor). It is the boundary of the run, not an event inside it
+  ;; (#151 item 6). Known residual: a run starter whose card :msg carries no
+  ;; "make a run on" at all (Run Amok / Stimhack with no additional cost) has
+  ;; no start line to anchor on, so a pre-run "uses" line can still leak into
+  ;; the 3-entry window — the pre-existing behaviour for those cards.
+  #"(?i)\bmake a run on\b|\bmakes a run on\b")
 (def ^:private fired-event-re
   ;; The umbrella fire message is "resolves N unbroken subroutine on X". Anchor
   ;; on "unbroken subroutine" so a Runner BREAKING subs ("use Corroder to break
@@ -464,8 +474,18 @@
         ;; resync (the server log is authoritative), and if the log were ever
         ;; truncated the shifted key fails toward re-reporting — i.e. toward
         ;; pausing, never toward going blind. (Guest review of the #31 fix.)
-        recent-log (map-indexed (fn [i e] (assoc e ::log-index (- n 1 i)))
-                                (take 3 (reverse log)))]
+        windowed (map-indexed (fn [i e] (assoc e ::log-index (- n 1 i)))
+                              (take 3 (reverse log)))
+        ;; #151 item 6: only entries AFTER the newest run-START line are run
+        ;; events. The start line itself ("uses Jailbreak to make a run on R&D")
+        ;; matches the ability regex and was reported as a mid-run 'ability
+        ;; triggered!' pause on EVERY card-initiated run — a `continue`
+        ;; round-trip per run — and anything older than it (a Sure Gamble played
+        ;; a click earlier) is pre-run by definition. `windowed` is newest-first,
+        ;; so take-while up to (excluding) the start line. If the start line has
+        ;; already scrolled out of the 3-entry window, ≥3 entries followed it and
+        ;; the window is all run.
+        recent-log (take-while #(not (text-matches? run-start-re %)) windowed)]
     {:rez-event (get-rez-event recent-log)
      ;; ability + fired un-guarded: an ability's "uses X to prevent ..." effect
      ;; and a fired sub's embedded label ("... cannot jack out ...") legitimately

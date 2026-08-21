@@ -289,6 +289,20 @@
       (is (not (str/includes? out "run had already ended"))
           "must NOT claim the run already ended"))))
 
+(deftest fire-subs-report-waiting-prompt-is-the-runners-decision
+  (testing "#151 item 3 (manual path): a sub that hands the RUNNER a decision appears on our side as a new \"waiting\" prompt — say so; do not steer the Corp at choose-value/choose-card"
+    (let [prompt {:msg "Waiting for Runner to make a decision"
+                  :prompt-type "waiting" :card {:title "Karunā"} :eid 5152}
+          {:keys [lines result]} (ai-card-actions/fire-subs-report
+                                  "Karunā" 40 41 [{:text "ai-corp uses Karunā to do 2 net damage"}] prompt)
+          out (str/join "\n" lines)]
+      (is (not (re-find #"(?i)resolve it|choose-value|choose-card" out))
+          (str "must not tell the Corp to resolve the Runner's decision, got:\n" out))
+      (is (re-find #"(?i)runner" out)
+          (str "must say whose decision it is, got:\n" out))
+      (is (not= :waiting-input (:status result))
+          (str "not OUR input that is awaited, got: " result)))))
+
 (deftest fire-subs-report-subs-fired
   (testing "new log entries (subs actually fired) are listed as success"
     (let [{:keys [lines result]} (ai-card-actions/fire-subs-report
