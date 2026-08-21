@@ -475,20 +475,44 @@
    :text "ai-runner uses Overclock to make a run on R&D."
    :timestamp "2026-07-18T04:13:59.335700Z"})
 
-(def ^:private wedged-log
+(def ^:private wedged-log-verbatim
   ;; Verbatim newest-3 from the wedged marquee game. Note the latched event is
   ;; NOT even the newest line — the run had visibly moved past it.
+  ;;
+  ;; #151 item 6 (2026-08-21): the Overclock line is the run's START line, and
+  ;; extract-run-events no longer classifies the start line (or anything older)
+  ;; as a run event at all — reporting it cost a `continue` round-trip on every
+  ;; card-initiated run. So this verbatim log now produces NO event (see
+  ;; the-run-start-line-is-not-an-event-to-pause-on); the latch tests below use
+  ;; `wedged-log`, which adds a genuine MID-run ability line, to exercise the
+  ;; same report-once-then-pass contract.
   [{:user "__system__" :text "ai-runner spends [Click] and pays 1 [Credits] to play Overclock."
     :timestamp "2026-07-18T04:13:52.187223Z"}
    overclock-entry
    {:user "__system__" :text "ai-runner approaches Brân 1.0 protecting R&D at position 1."
     :timestamp "2026-07-18T04:20:30.132582Z"}])
 
-(defn- wedged-state []
-  (runner-state :phase "approach-ice" :position 2 :no-action false
-                :ices [{:cid 1 :title "Brân 1.0" :rezzed true}]
-                :prompt {:prompt-type "run" :msg "You are running on R&D" :selectable []}
-                :log wedged-log))
+(def ^:private mid-run-ability-entry
+  {:user "__system__"
+   :text "ai-runner uses Leech to place 1 virus counter on Leech."
+   :timestamp "2026-07-18T04:20:31.000000Z"})
+
+(def ^:private wedged-log
+  ;; Keeps the ORIGINAL shape of the latch: the event is older than a newer
+  ;; non-event line (the run visibly moved past it) — guest catch: a Leech-as-
+  ;; newest fixture would let a newest-entry-only regression stay green.
+  (conj wedged-log-verbatim
+        mid-run-ability-entry
+        {:user "__system__" :text "ai-runner approaches Brân 1.0 protecting R&D at position 1."
+         :timestamp "2026-07-18T04:20:32.000000Z"}))
+
+(defn- wedged-state
+  ([] (wedged-state wedged-log))
+  ([log]
+   (runner-state :phase "approach-ice" :position 2 :no-action false
+                 :ices [{:cid 1 :title "Brân 1.0" :rezzed true}]
+                 :prompt {:prompt-type "run" :msg "You are running on R&D" :selectable []}
+                 :log log)))
 
 (deftest event-pause-reports-each-event-exactly-once
   (testing "An event pauses the seat ONCE. Offered the same entry again, the
@@ -600,6 +624,21 @@
               (is (= 1 (count @sent)) "Exactly one continue")
               (is (= "continue" (:command (first @sent)))))))))))
 
+(deftest the-run-start-line-is-not-an-event-to-pause-on
+  (testing "#151 item 6: on the VERBATIM wedged log — whose only 'uses' line is the
+            run's own start line (uses Overclock to make a run on R&D) — the very
+            first continue passes the window; there is no event to report and no
+            `continue` round-trip to pay"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (runs/reset-reported-events!)
+        (with-mock-state (wedged-state wedged-log-verbatim)
+          (let [out (with-out-str (is (= :action-taken (:status (runs/continue-run!)))
+                                      "the run-start line is the run, not a mid-run ability"))]
+            (is (= 1 (count @sent)) "one continue, straight away")
+            (is (not (re-find #"ability triggered" out))
+                (str "must not announce the run's own start as an ability pause, got:\n" out))))))))
+
 (deftest a-decision-arriving-after-an-event-is-reported-still-blocks-the-pass
   (testing "SAFETY, in the order that can actually bite. handle-real-decision
             sits AHEAD of handle-events (chain ~1399/1400), so while I hold a
@@ -657,7 +696,7 @@
   (testing "IDENTITY: the engine always stamps log entries (say.clj defaults
             :timestamp), but the key must not depend on that to stay correct."
     (runs/reset-reported-events!)
-    (let [line "ai-runner uses Overclock to make a run on R&D."
+    (let [line "ai-runner uses Leech to place 1 virus counter on Leech."  ; a MID-run ability (#151 item 6: the run-start line is no longer an event)
           log1 [{:text line}]
           log2 [{:text line} {:text "z"} {:text line}]]
       (is (= :ability-used (:status (runs/handle-events (runs/extract-run-events log1)))))

@@ -1018,6 +1018,53 @@
 ;; resolve), no prompt → :action-taken (loop continues). Both keep
 ;; :fired-at-position so re-entry never re-fires.
 
+(deftest fire-unbroken-strategy-result-waiting-prompt-is-the-runners-decision
+  (testing "#151 item 3: a fired sub that hands the RUNNER a decision (Karunā's 'trash 2 / jack out?') shows up on our side as a NEW prompt of type \"waiting\" — it is not ours to resolve, so it must not be announced as 'a prompt the Corp must resolve' with choose-value steering"
+    (let [prompt {:msg "Waiting for Runner to make a decision"
+                  :prompt-type "waiting"
+                  :card {:title "Karunā"}
+                  :eid 5151}
+          {:keys [lines result]} (corp-handlers/fire-unbroken-strategy-result
+                                  "Karunā" 2 1 prompt)
+          out (clojure.string/join "\n" lines)]
+      (is (not (re-find #"(?i)corp must resolve|resolve it|choose-value" out))
+          (str "must not tell the Corp to resolve the Runner's decision, got:\n" out))
+      (is (re-find #"(?i)runner" out)
+          (str "must say whose decision it is, got:\n" out))
+      (is (not= :decision-required (:status result))
+          (str "not a Corp decision — must not pause the loop as one, got: " result))
+      (is (= 1 (:fired-at-position result))
+          "the ICE WAS fired; re-entry must still not re-fire"))))
+
+(deftest extract-run-events-ignores-the-run-start-line-and-pre-run-entries
+  (testing "#151 item 6: the run-START line ('uses Jailbreak to make a run on R&D') is the run itself, not a mid-run ability — flagging it cost a `continue` round-trip on every card-initiated run; and a pre-run entry (Sure Gamble a click earlier) must not be reported as a run event either"
+    (let [log [{:text "ai-runner spends [Click] to play Sure Gamble."}
+               {:text "ai-runner uses Sure Gamble to gain 9 [Credits]."}
+               {:text "ai-runner uses Jailbreak to make a run on R&D."}]
+          {:keys [ability-event]} (ai-runs/extract-run-events log)]
+      (is (nil? ability-event)
+          (str "nothing after the run-start line — no ability event, got: " ability-event))))
+  (testing "guest catch: a start line phrased '… and make a run on …' (The Noble Path) is still the start line"
+    (let [log [{:text "ai-runner uses Sure Gamble to gain 9 [Credits]."}
+               {:text "ai-runner uses The Noble Path to trash Daily Casts and make a run on HQ."}]
+          {:keys [ability-event]} (ai-runs/extract-run-events log)]
+      (is (nil? ability-event)
+          (str "the Noble Path line is the run's start, not a mid-run ability, got: " ability-event))))
+  (testing "guest catch: player CHAT containing 'make a run on' is not the run boundary — a real event behind it must survive"
+    (let [log [{:user "__system__" :text "ai-runner spends [Click] to make a run on HQ."}
+               {:user "__system__" :text "ai-runner uses Leech to place 1 virus counter on Leech."}
+               {:user "Michael" :text "Michael: please make a run on HQ next turn"}]
+          {:keys [ability-event]} (ai-runs/extract-run-events log)]
+      (is (some? ability-event) "chat must not swallow the Leech event")
+      (is (re-find #"Leech" (:text ability-event)))))
+  (testing "control: an ability used DURING the run (after the run-start line) is still an event"
+    (let [log [{:text "ai-runner spends [Click] to make a run on HQ."}
+               {:text "ai-runner approaches HQ."}
+               {:text "ai-runner uses Docklands Pass to access 1 additional card."}]
+          {:keys [ability-event]} (ai-runs/extract-run-events log)]
+      (is (some? ability-event) "a mid-run ability must still be reported")
+      (is (re-find #"Docklands" (:text ability-event))))))
+
 (deftest fire-unbroken-strategy-result-prompt-opened
   (testing "a fired sub that opens a new prompt surfaces as :decision-required, not :action-taken"
     (let [prompt {:msg "Choose an ice to install from Archives or HQ"

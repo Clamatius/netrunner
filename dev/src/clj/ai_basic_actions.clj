@@ -1674,24 +1674,43 @@
               (core/with-cursor {:status :error :reason "Need 1 click to trash resource"}))
 
             :else
-            (let [gameid (:gameid client-state)]
+            (let [gameid (:gameid client-state)
+                  old-prompt (state/get-prompt)]
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "trash-resource"
                                  :args nil})
               (Thread/sleep core/medium-delay)
-              ;; This creates a prompt to select which resource to trash
-              (let [new-state @state/client-state
-                    prompt (first (get-in new-state [:game-state :corp :prompt]))]
-                (if prompt
+              ;; The engine answers with a SELECT prompt ("Choose a resource to
+              ;; trash") on our :prompt-state. #151 item 1: this used to read
+              ;; [:game-state :corp :prompt] — not a wire key — so it was always
+              ;; nil and "Trashed resource" printed before anything was trashed
+              ;; (false success, #109 family). eid-aware via core/new-prompt? so a
+              ;; stale leftover prompt is not mistaken for this one.
+              ;;
+              ;; The engine ALWAYS opens that prompt (even with one eligible
+              ;; resource — it does not auto-select), so "no new prompt" never
+              ;; means "trashed"; it means the diff hasn't landed yet or the
+              ;; action was rejected. Poll a little longer, then say so (guest
+              ;; panel) — never claim success here.
+              (let [new-prompt (loop [tries 0]
+                                 (let [cur (state/get-prompt)]
+                                   (cond
+                                     (core/new-prompt? old-prompt cur) cur
+                                     (< tries 20) (do (Thread/sleep 100) (recur (inc tries)))
+                                     :else nil)))]
+                (if (and new-prompt (not (state/waiting-prompt-type? (:prompt-type new-prompt))))
                   (do
-                    (println "🗑️  Select resource to trash:")
-                    (println (str "   " (:msg prompt)))
-                    (core/with-cursor {:status :waiting-input :prompt prompt}))
+                    (println (str "🗑️  " (:msg new-prompt)))
+                    (doseq [[idx cid] (map-indexed vector (:selectable new-prompt))]
+                      (println (format "     %d. %s" idx
+                                       (or (:title (core/find-card-by-cid cid)) (str "[cid " cid "]")))))
+                    (println "   → choose-card <N> to pick the resource")
+                    (core/with-cursor {:status :waiting-input :prompt new-prompt}))
                   (do
-                    (println "🗑️  Trashed resource")
-                    (check-auto-end-turn!)
-                    (core/with-cursor {:status :success})))))))))
+                    (println "⚠️  No 'Choose a resource to trash' prompt appeared — nothing was trashed.")
+                    (println "   The action may have been rejected or is still in flight: check `prompt` / `status` before retrying.")
+                    (core/with-cursor {:status :error :reason "No trash-resource prompt appeared"})))))))))
     (core/with-cursor {:status :error :reason "Failed to start turn"})))
 
 ;; ============================================================================

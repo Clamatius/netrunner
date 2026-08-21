@@ -1376,3 +1376,59 @@
         (is (empty? sent))
         (is (re-find #"(?i)waiting for the opponent|opponent to keep" out) (str "Got:\n" out))
         (is (not (str/includes? out "start-turn")) (str "Got:\n" out))))))
+
+;; ---------------------------------------------------------------------------
+;; #151 item 1: `trash-resource` printed "🗑️  Trashed resource" BEFORE the
+;; engine's "Choose a resource to trash" select prompt was answered — a false
+;; success (#109 family). The prompt check read [:game-state :corp :prompt], a
+;; key that is not on the wire (the engine serializes :prompt-state), so it was
+;; always nil. Marquee f0e820fc, Sol Corp, T9/T10 — twice.
+;; ---------------------------------------------------------------------------
+
+(deftest test-trash-resource-surfaces-the-select-prompt-not-a-false-success
+  (testing "trash-resource! must report the select prompt it opened and return :waiting-input"
+    (let [sent (atom [])
+          game-state {:active-player "corp" :turn 9
+                      :corp {:click 3 :credit 5 :prompt-state nil}
+                      :runner {:click 0 :credit 2 :tag {:base 2}
+                               :rig {:resource [{:cid 5 :title "Smartware Distributor"}
+                                                {:cid 6 :title "Verbal Plasticity"}]}}
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message!
+                      (fn [_evt data]
+                        (swap! sent conj data)
+                        ;; the engine answers the trash-resource action with a
+                        ;; select prompt for the Corp
+                        (swap! state/client-state assoc-in [:game-state :corp :prompt-state]
+                               {:msg "Choose a resource to trash" :prompt-type "select"
+                                :eid 901 :choices [] :selectable [5 6]})
+                        true)]
+          (let [r (atom nil)
+                out (with-out-str (reset! r (basic/trash-resource!)))]
+            (is (some #(= "trash-resource" (:command %)) @sent) "the action is sent")
+            (is (= :waiting-input (:status @r))
+                (str "a select prompt is open — not :success, got: " @r))
+            (is (not (str/includes? out "Trashed resource"))
+                (str "false success printed, got:\n" out))
+            (is (re-find #"(?i)choose a resource" out)
+                (str "must surface the prompt the seat now has to answer, got:\n" out))))))))
+
+(deftest test-trash-resource-never-claims-success-when-no-prompt-appears
+  (testing "guest catch: the engine ALWAYS opens the select prompt (even with one eligible resource), so 'no prompt yet' means latency or a rejected action — never a completed trash. Must not print 'Trashed resource' or return :success"
+    (let [sent (atom [])
+          game-state {:active-player "corp" :turn 9
+                      :corp {:click 3 :credit 5 :prompt-state nil}
+                      :runner {:click 0 :credit 2 :tag {:base 2}
+                               :rig {:resource [{:cid 5 :title "Smartware Distributor"}]}}
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (let [r (atom nil)
+                out (with-out-str (reset! r (basic/trash-resource!)))]
+            (is (not= :success (:status @r))
+                (str "nothing was trashed — must not report success, got: " @r))
+            (is (not (str/includes? out "Trashed resource"))
+                (str "false success printed, got:\n" out))
+            (is (re-find #"(?i)prompt" out)
+                (str "must tell the seat what did not happen and where to look, got:\n" out))))))))
