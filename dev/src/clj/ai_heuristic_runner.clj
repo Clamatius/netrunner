@@ -394,8 +394,14 @@
             ;; of them reads the board, so none of them is meaningful without one.
             (let [{:keys [action tracker]}
                   (loop-sync/report! "runner" (loop-sync/ensure-board! resync))]
-              (if (not= :act action)
-                {:continue? (not= :stop action) :run-status nil :resync-next tracker}
+              ;; The tracker rides EVERY path. Dropping it on the :act branch let
+              ;; the recur fall back to initial-tracker, whose :verified-at 0 is
+              ;; instantly due — so the once-a-minute membership check fired every
+              ;; tick instead (guest 2nd pass, CRITICAL).
+              (merge
+                {:resync-next tracker}
+                (if (not= :act action)
+                {:continue? (not= :stop action) :run-status nil}
                 (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
                   (if winner
@@ -456,7 +462,14 @@
                                 (actions/smart-end-turn!))))
                           ;; Not an in-run wait: turn-alternation idling is normal, so
                           ;; nil run-status keeps the stall tracker reset.
-                          {:continue? true :run-status nil})))))))
+                          {:continue? true :run-status nil}))))))))
+            ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
+            ;; Swallowing it here would keep a cancelled loop running, and a
+            ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).
+            (catch InterruptedException e
+              (println "🛑 Loop interrupted — stopping.")
+              (.interrupt (Thread/currentThread))
+              {:continue? false :resync-next resync})
             (catch Exception e
               (println "❌ RUNNER ERROR:" (.getMessage e))
               (.printStackTrace e)
@@ -498,7 +511,7 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur next-stall next-spin (or resync-next loop-sync/initial-tracker))))))
+        (recur next-stall next-spin resync-next)))))
 
 ;; ============================================================================
 ;; Turn Driver + Status (send_command parity with ai-heuristic-corp)

@@ -22,48 +22,44 @@
             [ai-loop-sync :as sync]
             [ai-connection :as conn]
             [ai-state :as state]
+            [ai-basic-actions :as actions]
             [ai-goldfish-runner]
             [ai-goldfish-corp]
             [ai-heuristic-runner]
             [ai-heuristic-corp]))
 
 ;; ============================================================================
-;; Pure core: classify
+;; Pure core: classify — the verdict outranks the board
 ;; ============================================================================
 
 (deftest test-classify-verdict-outranks-a-retained-board
   (testing "#144: a FAILED repair stays failed even though the old board is still there"
-    ;; Caught by the guest panel as a CRITICAL, and it was: this file's first cut
-    ;; let `board-after?` outrank the verdict, on the theory that a board in hand
-    ;; answers the loop's question whatever route it came by. It does not.
-    ;;
-    ;; `do-rejoin-resync!` returns :resync-failed from a path that never reaches
-    ;; `resync-game!` ("Rejoin not confirmed in lobby within 5s"), and
+    ;; Guest panel, CRITICAL, and it was: the first cut let the board outrank the
+    ;; verdict, on the theory that a board in hand answers the loop's question
+    ;; whatever route it came by. It does not. `do-rejoin-resync!` returns
+    ;; :resync-failed from an arm that never reaches `resync-game!`, and
     ;; `teardown-verdict` returns :game-gone while deliberately READING the
-    ;; cached snapshot. In both, the stale board is still sitting there. The old
-    ;; precedence turned that into :act on a board known not to track the
-    ;; server's, reset the budget to zero, and repeated every tick.
-    (is (= :resync-failed (sync/classify :resync-failed true))
+    ;; cached snapshot. In both, the stale board is still sitting there.
+    (is (= :resync-failed (sync/classify :resync-failed true true))
         "THE inverted-precedence bug: a retained board must not launder a failure")
-    (is (= :game-gone (sync/classify :game-gone true))
+    (is (= :game-gone (sync/classify :game-gone true true))
         "worse still — this one kept a seat playing into a destroyed game")
-    (is (= :game-over (sync/classify :game-over true))))
-  (testing "#144: only :synced lets the board decide"
-    (is (= :have-board (sync/classify :synced true)))
-    (is (= :no-game (sync/classify :synced false)))))
+    (is (= :game-over (sync/classify :game-over true true)))))
 
-(deftest test-classify-synced-without-a-board-is-not-a-failure
-  (testing "#144: :synced with no board means there is nothing to act in YET"
-    ;; sync-verdict! returns :synced for a client with no :gameid at all, and for
-    ;; a seated-but-unstarted lobby. Both are healthy. Counting them as failures
-    ;; would bail a loop that is merely waiting for its game to begin.
-    (is (= :no-game (sync/classify :synced false)))))
-
-(deftest test-classify-terminal-and-transient-verdicts
-  (testing "#144: decided, gone, and transient are three different answers"
-    (is (= :game-over (sync/classify :game-over false)))
-    (is (= :game-gone (sync/classify :game-gone false)))
-    (is (= :resync-failed (sync/classify :resync-failed false)))))
+(deftest test-classify-synced-must-also-be-actable
+  (testing "#144: :synced while a local signal is STILL set has not repaired anything"
+    ;; Guest panel, MAJOR: a delayed lobby-list reply can make `verify-in-game!`
+    ;; answer from a stale list, so sync-verdict! says :synced over a seat that is
+    ;; still disconnected / still flagged lobby-gone. Counting that as a failed
+    ;; attempt keeps it bounded instead of looping.
+    (is (= :resync-failed (sync/classify :synced false true))
+        "a board, but a signal the repair did not clear"))
+  (testing "#144: a clean :synced with a board is the only thing that is actable"
+    (is (= :have-board (sync/classify :synced true true))))
+  (testing "#144: :synced with no board at all means nothing to act in YET"
+    ;; sync-verdict! answers :synced for a client with no :gameid, and for a
+    ;; seated-but-unstarted lobby. Both healthy; nothing was attempted.
+    (is (= :no-game (sync/classify :synced false false)))))
 
 ;; ============================================================================
 ;; Pure core: the bound
@@ -79,7 +75,7 @@
       (is (= 0 (sync/next-attempts :game-over 2))))))
 
 (deftest test-recovery-action-bails-at-the-bound
-  (testing "#144: a failing resync retries, then stops — it does not rejoin forever"
+  (testing "#144: a failing repair retries, then stops — it does not rejoin forever"
     (is (= :retry (sync/recovery-action :resync-failed 1 3)))
     (is (= :retry (sync/recovery-action :resync-failed 2 3)))
     (is (= :stop (sync/recovery-action :resync-failed 3 3))
@@ -89,8 +85,6 @@
 
 (deftest test-recovery-action-idles-rather-than-bailing-pre-game
   (testing "#144: waiting for a game to start must not consume the retry budget"
-    ;; :idle keeps the loop alive and takes no action. A loop started before its
-    ;; game begins would otherwise burn its three attempts and stop.
     (is (= :idle (sync/recovery-action :no-game 0 3)))
     (is (= :idle (sync/recovery-action :no-game 0 1)))))
 
@@ -98,8 +92,46 @@
   (testing "#144: decided/gone are not retryable — no attempt budget applies"
     (is (= :stop (sync/recovery-action :game-over 0 3)))
     (is (= :stop (sync/recovery-action :game-gone 0 3))))
-  (testing "#144: a board means run the normal tick body"
+  (testing "#144: an actable seat means run the normal tick body"
     (is (= :act (sync/recovery-action :have-board 0 3)))))
+
+;; ============================================================================
+;; Pure core: what counts as a local invalidation
+;; ============================================================================
+
+(deftest test-local-invalidation-names-every-signal
+  (testing "#144: board? + stale? was too weak a guard (guest panel, CRITICAL)"
+    ;; `mark-lobby-gone!` records a server-closed lobby while deliberately
+    ;; RETAINING the board, and `stale?` never looks at that flag — so the one
+    ;; state most worth catching sailed straight through the fast path.
+    (with-mock-state (mock-client-state)
+      (is (nil? (sync/local-invalidation @state/client-state))
+          "a healthy connected seat has nothing wrong with it"))
+    (doseq [[expected st] {:no-board     {:game-state nil}
+                           :diverged     {:diff-mismatch true}
+                           :lobby-gone   {:lobby-gone? true}
+                           :disconnected {:connected false}}]
+      (with-mock-state (merge (mock-client-state) st)
+        (is (= expected (sync/local-invalidation @state/client-state))
+            (str "must be named: " expected))))))
+
+(deftest test-next-step-never-samples-while-a-repair-is-in-progress
+  (testing "#144: a repair in progress must not be laundered by a later tick"
+    ;; Guest 2nd pass, CRITICAL — and it took three tries to close. A failing
+    ;; check used to advance the TTL, so the next tick's fast path reset the
+    ;; budget to zero. Routing positive attempts through the PROBE instead was
+    ;; still wrong: the probe's one-absence-is-survivable branch answers :act, so
+    ;; a seat whose membership check always failed still acted forever.
+    (is (= :repair (sync/next-step nil {:attempts 1 :verified-at 1000} 1000 60000))
+        "THE hole: positive attempts must go straight to the repair, not sample")
+    (is (= :repair (sync/next-step :lobby-gone {:attempts 0 :verified-at 1000} 1000 60000))
+        "a local signal is a fact, not a noisy reading")
+    (is (= :probe (sync/next-step nil {:attempts 0 :verified-at 1000 :suspect? true} 1000 60000))
+        "an armed suspicion re-checks next tick, not next minute")
+    (is (= :probe (sync/next-step nil {:attempts 0 :verified-at 1000} 61001 60000))
+        "and the TTL eventually samples a healthy-looking seat")
+    (is (= :free (sync/next-step nil {:attempts 0 :verified-at 1000} 1000 60000))
+        "a clean, freshly-verified seat costs nothing")))
 
 ;; ============================================================================
 ;; Diagnostics — a bail must leave an attributable artifact, like ai-stall's
@@ -107,14 +139,11 @@
 
 (deftest test-diagnostic-says-what-to-do-about-each-ending
   (testing "#144: game-over points at the RESULT, not at a reconnect"
-    ;; Same precedence teardown-verdict uses: a seat that just won or lost wants
-    ;; the result, not "run reset.sh".
     (let [d (sync/diagnostic "corp" :game-over 0)]
       (is (.contains d "game-over-status"))
       (is (not (.contains d "reset.sh")))))
   (testing "#144: game-gone is not recoverable from inside the loop"
-    (let [d (sync/diagnostic "corp" :game-gone 0)]
-      (is (.contains d "reset.sh"))))
+    (is (.contains (sync/diagnostic "corp" :game-gone 0) "reset.sh")))
   (testing "#144: a resync bail reports how many attempts were spent"
     (let [d (sync/diagnostic "runner" :resync-failed 3)]
       (is (.contains d "3 rejoin attempts"))
@@ -124,108 +153,132 @@
 ;; ensure-board! — the behaviour the loops depend on
 ;; ============================================================================
 ;;
-;; These drive the 4-arity so the membership-TTL clock is explicit. `now` and
-;; `verify-every-ms` are parameters precisely so a test never has to wait on, or
-;; race, a wall clock.
+;; These drive the 4-arity so the membership-TTL clock is explicit: `now` and
+;; `verify-every-ms` are parameters precisely so a test never waits on, or
+;; races, a wall clock.
 
 (def ^:private fresh
-  "A tracker whose membership check is NOT yet due at now=1000."
-  {:attempts 0 :verified-at 1000})
+  "A tracker with nothing outstanding, verified recently enough at now=1000."
+  {:attempts 0 :verified-at 1000 :suspect? false})
 
-(defn- counting-verdict
-  "Stands in for sync-verdict!, recording each call so the fast path can be
-   asserted by COST rather than by reading the source."
-  [calls verdict]
-  (fn [] (swap! calls inc) verdict))
+(defn- counting
+  [calls v] (fn [] (swap! calls inc) v))
 
 (deftest test-ensure-board-fast-path-makes-no-round-trip
-  (testing "#144: a healthy loop must never pay for sync-verdict!"
-    ;; This is the property that makes the fix affordable. sync-verdict! costs a
-    ;; lobby round trip plus a 500ms sleep with a :gameid present; at ~1 tick/s
-    ;; for a whole game that is thousands of needless lobby requests.
-    (let [calls (atom 0)]
+  (testing "#144: a healthy loop must never pay for the authority"
+    ;; The property that makes the fix affordable. sync-verdict! costs a lobby
+    ;; round trip plus a 500ms sleep with a :gameid present; at ~1 tick/s for a
+    ;; whole game that is thousands of needless requests.
+    (let [repairs (atom 0) probes (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
+        (with-redefs [conn/sync-verdict!  (counting repairs :synced)
+                      conn/verify-in-game! (counting probes true)]
           (let [r (sync/ensure-board! fresh 3 60000 1000)]
             (is (= :act (:action r)))
-            (is (= :have-board (:outcome r)))
-            (is (zero? @calls)
-                "THE cost property: a cached board asks the network nothing")
-            (is (nil? (:verdict r)) "no round trip ⇒ no verdict to report")))))))
+            (is (zero? @repairs) "THE cost property: no repair")
+            (is (zero? @probes)  "and no probe either")
+            (is (= fresh (:tracker r)) "a free tick changes nothing")))))))
 
 (deftest test-ensure-board-repairs-a-boardless-seat
   (testing "#144: THE bug — a boardless loop now reaches the repair authority"
-    ;; Before this, nothing in a loop called sync-verdict!, so this state
-    ;; persisted until an external send_command happened to fix it.
     (let [calls (atom 0)
           boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
         (with-redefs [conn/sync-verdict!
                       (fn []
                         (swap! calls inc)
-                        ;; a successful repair installs a board, as do-rejoin-resync! does
                         (swap! state/client-state assoc :game-state {:turn 3})
                         :synced)]
           (let [r (sync/ensure-board! fresh 3 60000 1000)]
             (is (= 1 @calls) "the boardless seat DID reach the authority")
             (is (= :act (:action r)) "and may act again on the recovered board")
             (is (true? (:repaired? r)))
-            (is (zero? (:attempts (:tracker r))) "a recovery clears the failure count")))))))
+            (is (zero? (:attempts (:tracker r))))))))))
 
-;; --- the local invalidation signals (guest panel, CRITICAL) -----------------
-;;
-;; `board?` + `stale?` alone were too weak: a board can be present and yet not
-;; be a game to act in. Each of these is a purely local flag, free to check, and
-;; each was a state the CLI gate caught and the loops did not.
+(deftest test-ensure-board-local-signals-repair-immediately
+  (testing "#144: a local signal is a FACT about this seat — repair now, don't sample it"
+    (doseq [[what st] {"a server-closed lobby (mark-lobby-gone! RETAINS the board)"
+                       {:lobby-gone? true}
+                       "a recorded diff divergence"
+                       {:diff-mismatch true}
+                       "a dropped socket — a board cached across it is a snapshot"
+                       {:connected false}}]
+      (let [repairs (atom 0) probes (atom 0)]
+        (with-mock-state (merge (mock-client-state) st)
+          (with-redefs [conn/sync-verdict!   (counting repairs :synced)
+                        conn/verify-in-game! (counting probes true)]
+            (sync/ensure-board! fresh 3 60000 1000)
+            (is (= 1 @repairs) (str what " → straight to the repair"))
+            (is (zero? @probes) (str what " → not merely probed"))))))))
 
-(deftest test-ensure-board-honours-every-local-invalidation-signal
-  (let [signals {"a server-closed lobby (mark-lobby-gone! RETAINS the board)"
-                 {:lobby-gone? true}
-                 "a recorded diff divergence"
-                 {:diff-mismatch true}
-                 "a dropped socket — a board cached across it is a snapshot, not a game"
-                 {:connected false}}]
-    (doseq [[what st] signals]
-      (testing (str "#144: " what " must route through the repair, board or not")
-        (let [calls (atom 0)]
-          (with-mock-state (merge (mock-client-state) st)
-            (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
-              (sync/ensure-board! fresh 3 60000 1000)
-              (is (= 1 @calls) what))))))))
+;; --- the membership TTL, and why one absence is not enough -------------------
 
 (deftest test-ensure-board-reverifies-membership-on-a-throttle
   (testing "#144: a loop holding a board still re-asks 'am I still seated?' eventually"
-    ;; The CLI gate runs verify-in-game! on EVERY invocation; a loop with a board
-    ;; would otherwise run it never. The local flags cannot close that gap alone —
-    ;; a silent unseat announces nothing — so the TTL is the backstop.
-    (let [calls (atom 0)]
+    (let [probes (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
-          (testing "not yet due: still free"
-            (sync/ensure-board! {:attempts 0 :verified-at 1000} 3 60000 30000)
-            (is (zero? @calls)))
-          (testing "TTL expired: one round trip, and the clock restarts"
-            (let [r (sync/ensure-board! {:attempts 0 :verified-at 1000} 3 60000 61000)]
-              (is (= 1 @calls))
+        (with-redefs [conn/verify-in-game! (counting probes true)]
+          (testing "not yet due: free"
+            (sync/ensure-board! fresh 3 60000 30000)
+            (is (zero? @probes)))
+          (testing "TTL expired: one probe, and the clock restarts"
+            (let [r (sync/ensure-board! fresh 3 60000 61000)]
+              (is (= 1 @probes))
               (is (= :act (:action r)) "a healthy verified seat carries on")
               (is (= 61000 (:verified-at (:tracker r)))))))))))
 
 (deftest test-ensure-board-first-tick-verifies
-  (testing "#144: a loop confirms its seat once at startup rather than trusting the cache"
-    (let [calls (atom 0)]
+  (testing "#144: a loop confirms its seat at startup rather than trusting the cache"
+    (let [probes (atom 0)]
       (with-mock-state (mock-client-state)
-        (with-redefs [conn/sync-verdict! (counting-verdict calls :synced)]
+        (with-redefs [conn/verify-in-game! (counting probes true)]
           (sync/ensure-board! sync/initial-tracker 3 60000 500000)
-          (is (= 1 @calls) "initial-tracker's :verified-at 0 is always due"))))))
+          (is (= 1 @probes) "initial-tracker's :verified-at 0 is always due"))))))
 
-;; --- the bound --------------------------------------------------------------
+(deftest test-ensure-board-one-absence-does-not-destroy-a-live-board
+  (testing "#144: a single uncorrelated 'not seated' must NOT trigger a destructive resync"
+    ;; Guest 2nd pass, CRITICAL. `verify-in-game!` requests a lobby list, sleeps a
+    ;; fixed 500ms, then reads whichever cached list is there — it never proves the
+    ;; read belongs to the request. A slow reply reads as "not seated", and the
+    ;; repair path CLEARS the board before asking for a replacement. On a schedule,
+    ;; that would wreck healthy in-flight encounters about once a minute.
+    (let [repairs (atom 0)]
+      (with-mock-state (mock-client-state)
+        (with-redefs [conn/verify-in-game! (constantly false)
+                      conn/sync-verdict!   (counting repairs :synced)]
+          (let [r (sync/ensure-board! fresh 3 60000 61000)]
+            (is (zero? @repairs) "THE hazard: one sample must not clear a live board")
+            (is (= :act (:action r)) "the seat keeps playing")
+            (is (true? (:suspect? (:tracker r))) "but suspicion is armed")))))))
+
+(deftest test-ensure-board-a-second-absence-does-repair
+  (testing "#144: two independent absences a tick apart ARE evidence — then repair"
+    (let [repairs (atom 0)]
+      (with-mock-state (mock-client-state)
+        (with-redefs [conn/verify-in-game! (constantly false)
+                      conn/sync-verdict!   (counting repairs :game-gone)]
+          (let [r1 (sync/ensure-board! fresh 3 60000 61000)
+                r2 (sync/ensure-board! (:tracker r1) 3 60000 62000)]
+            (is (= :act (:action r1)))
+            (is (= 1 @repairs) "the second consecutive absence escalates")
+            (is (= :stop (:action r2)) "and the verdict is honoured")))))))
+
+(deftest test-ensure-board-suspicion-clears-on-a-good-sample
+  (testing "#144: a transient empty read must not leave the seat armed forever"
+    (with-mock-state (mock-client-state)
+      (with-redefs [conn/verify-in-game! (constantly true)]
+        (let [r (sync/ensure-board! (assoc fresh :suspect? true) 3 60000 61000)]
+          (is (= :act (:action r)))
+          (is (false? (:suspect? (:tracker r)))))))))
+
+;; --- the bound, including the cross-tick hole -------------------------------
 
 (deftest test-ensure-board-counts-consecutive-failures-to-a-stop
   (testing "#144: the retry is bounded — three failures stop the loop"
     (let [calls (atom 0)
           boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
-        (with-redefs [conn/sync-verdict! (counting-verdict calls :resync-failed)]
+        (with-redefs [conn/sync-verdict! (counting calls :resync-failed)]
           (let [r1 (sync/ensure-board! fresh 3 60000 1000)
                 r2 (sync/ensure-board! (:tracker r1) 3 60000 2000)
                 r3 (sync/ensure-board! (:tracker r2) 3 60000 3000)]
@@ -234,13 +287,39 @@
             (is (= [1 2 3] (map #(:attempts (:tracker %)) [r1 r2 r3])))
             (is (= 3 @calls))))))))
 
+(deftest test-ensure-board-a-failure-cannot-be-laundered-by-the-next-tick
+  (testing "#144: a repair in progress survives into the next tick and still bails"
+    ;; Guest 2nd pass, CRITICAL. The failing tick used to advance :verified-at, so
+    ;; the NEXT tick — healthy board, no local flag, TTL unexpired — took the fast
+    ;; path and reset attempts to zero. A seat whose membership check always failed
+    ;; therefore acted on its cache forever and never reached the three-attempt stop.
+    ;; Note the fixture RETAINS a board throughout: that is the state that hid it.
+    (let [repairs (atom 0)]
+      (with-mock-state (mock-client-state)
+        (with-redefs [conn/verify-in-game! (constantly false)
+                      conn/sync-verdict!   (counting repairs :resync-failed)]
+          (let [;; two absences to escalate, then the failure must stay sticky
+                rs (reductions (fn [prev i]
+                                 (sync/ensure-board! (:tracker prev) 3 60000 (+ 61000 (* 1000 i))))
+                               {:tracker fresh}
+                               (range 1 6))
+                actions (map :action (rest rs))]
+            (is (some #{:stop} actions)
+                "THE laundering bug: this used to :act forever, budget untouched")
+            (is (= [:act :retry :retry :stop] (take 4 actions))
+                "one absence survivable, the second escalates, then the budget runs out")
+            ;; 62000 is the FIRST probe's timestamp. Ticks run to 66000, so the
+            ;; clock is pinned at the last check that actually happened — the
+            ;; failures after it advance nothing.
+            (is (= 62000 (:verified-at (:tracker (last rs))))
+                "a FAILED repair must not restart the TTL clock")))))))
+
 (deftest test-ensure-board-a-throwing-repair-is-a-failed-repair
   (testing "#144: an exception must SPEND an attempt, not slip past the bound"
-    ;; Guest panel, CRITICAL. The loops' own catch blocks carry the attempt count
-    ;; without incrementing it — right for a tick-body exception, fatal for a
-    ;; recovery one: a sync-verdict! that throws every tick retried forever, and
-    ;; neither stall backstop accumulates in that state (own-turn-key needs an
-    ;; :active-player, and a boardless seat has none). So it is caught here.
+    ;; The loops' own catch blocks carry the attempt count without incrementing —
+    ;; right for a tick-body exception, fatal for a recovery one, and neither stall
+    ;; backstop accumulates in that state (own-turn-key needs an :active-player,
+    ;; and a boardless seat has none). So it is caught here.
     (let [calls (atom 0)
           boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
@@ -253,6 +332,39 @@
                 "THE bug: a throwing recovery used to retry forever, budget untouched")
             (is (= :resync-failed (:outcome r3)) "a throw IS a failed repair")
             (is (= 3 @calls))))))))
+
+(deftest test-ensure-board-does-not-swallow-an-interrupt
+  (testing "#144: bot-loop-stop cancels with an interrupt — it must not read as a failed repair"
+    ;; Guest 2nd pass, CRITICAL. `future-cancel` interrupts the loop, most likely
+    ;; mid-Thread/sleep inside verify-in-game!. Classifying that as :resync-failed
+    ;; would let a cancelled loop keep running, and a later bot-loop would then put
+    ;; TWO loops on one seat.
+    (let [boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
+      (with-mock-state boardless
+        (with-redefs [conn/sync-verdict! (fn [] (throw (InterruptedException. "cancelled")))]
+          (is (thrown? InterruptedException
+                       (sync/ensure-board! fresh 3 60000 1000))
+              "the interrupt must propagate, not be counted"))))
+    (testing "and the probe path too"
+      (with-mock-state (mock-client-state)
+        (with-redefs [conn/verify-in-game! (fn [] (throw (InterruptedException. "cancelled")))]
+          (is (thrown? InterruptedException
+                       (sync/ensure-board! fresh 3 60000 61000))))))))
+
+(deftest test-ensure-board-a-synced-that-did-not-clear-the-signal-is-a-failure
+  (testing "#144: :synced over a seat that is STILL disconnected has repaired nothing"
+    ;; Guest 2nd pass, MAJOR: verify-in-game! reading a stale lobby list can answer
+    ;; true while the socket is down, so sync-verdict! says :synced over a seat that
+    ;; is not actable. Counting it as a failed attempt keeps it bounded.
+    (let [st (assoc (mock-client-state) :connected false)]
+      (with-mock-state st
+        (with-redefs [conn/sync-verdict! (constantly :synced)]
+          (let [r (sync/ensure-board! fresh 3 60000 1000)]
+            (is (= :resync-failed (:outcome r))
+                "a board plus an uncleared signal is not a repaired seat")
+            (is (= :retry (:action r)))
+            (is (false? (:repaired? r))
+                "and it must not announce a recovery that did not happen")))))))
 
 (deftest test-ensure-board-terminal-verdicts-stop-without-spending-attempts
   (testing "#144: a decided or torn-down game stops the loop on the first tick"
@@ -267,8 +379,6 @@
 
 (deftest test-ensure-board-pre-game-idles-indefinitely
   (testing "#144: a loop waiting for its game to start must not bail"
-    ;; sync-verdict! says :synced for an unstarted lobby / a client with no
-    ;; gameid. Ten ticks of that must still leave the loop alive.
     (let [boardless (assoc (mock-client-state) :game-state nil :last-state nil)]
       (with-mock-state boardless
         (with-redefs [conn/sync-verdict! (constantly :synced)]
@@ -349,3 +459,36 @@
             (is (= :returned (run-with-timeout f 15000))
                 (str nm ": reached its normal body after the repair"))
             (is (true? @repaired) (str nm ": did attempt the repair"))))))))
+
+
+(deftest test-a-healthy-loop-consults-the-authority-once-not-every-tick
+  (testing "#144: the tracker must SURVIVE an :act tick, or the TTL is no throttle at all"
+    ;; Guest 2nd pass, CRITICAL. Every continuing normal-body result omitted
+    ;; :resync-next, so the recur substituted `initial-tracker`, whose
+    ;; :verified-at 0 is instantly due. All four loops therefore ran a membership
+    ;; check EVERY tick — a lobby request and a 500ms sleep per tick, and a
+    ;; recurring destructive-probe exposure for live runs. Exactly the per-tick
+    ;; cost the whole design exists to avoid, reintroduced by a dropped key.
+    ;;
+    ;; Counting is the only honest way to see this: the module tests pass either
+    ;; way, because the defect lives in what the LOOP carries between ticks.
+    ;;
+    ;; The board here is healthy and it is the OPPONENT's turn, so each tick is a
+    ;; clean no-op: the loops just sleep. Several ticks elapse inside the window.
+    (doseq [[nm f opponent] [["goldfish-runner" #(ai-goldfish-runner/loop!) "corp"]
+                             ["goldfish-corp"   #(ai-goldfish-corp/start-autonomous!) "runner"]
+                             ["heuristic-runner" #(ai-heuristic-runner/loop!) "corp"]
+                             ["heuristic-corp"  #(ai-heuristic-corp/start-autonomous!) "runner"]]]
+      (let [probes (atom 0)
+            repairs (atom 0)
+            healthy (assoc-in (mock-client-state) [:game-state :active-player] opponent)]
+        (with-mock-state healthy
+          (with-redefs [conn/verify-in-game!  (fn [] (swap! probes inc) true)
+                        conn/sync-verdict!    (fn [] (swap! repairs inc) :synced)
+                        actions/can-start-turn? (constantly {:can-start false})]
+            (is (= :spun (run-with-timeout f 3500))
+                (str nm ": a healthy loop should still be running"))
+            (is (zero? @repairs)
+                (str nm ": a healthy seat is never destructively repaired"))
+            (is (= 1 @probes)
+                (str nm ": THE bug — the startup check only, not one per tick"))))))))

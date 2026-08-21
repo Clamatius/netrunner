@@ -67,8 +67,14 @@
             ;; be repaired stops with a diagnostic instead of refusing forever.
             (let [{:keys [action tracker]}
                   (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))]
-              (if (not= :act action)
-                {:continue? (not= :stop action) :resync-next tracker}
+              ;; The tracker rides EVERY path. Dropping it on the :act branch let
+              ;; the recur fall back to initial-tracker, whose :verified-at 0 is
+              ;; instantly due — so the once-a-minute membership check fired every
+              ;; tick instead (guest 2nd pass, CRITICAL).
+              (merge
+                {:resync-next tracker}
+                (if (not= :act action)
+                {:continue? (not= :stop action)}
                 (let [game-state @state/client-state
                       winner (get-in game-state [:game-state :winner])]
                   (if winner
@@ -99,7 +105,14 @@
                             (println "🐠 GOLDFISH CORP - 0 clicks, ending turn")
                             (actions/smart-end-turn!))))
 
-                      {:continue? true}))))) ;; Continue loop
+                      {:continue? true})))))) ;; Continue loop
+            ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
+            ;; Swallowing it here would keep a cancelled loop running, and a
+            ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).
+            (catch InterruptedException e
+              (println "🛑 Loop interrupted — stopping.")
+              (.interrupt (Thread/currentThread))
+              {:continue? false :resync-next resync})
             (catch Exception e
               (println "❌ GOLDFISH CORP ERROR:" (.getMessage e))
               (Thread/sleep 5000)
@@ -107,4 +120,4 @@
               {:continue? true :resync-next resync}))] ;; Continue loop on error
       (when continue?
         (Thread/sleep 1000)
-        (recur (or resync-next loop-sync/initial-tracker))))))
+        (recur resync-next)))))
