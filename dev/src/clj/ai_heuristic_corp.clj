@@ -1371,11 +1371,9 @@
     ;; when healthy (no round trip while a board is cached and recently
     ;; verified), it REPAIRS a boardless seat, and it is bounded.
     ;;
-    ;; It sits OUTSIDE the tick body's try so the tracker survives a body
-    ;; exception: carrying a stale one back would re-arm the membership check
-    ;; every tick and, worse, keep discarding a suspicion so a real absence never
-    ;; reaches its second strike (guest 3rd pass, MAJOR). An interrupt raised in
-    ;; here is meant to propagate and end the loop.
+    ;; It sits OUTSIDE the tick body's try so the tracker cannot be reverted by
+    ;; a body exception, and so an interrupt raised in here propagates and ends
+    ;; the loop rather than being caught by the body's handler.
     ;;
     ;; Ahead of the run/prompt/turn priorities on purpose: every one of them
     ;; reads the board, so none is meaningful without one.

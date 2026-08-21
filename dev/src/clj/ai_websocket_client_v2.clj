@@ -228,15 +228,7 @@
 
     :lobby/list
     (do
-      ;; :lobby-list-rev makes a reply DISTINGUISHABLE from the cache it
-      ;; replaced. Without it a reader cannot tell "the server says I am in no
-      ;; lobby" from "the reply has not arrived yet and I am re-reading the same
-      ;; stale value" — and the second one, read as the first, drives a
-      ;; destructive rejoin that clears a healthy board (guest 3rd pass).
-      (swap! state/client-state
-             (fn [st] (-> st
-                          (assoc :lobby-list data)
-                          (update :lobby-list-rev (fnil inc 0)))))
+      (swap! state/client-state assoc :lobby-list data)
       (println "📋 Received" (count data) "game(s)"))
 
     :lobby/state

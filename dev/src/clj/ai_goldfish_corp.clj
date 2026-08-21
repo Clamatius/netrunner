@@ -61,8 +61,8 @@
   (loop [resync loop-sync/initial-tracker]
     ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap when
     ;; healthy, it REPAIRS a boardless seat, and it is bounded. It sits OUTSIDE
-    ;; the tick body's try so the tracker survives a body exception (guest 3rd
-    ;; pass, MAJOR); an interrupt raised in here propagates and ends the loop.
+    ;; the tick body's try so the tracker cannot be reverted by a body exception,
+    ;; and so an interrupt raised in here propagates and ends the loop.
     (let [{:keys [action tracker]}
           (loop-sync/report! "goldfish-corp" (loop-sync/ensure-board! resync))
           {:keys [continue?]}
