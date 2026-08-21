@@ -67,6 +67,14 @@ REQUIRE_EXPR="$REQUIRE_EXPR :check-success)"
 # you to commit. `pwd -P` on both sides so a symlinked path (/tmp vs /private/tmp)
 # does not read as a mismatch.
 repl_root() {
+    # Test seam: dev/test/check_ai_worktree_test.sh drives the match / mismatch /
+    # unverifiable branches against THIS script deterministically. Without it the
+    # only way to exercise the match branch is to run whichever script happens to
+    # live in the REPL's checkout — which is not the script under test (guest panel).
+    if [ -n "${CHECK_AI_REPL_ROOT_OVERRIDE:-}" ]; then
+        printf '%s' "$CHECK_AI_REPL_ROOT_OVERRIDE"
+        return 0
+    fi
     TIMEOUT=15 "$SCRIPT_DIR/ai-eval.sh" "runner" "$1" \
         '(System/getProperty "user.dir")' 2>/dev/null \
         | grep -o '"/[^"]*"' | tail -1 | tr -d '"'
@@ -81,7 +89,11 @@ if command -v bb &>/dev/null && nc -z localhost $RUNNER_PORT 2>/dev/null; then
     RAW_REPL_ROOT="$(repl_root "$RUNNER_PORT")"
     REPL_ROOT=""
     if [ -n "$RAW_REPL_ROOT" ] && [ -d "$RAW_REPL_ROOT" ]; then
-        REPL_ROOT="$(cd "$RAW_REPL_ROOT" && pwd -P)"
+        # `|| REPL_ROOT=""` because `set -e` is on: if the directory vanishes or
+        # loses +x between the test above and this cd, a bare assignment from a
+        # failed command substitution returns 1 and kills the script instead of
+        # falling back (guest panel).
+        REPL_ROOT="$(cd "$RAW_REPL_ROOT" && pwd -P)" || REPL_ROOT=""
     fi
 
     if [ -z "$REPL_ROOT" ]; then
@@ -133,7 +145,10 @@ if [ "$USE_REPL" = true ]; then
 fi
 
 # Cold start approach
-echo -e "${CYAN}   Cold JVM start (no REPL available or Babashka not installed)${NC}"
+# Not necessarily "no REPL": we also land here from a live-but-foreign or
+# unverifiable one. Name the tree being compiled instead of guessing the reason —
+# that is the fact the caller actually needs.
+echo -e "${CYAN}   Cold JVM start — compiling $REPO_ROOT${NC}"
 
 # Build require expression for cold start (with System/exit)
 COLD_REQUIRE_EXPR="(do"
