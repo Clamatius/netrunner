@@ -56,38 +56,56 @@
     (fn [_]
       (swap! s assoc :replay true))))
 
+(defn- replay-data-request
+  "Fetch the replay data. /replay-data serves SHARED and bug-reported replays
+   to anyone (AI-player fork, #89); a 401 there means the replay is private, so
+   fall back to the owner-only /profile/history/full route (needs a session)."
+  [gameid]
+  (go (let [{:keys [status] :as resp} (<! (GET (str "/replay-data/" gameid)))]
+        (if (= 401 status)
+          (<! (GET (str "/profile/history/full/" gameid)))
+          resp))))
+
 (defn start-shared-replay
   ([s gameid] (start-shared-replay s gameid nil))
   ([s gameid jump-to]
-   (authenticated
-     (fn [user]
-       (swap! s assoc
-              :title (str (:username user) "'s game")
-              :side "Corp"
-              :format "standard"
-              :editing false
-              :replay true
-              :flash-message ""
-              :protected false
-              :password ""
-              :allow-spectator true
-              :spectatorhands true)
-       ;; /replay-data is the public twin of /profile/history/full (AI-player
-       ;; fork, #89): same handler, outside the /profile ::auth group, so a
-       ;; shared or bug-reported replay loads for a logged-out viewer.
-       (go (let [{:keys [status json]} (<! (GET (str "/replay-data/" gameid)))]
-             (case status
-               200
-               (let [replay (js->clj json :keywordize-keys true)
-                     init-state (game-replay/replay-init-state-from-history replay gameid)]
-                 (ws/event-msg-handler-wrapper
-                   {:id :game/start
-                    :?data (.stringify js/JSON (clj->js
-                                                 (if jump-to
-                                                   (assoc init-state :replay-jump-to jump-to)
-                                                   init-state)))}))
-               404
-               (tr-non-game-toast [:lobby_replay-link-error "Replay link invalid."] "error" {:time-out 0 :close-button true}))))))))
+   ;; Deliberately NOT wrapped in `authenticated` (#89, guest catch): the
+   ;; server-side 401 was only the first gate — this client-side guard opened
+   ;; the login modal for a logged-out viewer before the data was ever fetched.
+   ;; A shared replay must open without a session; only a PRIVATE one needs
+   ;; login, and that is asked for on the 401 below, not up front.
+   (let [user (:user @app-state)]
+     (swap! s assoc
+            :title (if user (str (:username user) "'s game") "Shared replay")
+            :side "Corp"
+            :format "standard"
+            :editing false
+            :replay true
+            :flash-message ""
+            :protected false
+            :password ""
+            :allow-spectator true
+            :spectatorhands true)
+     (go (let [{:keys [status json]} (<! (replay-data-request gameid))]
+           (case status
+             200
+             (let [replay (js->clj json :keywordize-keys true)
+                   init-state (game-replay/replay-init-state-from-history replay gameid)]
+               (ws/event-msg-handler-wrapper
+                 {:id :game/start
+                  :?data (.stringify js/JSON (clj->js
+                                               (if jump-to
+                                                 (assoc init-state :replay-jump-to jump-to)
+                                                 init-state)))}))
+             ;; Private replay: an owner must be logged in (modal); anyone
+             ;; else is told so instead of silently getting nothing.
+             401
+             (if user
+               (tr-non-game-toast [:lobby_replay-private "This replay is private."] "error" {:time-out 0 :close-button true})
+               (authenticated (fn [_] nil)))
+             404
+             (tr-non-game-toast [:lobby_replay-link-error "Replay link invalid."] "error" {:time-out 0 :close-button true})
+             (tr-non-game-toast [:lobby_replay-link-error "Replay link invalid."] "error" {:time-out 0 :close-button true})))))))
 
 (defn leave-game []
   (if (= "local-replay" (:gameid @app-state))
