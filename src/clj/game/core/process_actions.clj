@@ -84,15 +84,20 @@
                            (name (or (:active-player @state) :none)) ").")
            "warning")
 
-    ;; :end-turn is set by end-turn-continue; between end-turn and that
-    ;; (the post-discard window) the turn is already ENDING and a repeat
-    ;; would run the discard step again — same duplicate, earlier.
-    (or (:end-turn @state)
+    ;; :end-turn is set by end-turn-continue — AFTER it dissocs the post-discard
+    ;; keys and awaits the asynchronous turn-end triggers (Jumon & co. open a
+    ;; prompt there). In that interval neither :end-turn nor the phase map is
+    ;; set, so the engine keeps its own marker, :ai-turn-ending, from the first
+    ;; accepted end-turn until start-turn clears it (second guest pass). The
+    ;; post-discard map is kept as a belt for a state that predates the marker.
+    (or (:ai-turn-ending @state)
+        (:end-turn @state)
         (get @state (if (= side :corp) :corp-post-discard :runner-post-discard)))
     (toast state side "The turn has already ended (or is ending) — duplicate end-turn ignored." "warning")
 
     :else
-    (end-turn state side args)))
+    (do (swap! state assoc :ai-turn-ending true)
+        (end-turn state side args))))
 
 (def commands
   {"ability" #'play-ability

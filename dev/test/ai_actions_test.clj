@@ -626,7 +626,7 @@
 
 (deftest fire-subs-allows-a-forced-encounter-outside-a-run
   ;; Guest panel CRITICAL on the first cut: the encountered ICE is the wire's
-  ;; [:encounters :ice] FIRST; a forced encounter (Ganked!, Quest Completed) has
+  ;; [:encounters :ice] FIRST; a forced encounter (Ganked!, Archangel on access) has
   ;; it with the run absent / at position 0 / in success. Requiring phase
   ;; encounter-ice blocked a legal Corp fire.
   (let [sent (atom [])
@@ -677,3 +677,25 @@
         (with-out-str (ai-card-actions/score-agenda! "Offworld Office"))
         (is (some #(= "score" (:command %)) @sent)
             "2 counters against a current requirement of 2 is scoreable — the printed 3 must not block it")))))
+
+(deftest fire-subs-resolves-a-non-installed-forced-encounter
+  ;; Second guest pass, CRITICAL: Archangel / Chrysalis / Herald / Sapper force
+  ;; an encounter ON ACCESS — the accessed card sits in R&D/HQ/Archives, not in
+  ;; any server's :ices, and the wire supplies it under [:encounters :ice] with
+  ;; :cid and subroutines. Looking it up among INSTALLED ice found nothing.
+  (let [sent (atom [])
+        gs {:active-player "runner" :turn 7
+            :run {:phase "success" :position 0 :server [:rd]}
+            :encounters {:ice {:cid 77 :title "Archangel" :type "ICE" :rezzed true :zone ["deck"]
+                               :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}
+                         :no-action false :encounter-count 1}
+            :corp {:click 0 :credit 5 :servers {:rd {:ices []}}}
+            :runner {:click 2 :credit 5}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Archangel"))]
+          (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+              (str "the encountered-on-access ICE must be fireable, got:\n" out))
+          (is (not (re-find #"(?i)not found installed" out))
+              (str "must resolve the encounter summary, not only installed ice, got:\n" out)))))))

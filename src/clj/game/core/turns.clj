@@ -93,6 +93,9 @@
     (doseq [s [:runner :corp]] (swap! state dissoc-in [s :undo-turn]))
     (swap! state assoc :click-states [])
     (swap! state dissoc :paid-ability-state)
+    ;; AI-player fork (#152): the end-turn gate's "turn is ending" marker lives
+    ;; from the first accepted end-turn until the NEXT turn starts.
+    (swap! state dissoc :ai-turn-ending)
     (swap! state assoc :turn-state (dissoc @state :log :history :turn-state))
 
     (when (= side :corp)

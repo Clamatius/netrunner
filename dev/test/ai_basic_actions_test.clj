@@ -1439,10 +1439,11 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-draw-refuses-on-an-empty-deck
-  ;; board.cljs: Draw is enabled only while (pos? (:deck-count @me)). The engine
-  ;; does NOT refuse a click-draw from an empty deck — for the Corp it DECKS them
-  ;; (game.core.drawing win-decked → the Runner wins). One leaked send decides
-  ;; the game; deck-count is local, so the client gate is the whole defence.
+  ;; board.cljs: Draw is enabled only while (pos? (:deck-count @me)). (The basic
+  ;; action card's draw has :req (not-empty deck), so the engine refuses the
+  ;; click-draw itself; only mandatory/effect draws deck the Corp — guest panel
+  ;; corrected the first, wrong rationale.) The guard is a UI mirror that turns
+  ;; a silent engine no-op into a named refusal.
   (doseq [[side label] [["corp" "Corp (would be decked)"] ["runner" "Runner (nothing to draw)"]]]
     (testing (str label ": draw with deck-count 0 sends nothing and says why")
       (let [sent (atom [])
@@ -1458,8 +1459,8 @@
               (is (re-find #"(?i)empty" out)
                   (str label ": must name the empty deck, got:\n" out))
               (when (= side "corp")
-                (is (re-find #"(?i)deck|runner wins" out)
-                    (str "the Corp must be told WHY it matters, got:\n" out))))))))))
+                (is (re-find #"(?i)R&D" out)
+                    (str "the Corp's deck is R&D — name it, got:\n" out))))))))))
 
 (deftest test-draw-still-sends-with-cards-in-deck
   (testing "control: deck-count 10 → the draw goes out"
@@ -1476,9 +1477,9 @@
 (deftest test-end-turn-refuses-while-phase-12-window-is-open
   ;; board.cljs: End Turn is hidden while `phase-locked` (a phase-1.2 or
   ;; post-discard window is open). The engine has no such check: an end-turn
-  ;; inside the start-of-turn window discards and ends the turn before a click
-  ;; was granted — and clicks=0 is precisely the state the click guard waves
-  ;; through.
+  ;; inside the start-of-turn window discards and ends the turn with the action
+  ;; phase never opened (the clicks are already granted; the window just hasn't
+  ;; closed) — and clicks=0 is a state the click guard waves through.
   (testing "Corp's own phase-1.2 window open, 0 clicks → end-turn is refused, nothing sent"
     (let [sent (atom [])
           game-state {:active-player "corp" :turn 4 :end-turn false

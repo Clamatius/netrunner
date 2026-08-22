@@ -49,8 +49,32 @@
    "action" 1        ; card-menu actions (derez/rez/trash/advance/score)
    "(if" 2})         ; phase-window buttons: (if requires-consent "…-pass-priority" "end-…")
 
-(defn- strip-comments [text]
-  (str/replace text #";[^\n]*" ""))
+(defn- strip-comments
+  "Remove `;` line comments — but only a `;` OUTSIDE a string literal starts a
+   comment (second guest pass: a regex strip would swallow a `send-command`
+   that follows `\"Choose; then act\"` on the same line). Tiny scanner: tracks
+   string state with backslash escapes."
+  [text]
+  (let [sb (StringBuilder.)]
+    (loop [i 0 in-str? false]
+      (if (>= i (count text))
+        (str sb)
+        (let [c (.charAt text i)]
+          (cond
+            (and in-str? (= c \\) (< (inc i) (count text)))
+            (do (.append sb c) (.append sb (.charAt text (inc i))) (recur (+ i 2) true))
+
+            (= c \")
+            (do (.append sb c) (recur (inc i) (not in-str?)))
+
+            (and (not in-str?) (= c \;))
+            (let [nl (.indexOf text (int \newline) i)]
+              (if (neg? nl)
+                (str sb)
+                (recur nl false)))
+
+            :else
+            (do (.append sb c) (recur (inc i) in-str?))))))))
 
 (defn- site-tokens
   "The head token of every `(send-command …)` call in `text`."

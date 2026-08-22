@@ -1101,10 +1101,10 @@
 
       ;; #152: board.cljs disables End Turn while a phase-1.2 window is open
       ;; (`phase-locked`). The engine has no such check: an end-turn sent inside
-      ;; the start-of-turn window discards and ends the turn before a single
-      ;; click was ever granted. clicks=0 is exactly the state a seat reads as
-      ;; "turn over" — so this is the one end-turn the click guard below waves
-      ;; through. Mirror the button.
+      ;; the start-of-turn window discards and ends the turn with the action
+      ;; phase never opened (the clicks ARE already granted — start-turn grants
+      ;; them before opening the window — so a seat holding them could also
+      ;; spend them there; see ensure-can-act!). Mirror the button.
       (open-phase-window :phase-12)
       (do
         (println "⛔ Refusing end-turn: the start-of-turn (phase 1.2) window is still open.")

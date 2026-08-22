@@ -522,7 +522,9 @@
           result)))))
 
 (defn trash-installed!
-  "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)
+  "Trash an installed card via the plain trash action — which the game offers
+   ONLY for ICE and Programs (board.cljs card-menu actions); other types are
+   refused before the send (#152).
 
    Usage: (trash-installed! \"Palisade\")
           (trash-installed! \"Daily Casts\")"
@@ -750,7 +752,16 @@
     (if (not (core/side= "Corp" side))
       (do (println "❌ Only Corp can fire ICE subroutines")
           (core/with-cursor {:status :error :reason "Wrong side"}))
-      (let [card (core/find-installed-corp-card ice-name)
+      (let [enc-summary (get-in client-state [:game-state :encounters :ice])
+            ;; The encountered ICE may not be INSTALLED at all: a forced
+            ;; encounter on access (Archangel, Chrysalis, Herald, Sapper) puts
+            ;; the accessed card under [:encounters :ice] — with :cid and subs —
+            ;; while it sits in R&D/HQ/Archives (second guest pass, CRITICAL).
+            ;; Installed ICE first (the full card), else the encounter summary
+            ;; for an ICE that is encountered but not installed anywhere.
+            card (or (core/find-installed-corp-card ice-name)
+                     (when (and enc-summary (= ice-name (:title enc-summary)))
+                       enc-summary))
             ;; #152: board.cljs enables "Fire unbroken subroutines" ONLY during an
             ;; encounter with THIS ice and only while it has an unbroken, unfired,
             ;; resolvable sub. The engine's play-unbroken-subroutines checks
@@ -758,7 +769,7 @@
             ;; subs of any rezzed ice at any time — an illegal move no human can
             ;; make. Mirror the button's enable condition before the send.
             ;; The encountered ICE is the wire's [:encounters :ice] FIRST (a
-            ;; forced encounter — Ganked!, Quest Completed — has it with the run
+            ;; forced encounter — Ganked!, Archangel on access — has it with the run
             ;; at position 0 / success / absent; guest-panel CRITICAL), then the
             ;; position-derived ICE at encounter-ice. Same authority as #100.
             enc-ice (or (get-in client-state [:game-state :encounters :ice])
