@@ -817,7 +817,8 @@
           side (:side client-state)
           before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
           before-clicks (get-in client-state [:game-state (keyword side) :click])
-          deck-count (get-in client-state [:game-state (keyword side) :deck-count])
+          ;; #127: through the authority, not a bare keyword-of-side.
+          deck-count (get-in client-state [:game-state (state/my-side-kw client-state) :deck-count])
           vitals-before (my-vitals)
           gameid (:gameid client-state)]
      ;; #152: board.cljs enables Draw only while (pos? (:deck-count @me)). The
