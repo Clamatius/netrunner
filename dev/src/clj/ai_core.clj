@@ -1067,6 +1067,53 @@
                 (println (format "   → \"%s [%d]\" (%s, %s)" title idx location status))))
             nil))))))
 
+(defn installed-title-match-count
+  "How many INSTALLED cards in `scope` share the title parsed out of card-name
+   (the [N] suffix is stripped first, so \"Leech [1]\" counts Leeches).
+   `scope` is :runner (the rig) or :corp (every server's ICE + content).
+
+   This is the question \"was that nil ambiguity or absence?\" — the two states
+   a find-installed-* miss collapses into, which a caller cannot tell apart
+   from the nil alone."
+  [card-name scope]
+  (let [{:keys [title]} (parse-card-reference card-name)
+        installed (case scope
+                    :runner (let [rig (state/runner-rig)]
+                              (concat (:program rig) (:hardware rig) (:resource rig)))
+                    :corp (let [servers (state/corp-servers)]
+                            (concat (mapcat :ices (vals servers))
+                                    (mapcat :content (vals servers))))
+                    nil)]
+    (count (filter #(= title (:title %)) installed))))
+
+(defn report-installed-lookup-miss!
+  "Print the honest reason a find-installed-* lookup returned nil and return an
+   {:status :error :reason ...} map. `scopes` are the zones the caller actually
+   searched (:runner / :corp), in any order; the largest match count decides.
+
+   Ambiguity and absence are different facts. find-installed-card /
+   find-installed-corp-card return nil for BOTH, having already printed the
+   \"❓ Multiple copies\" list in the ambiguous case — so a caller that reads
+   nil as absence prints \"❌ Card not found installed: Leech\" directly beneath
+   a list of the seat's two Leeches (#151 item 5). Two verdicts, one card, and
+   the louder one is false: the seat is left believing its board is wrong.
+
+   The Corp half of this had a fix that counted CORP installs only, so from a
+   Runner seat the count was always 0 and every Runner ambiguity fell straight
+   through to the not-found lie."
+  [card-name scopes]
+  (let [best (apply max 0 (map #(installed-title-match-count card-name %) scopes))]
+    (if (> best 1)
+      (do
+        (println (str "   Re-run with the [N] suffix, e.g. \"" card-name " [0]\""))
+        (flush)
+        {:status :error
+         :reason (str "Ambiguous: multiple copies of " card-name " installed — specify [N]")})
+      (do
+        (println (str "❌ Card not found installed: " card-name))
+        (flush)
+        {:status :error :reason (str "Card not found: " card-name)}))))
+
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.
    Walks the entire game state tree, so cards in less common zones

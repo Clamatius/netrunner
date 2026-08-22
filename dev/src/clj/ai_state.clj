@@ -1059,6 +1059,43 @@
   (swap! client-state dissoc :diff-mismatch))
 
 ;; ============================================================================
+;; Run Strategy
+;; ============================================================================
+;; The flags the seat has committed to for the CURRENT run — the Runner's
+;; --tank / --full-break, the Corp's --rez / --no-rez / --fire-unbroken. Reset
+;; when the run ends (ai-runs/reset-strategy!), so a key here is run-scoped by
+;; construction.
+;;
+;; It lives in ai-state, not ai-runs, because it answers a question the DISPLAY
+;; layer must ask too: "has this seat already tanked this ICE?" The encounter
+;; menu was printing the full break-or-tank decision to a Runner that had just
+;; tanked (#151 item 2), and ai-display cannot require ai-runs. Behaviour is
+;; unchanged — ai-runs/{get,set,reset}-strategy! still own every write.
+;;
+;; Structure:
+;; {:full-break true/false      ; Runner: auto-break all ICE
+;;  :tank #{"Tithe" ...}        ; Runner: let subs fire on these ICE
+;;  :tank-all true/false        ; Runner: let subs fire on ANY ICE
+;;  :no-rez true/false          ; Corp: don't rez anything
+;;  :rez #{"Ice Wall" ...}      ; Corp: auto-rez these ICE
+;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
+;;  :force true/false}          ; Bypass all smart checks
+
+(defonce run-strategy (atom {}))
+
+(defn tank-authorized?
+  "True when the seat has already declined to break ICE-TITLE this run — either
+   by naming it (`tank \"Tithe\"` / `--tank`) or blanket (`--tank-all`).
+
+   This is the difference between \"you must decide: break or tank\" and \"you
+   HAVE decided; the Corp owes you the subs\". Reading it lets the encounter
+   guidance stop re-asking a question the seat already answered."
+  [ice-title]
+  (let [strategy @run-strategy]
+    (boolean (or (:tank-all strategy)
+                 (contains? (:tank strategy #{}) ice-title)))))
+
+;; ============================================================================
 ;; Seen Cards Tracking
 ;; ============================================================================
 ;; Track which card titles have been shown to the user this session.

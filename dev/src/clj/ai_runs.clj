@@ -25,7 +25,10 @@
 ;;  :rez #{\"Ice Wall\" ...}    ; Corp: auto-rez these ICE; pause on other unrezzed ICE
 ;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
 ;;  :force true/false}          ; Bypass all smart checks
-(defonce run-strategy (atom {}))
+;; The atom itself now lives in ai-state (see the Run Strategy section there) so
+;; the display layer can ask "already tanked?" without requiring this namespace.
+;; This var is the same atom, kept for every existing reader.
+(def run-strategy state/run-strategy)
 
 ;; Track last waiting status to suppress repeated output
 (defonce last-waiting-status (atom nil))

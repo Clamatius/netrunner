@@ -324,3 +324,78 @@
                    "exception at a model seat — and unlike a display, several of "
                    "these run automatically from inside other actions:\n  "
                    (clojure.string/join "\n  " throwers))))))))
+
+;; ============================================================================
+;; Ambiguity is not absence (#151 item 5)
+;; ============================================================================
+;; A duplicate-title lookup prints "❓ Multiple copies of 'X' installed" and
+;; returns nil. The caller then read that nil as "no such card" and printed
+;; "❌ Card not found installed: X" underneath — two contradictory verdicts on
+;; one card, from a seat that was holding two of them. The Corp half of this was
+;; already fixed (ambiguous-or-missing-error), but it counted CORP installs
+;; only, so from a Runner seat the count was always 0 and every Runner
+;; ambiguity fell through to the not-found lie.
+
+(def ^:private two-leeches
+  {:program [{:cid 101 :title "Leech" :zone [:rig :program] :counter {:virus 2}
+              :abilities [{:label "Spend 1 hosted virus counter"}]}
+             {:cid 102 :title "Leech" :zone [:rig :program] :counter {:virus 0}
+              :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+
+(defn- runner-rig-state [rig]
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:click 3 :credit 5 :hand [] :rig rig}
+                :corp {:click 0 :credit 5 :hand [] :servers {}}
+                :active-player "runner"}))
+
+(deftest test-use-ability-ambiguous-runner-card-is-not-not-found
+  (testing "two copies installed: say which to specify, never 'not found'"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech" 0)))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "a card the seat has TWO of is not missing, got: " out))
+        (is (clojure.string/includes? out "[0]")
+            (str "expected the [N] suffix hint, got: " out)))))
+  (testing "the returned status names ambiguity, not absence"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [result (atom nil)
+            _ (with-out-str
+                (with-redefs [ws/send-message! (fn [_ _] true)]
+                  (reset! result (ai-actions/use-ability! "Leech" 0))))
+            result @result]
+        (is (= :error (:status result)))
+        (is (clojure.string/includes? (str (:reason result)) "Ambiguous")
+            (str "expected an ambiguity reason, got: " (:reason result))))))
+  (testing "a genuinely absent card still reports not-found"
+    (with-mock-state (runner-rig-state {:program [{:cid 103 :title "Buzzsaw"
+                                                   :zone [:rig :program]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech" 0)))]
+        (is (clojure.string/includes? out "Card not found installed")
+            (str "absence must still be reported as absence, got: " out))))))
+
+(deftest test-trash-installed-ambiguous-runner-card-is-not-not-found
+  (testing "trash-installed on a duplicate title does not claim the card is missing"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/trash-installed! "Leech")))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "ambiguity is not absence, got: " out))))))
+
+(deftest test-abilities-ambiguous-runner-card-is-not-not-found
+  (testing "the abilities display does not claim a duplicated card is missing"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str (ai-actions/show-card-abilities "Leech"))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "ambiguity is not absence, got: " out))))))
