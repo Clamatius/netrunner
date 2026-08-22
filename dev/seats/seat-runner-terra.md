@@ -13,10 +13,12 @@ already kept its hand. You take the Runner seat.
 
 1. **Play the ENTIRE game, to GAME-OVER. Do NOT stop after one turn.** This is a
    full multi-turn game. After each of your turns, run
-   `./dev/send_command runner game-over-status`. While it prints `IN-PROGRESS …`,
-   the game is NOT over — start your next turn and keep playing. Only stop when it
-   prints `GAME-OVER winner=… turn=…`. If you stop early while it still says
-   IN-PROGRESS, you strand the game and waste the run — keep going until GAME-OVER.
+   `./dev/send_command runner game-over-status`. While it prints `IN-PROGRESS …`
+   or `AWAITING-START …`, the game is NOT over — start your next turn and keep
+   playing. Stop only on `GAME-OVER winner=… turn=…` (the result) or `GAME-GONE
+   turn=…` (the server closed the lobby without one). If you stop early while it
+   still says IN-PROGRESS, you strand the game and waste the run — keep going
+   until GAME-OVER. The full state list is under "Knowing when to stop" below.
 
 2. **Your opponent is a slow thinking model.** Between your turns the Corp takes
    minutes to think. That is normal, NOT a stall. Block until it's your turn

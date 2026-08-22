@@ -22,6 +22,11 @@
 ;; the status displays above their definitions.
 (declare run-status-headline)
 (declare print-run-window-priority!)
+;; The encounter authority (wire [:encounters :ice] first) and its liveness
+;; predicate — defined with the run-window helpers below, used by the status
+;; displays above them.
+(declare encountered-ice)
+(declare live-encounter?)
 
 ;; ============================================================================
 ;; Status & Information
@@ -55,10 +60,16 @@
   [card]
   (let [counters (:counter card {})
         adv (:advance-counter card 0)
+        ;; PRESENT-at-zero is printed. A Leech that has spent its last counter
+        ;; keeps :virus 0 on the wire, and rendering that as a bare `Leech` is
+        ;; indistinguishable from "this view doesn't show counters" — which is
+        ;; the exact confusion this suffix exists to end (guest panel). Only
+        ;; :advance-counter is suppressed at zero: it is a default field on every
+        ;; card, so printing 0adv everywhere would drown the signal.
         parts (cond-> []
-                (pos? (:virus counters 0)) (conj (str (:virus counters) "v"))
-                (pos? (:power counters 0)) (conj (str (:power counters) "p"))
-                (pos? (:credit counters 0)) (conj (str (:credit counters) "c"))
+                (contains? counters :virus) (conj (str (:virus counters) "v"))
+                (contains? counters :power) (conj (str (:power counters) "p"))
+                (contains? counters :credit) (conj (str (:credit counters) "c"))
                 (pos? adv) (conj (str adv "adv")))]
     (if (seq parts)
       (str "(" (str/join "," parts) ")")
@@ -350,8 +361,9 @@
                 (when-let [pos (:position run-state)]
                   (println "  Position:" pos)))
               ;; Show ICE info during encounter-ice
-              (when (= "encounter-ice" (:phase run-state))
-                (when-let [current-ice (core/current-run-ice @state/client-state)]
+              (when (or (= "encounter-ice" (:phase run-state))
+                        (live-encounter? @state/client-state))
+                (when-let [current-ice (encountered-ice @state/client-state)]
                   (when (:rezzed current-ice)
                     (let [ice-title (:title current-ice)
                           ice-str (or (:current-strength current-ice) (:strength current-ice))
@@ -898,10 +910,23 @@
             ;; seat actually polls did not.
             runner-hosted-info (state/runner-hosted-credits gs)
             runner-hosted (:total runner-hosted-info)
-            runner-cred-str (if (pos? runner-hosted)
+            ;; Per-holder amounts, not just names: with two holders the seat
+            ;; still has to know WHICH restriction governs which credits, and
+            ;; "(+15:Smartware Distributor,Red Team)" doesn't say (guest panel).
+            ;; Same shape as full `status`.
+            hosted-sources (:sources runner-hosted-info)
+            runner-cred-str (cond
+                              (not (pos? runner-hosted)) (str runner-credits)
+                              ;; One holder: the total in front of the colon is
+                              ;; already its amount — repeating it is noise.
+                              (= 1 (count hosted-sources))
                               (format "%d(+%d:%s)" runner-credits runner-hosted
-                                      (str/join "," (map :title (:sources runner-hosted-info))))
-                              (str runner-credits))
+                                      (:title (first hosted-sources)))
+                              :else
+                              (format "%d(+%d:%s)" runner-credits runner-hosted
+                                      (str/join ","
+                                                (map #(format "%s %d" (:title %) (:credits %))
+                                                     hosted-sources))))
             ;; Tags decide endgames (Orbital Superiority won marquee g1 off
             ;; one) but were only visible via full `status` — the one-call
             ;; snapshot silently omitted them (#85). Append to the Runner's
@@ -911,6 +936,19 @@
             runner-tag-str (if (pos? runner-tags)
                              (format "/%dtag" runner-tags)
                              "")
+            ;; Virus counters price runs (Leech's counters decide how much ICE
+            ;; strength the Runner can shave), and this line — the one a seat
+            ;; polls before every decision — omitted them, so budgeting meant a
+            ;; second call to `board` (#151 item 12). Named per card for the same
+            ;; reason the hosted credits are: a total across two virus programs
+            ;; cannot be spent against either.
+            runner-virus (state/runner-virus-counters gs)
+            runner-virus-str (if (pos? (:total runner-virus))
+                               (format "/v:%s"
+                                       (str/join ","
+                                                 (map #(format "%s %d" (:title %) (:virus %))
+                                                      (:sources runner-virus))))
+                               "")
 
             ;; Corp state
             corp-credits (get-in gs [:corp :credit] 0)
@@ -920,9 +958,9 @@
             corp-ap (get-in gs [:corp :agenda-point] 0)
 
             ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
-            runner-stats (format "%sc/%dcl/%dh/%dAP%s"
+            runner-stats (format "%sc/%dcl/%dh/%dAP%s%s"
                                  runner-cred-str runner-clicks runner-hand-ct
-                                 runner-ap runner-tag-str)
+                                 runner-ap runner-tag-str runner-virus-str)
             corp-stats (format "%dc/%dcl/%dh/%dAP"
                                corp-credits corp-clicks corp-hand-ct corp-ap)
             my-stats (if (= my-side "runner") runner-stats corp-stats)
@@ -1336,7 +1374,10 @@
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
   [state run my-side]
-  (when-let [current-ice (core/current-run-ice state)]
+  ;; Same authority as the priority block below it: naming the position-derived
+  ;; ICE here while the guidance keys off [:encounters :ice] would split ONE
+  ;; output across two cards in a forced encounter (guest panel).
+  (when-let [current-ice (encountered-ice state)]
     (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
             ice-str (or (:current-strength current-ice) (:strength current-ice))
@@ -1587,10 +1628,23 @@
    so position is not the authority — the same rule the card resolvers had to
    learn twice (#100, #152). It matters here because these lines NAME the ICE
    and now key the tank check on that name: get the identity wrong and the
-   guidance is confidently about the wrong card."
+   guidance is confidently about the wrong card.
+
+   Trustworthy as a liveness signal too: the engine keeps :encounters as a stack
+   and POPS it when the encounter ends (game.core.runs), so a present :ice means
+   an encounter that is actually happening."
   [state]
   (or (get-in state [:game-state :encounters :ice])
       (core/current-run-ice state)))
+
+(defn live-encounter?
+  "True when the wire reports an encounter in progress, whatever the run phase
+   says. A forced encounter (an on-access Archangel, say) is live while
+   [:run :phase] reads \"success\" — gating the break/tank guidance on the phase
+   string alone left exactly that case being told 'use continue to pass
+   priority', the #92 lie in the one phase nobody had checked (guest panel)."
+  [state]
+  (some? (get-in state [:game-state :encounters :ice])))
 
 (defn runner-encounter-unbroken-count
   "Count of subroutines on the current encounter ICE that the Runner has neither
@@ -1669,7 +1723,9 @@
    jack-out / escalate guidance the identical situation gets at #1 Run begins. Two
    Luna seats re-sent continue and then pinged the umpire."
   [state run run-phase my-side]
-  (let [runner-unbroken (when (and (= my-side "runner") (= run-phase "encounter-ice"))
+  (let [runner-unbroken (when (and (= my-side "runner")
+                                   (or (= run-phase "encounter-ice")
+                                       (live-encounter? state)))
                           (runner-encounter-unbroken-count state))
         ;; A Corp that has already passed this window is in the SAME position the
         ;; Runner's already-passed branch describes: `continue` is a no-op and the
@@ -2666,7 +2722,9 @@
       ;; branch above and told the seat to `choose`, contradicting what `prompt`
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
       (and (:in-run? ts) prompt (not waiting?))
-      (let [runner-unbroken (when (and (= my-side-lc "runner") (= run-phase "encounter-ice"))
+      (let [runner-unbroken (when (and (= my-side-lc "runner")
+                                       (or (= run-phase "encounter-ice")
+                                           (live-encounter? cs)))
                               (runner-encounter-unbroken-count cs))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
@@ -2689,11 +2747,17 @@
           ;; is refused (#92), so naming it here (as this branch used to) is the lie
           ;; that agreed with the prompt display and deadlocked marquee G2.
           (and runner-unbroken (pos? runner-unbroken))
-          (do
-            (println "   → Owner: YOU — a break/tank decision, not a both-pass window.")
+          (let [ice-title (:title (encountered-ice cs) "this ICE")
+                tanked? (state/tank-authorized? ice-title)]
+            ;; A tanked encounter is NOT still owed a decision by us — saying
+            ;; "Owner: YOU" there is the same false failure `tank` itself used to
+            ;; print (#151 item 2). diagnose-blocker is where a seat goes when it
+            ;; already suspects it is stuck; it must not manufacture the suspicion.
+            (println (if tanked?
+                       "   → Owner: the CORP — your tank stands; they owe the subs."
+                       "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
-                          (:title (core/current-run-ice cs) "this ICE")
-                          runner-unbroken)]
+                          ice-title runner-unbroken tanked?)]
               (println line)))
 
           :else

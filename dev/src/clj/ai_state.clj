@@ -26,6 +26,68 @@
          :spectator-perspective nil}))
 
 ;; ============================================================================
+;; Run Strategy
+;; ============================================================================
+;; The flags the seat has committed to for the CURRENT run — the Runner's
+;; --tank / --full-break, the Corp's --rez / --no-rez / --fire-unbroken.
+;;
+;; LIFETIME. ai-runs/reset-strategy! clears this at the START of run! and
+;; monitor-active-run!, NOT at the end of a run — so on its own the set outlives
+;; the run that created it. That was survivable while only the run loops read it
+;; (they reset before use); it is NOT survivable now that the display reads it to
+;; assert "you have already tanked this ICE": tank Tithe, let the run end, start
+;; another run through a run EVENT (Jailbreak/Conduit enter via continue-run! and
+;; never re-reset), meet Tithe again, and the seat would be told its tank stands
+;; when the Corp has been told nothing. So expire-run-strategy! below clears it on
+;; the observed end of a run, and the diff applier calls it. Every legitimate
+;; re-entry (run!, monitor-active-run!, a persistent monitor returning to its
+;; post) re-applies its flags, so clearing early costs nothing.
+;;
+;; It lives in ai-state, not ai-runs, because it answers a question the DISPLAY
+;; layer must ask too: "has this seat already tanked this ICE?" The encounter
+;; menu was printing the full break-or-tank decision to a Runner that had just
+;; tanked (#151 item 2), and ai-display cannot require ai-runs. Behaviour is
+;; unchanged — ai-runs/{get,set,reset}-strategy! still own every write.
+;;
+;; Structure:
+;; {:full-break true/false      ; Runner: auto-break all ICE
+;;  :tank #{"Tithe" ...}        ; Runner: let subs fire on these ICE
+;;  :tank-all true/false        ; Runner: let subs fire on ANY ICE
+;;  :no-rez true/false          ; Corp: don't rez anything
+;;  :rez #{"Ice Wall" ...}      ; Corp: auto-rez these ICE
+;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
+;;  :force true/false}          ; Bypass all smart checks
+
+(defonce run-strategy (atom {}))
+
+(defn expire-run-strategy!
+  "Clear the run strategy when a run we were holding flags for has ENDED.
+   `old-state` / `new-state` are the boards either side of an applied diff; the
+   transition that matters is a :run map becoming absent.
+
+   Deliberately one-directional: it never SETS anything, so it cannot race the
+   run loops that own every write. If the transition is missed (a diff we could
+   not apply, a resync), the strategy simply survives to the next run start,
+   which is the pre-existing behaviour — this narrows the stale window, it does
+   not depend on catching every one."
+  [old-state new-state]
+  (when (and (:run old-state) (nil? (:run new-state)))
+    (reset! run-strategy {}))
+  nil)
+
+(defn tank-authorized?
+  "True when the seat has already declined to break ICE-TITLE this run — either
+   by naming it (`tank \"Tithe\"` / `--tank`) or blanket (`--tank-all`).
+
+   This is the difference between \"you must decide: break or tank\" and \"you
+   HAVE decided; the Corp owes you the subs\". Reading it lets the encounter
+   guidance stop re-asking a question the seat already answered."
+  [ice-title]
+  (let [strategy @run-strategy]
+    (boolean (or (:tank-all strategy)
+                 (contains? (:tank strategy #{}) ice-title)))))
+
+;; ============================================================================
 ;; Gameid Normalization
 ;; ============================================================================
 
@@ -136,6 +198,11 @@
         (do (swap! client-state assoc
                    :game-state new-state
                    :last-state new-state)
+            ;; A run that just ended takes its strategy with it (see the Run
+            ;; Strategy section): the display now answers "have I already tanked
+            ;; this ICE?" from those flags, and a stale yes is a lie about a
+            ;; signal the Corp never received.
+            (expire-run-strategy! old-state new-state)
             true)
         ;; #142: nothing to patch, so nothing was learned. HOLD what we have
         ;; rather than caching a non-board — writing the diff in was exactly what
@@ -328,6 +395,34 @@
                        (get-in gs [:runner :play-area]))
          sources (vec (mapcat card-credit-counters cards))]
      {:total (reduce + 0 (map :credits sources))
+      :sources sources})))
+
+(defn- card-virus-counters
+  "Recursively collect {:title :virus} for a card and any cards hosted on it that
+   carry a positive :virus counter. Hosted cards count: a Leech on a Leprechaun
+   is still the Leech whose counters the run budget depends on."
+  [card]
+  (let [n (get-in card [:counter :virus] 0)
+        here (when (pos? n) [{:title (or (:title card) "Unknown") :virus n}])
+        hosted (mapcat card-virus-counters (:hosted card))]
+    (concat here hosted)))
+
+(defn runner-virus-counters
+  "Virus counters on the Runner's installed cards, as
+   {:total N :sources [{:title :virus} ...]}.
+
+   These are spend-down resources that price whole runs — Leech's counters set
+   how much strength the Runner can shave off an ICE — and the compact status
+   line, the one a seat polls before every decision, omitted them entirely, so
+   seats fell back to `board | grep -i leech` (#151 item 12). Named sources, not
+   a bare total, for the same reason hosted credits are named: with two virus
+   programs a total cannot be budgeted against either."
+  ([] (runner-virus-counters (get-game-state)))
+  ([gs]
+   (let [rig (get-in gs [:runner :rig])
+         cards (concat (:program rig) (:hardware rig) (:resource rig))
+         sources (vec (mapcat card-virus-counters cards))]
+     {:total (reduce + 0 (map :virus sources))
       :sources sources})))
 
 (defn waiting-prompt-type?
@@ -1057,43 +1152,6 @@
   "Clear staleness indicators after successful resync"
   []
   (swap! client-state dissoc :diff-mismatch))
-
-;; ============================================================================
-;; Run Strategy
-;; ============================================================================
-;; The flags the seat has committed to for the CURRENT run — the Runner's
-;; --tank / --full-break, the Corp's --rez / --no-rez / --fire-unbroken. Reset
-;; when the run ends (ai-runs/reset-strategy!), so a key here is run-scoped by
-;; construction.
-;;
-;; It lives in ai-state, not ai-runs, because it answers a question the DISPLAY
-;; layer must ask too: "has this seat already tanked this ICE?" The encounter
-;; menu was printing the full break-or-tank decision to a Runner that had just
-;; tanked (#151 item 2), and ai-display cannot require ai-runs. Behaviour is
-;; unchanged — ai-runs/{get,set,reset}-strategy! still own every write.
-;;
-;; Structure:
-;; {:full-break true/false      ; Runner: auto-break all ICE
-;;  :tank #{"Tithe" ...}        ; Runner: let subs fire on these ICE
-;;  :tank-all true/false        ; Runner: let subs fire on ANY ICE
-;;  :no-rez true/false          ; Corp: don't rez anything
-;;  :rez #{"Ice Wall" ...}      ; Corp: auto-rez these ICE
-;;  :fire-unbroken true/false   ; Corp: auto-fire unbroken subs
-;;  :force true/false}          ; Bypass all smart checks
-
-(defonce run-strategy (atom {}))
-
-(defn tank-authorized?
-  "True when the seat has already declined to break ICE-TITLE this run — either
-   by naming it (`tank \"Tithe\"` / `--tank`) or blanket (`--tank-all`).
-
-   This is the difference between \"you must decide: break or tank\" and \"you
-   HAVE decided; the Corp owes you the subs\". Reading it lets the encounter
-   guidance stop re-asking a question the seat already answered."
-  [ice-title]
-  (let [strategy @run-strategy]
-    (boolean (or (:tank-all strategy)
-                 (contains? (:tank strategy #{}) ice-title)))))
 
 ;; ============================================================================
 ;; Seen Cards Tracking

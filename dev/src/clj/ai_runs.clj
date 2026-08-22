@@ -27,7 +27,9 @@
 ;;  :force true/false}          ; Bypass all smart checks
 ;; The atom itself now lives in ai-state (see the Run Strategy section there) so
 ;; the display layer can ask "already tanked?" without requiring this namespace.
-;; This var is the same atom, kept for every existing reader.
+;; This var is the same atom, kept for every existing reader. ai-state also
+;; expires it when it observes a run end — the resets below still happen at run
+;; START, which on its own let a tank authorization outlive its run.
 (def run-strategy state/run-strategy)
 
 ;; Track last waiting status to suppress repeated output

@@ -1102,13 +1102,32 @@
    Runner seat the count was always 0 and every Runner ambiguity fell straight
    through to the not-found lie."
   [card-name scopes]
-  (let [best (apply max 0 (map #(installed-title-match-count card-name %) scopes))]
-    (if (> best 1)
+  (let [{:keys [title index explicit-index?]} (parse-card-reference card-name)
+        best (apply max 0 (map #(installed-title-match-count card-name %) scopes))]
+    (cond
+      ;; The seat DID specify an index and the lookup still missed — the index is
+      ;; out of range. Telling it to "specify [N]" is advice it already took, and
+      ;; the worked example built from card-name reads "Leech [9] [0]", which is
+      ;; not a thing you can type (guest panel). Name the range instead.
+      (and explicit-index? (pos? best))
       (do
-        (println (str "   Re-run with the [N] suffix, e.g. \"" card-name " [0]\""))
+        (println (format "❌ No copy [%d] of '%s' — %d installed, so the valid indices are 0..%d."
+                         index title best (dec best)))
+        (println (format "   Re-run as \"%s [0]\"%s"
+                         title
+                         (if (> best 1) (format " … \"%s [%d]\"" title (dec best)) "")))
         (flush)
         {:status :error
-         :reason (str "Ambiguous: multiple copies of " card-name " installed — specify [N]")})
+         :reason (format "Index out of range: %s has %d installed copies" title best)})
+
+      (> best 1)
+      (do
+        (println (str "   Re-run with the [N] suffix, e.g. \"" title " [0]\""))
+        (flush)
+        {:status :error
+         :reason (str "Ambiguous: multiple copies of " title " installed — specify [N]")})
+
+      :else
       (do
         (println (str "❌ Card not found installed: " card-name))
         (flush)

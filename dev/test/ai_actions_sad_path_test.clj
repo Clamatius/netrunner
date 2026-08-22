@@ -399,3 +399,28 @@
             (str "expected the disambiguation list, got: " out))
         (is (not (clojure.string/includes? out "Card not found installed"))
             (str "ambiguity is not absence, got: " out))))))
+
+(deftest test-explicit-index-out-of-range-is-not-ambiguity
+  ;; Guest panel: "Leech [9]" with two Leeches missed the lookup, and the honest-
+  ;; error helper stripped the suffix, counted two, and told the seat to "specify
+  ;; [N]" — advice it had just taken — with a worked example of `"Leech [9] [0]"`,
+  ;; which is not something you can type. An out-of-range index is its own state.
+  (testing "the range is named, and the example is typeable"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [9]" 0)))]
+        (is (clojure.string/includes? out "0..1")
+            (str "expected the valid index range, got: " out))
+        (is (not (clojure.string/includes? out "[9] [0]"))
+            (str "must not suggest a doubled suffix, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "the card IS installed — twice, got: " out)))))
+  (testing "an explicit index on a title with no copies is still not-found"
+    (with-mock-state (runner-rig-state {:program [{:cid 103 :title "Buzzsaw"
+                                                   :zone [:rig :program]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [1]" 0)))]
+        (is (clojure.string/includes? out "Card not found installed")
+            (str "no Leech at all is absence, got: " out))))))
