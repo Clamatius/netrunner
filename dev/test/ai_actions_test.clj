@@ -699,3 +699,26 @@
               (str "the encountered-on-access ICE must be fireable, got:\n" out))
           (is (not (re-find #"(?i)not found installed" out))
               (str "must resolve the encounter summary, not only installed ice, got:\n" out)))))))
+
+(deftest fire-subs-resolves-the-encountered-copy-over-a-same-title-installed-one
+  ;; Third guest pass, CRITICAL: an installed Archangel (cid 11) and the
+  ;; ACCESSED Archangel being encountered (cid 77, not installed). Preferring
+  ;; the installed lookup made the cid gate refuse the legal fire.
+  (let [sent (atom [])
+        gs {:active-player "runner" :turn 7
+            :run {:phase "success" :position 0 :server [:rd]}
+            :encounters {:ice {:cid 77 :title "Archangel" :type "ICE" :rezzed true :zone ["deck"]
+                               :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}
+                         :no-action false :encounter-count 1}
+            :corp {:click 0 :credit 5
+                   :servers {:hq {:ices [{:cid 11 :title "Archangel" :type "ICE" :rezzed true :zone ["servers" "hq" "ices"]
+                                          :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}]}}}
+            :runner {:click 2 :credit 5}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/fire-unbroken-subs! "Archangel"))
+        (let [cmd (first (filter #(= "unbroken-subroutines" (:command %)) @sent))]
+          (is (some? cmd) "the encountered copy must be fired")
+          (is (= 77 (get-in cmd [:args :card :cid]))
+              (str "must send the ENCOUNTERED copy (cid 77), not the installed one (cid 11), sent: " cmd)))))))

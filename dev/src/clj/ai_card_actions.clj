@@ -757,11 +757,18 @@
             ;; encounter on access (Archangel, Chrysalis, Herald, Sapper) puts
             ;; the accessed card under [:encounters :ice] — with :cid and subs —
             ;; while it sits in R&D/HQ/Archives (second guest pass, CRITICAL).
-            ;; Installed ICE first (the full card), else the encounter summary
-            ;; for an ICE that is encountered but not installed anywhere.
-            card (or (core/find-installed-corp-card ice-name)
-                     (when (and enc-summary (= ice-name (:title enc-summary)))
-                       enc-summary))
+            installed (core/find-installed-corp-card ice-name)
+            ;; Resolve by the ENCOUNTERED cid (third guest pass): if the named
+            ;; ICE is the one being encountered, take the installed copy only
+            ;; when it IS that card (same :cid — the full card, richer than the
+            ;; summary); a same-title installed copy must not shadow an
+            ;; encountered non-installed one (accessed Archangel vs an installed
+            ;; Archangel). Otherwise the installed lookup as before.
+            card (if (and enc-summary (= ice-name (:title enc-summary)))
+                   (if (and installed (= (:cid installed) (:cid enc-summary)))
+                     installed
+                     enc-summary)
+                   installed)
             ;; #152: board.cljs enables "Fire unbroken subroutines" ONLY during an
             ;; encounter with THIS ice and only while it has an unbroken, unfired,
             ;; resolvable sub. The engine's play-unbroken-subroutines checks

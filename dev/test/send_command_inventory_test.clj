@@ -61,8 +61,11 @@
         (str sb)
         (let [c (.charAt text i)]
           (cond
-            (and in-str? (= c \\) (< (inc i) (count text)))
-            (do (.append sb c) (.append sb (.charAt text (inc i))) (recur (+ i 2) true))
+            ;; a backslash escapes the next char BOTH inside a string (\") and
+            ;; outside it (a Clojure char literal such as \; or \" — third
+            ;; guest pass: `(= ch \;)` must not read as a comment start)
+            (and (= c \\) (< (inc i) (count text)))
+            (do (.append sb c) (.append sb (.charAt text (inc i))) (recur (+ i 2) in-str?))
 
             (= c \")
             (do (.append sb c) (recur (inc i) (not in-str?)))
