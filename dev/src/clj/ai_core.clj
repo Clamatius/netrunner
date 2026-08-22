@@ -992,8 +992,12 @@
         match-count (count matches)]
     (cond
       (zero? match-count) nil
-      (= 1 match-count) (first matches)
+      ;; An EXPLICIT index is a claim about which copy, and it outranks the
+      ;; single-match shortcut: with one Leech installed, "Leech [9]" used to act
+      ;; on the Leech, silently ignoring an index the seat asked for and would
+      ;; have been told about if it had owned two (guest re-review).
       explicit-index? (nth (vec matches) index nil)
+      (= 1 match-count) (first matches)
       :else
       (do
         (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
@@ -1040,8 +1044,10 @@
         match-count (count matches)]
     (cond
       (zero? match-count) nil
-      (= 1 match-count) (first matches)
+      ;; Explicit index before the single-match shortcut — same reason as
+      ;; find-installed-card above.
       explicit-index? (nth (vec matches) index nil)
+      (= 1 match-count) (first matches)
       :else
       (let [cs @state/client-state
             ;; A FORCED encounter can put the Runner on an ICE that :position

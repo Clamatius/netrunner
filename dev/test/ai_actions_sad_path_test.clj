@@ -424,3 +424,29 @@
                     (ai-actions/use-ability! "Leech [1]" 0)))]
         (is (clojure.string/includes? out "Card not found installed")
             (str "no Leech at all is absence, got: " out))))))
+
+(deftest test-explicit-index-outranks-the-single-match-shortcut
+  ;; With ONE copy installed, "Leech [9]" used to resolve to the Leech: the
+  ;; single-match branch ran before the explicit-index branch, so an index the
+  ;; seat deliberately typed was silently discarded — and it would have been
+  ;; told about it if it had owned two (guest re-review).
+  (testing "an out-of-range index on a single copy is refused, not silently used"
+    (with-mock-state (runner-rig-state
+                      {:program [{:cid 101 :title "Leech" :zone [:rig :program]
+                                  :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [9]" 0)))]
+        (is (clojure.string/includes? out "0..0")
+            (str "expected the valid range for one copy, got: " out)))))
+  (testing "an in-range explicit index on a single copy still works"
+    (with-mock-state (runner-rig-state
+                      {:program [{:cid 101 :title "Leech" :zone [:rig :program]
+                                  :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [0]" 0)))]
+        (is (not (clojure.string/includes? out "Card not found"))
+            (str "\"Leech [0]\" names the only Leech, got: " out))
+        (is (not (clojure.string/includes? out "0..0"))
+            (str "an in-range index is not an error, got: " out))))))

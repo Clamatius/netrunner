@@ -943,7 +943,7 @@
             ;; reason the hosted credits are: a total across two virus programs
             ;; cannot be spent against either.
             runner-virus (state/runner-virus-counters gs)
-            runner-virus-str (if (pos? (:total runner-virus))
+            runner-virus-str (if (seq (:sources runner-virus))
                                (format "/v:%s"
                                        (str/join ","
                                                  (map #(format "%s %d" (:title %) (:virus %))
@@ -1582,7 +1582,12 @@
    the [:game-state] map."
   [gs]
   (let [run (:run gs)
-        v   (if (= "encounter-ice" (:phase run))
+        ;; Keyed on a LIVE encounter, not on the phase string: a forced encounter
+        ;; runs while :phase reads something else, and reading the run-level
+        ;; :no-action there made the headline ("your move") contradict the
+        ;; encounter guidance printed directly beneath it (guest re-review).
+        v   (if (or (= "encounter-ice" (:phase run))
+                    (some? (get-in gs [:encounters :ice])))
               (get-in gs [:encounters :no-action])
               (:no-action run))]
     (cond (keyword? v) (name v) (string? v) v :else nil)))
@@ -1697,6 +1702,28 @@
       "      (You cannot jack out during an encounter — that is a movement-window action. If the"
       "       entry cost was misjudged, `tank` through and jack out at the next movement window.)"])))
 
+(defn forced-encounter-advisory-lines
+  "Guidance for a Runner at a FORCED encounter — one the wire reports live
+   ([:encounters :ice]) while [:run :phase] says something else, e.g. an
+   on-access Archangel during \"success\".
+
+   Deliberately NOT the break/tank menu. `tank` only sets a flag, and the handler
+   that turns that flag into the Corp-facing signal
+   (handle-runner-encounter-ice) gates on run-phase == \"encounter-ice\"; the
+   Corp's auto-fire gates the same way. So at this window `tank` is a no-op, and
+   printing it would be the same class of bug as the \"use continue to pass
+   priority\" steer this branch replaced — a command that reads as progress and
+   does nothing. Breaking still works: use-ability is phase-independent.
+
+   Pure; returns lines to println."
+  [ice-title unbroken-count phase]
+  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (phase: %s)."
+           ice-title unbroken-count (if (= unbroken-count 1) "" "s") (or phase "?"))
+   "      • Break it with an icebreaker if you can — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
+   "      • `continue` does NOT pass an encounter, and `tank` cannot help here: its signal is only sent from the standard"
+   "        encounter window, so it would set a flag and do nothing visible."
+   "      • If the window does not clear on its own after the subs resolve, escalate (`./dev/umpire-ping`) rather than re-sending."])
+
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
    run window. Shared by the `prompt` and `status` commands so both surface the
@@ -1753,10 +1780,20 @@
       ;; refused (#92). Name the real options instead of the impossible pass.
       (and runner-unbroken (pos? runner-unbroken))
       (let [ice-title (:title (encountered-ice state) "this ICE")]
-        (doseq [line (runner-encounter-decline-hint-lines
-                      ice-title runner-unbroken
-                      (state/tank-authorized? ice-title))]
-          (println line)))
+        (if (= run-phase "encounter-ice")
+          (doseq [line (runner-encounter-decline-hint-lines
+                        ice-title runner-unbroken
+                        (state/tank-authorized? ice-title))]
+            (println line))
+          ;; A FORCED encounter outside the standard window. The break/tank menu
+          ;; must NOT be printed here: `tank` writes a flag that only
+          ;; handle-runner-encounter-ice acts on, and that handler gates on
+          ;; run-phase == "encounter-ice" (ai-run-runner-handlers) — as does the
+          ;; Corp's auto-fire. Offering `tank` here would advertise a command
+          ;; that silently does nothing, which is worse than the wrong steer it
+          ;; replaced. Say what is true and what still works instead.
+          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase)]
+            (println line))))
 
       ;; Corp at approach-ice having already declined/passed: don't offer it a rez
       ;; it can no longer take, and don't call a no-op a priority pass (#115).
@@ -2063,8 +2100,13 @@
                 ;; bare phase line for any phase the ladder doesn't model.
                 (when-not (print-run-phase-ladder! state run my-side)
                   (println (str "  Run Phase: " run-phase)))
-                ;; During encounter-ice, show ICE and breaker info
-                (when (= run-phase "encounter-ice")
+                ;; During an encounter, show ICE and breaker info. Keyed on the
+                ;; live encounter as well as the phase: at a forced encounter the
+                ;; guidance below was printing while the ICE and the playable
+                ;; breakers — the two things a seat needs to act on it — were
+                ;; suppressed by the phase gate (guest re-review).
+                (when (or (= run-phase "encounter-ice")
+                          (live-encounter? state))
                   (show-encounter-ice-info state run my-side))
                 ;; Whose move is it now + what 'continue' does — shared with the
                 ;; `status` command so both surface the same run-priority read.

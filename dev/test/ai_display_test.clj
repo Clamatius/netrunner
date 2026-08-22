@@ -3024,3 +3024,104 @@
       (let [line (str/trim (with-out-str (display/status-compact)))]
         (is (not (str/includes? line "/v:"))
             (str "must stay quiet when there is nothing to say, got: " line))))))
+
+;; ============================================================================
+;; Second guest pass — over the fixes the first pass produced
+;; ============================================================================
+
+(deftest test-forced-encounter-does-not-advertise-a-no-op-tank
+  ;; The first pass's fix widened the break/tank menu to any live encounter. But
+  ;; `tank` only writes a flag, and the handler that turns it into the Corp-facing
+  ;; signal gates on run-phase == "encounter-ice" (ai-run-runner-handlers), as
+  ;; does the Corp's auto-fire. So outside that window the menu advertised a
+  ;; command that sets a flag and does nothing — the same class of bug as the
+  ;; "use continue to pass priority" steer it replaced, and harder to notice.
+  (let [archangel {:cid 77 :title "Archangel" :rezzed true
+                   :subroutines [{:broken false :fired false}]}
+        on-access (mock-client-state
+                   :side "runner"
+                   :game-state {:active-player "runner" :turn 6
+                                :run {:server ["servers" "rd"] :position 0
+                                      :phase "success"}
+                                :encounters {:ice archangel}
+                                :corp {:servers {:rd {:ices []}}}
+                                :runner {:click 1 :credit 3 :rig {}}})]
+    (testing "the forced encounter is surfaced, but tank is not offered as the way out"
+      (with-mock-state on-access
+        (reset! ai-state/run-strategy {})
+        (let [out (with-out-str
+                    (display/print-run-window-priority!
+                     @ai-state/client-state
+                     (get-in on-access [:game-state :run])
+                     "success" "runner"))]
+          (is (str/includes? out "Archangel")
+              (str "the seat must be told what it is encountering, got: " out))
+          (is (re-find #"(?i)forced encounter" out)
+              (str "name the situation, got: " out))
+          (is (not (re-find #"tank \"Archangel\"" out))
+              (str "must not advertise a command that cannot fire here, got: " out))
+          (is (not (str/includes? out "pass priority"))
+              (str "continue does not pass an encounter either, got: " out))
+          (is (re-find #"(?i)icebreaker" out)
+              (str "breaking DOES work here — say so, got: " out)))))
+    (testing "the standard window still gets the real menu"
+      (let [tithe {:cid 55 :title "Tithe" :rezzed true
+                   :subroutines [{:broken false :fired false}]}]
+        (with-mock-state (mock-client-state
+                          :side "runner"
+                          :game-state {:active-player "runner" :turn 5
+                                       :run {:server ["servers" "hq"] :position 1
+                                             :phase "encounter-ice"}
+                                       :encounters {:ice tithe}
+                                       :corp {:servers {:hq {:ices [tithe]}}}
+                                       :runner {:click 2 :credit 4 :rig {}}})
+          (reset! ai-state/run-strategy {})
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in @ai-state/client-state [:game-state :run])
+                       "encounter-ice" "runner"))]
+            (is (str/includes? out "tank \"Tithe\"")
+                (str "the real encounter window still offers tank, got: " out))))))))
+
+(deftest test-window-passer-follows-the-encounter-not-the-phase
+  ;; The headline reads the passer; at a forced encounter it was reading the
+  ;; run-level :no-action while the guidance below read the encounter's — one
+  ;; output, two answers to "whose move" (guest re-review).
+  (testing "a live encounter's pass-state wins whatever the phase says"
+    (let [gs {:run {:phase "success" :no-action "corp"}
+              :encounters {:ice {:title "Archangel"} :no-action "runner"}}]
+      (is (= "runner" (display/effective-window-passer gs)))))
+  (testing "no encounter -> the run-level passer, unchanged"
+    (is (= "corp" (display/effective-window-passer
+                   {:run {:phase "movement" :no-action "corp"}})))))
+
+(deftest test-status-compact-shows-a-spent-virus-program
+  ;; A Leech at zero is a different plan from no Leech at all.
+  (testing "present-at-zero still appears"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:program [{:title "Leech"
+                                                             :counter {:virus 0}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Leech 0")
+            (str "a spent Leech is not an absent Leech, got: " line))))))
+
+(deftest test-run-strategy-expires-on-a-runless-snapshot
+  ;; A resync clears :last-state first, so if the run ended while we were
+  ;; desynced the diff-transition expiry never fires (guest re-review).
+  (testing "a full state with no run clears run-scoped flags"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+    (try
+      (ai-state/expire-run-strategy-on-snapshot! {:runner {} :corp {}})
+      (is (= {} @ai-state/run-strategy))
+      (finally (reset! ai-state/run-strategy {}))))
+  (testing "a full state DURING a run keeps them"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+    (try
+      (ai-state/expire-run-strategy-on-snapshot! {:run {:position 1}})
+      (is (= #{"Tithe"} (:tank @ai-state/run-strategy)))
+      (finally (reset! ai-state/run-strategy {})))))

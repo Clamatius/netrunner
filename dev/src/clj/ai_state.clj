@@ -75,6 +75,21 @@
     (reset! run-strategy {}))
   nil)
 
+(defn expire-run-strategy-on-snapshot!
+  "The same expiry for a FULL state (a join or a resync), where there is no
+   before-picture to diff against: a snapshot that shows no run cannot leave
+   run-scoped flags standing.
+
+   Needed because a resync clears :last-state first, so if the run ended while we
+   were desynced the diff-transition above never fires and the stale tank
+   survives (guest re-review). Not used on the diff path, where flags are
+   legitimately set a beat BEFORE the run appears in state (run! sets strategy,
+   then sends the command) and clearing on any run-less board would drop them."
+  [new-state]
+  (when (nil? (:run new-state))
+    (reset! run-strategy {}))
+  nil)
+
 (defn tank-authorized?
   "True when the seat has already declined to break ICE-TITLE this run — either
    by naming it (`tank \"Tithe\"` / `--tank`) or blanket (`--tank-all`).
@@ -253,6 +268,9 @@
     ;; state also proves the server still hosts our game, so any lobby-gone
     ;; verdict from a previous teardown is stale — drop it (#93).
     (swap! client-state dissoc :lobby-state :lobby-gone?)
+    ;; A snapshot showing no run cannot leave run-scoped flags standing: if the
+    ;; run ended while we were desynced, the diff-transition expiry never saw it.
+    (expire-run-strategy-on-snapshot! state)
     (when side
       (println "   Detected side:" side))))
 
@@ -402,8 +420,12 @@
    carry a positive :virus counter. Hosted cards count: a Leech on a Leprechaun
    is still the Leech whose counters the run budget depends on."
   [card]
-  (let [n (get-in card [:counter :virus] 0)
-        here (when (pos? n) [{:title (or (:title card) "Unknown") :virus n}])
+  ;; PRESENT, not positive: a Leech that has spent its last counter keeps
+  ;; :virus 0, and dropping it makes the line say "no virus programs" when the
+  ;; truth is "a virus program with nothing left" — a different plan (guest
+  ;; re-review). Same rule as the compact board's counter suffix.
+  (let [n (get-in card [:counter :virus])
+        here (when n [{:title (or (:title card) "Unknown") :virus n}])
         hosted (mapcat card-virus-counters (:hosted card))]
     (concat here hosted)))
 
