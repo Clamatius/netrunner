@@ -623,3 +623,57 @@
           (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
             (is (empty? @sent))
             (is (re-find #"(?i)no unbroken" out) (str "got:\n" out))))))))
+
+(deftest fire-subs-allows-a-forced-encounter-outside-a-run
+  ;; Guest panel CRITICAL on the first cut: the encountered ICE is the wire's
+  ;; [:encounters :ice] FIRST; a forced encounter (Ganked!, Quest Completed) has
+  ;; it with the run absent / at position 0 / in success. Requiring phase
+  ;; encounter-ice blocked a legal Corp fire.
+  (let [sent (atom [])
+        gs (assoc corp-with-two-ice :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))
+        (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+            "a forced encounter with no run must still let the Corp fire")))))
+
+(deftest trash-installed-offers-only-ice-and-programs
+  ;; Guest panel: board.cljs offers the plain trash action only for ICE and
+  ;; Programs; the engine's trash-button trashes whatever it is handed.
+  (let [gs {:active-player "corp" :turn 3
+            :corp {:click 2 :credit 5
+                   :servers {:remote1 {:ices [{:cid 21 :title "Palisade" :type "ICE" :rezzed true :zone ["servers" "remote1" "ices"]}]
+                                       :content [{:cid 22 :title "Nico Campaign" :type "Asset" :rezzed true :zone ["servers" "remote1" "content"]}]}}}
+            :runner {:click 0}}]
+    (testing "an own asset is refused, nothing sent"
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+            (let [out (with-out-str (ai-card-actions/trash-installed! "Nico Campaign"))]
+              (is (empty? @sent) (str "must not trash an asset via the plain action, sent: " @sent))
+              (is (re-find #"(?i)ICE and Programs" out) (str "must say what the action is for, got:\n" out)))))))
+    (testing "control: ICE still trashes"
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+            (with-out-str (ai-card-actions/trash-installed! "Palisade"))
+            (is (some #(= "trash" (:command %)) @sent))))))))
+
+(deftest score-uses-the-current-advancement-requirement
+  ;; Guest panel CRITICAL: board.cljs and the engine score against
+  ;; :current-advancement-requirement (SanSan City Grid lowers it); comparing to
+  ;; the printed :advancementcost refused a legal score.
+  (let [sent (atom [])
+        gs {:active-player "corp" :turn 5
+            :corp {:click 2 :credit 5
+                   :servers {:remote1 {:ices [] :content [{:cid 31 :title "Offworld Office" :type "Agenda"
+                                                          :advancementcost 3 :current-advancement-requirement 2
+                                                          :advance-counter 2 :agendapoints 2
+                                                          :zone ["servers" "remote1" "content"]}]}}}
+            :runner {:click 0}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/score-agenda! "Offworld Office"))
+        (is (some #(= "score" (:command %)) @sent)
+            "2 counters against a current requirement of 2 is scoreable — the printed 3 must not block it")))))

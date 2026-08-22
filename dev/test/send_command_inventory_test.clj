@@ -6,12 +6,23 @@
    mirror, because the engine enforces none of it (process_actions.clj trusts
    the client). dev/ENABLE_CONDITIONS.md is the inventory: command → UI enable
    condition → our predicate → test → gap. This test fails when an upstream
-   merge adds a `send-command` site (or a new command string) that the
-   inventory has no row for, so new buttons surface instead of silently
+   merge changes the call sites, so new buttons surface instead of silently
    widening the gap (#133 was found one incident at a time).
 
-   On failure: read the new site, add its row to dev/ENABLE_CONDITIONS.md
-   (mirror or justify), then update the two literals below."
+   What is keyed (guest panel, first cut was count + literal set and could be
+   fooled by a same-count swap): the number of call sites PER COMMAND TOKEN —
+   the first form after `(send-command`, a literal string for most sites and
+   a symbol/expression for the computed ones (`command`, `action`,
+   `(first actions)`, the phase-window `(if …)`). A new site for an existing
+   command changes that command's count; a removed-and-added pair changes two
+   counts. Comments are stripped first; the match spans newlines.
+
+   Known residual: a removed site and an added site for the SAME token in the
+   same merge is invisible here — that is what `git diff board.cljs` on an
+   upstream merge is for.
+
+   On failure: read the new site, add/adjust its row in
+   dev/ENABLE_CONDITIONS.md (mirror or justify), then update the literal map."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -20,49 +31,48 @@
   ["src/cljs/nr/gameboard/board.cljs"
    "src/cljs/nr/gameboard/actions.cljs"])
 
-;; Literal call sites of send-command (the defn in actions.cljs and its :refer
-;; line in board.cljs are excluded below), as counted on 2026-08-21.
-(def ^:private expected-site-count 64)
+;; Call sites per command token, as inventoried on 2026-08-21 (64 sites).
+;; Literal strings are quoted; computed tokens are the source form's head.
+(def ^:private expected-sites
+  {"\"ability\"" 1, "\"bad-pub-choice\"" 1, "\"choice\"" 9, "\"close-deck\"" 1,
+   "\"continue\"" 8, "\"credit\"" 2, "\"draw\"" 1, "\"end-phase-12\"" 1,
+   "\"end-turn\"" 2, "\"expend\"" 1, "\"flashback\"" 1, "\"generate-install-list\"" 2,
+   "\"generate-runnable-zones\"" 1, "\"jack-out\"" 1, "\"move\"" 1,
+   "\"phase-12-pass-priority\"" 1, "\"play\"" 2, "\"post-discard-pass-priority\"" 1,
+   "\"purge\"" 1, "\"remove-tag\"" 1, "\"rez\"" 1, "\"run\"" 1, "\"select\"" 1,
+   "\"shuffle\"" 2, "\"start-next-phase\"" 1, "\"start-turn\"" 2, "\"subroutine\"" 2,
+   "\"system-msg\"" 3, "\"toast\"" 1, "\"toggle-auto-no-action\"" 1,
+   "\"trash-resource\"" 1, "\"unbroken-subroutines\"" 2, "\"view-deck\"" 1,
+   ;; computed-command sites
+   "(first" 1        ; (send-command (first actions) …) — card click, single action
+   "command" 2       ; list-abilities (runner/corp/dynamic ability) + actions.cljs arity-forward
+   "action" 1        ; card-menu actions (derez/rez/trash/advance/score)
+   "(if" 2})         ; phase-window buttons: (if requires-consent "…-pass-priority" "end-…")
 
-;; Every distinct command STRING board.cljs / actions.cljs can put on the wire
-;; via a literal `send-command "<cmd>"` — the rows of dev/ENABLE_CONDITIONS.md.
-;; Sites that send a computed command (`(send-command command …)`,
-;; `(send-command action …)`, `(send-command (first actions) …)`, the
-;; phase-window `(if … "phase-12-pass-priority" "end-phase-12")`) are covered by
-;; the count and by their own rows; their strings appear here when literal.
-(def ^:private expected-commands
-  #{"ability" "bad-pub-choice" "choice" "close-deck" "continue" "credit" "draw"
-    "end-phase-12" "end-turn" "expend" "flashback" "generate-install-list" "generate-runnable-zones"
-    "jack-out" "move" "phase-12-pass-priority" "play" "post-discard-pass-priority" "purge" "remove-tag"
-    "rez" "run" "select" "shuffle" "start-next-phase" "start-turn" "subroutine"
-    "system-msg" "toast" "toggle-auto-no-action" "trash-resource"
-    "unbroken-subroutines" "view-deck"})
+(defn- strip-comments [text]
+  (str/replace text #";[^\n]*" ""))
 
-(defn- source-text [path]
-  (let [f (io/file path)]
-    (is (.exists f) (str "inventory source missing: " path))
-    (slurp f)))
-
-(defn- call-sites [text]
-  ;; every `(send-command` occurrence that is a CALL, not the defn / :refer
-  (->> (re-seq #"\(send-command\b" text) count))
+(defn- site-tokens
+  "The head token of every `(send-command …)` call in `text`."
+  [text]
+  (->> (re-seq #"\(send-command\s+(\"[a-z0-9-]+\"|\([a-z-]+|[a-z][a-z0-9-]*)" (strip-comments text))
+       (map second)))
 
 (deftest send-command-sites-are-inventoried
-  (let [texts (map source-text sources)
-        sites (reduce + (map call-sites texts))
-        literal-cmds (->> texts
-                          (mapcat #(re-seq #"\(send-command \"([a-z0-9-]+)\"" %))
-                          (map second)
-                          set)]
-    (testing "no send-command site without an inventory row (count ratchet)"
-      (is (= expected-site-count sites)
-          (str "board.cljs/actions.cljs now have " sites " send-command call sites "
-               "(inventory has " expected-site-count "). A new button appeared (or one "
-               "was removed): read it, add/remove its row in dev/ENABLE_CONDITIONS.md, "
-               "then update expected-site-count.")))
-    (testing "no new command string without an inventory row"
-      (is (= expected-commands literal-cmds)
-          (str "new/removed wire commands vs the inventory — added: "
-               (pr-str (remove expected-commands literal-cmds))
-               " removed: " (pr-str (remove literal-cmds expected-commands))
-               ". Update dev/ENABLE_CONDITIONS.md and expected-commands.")))))
+  (let [texts (map (fn [path]
+                     (let [f (io/file path)]
+                       (is (.exists f) (str "inventory source missing: " path))
+                       (slurp f)))
+                   sources)
+        actual (frequencies (mapcat site-tokens texts))
+        added (remove #(= (get expected-sites (key %)) (val %)) actual)
+        removed (remove #(contains? actual (key %)) expected-sites)]
+    (testing "every send-command site in board.cljs/actions.cljs has an inventory row (per-command counts)"
+      (is (= expected-sites actual)
+          (str "send-command call sites changed vs dev/ENABLE_CONDITIONS.md.\n"
+               "  changed/added (token → count now): " (pr-str (into {} added)) "\n"
+               "  removed (token → count inventoried): " (pr-str (into {} removed)) "\n"
+               "  Read each new site's enclosing condition, add/adjust its row in the "
+               "inventory (mirror it or justify leaving it), then update expected-sites.")))
+    (testing "sanity: the total is what the inventory header says"
+      (is (= 64 (reduce + (vals actual)))))))

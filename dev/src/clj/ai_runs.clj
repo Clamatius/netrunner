@@ -295,7 +295,7 @@
     (do
       (println "❌ Only Runner can run on servers")
       {:status :error :reason :wrong-side})
-    (if (basic/ensure-turn-started!)
+    (if (basic/ensure-can-act!)
     (let [{:keys [server flags]} (parse-run-flags args)
           _ (when (nil? server)
               (throw (ex-info "No server specified" {:args args})))

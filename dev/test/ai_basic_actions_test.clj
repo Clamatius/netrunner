@@ -1495,3 +1495,44 @@
                 (str "must name the open window, got:\n" out))
             (is (re-find #"end-phase-12" out)
                 (str "must name the command that closes it, got:\n" out))))))))
+
+(deftest test-basic-actions-refuse-while-phase-locked
+  ;; Guest panel: `start-turn` grants the clicks BEFORE opening the phase-1.2
+  ;; window (game.core.turns), so "clicks>0 ⇒ action phase begun" is false and
+  ;; the old `ensure-turn-started!` let a credit click through an Anson Rose
+  ;; window. board.cljs hides every basic action while `phase-locked`.
+  (doseq [[label f cmd] [["take-credit!" basic/take-credit! "credit"]
+                         ["draw-card!" basic/draw-card! "draw"]]]
+    (testing (str label ": phase-1.2 window open with clicks in hand → refused, nothing sent")
+      (let [sent (atom [])
+            game-state {:active-player "corp" :turn 4 :end-turn false
+                        :corp-phase-12 {:active true}
+                        :corp {:click 3 :credit 5 :hand [] :deck-count 10}
+                        :runner {:click 0 :credit 5 :hand []}
+                        :log []}]
+        (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [out (with-out-str (f))]
+              (is (not-any? #(= cmd (get-in % [:data :command])) @sent)
+                  (str label " inside phase 1.2 must not reach the engine, sent: " @sent))
+              (is (re-find #"(?i)window is open|locked" out)
+                  (str label " must name the lock, got:\n" out))
+              (is (re-find #"end-phase-12" out)
+                  (str label " must name the command that closes it, got:\n" out)))))))))
+
+(deftest test-end-turn-refuses-while-post-discard-window-is-open
+  ;; Guest panel: only phase 1.2 was checked; inside the post-discard window
+  ;; :end-turn is still false and a second end-turn re-runs the discard.
+  (let [sent (atom [])
+        game-state {:active-player "corp" :turn 4 :end-turn false
+                    :corp-post-discard {:active true}
+                    :corp {:click 0 :credit 5 :hand []}
+                    :runner {:click 0 :credit 5 :hand []}
+                    :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (basic/end-turn!))]
+          (is (not-any? #(= "end-turn" (get-in % [:data :command])) @sent)
+              (str "end-turn inside the post-discard window must not be sent, sent: " @sent))
+          (is (re-find #"end-post-discard" out)
+              (str "must name the command that finishes the turn, got:\n" out)))))))

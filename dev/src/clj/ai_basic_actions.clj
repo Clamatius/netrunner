@@ -753,6 +753,33 @@
                 (println (format "⏹️  Stopped after %d of %d %s" done n label)))
               (update r :data merge {:times done :requested n})))))))
 
+(defn phase-locked?
+  "True while a phase-1.2 or post-discard window is open — board.cljs's
+   `phase-locked`, which hides EVERY basic-action button. The engine does not
+   check it, and `start-turn` grants the clicks BEFORE opening the phase-1.2
+   window (game.core.turns), so 'clicks>0' is not evidence the action phase has
+   begun (#152 guest panel: a credit click inside an Anson Rose window goes
+   through)."
+  []
+  (boolean (or (open-phase-window :phase-12) (open-phase-window :post-discard))))
+
+(defn ensure-can-act!
+  "ensure-turn-started! AND not phase-locked — the pre-send predicate of every
+   basic action (credit / draw / purge / remove-tag / trash-resource / run),
+   mirroring board.cljs's `(and (not phase-locked) (playable? …))`. Prints the
+   refusal and returns false when locked."
+  []
+  (and (ensure-turn-started!)
+       (if (phase-locked?)
+         (let [w (or (open-phase-window :phase-12) (open-phase-window :post-discard))
+               kind (if (open-phase-window :phase-12) "start-of-turn (phase 1.2)" "end-of-turn (post-discard)")
+               closer (if (open-phase-window :phase-12) "end-phase-12" "end-post-discard")]
+           (println (format "⛔ Refusing: the %s window is open — basic actions are locked until it closes." kind))
+           (println (format "   Use '%s' (the active player) or 'wait' if it is the opponent's window to close.%s"
+                            closer (if (:requires-consent? w) " This one needs both players to pass." "")))
+           false)
+         true)))
+
 (defn take-credit!
   "Click for credit (shows before/after).
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
@@ -760,7 +787,7 @@
    With `n`, clicks for credit up to n times (stops early if clicks run out)."
   ([n] (repeat-action! n take-credit! "credit clicks"))
   ([]
-  (if (ensure-turn-started!)
+  (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)
           before-credits (get-in client-state [:game-state (keyword side) :credit])
@@ -812,7 +839,7 @@
    With `n`, draws up to n times (stops early if clicks run out)."
   ([n] (repeat-action! n draw-card! "draws"))
   ([]
-  (if (ensure-turn-started!)
+  (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)
           before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
@@ -821,16 +848,16 @@
           deck-count (get-in client-state [:game-state (state/my-side-kw client-state) :deck-count])
           vitals-before (my-vitals)
           gameid (:gameid client-state)]
-     ;; #152: board.cljs enables Draw only while (pos? (:deck-count @me)). The
-     ;; engine does not refuse a click-draw from an empty deck — for the Corp it
-     ;; DECKS them (game.core.drawing: win-decked → the Runner wins). One leaked
-     ;; send decides the game, and deck-count is local, so the client gate is
-     ;; the whole defence. Mirror the button.
+     ;; #152: board.cljs enables Draw only while (pos? (:deck-count @me)).
+     ;; (The basic action card's draw has :req (not-empty deck), so the engine
+     ;; itself refuses the click-draw — only MANDATORY/effect draws deck the
+     ;; Corp. The guard is a pure UI mirror that turns a silent engine no-op
+     ;; into a named refusal; guest panel corrected my first, wrong rationale.)
      (if (and (some? deck-count) (not (pos? deck-count)))
        (do
          (println (format "❌ Cannot draw: your deck is empty (%s)."
                           (if (core/side= "Corp" side)
-                            "drawing from an empty R&D would DECK you — the Runner wins"
+                            "R&D has no cards to draw"
                             "the stack has no cards to draw")))
          (core/with-cursor {:status :error :reason :deck-empty}))
       (do
@@ -1081,9 +1108,20 @@
       (open-phase-window :phase-12)
       (do
         (println "⛔ Refusing end-turn: the start-of-turn (phase 1.2) window is still open.")
-        (println "   Ending now would skip your whole action phase — clicks are granted when the window closes.")
-        (println "   Use 'end-phase-12' (or 'start-turn', which closes it) and then take your turn.")
+        (println "   Ending now would skip your whole action phase (your clicks are already granted — the window just hasn't closed).")
+        (println "   Use 'end-phase-12' (or pass priority if a card holds it open) and then take your turn.")
         (core/with-cursor {:status :error :reason :phase-12-open}))
+
+      ;; Post-discard window open (a card forced it; :end-turn is still false and
+      ;; our own "is ending" line may not be in the log yet): the turn is already
+      ;; ENDING. A second end-turn here re-runs the discard step — the engine
+      ;; gate (process-actions/guarded-end-turn) catches it, but deliverable 2 of
+      ;; #152 is "refuse before the send".
+      (open-phase-window :post-discard)
+      (do
+        (println "⛔ Refusing end-turn: your turn is already ending — the end-of-turn (post-discard) window is open.")
+        (println "   Use 'end-post-discard' to finish it (or 'wait' if the opponent still has to pass).")
+        (core/with-cursor {:status :error :reason :post-discard-open}))
 
       ;; Bug #2 guard: refuse to double-end the turn. The engine treats a
       ;; second end-turn message as state corruption and deadlocks the next
@@ -1602,7 +1640,7 @@
   "Runner action: Pay $2 + click to remove a tag.
    Returns {:status :success} or {:status :error :reason ...}"
   []
-  (if (ensure-turn-started!)
+  (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)]
       (if (not= (clojure.string/lower-case (or side "")) "runner")
@@ -1647,7 +1685,7 @@
   "Corp action: Spend 3 clicks to purge all virus counters.
    Returns {:status :success} or {:status :error :reason ...}"
   []
-  (if (ensure-turn-started!)
+  (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)]
       (if (not= (clojure.string/lower-case (or side "")) "corp")
@@ -1675,7 +1713,7 @@
    Requires runner to be tagged. Creates a prompt to select which resource.
    Returns {:status :success} or {:status :error :reason ...} or {:status :waiting-input}"
   []
-  (if (ensure-turn-started!)
+  (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)]
       (if (not= (clojure.string/lower-case (or side "")) "corp")

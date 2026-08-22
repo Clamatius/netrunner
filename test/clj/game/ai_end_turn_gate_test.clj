@@ -50,3 +50,22 @@
       (is (not (:end-turn @state)))
       (core/process-action "end-turn" state :corp nil)
       (is (:end-turn @state) "the gate must not refuse the real thing"))))
+
+(deftest duplicate-end-turn-inside-the-post-discard-window-is-refused
+  ;; Guest panel: the "ending" arm was untested. A card (or the property) that
+  ;; forces the post-discard window leaves :end-turn FALSE between end-turn and
+  ;; end-turn-continue; a repeat end-turn there would re-run the discard step.
+  (testing "second end-turn while :corp-post-discard is active is a no-op; end-post-discard still completes the turn"
+    (do-game
+      (new-game {:corp {:hand ["Hedge Fund"]}})
+      (core/process-action "set-property" state :corp {:key :force-post-discard-self :value true})
+      (core/process-action "end-turn" state :corp nil)
+      (is (get-in @state [:corp-post-discard :active]) "precondition: the post-discard window is open")
+      (is (not (:end-turn @state)) "precondition: the turn has not finished ending")
+      (let [before (turn-end-log-count state)]
+        (core/process-action "end-turn" state :corp nil)
+        (is (get-in @state [:corp-post-discard :active]) "the window is still the one window")
+        (is (not (:end-turn @state)) "a duplicate must not end the turn early")
+        (is (= before (turn-end-log-count state)) "no extra 'is ending' line"))
+      (core/process-action "end-post-discard" state :corp nil)
+      (is (:end-turn @state) "the legitimate close still ends the turn"))))
