@@ -19,7 +19,7 @@
    [game.core.say :refer [indicate-action say system-msg system-say]]
    [game.core.set-up :refer [keep-hand mulligan]]
    [game.core.shuffling :refer [shuffle-deck]]
-   [game.core.toasts :refer [ack-toast]]
+   [game.core.toasts :refer [ack-toast toast]]
    [game.core.turns :refer [end-phase-12 phase-12-pass-priority end-turn end-turn-continue post-discard-pass-priority start-turn]]
    [game.core.winning :refer [concede]]))
 
@@ -64,6 +64,36 @@
         (system-say state side (str "[!]" (:username author) " uses a command: " text)))
       (say state side args))))
 
+(defn guarded-end-turn
+  "AI-player fork (#152 / #133 / #107): the ONE engine-side gate, for the
+   end-turn class. The client is the rules layer everywhere else (board.cljs
+   enables the buttons; this engine trusts the client), but an end-turn that is
+   OFF-TURN or DUPLICATE is both derailing and raceable:
+     - off-turn: a seat that is not the active player sends end-turn → the
+       OPPONENT's turn ends under the sender's name, every consumer that reads
+       the log disagrees with :end-turn, and no game has ever recovered;
+     - duplicate: a second end-turn while :end-turn is already true (the turn
+       ended, the next has not started) corrupts the next turn cycle.
+   A client-side check can lose the race with its own diff lag, so the engine
+   refuses these two shapes and says so. Everything else (phase-1.2 window,
+   clicks in hand) stays a client gate, per the #107 policy."
+  [state side args]
+  (cond
+    (not= side (:active-player @state))
+    (toast state side (str "Not your turn — end-turn ignored (active player: "
+                           (name (or (:active-player @state) :none)) ").")
+           "warning")
+
+    ;; :end-turn is set by end-turn-continue; between end-turn and that
+    ;; (the post-discard window) the turn is already ENDING and a repeat
+    ;; would run the discard step again — same duplicate, earlier.
+    (or (:end-turn @state)
+        (get @state (if (= side :corp) :corp-post-discard :runner-post-discard)))
+    (toast state side "The turn has already ended (or is ending) — duplicate end-turn ignored." "warning")
+
+    :else
+    (end-turn state side args)))
+
 (def commands
   {"ability" #'play-ability
    "advance" #'click-advance
@@ -81,7 +111,7 @@
    "end-phase-12" #'end-phase-12
    "phase-12-pass-priority" #'phase-12-pass-priority
    "start-next-phase" #'start-next-phase
-   "end-turn" #'end-turn
+   "end-turn" #'guarded-end-turn
    "post-discard-pass-priority" #'post-discard-pass-priority
    "end-post-discard" #'end-turn-continue
    "flashback" #'flashback

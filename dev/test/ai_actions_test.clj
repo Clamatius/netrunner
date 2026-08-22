@@ -562,3 +562,64 @@
   ;; Run from main
   (-main)
   )
+
+;; ---------------------------------------------------------------------------
+;; #152 enable-conditions inventory (dev/ENABLE_CONDITIONS.md): manual fire-subs
+;; board.cljs enables "Fire unbroken subroutines" only during an encounter with
+;; THAT ice and only while it has an unbroken, unfired, resolvable sub. The
+;; engine's play-unbroken-subroutines checks neither (only "no blocking
+;; prompt"), so an unguarded send fires the subs of any rezzed ice at any time.
+;; ---------------------------------------------------------------------------
+
+(def ^:private corp-with-two-ice
+  {:active-player "runner" :turn 6
+   :corp {:click 0 :credit 5
+          :servers {:hq {:ices [{:cid 11 :title "Tithe" :rezzed true :zone ["servers" "hq" "ices"]
+                                 :subroutines [{:label "Do 1 net damage"} {:label "Gain 1 [Credits]"}]}]}
+                    :rd {:ices [{:cid 12 :title "Whitespace" :rezzed true :zone ["servers" "rd" "ices"]
+                                 :subroutines [{:label "Lose 3 [Credits]"}]}]}}}
+   :runner {:click 2 :credit 5}
+   :log []})
+
+(deftest fire-subs-refuses-outside-an-encounter-with-that-ice
+  (testing "no run at all → refused, nothing sent"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-with-two-ice)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (not-any? #(= "unbroken-subroutines" (:command %)) @sent)
+                (str "must not fire outside an encounter, sent: " @sent))
+            (is (re-find #"(?i)not encountering|encounter" out)
+                (str "must say why, got:\n" out)))))))
+  (testing "a run encountering a DIFFERENT ice → refused and names the encountered one"
+    (let [sent (atom [])
+          gs (assoc corp-with-two-ice
+                    :run {:phase "encounter-ice" :position 1 :server [:rd]}
+                    :encounters {:ice {:cid 12 :title "Whitespace"} :no-action false})]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (empty? @sent) (str "must not fire Tithe while Whitespace is encountered, sent: " @sent))
+            (is (re-find #"Whitespace" out) (str "must name the ICE actually being encountered, got:\n" out)))))))
+  (testing "control: encountering Tithe with unbroken subs → the fire goes out"
+    (let [sent (atom [])
+          gs (assoc corp-with-two-ice
+                    :run {:phase "encounter-ice" :position 1 :server [:hq]}
+                    :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))
+          (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+              "the legitimate fire must still be sent")))))
+  (testing "all subs already fired/broken → refused (nothing to fire)"
+    (let [sent (atom [])
+          gs (-> corp-with-two-ice
+                 (assoc :run {:phase "encounter-ice" :position 1 :server [:hq]}
+                        :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})
+                 (assoc-in [:corp :servers :hq :ices 0 :subroutines]
+                           [{:label "Do 1 net damage" :fired true} {:label "Gain 1 [Credits]" :broken true}]))]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (empty? @sent))
+            (is (re-find #"(?i)no unbroken" out) (str "got:\n" out))))))))

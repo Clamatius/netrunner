@@ -817,8 +817,22 @@
           side (:side client-state)
           before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
           before-clicks (get-in client-state [:game-state (keyword side) :click])
+          deck-count (get-in client-state [:game-state (keyword side) :deck-count])
           vitals-before (my-vitals)
           gameid (:gameid client-state)]
+     ;; #152: board.cljs enables Draw only while (pos? (:deck-count @me)). The
+     ;; engine does not refuse a click-draw from an empty deck — for the Corp it
+     ;; DECKS them (game.core.drawing: win-decked → the Runner wins). One leaked
+     ;; send decides the game, and deck-count is local, so the client gate is
+     ;; the whole defence. Mirror the button.
+     (if (and (some? deck-count) (not (pos? deck-count)))
+       (do
+         (println (format "❌ Cannot draw: your deck is empty (%s)."
+                          (if (core/side= "Corp" side)
+                            "drawing from an empty R&D would DECK you — the Runner wins"
+                            "the stack has no cards to draw")))
+         (core/with-cursor {:status :error :reason :deck-empty}))
+      (do
       (ws/send-message! :game/action
                         {:gameid gameid
                          :command "draw"
@@ -848,7 +862,7 @@
             (core/show-card-on-first-sight! card-title)
             (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
             (check-auto-end-turn!)
-            (core/with-cursor {:status :success :card-drawn card-title})))))
+            (core/with-cursor {:status :success :card-drawn card-title})))))))
     (core/with-cursor {:status :error :reason "Failed to start turn"}))))
 
 (defn- burn-clicks-for-credits!
@@ -1056,6 +1070,19 @@
         (println (format "   Active player is %s; ending a turn you don't own corrupts engine state." active-player))
         (println "   If the game looks stuck, escalate to the umpire — do NOT re-send.")
         (core/with-cursor {:status :error :reason :not-my-turn :active-player active-player}))
+
+      ;; #152: board.cljs disables End Turn while a phase-1.2 window is open
+      ;; (`phase-locked`). The engine has no such check: an end-turn sent inside
+      ;; the start-of-turn window discards and ends the turn before a single
+      ;; click was ever granted. clicks=0 is exactly the state a seat reads as
+      ;; "turn over" — so this is the one end-turn the click guard below waves
+      ;; through. Mirror the button.
+      (open-phase-window :phase-12)
+      (do
+        (println "⛔ Refusing end-turn: the start-of-turn (phase 1.2) window is still open.")
+        (println "   Ending now would skip your whole action phase — clicks are granted when the window closes.")
+        (println "   Use 'end-phase-12' (or 'start-turn', which closes it) and then take your turn.")
+        (core/with-cursor {:status :error :reason :phase-12-open}))
 
       ;; Bug #2 guard: refuse to double-end the turn. The engine treats a
       ;; second end-turn message as state corruption and deadlocks the next

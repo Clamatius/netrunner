@@ -735,10 +735,36 @@
     (if (not (core/side= "Corp" side))
       (do (println "❌ Only Corp can fire ICE subroutines")
           (core/with-cursor {:status :error :reason "Wrong side"}))
-      (let [card (core/find-installed-corp-card ice-name)]
-        (if-not card
+      (let [card (core/find-installed-corp-card ice-name)
+            ;; #152: board.cljs enables "Fire unbroken subroutines" ONLY during an
+            ;; encounter with THIS ice and only while it has an unbroken, unfired,
+            ;; resolvable sub. The engine's play-unbroken-subroutines checks
+            ;; neither (only "no blocking prompt"), so an unguarded send fires the
+            ;; subs of any rezzed ice at any time — an illegal move no human can
+            ;; make. Mirror the button's enable condition before the send.
+            enc-ice (core/current-run-ice client-state)
+            encountering-this? (and card enc-ice (= (:cid card) (:cid enc-ice))
+                                    (= "encounter-ice" (get-in client-state [:game-state :run :phase])))
+            fireable (when card
+                       (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
+                               (:subroutines card)))]
+        (cond
+          (not card)
           (do (println (str "❌ ICE not found installed: " ice-name))
               (core/with-cursor {:status :error :reason "ICE not found"}))
+
+          (not encountering-this?)
+          (do (println (format "❌ Cannot fire %s's subroutines: the Runner is not encountering it." (:title card)))
+              (println (if enc-ice
+                         (format "   The current encounter is %s — subs fire only on the ICE being encountered." (:title enc-ice "another ICE"))
+                         "   Subroutines fire only during an ICE encounter (the Runner must be at encounter-ice)."))
+              (core/with-cursor {:status :error :reason :not-encountering}))
+
+          (empty? fireable)
+          (do (println (format "❌ %s has no unbroken, unfired subroutines to fire." (:title card)))
+              (core/with-cursor {:status :error :reason :nothing-to-fire}))
+
+          :else
           (let [gameid (:gameid client-state)
                 card-ref (core/create-card-ref card)
                 old-cursor (state/get-cursor)
