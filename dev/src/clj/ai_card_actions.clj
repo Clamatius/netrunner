@@ -522,7 +522,9 @@
           result)))))
 
 (defn trash-installed!
-  "Trash an installed card (Corp: ICE/asset/upgrade, Runner: rig card)
+  "Trash an installed card via the plain trash action — which the game offers
+   ONLY for ICE and Programs (board.cljs card-menu actions); other types are
+   refused before the send (#152).
 
    Usage: (trash-installed! \"Palisade\")
           (trash-installed! \"Daily Casts\")"
@@ -535,8 +537,22 @@
         ;; missing every Corp card to trash. (issue #69, same defect)
         card (if (core/side= "Corp" side)
                (core/find-installed-corp-card card-name)
-               (core/find-installed-card card-name))]
-    (if card
+               (core/find-installed-card card-name))
+        ;; #152: board.cljs offers the plain "trash" action ONLY for ICE and
+        ;; Programs (card-menu actions, board.cljs ~line 110); the engine's
+        ;; trash-button trashes whatever it is handed. Any other own card
+        ;; (asset, upgrade, agenda, hardware, resource) is not legally
+        ;; discardable this way — mirror the menu (guest-panel HIGH).
+        trashable-type? (contains? #{"ICE" "Program"} (:type card))]
+    (cond
+      (and card (not trashable-type?))
+      (do
+        (println (format "❌ Cannot trash %s: the game offers a plain trash action only for ICE and Programs (this is a%s %s)."
+                         card-name (if (re-find #"^[AEIOUaeiou]" (str (:type card))) "n" "") (:type card)))
+        (println "   Cards of other types leave play only through their own abilities, the opponent's actions, or card effects.")
+        (core/with-cursor {:status :error :reason :not-trashable-type :type (:type card)}))
+
+      card
       (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
             card-type (:type card)
@@ -547,6 +563,7 @@
                            :args {:card card-ref}})
         (Thread/sleep core/medium-delay)
         (println (str "🗑️  Trashed: " card-name " (" card-type ")")))
+      :else
       (println (str "❌ Card not found installed: " card-name)))))
 
 (defn rez-card!
@@ -735,10 +752,57 @@
     (if (not (core/side= "Corp" side))
       (do (println "❌ Only Corp can fire ICE subroutines")
           (core/with-cursor {:status :error :reason "Wrong side"}))
-      (let [card (core/find-installed-corp-card ice-name)]
-        (if-not card
+      (let [enc-summary (get-in client-state [:game-state :encounters :ice])
+            ;; The encountered ICE may not be INSTALLED at all: a forced
+            ;; encounter on access (Archangel, Chrysalis, Herald, Sapper) puts
+            ;; the accessed card under [:encounters :ice] — with :cid and subs —
+            ;; while it sits in R&D/HQ/Archives (second guest pass, CRITICAL).
+            installed (core/find-installed-corp-card ice-name)
+            ;; Resolve by the ENCOUNTERED cid (third guest pass): if the named
+            ;; ICE is the one being encountered, take the installed copy only
+            ;; when it IS that card (same :cid — the full card, richer than the
+            ;; summary); a same-title installed copy must not shadow an
+            ;; encountered non-installed one (accessed Archangel vs an installed
+            ;; Archangel). Otherwise the installed lookup as before.
+            card (if (and enc-summary (= ice-name (:title enc-summary)))
+                   (if (and installed (= (:cid installed) (:cid enc-summary)))
+                     installed
+                     enc-summary)
+                   installed)
+            ;; #152: board.cljs enables "Fire unbroken subroutines" ONLY during an
+            ;; encounter with THIS ice and only while it has an unbroken, unfired,
+            ;; resolvable sub. The engine's play-unbroken-subroutines checks
+            ;; neither (only "no blocking prompt"), so an unguarded send fires the
+            ;; subs of any rezzed ice at any time — an illegal move no human can
+            ;; make. Mirror the button's enable condition before the send.
+            ;; The encountered ICE is the wire's [:encounters :ice] FIRST (a
+            ;; forced encounter — Ganked!, Archangel on access — has it with the run
+            ;; at position 0 / success / absent; guest-panel CRITICAL), then the
+            ;; position-derived ICE at encounter-ice. Same authority as #100.
+            enc-ice (or (get-in client-state [:game-state :encounters :ice])
+                        (when (= "encounter-ice" (get-in client-state [:game-state :run :phase]))
+                          (core/current-run-ice client-state)))
+            encountering-this? (and card enc-ice (= (:cid card) (:cid enc-ice)))
+            fireable (when card
+                       (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
+                               (:subroutines card)))]
+        (cond
+          (not card)
           (do (println (str "❌ ICE not found installed: " ice-name))
               (core/with-cursor {:status :error :reason "ICE not found"}))
+
+          (not encountering-this?)
+          (do (println (format "❌ Cannot fire %s's subroutines: the Runner is not encountering it." (:title card)))
+              (println (if enc-ice
+                         (format "   The current encounter is %s — subs fire only on the ICE being encountered." (:title enc-ice "another ICE"))
+                         "   Subroutines fire only during an ICE encounter (the Runner must be at encounter-ice)."))
+              (core/with-cursor {:status :error :reason :not-encountering}))
+
+          (empty? fireable)
+          (do (println (format "❌ %s has no unbroken, unfired subroutines to fire." (:title card)))
+              (core/with-cursor {:status :error :reason :nothing-to-fire}))
+
+          :else
           (let [gameid (:gameid client-state)
                 card-ref (core/create-card-ref card)
                 old-cursor (state/get-cursor)
@@ -877,7 +941,11 @@
       (let [card (core/find-installed-corp-card card-name)]
         (if card
           (if (= "Agenda" (:type card))
-            (let [requirement (:advancementcost card)
+            (let [;; board.cljs (and the engine) score against the CURRENT requirement
+                  ;; (SanSan City Grid etc.), falling back to the printed cost —
+                  ;; comparing against :advancementcost alone refused legal scores
+                  ;; (#152 guest-panel CRITICAL).
+                  requirement (or (:current-advancement-requirement card) (:advancementcost card))
                   counters (or (:advance-counter card) 0)]
               ;; Pre-check: an agenda with fewer advancement counters than its
               ;; requirement is not scoreable — the engine will refuse. Catch it

@@ -562,3 +562,163 @@
   ;; Run from main
   (-main)
   )
+
+;; ---------------------------------------------------------------------------
+;; #152 enable-conditions inventory (dev/ENABLE_CONDITIONS.md): manual fire-subs
+;; board.cljs enables "Fire unbroken subroutines" only during an encounter with
+;; THAT ice and only while it has an unbroken, unfired, resolvable sub. The
+;; engine's play-unbroken-subroutines checks neither (only "no blocking
+;; prompt"), so an unguarded send fires the subs of any rezzed ice at any time.
+;; ---------------------------------------------------------------------------
+
+(def ^:private corp-with-two-ice
+  {:active-player "runner" :turn 6
+   :corp {:click 0 :credit 5
+          :servers {:hq {:ices [{:cid 11 :title "Tithe" :rezzed true :zone ["servers" "hq" "ices"]
+                                 :subroutines [{:label "Do 1 net damage"} {:label "Gain 1 [Credits]"}]}]}
+                    :rd {:ices [{:cid 12 :title "Whitespace" :rezzed true :zone ["servers" "rd" "ices"]
+                                 :subroutines [{:label "Lose 3 [Credits]"}]}]}}}
+   :runner {:click 2 :credit 5}
+   :log []})
+
+(deftest fire-subs-refuses-outside-an-encounter-with-that-ice
+  (testing "no run at all → refused, nothing sent"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-with-two-ice)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (not-any? #(= "unbroken-subroutines" (:command %)) @sent)
+                (str "must not fire outside an encounter, sent: " @sent))
+            (is (re-find #"(?i)not encountering|encounter" out)
+                (str "must say why, got:\n" out)))))))
+  (testing "a run encountering a DIFFERENT ice → refused and names the encountered one"
+    (let [sent (atom [])
+          gs (assoc corp-with-two-ice
+                    :run {:phase "encounter-ice" :position 1 :server [:rd]}
+                    :encounters {:ice {:cid 12 :title "Whitespace"} :no-action false})]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (empty? @sent) (str "must not fire Tithe while Whitespace is encountered, sent: " @sent))
+            (is (re-find #"Whitespace" out) (str "must name the ICE actually being encountered, got:\n" out)))))))
+  (testing "control: encountering Tithe with unbroken subs → the fire goes out"
+    (let [sent (atom [])
+          gs (assoc corp-with-two-ice
+                    :run {:phase "encounter-ice" :position 1 :server [:hq]}
+                    :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))
+          (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+              "the legitimate fire must still be sent")))))
+  (testing "all subs already fired/broken → refused (nothing to fire)"
+    (let [sent (atom [])
+          gs (-> corp-with-two-ice
+                 (assoc :run {:phase "encounter-ice" :position 1 :server [:hq]}
+                        :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})
+                 (assoc-in [:corp :servers :hq :ices 0 :subroutines]
+                           [{:label "Do 1 net damage" :fired true} {:label "Gain 1 [Credits]" :broken true}]))]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+          (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))]
+            (is (empty? @sent))
+            (is (re-find #"(?i)no unbroken" out) (str "got:\n" out))))))))
+
+(deftest fire-subs-allows-a-forced-encounter-outside-a-run
+  ;; Guest panel CRITICAL on the first cut: the encountered ICE is the wire's
+  ;; [:encounters :ice] FIRST; a forced encounter (Ganked!, Archangel on access) has
+  ;; it with the run absent / at position 0 / in success. Requiring phase
+  ;; encounter-ice blocked a legal Corp fire.
+  (let [sent (atom [])
+        gs (assoc corp-with-two-ice :encounters {:ice {:cid 11 :title "Tithe"} :no-action false})]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/fire-unbroken-subs! "Tithe"))
+        (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+            "a forced encounter with no run must still let the Corp fire")))))
+
+(deftest trash-installed-offers-only-ice-and-programs
+  ;; Guest panel: board.cljs offers the plain trash action only for ICE and
+  ;; Programs; the engine's trash-button trashes whatever it is handed.
+  (let [gs {:active-player "corp" :turn 3
+            :corp {:click 2 :credit 5
+                   :servers {:remote1 {:ices [{:cid 21 :title "Palisade" :type "ICE" :rezzed true :zone ["servers" "remote1" "ices"]}]
+                                       :content [{:cid 22 :title "Nico Campaign" :type "Asset" :rezzed true :zone ["servers" "remote1" "content"]}]}}}
+            :runner {:click 0}}]
+    (testing "an own asset is refused, nothing sent"
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+            (let [out (with-out-str (ai-card-actions/trash-installed! "Nico Campaign"))]
+              (is (empty? @sent) (str "must not trash an asset via the plain action, sent: " @sent))
+              (is (re-find #"(?i)ICE and Programs" out) (str "must say what the action is for, got:\n" out)))))))
+    (testing "control: ICE still trashes"
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+            (with-out-str (ai-card-actions/trash-installed! "Palisade"))
+            (is (some #(= "trash" (:command %)) @sent))))))))
+
+(deftest score-uses-the-current-advancement-requirement
+  ;; Guest panel CRITICAL: board.cljs and the engine score against
+  ;; :current-advancement-requirement (SanSan City Grid lowers it); comparing to
+  ;; the printed :advancementcost refused a legal score.
+  (let [sent (atom [])
+        gs {:active-player "corp" :turn 5
+            :corp {:click 2 :credit 5
+                   :servers {:remote1 {:ices [] :content [{:cid 31 :title "Offworld Office" :type "Agenda"
+                                                          :advancementcost 3 :current-advancement-requirement 2
+                                                          :advance-counter 2 :agendapoints 2
+                                                          :zone ["servers" "remote1" "content"]}]}}}
+            :runner {:click 0}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/score-agenda! "Offworld Office"))
+        (is (some #(= "score" (:command %)) @sent)
+            "2 counters against a current requirement of 2 is scoreable — the printed 3 must not block it")))))
+
+(deftest fire-subs-resolves-a-non-installed-forced-encounter
+  ;; Second guest pass, CRITICAL: Archangel / Chrysalis / Herald / Sapper force
+  ;; an encounter ON ACCESS — the accessed card sits in R&D/HQ/Archives, not in
+  ;; any server's :ices, and the wire supplies it under [:encounters :ice] with
+  ;; :cid and subroutines. Looking it up among INSTALLED ice found nothing.
+  (let [sent (atom [])
+        gs {:active-player "runner" :turn 7
+            :run {:phase "success" :position 0 :server [:rd]}
+            :encounters {:ice {:cid 77 :title "Archangel" :type "ICE" :rezzed true :zone ["deck"]
+                               :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}
+                         :no-action false :encounter-count 1}
+            :corp {:click 0 :credit 5 :servers {:rd {:ices []}}}
+            :runner {:click 2 :credit 5}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (let [out (with-out-str (ai-card-actions/fire-unbroken-subs! "Archangel"))]
+          (is (some #(= "unbroken-subroutines" (:command %)) @sent)
+              (str "the encountered-on-access ICE must be fireable, got:\n" out))
+          (is (not (re-find #"(?i)not found installed" out))
+              (str "must resolve the encounter summary, not only installed ice, got:\n" out)))))))
+
+(deftest fire-subs-resolves-the-encountered-copy-over-a-same-title-installed-one
+  ;; Third guest pass, CRITICAL: an installed Archangel (cid 11) and the
+  ;; ACCESSED Archangel being encountered (cid 77, not installed). Preferring
+  ;; the installed lookup made the cid gate refuse the legal fire.
+  (let [sent (atom [])
+        gs {:active-player "runner" :turn 7
+            :run {:phase "success" :position 0 :server [:rd]}
+            :encounters {:ice {:cid 77 :title "Archangel" :type "ICE" :rezzed true :zone ["deck"]
+                               :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}
+                         :no-action false :encounter-count 1}
+            :corp {:click 0 :credit 5
+                   :servers {:hq {:ices [{:cid 11 :title "Archangel" :type "ICE" :rezzed true :zone ["servers" "hq" "ices"]
+                                          :subroutines [{:label "Trace 6 - add an installed card to the grip"}]}]}}}
+            :runner {:click 2 :credit 5}
+            :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state gs)
+      (with-redefs [ws/send-message! (fn [_e d] (swap! sent conj d) true)]
+        (with-out-str (ai-card-actions/fire-unbroken-subs! "Archangel"))
+        (let [cmd (first (filter #(= "unbroken-subroutines" (:command %)) @sent))]
+          (is (some? cmd) "the encountered copy must be fired")
+          (is (= 77 (get-in cmd [:args :card :cid]))
+              (str "must send the ENCOUNTERED copy (cid 77), not the installed one (cid 11), sent: " cmd)))))))

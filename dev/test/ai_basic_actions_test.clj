@@ -1432,3 +1432,108 @@
                 (str "false success printed, got:\n" out))
             (is (re-find #"(?i)prompt" out)
                 (str "must tell the seat what did not happen and where to look, got:\n" out))))))))
+
+;; ---------------------------------------------------------------------------
+;; #152 enable-conditions inventory — gaps found by diffing board.cljs's button
+;; conditions against our senders (dev/ENABLE_CONDITIONS.md).
+;; ---------------------------------------------------------------------------
+
+(deftest test-draw-refuses-on-an-empty-deck
+  ;; board.cljs: Draw is enabled only while (pos? (:deck-count @me)). (The basic
+  ;; action card's draw has :req (not-empty deck), so the engine refuses the
+  ;; click-draw itself; only mandatory/effect draws deck the Corp — guest panel
+  ;; corrected the first, wrong rationale.) The guard is a UI mirror that turns
+  ;; a silent engine no-op into a named refusal.
+  (doseq [[side label] [["corp" "Corp (would be decked)"] ["runner" "Runner (nothing to draw)"]]]
+    (testing (str label ": draw with deck-count 0 sends nothing and says why")
+      (let [sent (atom [])
+            game-state {:active-player side :turn 5
+                        :corp {:click 3 :credit 5 :hand [] :deck-count (if (= side "corp") 0 10)}
+                        :runner {:click 4 :credit 5 :hand [] :deck-count (if (= side "runner") 0 10)}
+                        :log []}]
+        (with-mock-state (mock-client-state :side side :game-state game-state)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [out (with-out-str (basic/draw-card!))]
+              (is (not-any? #(= "draw" (get-in % [:data :command])) @sent)
+                  (str label ": a draw from an empty deck must never reach the engine, sent: " @sent))
+              (is (re-find #"(?i)empty" out)
+                  (str label ": must name the empty deck, got:\n" out))
+              (when (= side "corp")
+                (is (re-find #"(?i)R&D" out)
+                    (str "the Corp's deck is R&D — name it, got:\n" out))))))))))
+
+(deftest test-draw-still-sends-with-cards-in-deck
+  (testing "control: deck-count 10 → the draw goes out"
+    (let [sent (atom [])
+          game-state {:active-player "corp" :turn 5
+                      :corp {:click 3 :credit 5 :hand [] :deck-count 10}
+                      :runner {:click 0 :credit 5 :hand []}
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (with-out-str (basic/draw-card!))
+          (is (some #(= "draw" (get-in % [:data :command])) @sent)))))))
+
+(deftest test-end-turn-refuses-while-phase-12-window-is-open
+  ;; board.cljs: End Turn is hidden while `phase-locked` (a phase-1.2 or
+  ;; post-discard window is open). The engine has no such check: an end-turn
+  ;; inside the start-of-turn window discards and ends the turn with the action
+  ;; phase never opened (the clicks are already granted; the window just hasn't
+  ;; closed) — and clicks=0 is a state the click guard waves through.
+  (testing "Corp's own phase-1.2 window open, 0 clicks → end-turn is refused, nothing sent"
+    (let [sent (atom [])
+          game-state {:active-player "corp" :turn 4 :end-turn false
+                      :corp-phase-12 {:active true}
+                      :corp {:click 0 :credit 5 :hand []}
+                      :runner {:click 0 :credit 5 :hand []}
+                      :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not-any? #(= "end-turn" (get-in % [:data :command])) @sent)
+                (str "end-turn inside phase 1.2 must not reach the engine, sent: " @sent))
+            (is (re-find #"(?i)phase.?1\.2|start-of-turn" out)
+                (str "must name the open window, got:\n" out))
+            (is (re-find #"end-phase-12" out)
+                (str "must name the command that closes it, got:\n" out))))))))
+
+(deftest test-basic-actions-refuse-while-phase-locked
+  ;; Guest panel: `start-turn` grants the clicks BEFORE opening the phase-1.2
+  ;; window (game.core.turns), so "clicks>0 ⇒ action phase begun" is false and
+  ;; the old `ensure-turn-started!` let a credit click through an Anson Rose
+  ;; window. board.cljs hides every basic action while `phase-locked`.
+  (doseq [[label f cmd] [["take-credit!" basic/take-credit! "credit"]
+                         ["draw-card!" basic/draw-card! "draw"]]]
+    (testing (str label ": phase-1.2 window open with clicks in hand → refused, nothing sent")
+      (let [sent (atom [])
+            game-state {:active-player "corp" :turn 4 :end-turn false
+                        :corp-phase-12 {:active true}
+                        :corp {:click 3 :credit 5 :hand [] :deck-count 10}
+                        :runner {:click 0 :credit 5 :hand []}
+                        :log []}]
+        (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [out (with-out-str (f))]
+              (is (not-any? #(= cmd (get-in % [:data :command])) @sent)
+                  (str label " inside phase 1.2 must not reach the engine, sent: " @sent))
+              (is (re-find #"(?i)window is open|locked" out)
+                  (str label " must name the lock, got:\n" out))
+              (is (re-find #"end-phase-12" out)
+                  (str label " must name the command that closes it, got:\n" out)))))))))
+
+(deftest test-end-turn-refuses-while-post-discard-window-is-open
+  ;; Guest panel: only phase 1.2 was checked; inside the post-discard window
+  ;; :end-turn is still false and a second end-turn re-runs the discard.
+  (let [sent (atom [])
+        game-state {:active-player "corp" :turn 4 :end-turn false
+                    :corp-post-discard {:active true}
+                    :corp {:click 0 :credit 5 :hand []}
+                    :runner {:click 0 :credit 5 :hand []}
+                    :log []}]
+    (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (basic/end-turn!))]
+          (is (not-any? #(= "end-turn" (get-in % [:data :command])) @sent)
+              (str "end-turn inside the post-discard window must not be sent, sent: " @sent))
+          (is (re-find #"end-post-discard" out)
+              (str "must name the command that finishes the turn, got:\n" out)))))))
