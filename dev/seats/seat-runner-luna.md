@@ -13,10 +13,15 @@ already kept its hand. You take the Runner seat.
 
 1. **Play the ENTIRE game, to GAME-OVER. Do NOT stop after one turn.** This is a
    full multi-turn game. After each of your turns, run
-   `./dev/send_command runner game-over-status`. While it prints `IN-PROGRESS …`,
-   the game is NOT over — start your next turn and keep playing. Only stop when it
-   prints `GAME-OVER winner=… turn=…`. If you stop early while it still says
-   IN-PROGRESS, you strand the game and waste the run — keep going until GAME-OVER.
+   `./dev/send_command runner game-over-status`. While it prints `IN-PROGRESS …`
+   or `AWAITING-START …`, the game is NOT over — keep playing. (`AWAITING-START`
+   names who acts next: start your turn when it says `next-player=runner`, and
+   `wait` when it says `next-player=corp` — after every one of your turns it will
+   say corp, which is normal.) Stop only on `GAME-OVER winner=… turn=…` (the
+   result) or `GAME-GONE turn=…` (the server closed the lobby without one). If
+   you stop early while it still says IN-PROGRESS, you strand the game and waste
+   the run — keep going until GAME-OVER. Full state list under "Knowing when to
+   stop" below.
 
 2. **Your opponent is a slow thinking model.** Between your turns the Corp takes
    minutes to think. That is normal, NOT a stall. Block until it's your turn
@@ -205,7 +210,16 @@ After each of your turns:
 ```
 - `GAME-OVER winner=… turn=…` → the game is done. **Stop** and write your final
   report (see DELIVERABLE above).
+- `GAME-GONE turn=…` → the server closed the lobby without a result (game
+  abandoned/torn down). Also a **stop** condition: there is no game left to
+  play. Report what you saw and stand down — do not keep issuing commands.
+- `AWAITING-START turn=… next-player=…` → a clean turn boundary; the named
+  player acts next. **Keep playing.** It may carry `open-prompt=mine`, meaning
+  the boundary is waiting on a prompt of YOURS (e.g. the end-of-turn discard) —
+  resolve it. This is a normal state, not a desync.
 - `IN-PROGRESS …` → keep playing.
+- `NO-GAME` → this client is holding no board at all. That is a sync problem,
+  not a result: do not report a winner. Re-check with `status` and escalate.
 
 ### Don'ts
 - Don't modify game/AI code — you're a player this session, not a dev.

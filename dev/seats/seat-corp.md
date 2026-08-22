@@ -150,6 +150,16 @@ Then commit your decision by re-entering the monitor with a strategy flag
 - **Low-stakes run, just let it play out:** `./dev/send_command corp monitor-run --persistent --fire-if-asked`
   (auto-fires unbroken subs, auto-continues, wakes you only for rez decisions)
 
+The pause text itself offers a different verb — `continue --rez "<ICE>"` /
+`continue --no-rez`. **Both are correct and they do the same thing at this
+window**; they differ only in what happens next. `continue --rez` rezzes and
+hands the window back, leaving you to drive the rest of the run by hand;
+re-entering `monitor-run --persistent --rez` rezzes and keeps the monitor
+defending the remaining windows for you. Prefer the monitor form unless you
+specifically want manual control of the next window. (#151 item 18: the two
+were documented in different places with no cross-reference, so a seat that had
+read one treated the other as a contradiction.)
+
 **Non-rez trigger decisions.** Some agendas fire a Corp ability when the Runner
 *steals* them (or when you score them) — e.g. Send a Message ("you may rez a
 piece of ice, ignoring all costs"). The monitor returns with `🛑 You have a

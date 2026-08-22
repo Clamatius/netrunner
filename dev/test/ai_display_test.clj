@@ -356,8 +356,10 @@
                                                               :counter {:credit 12}}]}}
                                    :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
       (let [line (str/trim (with-out-str (display/status-compact)))]
-        (is (str/includes? line "0(+12)c")
-            (str "expected hosted-credit annotation, got: " line)))))
+        (is (str/includes? line "0(+12:Red Team)c")
+            (str "expected hosted-credit annotation naming its holder, got: " line))
+        (is (not (str/includes? line "Red Team 12"))
+            (str "one holder: the total already IS its amount, got: " line)))))
   (testing "no hosted credits -> plain credit count, no parens"
     (with-mock-state (mock-client-state
                       :side "runner"
@@ -2654,3 +2656,472 @@
           (str "--all does nothing here and must not be advertised:\n" out))
       (is (not (str/includes? out "still owed"))
           (str "no payment line on a non-payment prompt:\n" out)))))
+
+;; ============================================================================
+;; Compact views: name what a number belongs to (#151 items 11-13)
+;; ============================================================================
+
+(deftest test-status-compact-hosted-credits-name-their-holder
+  ;; #151 item 11: `Me(R):5(+3)c` was read as "3 more credits I can spend".
+  ;; They were Smartware Distributor's hosted credits (1/turn, on the card's own
+  ;; trigger) — Fable planned a turn around money it could not take and ended
+  ;; the turn at 0. The number alone cannot be judged; the HOLDER decides
+  ;; spendability, and full `status` already names it. Say which card holds them.
+  (testing "hosted credits name their source card"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:resource [{:title "Smartware Distributor"
+                                                              :counter {:credit 3}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "5(+3")
+            (str "expected pool(+hosted), got: " line))
+        (is (str/includes? line "Smartware Distributor")
+            (str "expected the holding card named, got: " line)))))
+  (testing "several holders are all named"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 1 :hand [] :agenda-point 0
+                                            :rig {:resource [{:title "Smartware Distributor"
+                                                              :counter {:credit 3}}]
+                                                  :program [{:title "Red Team"
+                                                             :counter {:credit 12}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "1(+15")
+            (str "expected the hosted total, got: " line))
+        (is (and (str/includes? line "Smartware Distributor")
+                 (str/includes? line "Red Team"))
+            (str "expected both holders named, got: " line)))))
+  ;; The no-hosted-credits case (plain count, no parens) is pinned by
+  ;; test-status-compact-hosted-credits above.
+  )
+
+(deftest test-board-compact-shows-program-counters
+  ;; #151 item 12: every late-game run budget depended on Leech's virus
+  ;; counters, and neither compact view showed them — the seat had to fall back
+  ;; to `board | grep -i leech`. The compact board already lists the programs by
+  ;; name; the counters belong on those names.
+  (testing "virus counters ride along with the program name"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:corp {:servers {}}
+                                   :runner {:rig {:program [{:title "Leech"
+                                                             :counter {:virus 3}}
+                                                            {:title "Buzzsaw"}]}}})
+      (let [out (with-out-str (display/board-compact))]
+        (is (str/includes? out "Leech(3v)")
+            (str "expected virus counters on the program, got: " out))
+        (is (str/includes? out "Buzzsaw")
+            (str "counter-less programs must still be listed plainly, got: " out))
+        (is (not (str/includes? out "Buzzsaw("))
+            (str "no empty counter parens on a bare program, got: " out)))))
+  (testing "power and hosted-credit counters use their own letters"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:corp {:servers {}}
+                                   :runner {:rig {:program [{:title "Botulus"
+                                                             :counter {:virus 2 :power 1}}
+                                                           {:title "Red Team"
+                                                            :counter {:credit 12}}]}}})
+      (let [out (with-out-str (display/board-compact))]
+        (is (str/includes? out "Botulus(2v,1p)")
+            (str "expected both counter kinds, got: " out))
+        (is (str/includes? out "Red Team(12c)")
+            (str "expected hosted credits marked, got: " out))))))
+
+(deftest test-board-compact-unrezzed-content-says-card
+  ;; #151 item 13: `REMOTE1[…|Manegarm Skunkworks,1?]` — the bare `1?` read as
+  ;; "1 advancement", contradicting a log that said the card had been advanced
+  ;; twice. It means "1 unknown ROOT CARD". Say `card`, and put the real
+  ;; advancement count where the seat was already looking for it.
+  (testing "an unrezzed root card is labelled a card, with its advancements"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:corp {:servers
+                                          {:remote1 {:ices []
+                                                     :content [{:title "Manegarm Skunkworks"
+                                                                :rezzed true}
+                                                               {:advance-counter 2}]}}}
+                                   :runner {:rig {}}})
+      (let [out (with-out-str (display/board-compact))]
+        (is (str/includes? out "1?card(2adv)")
+            (str "expected the unknown card labelled + advancements, got: " out))
+        (is (str/includes? out "Manegarm Skunkworks")
+            (str "rezzed content must still show, got: " out)))))
+  (testing "an unadvanced unrezzed card carries no adv parenthetical"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:corp {:servers {:remote2 {:ices [] :content [{}]}}}
+                                   :runner {:rig {}}})
+      (let [out (with-out-str (display/board-compact))]
+        (is (str/includes? out "1?card")
+            (str "expected the card label, got: " out))
+        (is (not (str/includes? out "adv"))
+            (str "no advancement parenthetical when there are none, got: " out)))))
+  (testing "several unrezzed cards list each advanced one"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:corp {:servers {:remote3 {:ices []
+                                                              :content [{:advance-counter 3}
+                                                                        {}]}}}
+                                   :runner {:rig {}}})
+      (let [out (with-out-str (display/board-compact))]
+        (is (str/includes? out "2?card(3adv)")
+            (str "expected the advanced one surfaced, got: " out))))))
+
+;; ============================================================================
+;; Tanking answers the question — stop re-asking it (#151 item 2)
+;; ============================================================================
+;; `tank "Tithe"` printed "✅ Authorized tank … 📡 Signaling Corp", and then the
+;; auto-prompt echo immediately re-printed "2 unbroken of 2 … `continue` will
+;; NOT pass this window; you must decide: break … OR tank". The seat had just
+;; decided. Read top to bottom it says "your tank did not take" — a false
+;; FAILURE, on the one command whose whole job is to hand the window to the
+;; Corp. What is actually true after a tank is: you are waiting on the Corp to
+;; fire the subs, and the way to do that is `wait`.
+
+(deftest test-encounter-hint-after-tank-does-not-re-ask
+  (testing "tank authorized: report the pending fire, don't re-open the menu"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 true))]
+      (is (not (re-find #"(?i)you must decide" out))
+          (str "the seat already decided; re-asking reads as a failed tank, got: " out))
+      (is (not (re-find #"(?i)will NOT pass this window" out))
+          (str "that warning belongs to the undecided state, got: " out))
+      (is (re-find #"(?i)tank" out)
+          (str "must confirm the tank stands, got: " out))
+      (is (str/includes? out "wait")
+          (str "must name the command that advances from here, got: " out))
+      (is (str/includes? out "2")
+          (str "should still say how many subs the Corp owes, got: " out))))
+  (testing "no tank yet: the break-or-tank menu is unchanged"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 false))]
+      (is (re-find #"(?i)you must decide" out))
+      (is (str/includes? out "tank \"Tithe\""))))
+  (testing "the 2-arity still means 'undecided'"
+    (is (= (display/runner-encounter-decline-hint-lines "Tithe" 2)
+           (display/runner-encounter-decline-hint-lines "Tithe" 2 false)))))
+
+(deftest test-status-after-tank-reads-as-waiting-not-undecided
+  ;; End to end through the surface a seat actually reads: the run-window
+  ;; guidance block that `status`, `prompt` and every action's auto-echo print.
+  (let [tithe {:cid 55 :title "Tithe" :rezzed true
+               :subroutines [{:broken false :fired false}
+                             {:broken false :fired false}]}
+        encounter-state (mock-client-state
+                         :side "runner"
+                         :game-state {:active-player "runner" :turn 5
+                                      :run {:server ["servers" "hq"] :position 1
+                                            :phase "encounter-ice"}
+                                      :encounters {:ice tithe}
+                                      :corp {:servers {:hq {:ices [tithe]}}}
+                                      :runner {:click 2 :credit 4 :rig {}}})]
+    (testing "before tanking, the seat is told to decide"
+      (with-mock-state encounter-state
+        (reset! ai-state/run-strategy {})
+        (let [out (with-out-str
+                    (display/print-run-window-priority!
+                     @ai-state/client-state
+                     (get-in encounter-state [:game-state :run])
+                     "encounter-ice" "runner"))]
+          (is (re-find #"(?i)you must decide" out)
+              (str "expected the break-or-tank menu, got: " out)))))
+    (testing "after tanking, the same surface reports a pending Corp action"
+      (with-mock-state encounter-state
+        (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+        (try
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in encounter-state [:game-state :run])
+                       "encounter-ice" "runner"))]
+            (is (not (re-find #"(?i)you must decide" out))
+                (str "the tank already decided this; got: " out))
+            (is (str/includes? out "wait")
+                (str "expected the wait steer, got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))
+    (testing "--tank-all covers an ICE it never named"
+      (with-mock-state encounter-state
+        (reset! ai-state/run-strategy {:tank-all true})
+        (try
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in encounter-state [:game-state :run])
+                       "encounter-ice" "runner"))]
+            (is (not (re-find #"(?i)you must decide" out))
+                (str "--tank-all is a standing decision; got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))))
+
+;; ============================================================================
+;; Guest-panel remediations over the #151 batch
+;; ============================================================================
+
+(deftest test-tank-authorization-does-not-outlive-its-run
+  ;; CRITICAL (guest panel): reset-strategy! runs at the START of run! /
+  ;; monitor-active-run!, never at the end, so a :tank set outlived its run. The
+  ;; display now asserts "your tank stands" from those flags, and a run started
+  ;; by a run EVENT (Jailbreak/Conduit enter through continue-run!, which does
+  ;; not reset) would inherit it — the seat told the Corp owes it subs on an ICE
+  ;; the Corp was never signalled about.
+  (testing "a run ending clears the flags the next run would have inherited"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"} :full-break true})
+    (try
+      (ai-state/expire-run-strategy! {:run {:server ["servers" "hq"] :position 1}}
+                                     {:run nil})
+      (is (= {} @ai-state/run-strategy)
+          "the strategy belongs to the run that is now over")
+      (finally (reset! ai-state/run-strategy {}))))
+  (testing "a run still in progress keeps them"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+    (try
+      (ai-state/expire-run-strategy! {:run {:position 2}} {:run {:position 1}})
+      (is (= #{"Tithe"} (:tank @ai-state/run-strategy))
+          "advancing through a run must not drop the seat's own decisions")
+      (finally (reset! ai-state/run-strategy {}))))
+  (testing "no run either side of the diff is not a transition"
+    (reset! ai-state/run-strategy {:rez #{"Palisade"}})
+    (try
+      (ai-state/expire-run-strategy! {:run nil} {:run nil})
+      (is (= #{"Palisade"} (:rez @ai-state/run-strategy)))
+      (finally (reset! ai-state/run-strategy {})))))
+
+(deftest test-forced-encounter-is-live-whatever-the-phase
+  ;; CRITICAL (guest panel): the break/tank guidance was gated on
+  ;; phase == "encounter-ice". A forced encounter (on-access Archangel) is live
+  ;; while [:run :phase] reads "success" — that seat was told "use continue to
+  ;; pass priority", which is the #92 lie in the phase nobody had checked.
+  (let [archangel {:cid 77 :title "Archangel" :rezzed true
+                   :subroutines [{:broken false :fired false}]}
+        on-access (mock-client-state
+                   :side "runner"
+                   :game-state {:active-player "runner" :turn 6
+                                :run {:server ["servers" "rd"] :position 0
+                                      :phase "success"}
+                                :encounters {:ice archangel}
+                                :corp {:servers {:rd {:ices []}}}
+                                :runner {:click 1 :credit 3 :rig {}}})]
+    (testing "the break/tank menu appears, not the pass-priority steer"
+      (with-mock-state on-access
+        (reset! ai-state/run-strategy {})
+        (let [out (with-out-str
+                    (display/print-run-window-priority!
+                     @ai-state/client-state
+                     (get-in on-access [:game-state :run])
+                     "success" "runner"))]
+          (is (str/includes? out "Archangel")
+              (str "expected the encountered ICE named, got: " out))
+          (is (not (str/includes? out "pass priority"))
+              (str "continue does NOT pass an encounter, got: " out)))))
+    (testing "and the tank verdict is honoured there too"
+      (with-mock-state on-access
+        (reset! ai-state/run-strategy {:tank #{"Archangel"}})
+        (try
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in on-access [:game-state :run])
+                       "success" "runner"))]
+            (is (not (re-find #"(?i)you must decide" out))
+                (str "already tanked; got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))))
+
+(deftest test-forced-encounter-names-one-ice-not-two
+  ;; CRITICAL (guest panel): position pointed at one copy while the wire's
+  ;; encounter summary named another, and the SAME status output rendered the ICE
+  ;; block from position and the guidance from the encounter — two cards, one
+  ;; screen. encountered-ice is now the single authority for both.
+  (let [pos-ice {:cid 1 :title "Funhouse" :rezzed true
+                 :subroutines [{:broken false :fired false}]}
+        forced {:cid 2 :title "Karunā" :rezzed true
+                :subroutines [{:broken false :fired false}
+                              {:broken false :fired false}]}]
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 4
+                                   :run {:server ["servers" "hq"] :position 1
+                                         :phase "encounter-ice"}
+                                   :encounters {:ice forced}
+                                   :corp {:servers {:hq {:ices [pos-ice]}}}
+                                   :runner {:click 2 :credit 5 :rig {}}})
+      (is (= "Karunā" (:title (display/encountered-ice @ai-state/client-state)))
+          "the wire's encounter summary outranks the position-derived ICE")
+      (is (= 2 (display/runner-encounter-unbroken-count @ai-state/client-state))
+          "the sub count must come from the ICE actually being encountered"))))
+
+(deftest test-compact-counter-suffix-prints-a-spent-counter
+  ;; A Leech that has spent its last counter keeps :virus 0 on the wire. Rendering
+  ;; that as a bare `Leech` is indistinguishable from "this view has no counter
+  ;; data" — the confusion the suffix exists to end (guest panel).
+  (testing "present-at-zero is printed"
+    (is (= "(0v)" (display/compact-counter-suffix {:counter {:virus 0}}))))
+  (testing "absent stays absent"
+    (is (= "" (display/compact-counter-suffix {:counter {}})))
+    (is (= "" (display/compact-counter-suffix {}))))
+  (testing "advance-counter is the one field suppressed at zero — every card has it"
+    (is (= "" (display/compact-counter-suffix {:advance-counter 0})))
+    (is (= "(2adv)" (display/compact-counter-suffix {:advance-counter 2})))))
+
+(deftest test-status-compact-hosted-credits-map-amount-to-holder
+  ;; With two holders, naming both but totalling once still leaves the seat
+  ;; unable to tell which restriction governs which credits (guest panel).
+  (testing "each holder carries its own amount"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 1 :hand [] :agenda-point 0
+                                            :rig {:resource [{:title "Smartware Distributor"
+                                                              :counter {:credit 3}}]
+                                                  :program [{:title "Red Team"
+                                                             :counter {:credit 12}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Red Team 12")
+            (str "expected per-holder amounts, got: " line))
+        (is (str/includes? line "Smartware Distributor 3")
+            (str "expected per-holder amounts, got: " line))))))
+
+(deftest test-status-compact-shows-virus-counters
+  ;; #151 item 12 named BOTH compact views. board-compact carries them on the
+  ;; program names; status-compact is the line a seat actually polls per decision.
+  (testing "virus counters appear on the polled line, named per card"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:program [{:title "Leech"
+                                                             :counter {:virus 3}}
+                                                            {:title "Botulus"
+                                                             :counter {:virus 2}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Leech 3")
+            (str "expected the virus counters named, got: " line))
+        (is (str/includes? line "Botulus 2")
+            (str "a total across two virus programs cannot be budgeted, got: " line)))))
+  (testing "a hosted virus program still counts"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:program [{:title "Leprechaun"
+                                                             :hosted [{:title "Leech"
+                                                                       :counter {:virus 4}}]}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Leech 4")
+            (str "a hosted Leech is still the Leech being spent, got: " line)))))
+  (testing "no virus counters -> no segment"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:program [{:title "Buzzsaw"}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (not (str/includes? line "/v:"))
+            (str "must stay quiet when there is nothing to say, got: " line))))))
+
+;; ============================================================================
+;; Second guest pass — over the fixes the first pass produced
+;; ============================================================================
+
+(deftest test-forced-encounter-does-not-advertise-a-no-op-tank
+  ;; The first pass's fix widened the break/tank menu to any live encounter. But
+  ;; `tank` only writes a flag, and the handler that turns it into the Corp-facing
+  ;; signal gates on run-phase == "encounter-ice" (ai-run-runner-handlers), as
+  ;; does the Corp's auto-fire. So outside that window the menu advertised a
+  ;; command that sets a flag and does nothing — the same class of bug as the
+  ;; "use continue to pass priority" steer it replaced, and harder to notice.
+  (let [archangel {:cid 77 :title "Archangel" :rezzed true
+                   :subroutines [{:broken false :fired false}]}
+        on-access (mock-client-state
+                   :side "runner"
+                   :game-state {:active-player "runner" :turn 6
+                                :run {:server ["servers" "rd"] :position 0
+                                      :phase "success"}
+                                :encounters {:ice archangel}
+                                :corp {:servers {:rd {:ices []}}}
+                                :runner {:click 1 :credit 3 :rig {}}})]
+    (testing "the forced encounter is surfaced, but tank is not offered as the way out"
+      (with-mock-state on-access
+        (reset! ai-state/run-strategy {})
+        (let [out (with-out-str
+                    (display/print-run-window-priority!
+                     @ai-state/client-state
+                     (get-in on-access [:game-state :run])
+                     "success" "runner"))]
+          (is (str/includes? out "Archangel")
+              (str "the seat must be told what it is encountering, got: " out))
+          (is (re-find #"(?i)forced encounter" out)
+              (str "name the situation, got: " out))
+          (is (not (re-find #"tank \"Archangel\"" out))
+              (str "must not advertise a command that cannot fire here, got: " out))
+          (is (not (str/includes? out "pass priority"))
+              (str "continue does not pass an encounter either, got: " out))
+          (is (re-find #"(?i)icebreaker" out)
+              (str "breaking DOES work here — say so, got: " out)))))
+    (testing "the standard window still gets the real menu"
+      (let [tithe {:cid 55 :title "Tithe" :rezzed true
+                   :subroutines [{:broken false :fired false}]}]
+        (with-mock-state (mock-client-state
+                          :side "runner"
+                          :game-state {:active-player "runner" :turn 5
+                                       :run {:server ["servers" "hq"] :position 1
+                                             :phase "encounter-ice"}
+                                       :encounters {:ice tithe}
+                                       :corp {:servers {:hq {:ices [tithe]}}}
+                                       :runner {:click 2 :credit 4 :rig {}}})
+          (reset! ai-state/run-strategy {})
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in @ai-state/client-state [:game-state :run])
+                       "encounter-ice" "runner"))]
+            (is (str/includes? out "tank \"Tithe\"")
+                (str "the real encounter window still offers tank, got: " out))))))))
+
+(deftest test-window-passer-follows-the-encounter-not-the-phase
+  ;; The headline reads the passer; at a forced encounter it was reading the
+  ;; run-level :no-action while the guidance below read the encounter's — one
+  ;; output, two answers to "whose move" (guest re-review).
+  (testing "a live encounter's pass-state wins whatever the phase says"
+    (let [gs {:run {:phase "success" :no-action "corp"}
+              :encounters {:ice {:title "Archangel"} :no-action "runner"}}]
+      (is (= "runner" (display/effective-window-passer gs)))))
+  (testing "no encounter -> the run-level passer, unchanged"
+    (is (= "corp" (display/effective-window-passer
+                   {:run {:phase "movement" :no-action "corp"}})))))
+
+(deftest test-status-compact-shows-a-spent-virus-program
+  ;; A Leech at zero is a different plan from no Leech at all.
+  (testing "present-at-zero still appears"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 9
+                                   :runner {:click 2 :credit 5 :hand [] :agenda-point 0
+                                            :rig {:program [{:title "Leech"
+                                                             :counter {:virus 0}}]}}
+                                   :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
+      (let [line (str/trim (with-out-str (display/status-compact)))]
+        (is (str/includes? line "Leech 0")
+            (str "a spent Leech is not an absent Leech, got: " line))))))
+
+(deftest test-run-strategy-expires-on-a-runless-snapshot
+  ;; A resync clears :last-state first, so if the run ended while we were
+  ;; desynced the diff-transition expiry never fires (guest re-review).
+  (testing "a full state with no run clears run-scoped flags"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+    (try
+      (ai-state/expire-run-strategy-on-snapshot! {:runner {} :corp {}})
+      (is (= {} @ai-state/run-strategy))
+      (finally (reset! ai-state/run-strategy {}))))
+  (testing "a full state DURING a run keeps them"
+    (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+    (try
+      (ai-state/expire-run-strategy-on-snapshot! {:run {:position 1}})
+      (is (= #{"Tithe"} (:tank @ai-state/run-strategy)))
+      (finally (reset! ai-state/run-strategy {})))))

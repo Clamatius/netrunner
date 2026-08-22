@@ -239,7 +239,7 @@ Corp gets priority at specific timing windows:
 | Situation | Command | Notes |
 |-----------|---------|-------|
 | Pass priority (do nothing) | `continue` | Most common - just let the run proceed |
-| Rez ICE on approach | `continue --rez "ICE Name"` | **Critical**: Must rez during approach, not encounter |
+| Rez ICE on approach | `continue --rez "ICE Name"` | **Critical**: Must rez during approach, not encounter. Equivalent while a monitor is running: `monitor-run --persistent --rez "ICE Name"` (rezzes AND keeps the monitor defending the rest of the run) |
 | Fire unbroken subs | `fire-subs` | After Runner declines to break |
 | Rez upgrade (Manegarm etc.) | `continue --rez "Upgrade Name"` | On approach to server |
 | Auto-handle full run | `monitor-run` | Convenience command (see caveats below) |

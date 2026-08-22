@@ -284,10 +284,27 @@ passed priority here"* — re-sending `continue` does **nothing** (it's a no-op
 loop). You're waiting on the Corp to also pass.
 
 In cross-model play the Corp seat must be actively running `monitor-run` to pass
-an empty window. If it isn't, the run stalls and `wait` never resolves. To break
-out, **`jack-out`** ends the run cleanly. (If you have a real reason to be in the
-run, give the Corp seat a moment to pass first; only `jack-out` if it's clearly
-not coming.)
+an empty window. If it isn't, the run stalls and `wait` never resolves.
+
+**Do not jack out to unstick a window.** It is not an escape hatch here — it is
+a *movement-window* action (the human client enables the Jack Out button only
+while `phase == "movement"`), so at initiation, approach-ice, or an encounter it
+is simply refused, and at an encounter it would skip the unbroken subroutines
+anyway. Across the archived replays, 11 of 28 jack-outs fired at an encounter:
+that is this paragraph's old advice being followed.
+
+What to do instead, in order:
+
+1. `wait` — the Corp seat is usually just thinking. A slow opponent is not a
+   stall.
+2. `prompt` / `diagnose-blocker` — confirm who owes the move. If it says *"You
+   have already passed priority here"*, re-sending `continue` does nothing.
+3. `./dev/umpire-ping runner "what I tried + what I see"` — if the Corp still
+   hasn't passed, escalate. A wedged both-must-pass window is a harness problem,
+   not a play decision, and the umpire can see both seats.
+
+If you have a real reason to leave the run, wait for the next **movement**
+window and jack out there.
 
 ---
 

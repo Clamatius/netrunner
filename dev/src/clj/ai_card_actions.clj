@@ -311,34 +311,14 @@
 
 (declare use-runner-ability!)
 
-(defn- corp-title-match-count
-  "How many installed Corp cards share the parsed title. >1 means
-   find-installed-corp-card just printed its disambiguation list and returned
-   nil because the reference is AMBIGUOUS — not because the card is absent.
-   Callers must not follow that list with a 'not found' lie (review catch on
-   #95; misleading-output class)."
-  [card-name]
-  (let [{:keys [title]} (core/parse-card-reference card-name)
-        servers (state/corp-servers)]
-    (->> (concat (mapcat :ices (vals servers))
-                 (mapcat :content (vals servers)))
-         (filter #(= title (:title %)))
-         count)))
-
 (defn- ambiguous-or-missing-error
-  "Honest error result for a nil corp-card lookup: ambiguity gets a
-   disambiguate hint (the list is already printed), absence gets not-found."
-  [card-name]
-  (if (> (corp-title-match-count card-name) 1)
-    (do
-      (println (str "   Re-run with the [N] suffix, e.g. \"" card-name " [0]\""))
-      (flush)
-      {:status :error
-       :reason (str "Ambiguous: multiple copies of " card-name " installed — specify [N]")})
-    (do
-      (println (str "❌ Card not found installed: " card-name))
-      (flush)
-      {:status :error :reason (str "Card not found: " card-name)})))
+  "Honest error result for a nil installed-card lookup, scoped to the zones the
+   caller searched: ambiguity gets a disambiguate hint (the list is already
+   printed), absence gets not-found. Delegates to ai-core, which owns both
+   lookups — this used to count CORP installs only, so a Runner seat holding two
+   Leeches was told its Leech was not installed (#151 item 5)."
+  [card-name scopes]
+  (core/report-installed-lookup-miss! card-name scopes))
 
 (defn use-ability!
   "Use an installed card's ability. Returns status map:
@@ -441,7 +421,12 @@
             (println (str "❌ " card-name " is a Corp card with no Runner-usable abilities"))
             (flush)
             {:status :error :reason (str "No runner-abilities on Corp card: " card-name)}))
-        (ambiguous-or-missing-error card-name)))))
+        ;; A Corp seat searched only its own servers; a Runner seat searched
+        ;; its rig AND (for the bioroid fallback just above) the Corp's cards.
+        (ambiguous-or-missing-error card-name
+                                    (if (core/side= "Corp" side)
+                                      [:corp]
+                                      [:runner :corp]))))))
 
 (defn use-runner-ability!
   "Use a Runner-usable ability printed on a Corp card (e.g. bioroid
@@ -463,7 +448,8 @@
                       (core/break-refusal-lines ability (state/get-game-state)))]
     (cond
       (not card)
-      (ambiguous-or-missing-error card-name)
+      ;; find-installed-corp-card is the only lookup here, whatever our side.
+      (ambiguous-or-missing-error card-name [:corp])
 
       (not ability)
       (do
@@ -564,7 +550,13 @@
         (Thread/sleep core/medium-delay)
         (println (str "🗑️  Trashed: " card-name " (" card-type ")")))
       :else
-      (println (str "❌ Card not found installed: " card-name)))))
+      ;; Ambiguity is not absence: the duplicate-title list has already been
+      ;; printed by the lookup, and "not found" underneath it contradicts it
+      ;; (#151 item 5). Scope to the side this seat actually searched.
+      (core/report-installed-lookup-miss! card-name
+                                          (if (core/side= "Corp" side)
+                                            [:corp]
+                                            [:runner])))))
 
 (defn rez-card!
   "Rez an installed Corp card (ICE, asset, or upgrade)

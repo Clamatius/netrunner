@@ -176,7 +176,13 @@ After each of your turns, check:
 - `GAME-GONE turn=…` → the server closed the lobby without a result (game
   abandoned/torn down). Also a **stop** condition: there is no game left to
   play. Report what you saw and stand down — do not keep issuing commands.
+- `AWAITING-START turn=… next-player=…` → a clean turn boundary; the named
+  player acts next. **Keep playing.** It may carry `open-prompt=mine`, meaning
+  the boundary is waiting on a prompt of YOURS (e.g. the end-of-turn discard) —
+  resolve it. This is a normal state, not a desync.
 - `IN-PROGRESS …` → keep playing.
+- `NO-GAME` → this client is holding no board at all. That is a sync problem,
+  not a result: do not report a winner. Re-check with `status` and escalate.
 
 ## Don'ts
 

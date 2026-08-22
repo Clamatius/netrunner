@@ -22,6 +22,11 @@
 ;; the status displays above their definitions.
 (declare run-status-headline)
 (declare print-run-window-priority!)
+;; The encounter authority (wire [:encounters :ice] first) and its liveness
+;; predicate — defined with the run-window helpers below, used by the status
+;; displays above them.
+(declare encountered-ice)
+(declare live-encounter?)
 
 ;; ============================================================================
 ;; Status & Information
@@ -40,6 +45,55 @@
     (if (seq parts)
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
+
+(defn compact-counter-suffix
+  "Pure: the counters on a card, in the compact board's one-line idiom —
+   \"(3v)\", \"(2v,1p)\", \"(12c)\", \"(2adv)\" — or \"\" when the card carries
+   none. Letters, not words, because this rides inside a name list; the full
+   board's format-counters spells them out.
+
+   Why the compact board needs them at all: every late-game run budget in the
+   2026-08-21 pair turned on Leech's virus counters, and neither compact view
+   showed a counter, so the seat fell back to `board | grep -i leech` on every
+   decision (#151 item 12). The compact board already names the programs — the
+   counters belong on those names."
+  [card]
+  (let [counters (:counter card {})
+        adv (:advance-counter card 0)
+        ;; PRESENT-at-zero is printed. A Leech that has spent its last counter
+        ;; keeps :virus 0 on the wire, and rendering that as a bare `Leech` is
+        ;; indistinguishable from "this view doesn't show counters" — which is
+        ;; the exact confusion this suffix exists to end (guest panel). Only
+        ;; :advance-counter is suppressed at zero: it is a default field on every
+        ;; card, so printing 0adv everywhere would drown the signal.
+        parts (cond-> []
+                (contains? counters :virus) (conj (str (:virus counters) "v"))
+                (contains? counters :power) (conj (str (:power counters) "p"))
+                (contains? counters :credit) (conj (str (:credit counters) "c"))
+                (pos? adv) (conj (str adv "adv")))]
+    (if (seq parts)
+      (str "(" (str/join "," parts) ")")
+      "")))
+
+(defn compact-unrezzed-content
+  "Pure: the compact board's summary of a server's UNREZZED root cards, e.g.
+   \"1?card(2adv)\" or \"2?card(3adv)\". Returns nil when every root card is
+   rezzed.
+
+   The old form was a bare \"1?\". In `REMOTE1[…|Manegarm Skunkworks,1?]` that
+   read as \"one advancement\" — flatly contradicting a log that said the card
+   had been advanced twice — when it means \"one unknown root card\" (#151
+   item 13). So: say `card`, and put the advancement counts the seat was
+   actually hunting for in the parenthetical, one entry per advanced card."
+  [content-list]
+  (let [unrezzed (remove :rezzed content-list)
+        advanced (->> unrezzed
+                      (map #(:advance-counter % 0))
+                      (filter pos?))]
+    (when (seq unrezzed)
+      (str (count unrezzed) "?card"
+           (when (seq advanced)
+             (str "(" (str/join "," (map #(str % "adv") advanced)) ")"))))))
 
 (defn remote-threat-counts
   "Pure: the Runner-visible remote-server threat counts, from the Corp's
@@ -307,8 +361,9 @@
                 (when-let [pos (:position run-state)]
                   (println "  Position:" pos)))
               ;; Show ICE info during encounter-ice
-              (when (= "encounter-ice" (:phase run-state))
-                (when-let [current-ice (core/current-run-ice @state/client-state)]
+              (when (or (= "encounter-ice" (:phase run-state))
+                        (live-encounter? @state/client-state))
+                (when-let [current-ice (encountered-ice @state/client-state)]
                   (when (:rezzed current-ice)
                     (let [ice-title (:title current-ice)
                           ice-str (or (:current-strength current-ice) (:strength current-ice))
@@ -695,10 +750,12 @@
           (print "|")
           ;; Content summary
           (when (seq rezzed-content)
-            (print (clojure.string/join "," (map #(core/format-card-name-with-index % content-list) rezzed-content))))
-          (when (> unrezzed-content-count 0)
+            (print (clojure.string/join "," (map #(str (core/format-card-name-with-index % content-list)
+                                                      (compact-counter-suffix %))
+                                                 rezzed-content))))
+          (when-let [unknown (compact-unrezzed-content content-list)]
             (print (if (seq rezzed-content) "," ""))
-            (print (str unrezzed-content-count "?")))
+            (print unknown))
           (print "]"))))
     (println)
 
@@ -711,7 +768,11 @@
                       (count hardware)
                       (count resources)
                       (if (seq programs)
-                        (str " - " (clojure.string/join "," (map #(core/format-card-name-with-index % programs) programs)))
+                        (str " - " (clojure.string/join
+                                    ","
+                                    (map #(str (core/format-card-name-with-index % programs)
+                                               (compact-counter-suffix %))
+                                         programs)))
                         ""))))
     nil))
 
@@ -841,10 +902,31 @@
             ;; Credits hosted on rig/play-area cards (e.g. Overclock during a run)
             ;; are spendable but omitted from the pool field -- surface as (+N)
             ;; so the seat doesn't undercount affordability (issue #21).
-            runner-hosted (:total (state/runner-hosted-credits gs))
-            runner-cred-str (if (pos? runner-hosted)
-                              (format "%d(+%d)" runner-credits runner-hosted)
-                              (str runner-credits))
+            ;; ...and NAME the holder. A bare (+3) is a number with no owner,
+            ;; and spendability lives on the card, not the count: a Runner read
+            ;; Smartware Distributor's 3 hosted credits as a pool it could draw
+            ;; on, planned a turn around them and ended it at 0 (#151 item 11).
+            ;; Full `status` has always named the sources; the one-line view a
+            ;; seat actually polls did not.
+            runner-hosted-info (state/runner-hosted-credits gs)
+            runner-hosted (:total runner-hosted-info)
+            ;; Per-holder amounts, not just names: with two holders the seat
+            ;; still has to know WHICH restriction governs which credits, and
+            ;; "(+15:Smartware Distributor,Red Team)" doesn't say (guest panel).
+            ;; Same shape as full `status`.
+            hosted-sources (:sources runner-hosted-info)
+            runner-cred-str (cond
+                              (not (pos? runner-hosted)) (str runner-credits)
+                              ;; One holder: the total in front of the colon is
+                              ;; already its amount — repeating it is noise.
+                              (= 1 (count hosted-sources))
+                              (format "%d(+%d:%s)" runner-credits runner-hosted
+                                      (:title (first hosted-sources)))
+                              :else
+                              (format "%d(+%d:%s)" runner-credits runner-hosted
+                                      (str/join ","
+                                                (map #(format "%s %d" (:title %) (:credits %))
+                                                     hosted-sources))))
             ;; Tags decide endgames (Orbital Superiority won marquee g1 off
             ;; one) but were only visible via full `status` — the one-call
             ;; snapshot silently omitted them (#85). Append to the Runner's
@@ -854,6 +936,19 @@
             runner-tag-str (if (pos? runner-tags)
                              (format "/%dtag" runner-tags)
                              "")
+            ;; Virus counters price runs (Leech's counters decide how much ICE
+            ;; strength the Runner can shave), and this line — the one a seat
+            ;; polls before every decision — omitted them, so budgeting meant a
+            ;; second call to `board` (#151 item 12). Named per card for the same
+            ;; reason the hosted credits are: a total across two virus programs
+            ;; cannot be spent against either.
+            runner-virus (state/runner-virus-counters gs)
+            runner-virus-str (if (seq (:sources runner-virus))
+                               (format "/v:%s"
+                                       (str/join ","
+                                                 (map #(format "%s %d" (:title %) (:virus %))
+                                                      (:sources runner-virus))))
+                               "")
 
             ;; Corp state
             corp-credits (get-in gs [:corp :credit] 0)
@@ -863,9 +958,9 @@
             corp-ap (get-in gs [:corp :agenda-point] 0)
 
             ;; Format: T3-Corp | Me(R): 4c/2cl/5h/0AP | Opp(C): 5c/0cl/4h/0AP
-            runner-stats (format "%sc/%dcl/%dh/%dAP%s"
+            runner-stats (format "%sc/%dcl/%dh/%dAP%s%s"
                                  runner-cred-str runner-clicks runner-hand-ct
-                                 runner-ap runner-tag-str)
+                                 runner-ap runner-tag-str runner-virus-str)
             corp-stats (format "%dc/%dcl/%dh/%dAP"
                                corp-credits corp-clicks corp-hand-ct corp-ap)
             my-stats (if (= my-side "runner") runner-stats corp-stats)
@@ -1279,7 +1374,10 @@
 (defn- show-encounter-ice-info
   "Display ICE encounter info: current ICE and playable icebreakers"
   [state run my-side]
-  (when-let [current-ice (core/current-run-ice state)]
+  ;; Same authority as the priority block below it: naming the position-derived
+  ;; ICE here while the guidance keys off [:encounters :ice] would split ONE
+  ;; output across two cards in a forced encounter (guest panel).
+  (when-let [current-ice (encountered-ice state)]
     (when (:rezzed current-ice)
       (let [ice-title (:title current-ice)
             ice-str (or (:current-strength current-ice) (:strength current-ice))
@@ -1484,7 +1582,12 @@
    the [:game-state] map."
   [gs]
   (let [run (:run gs)
-        v   (if (= "encounter-ice" (:phase run))
+        ;; Keyed on a LIVE encounter, not on the phase string: a forced encounter
+        ;; runs while :phase reads something else, and reading the run-level
+        ;; :no-action there made the headline ("your move") contradict the
+        ;; encounter guidance printed directly beneath it (guest re-review).
+        v   (if (or (= "encounter-ice" (:phase run))
+                    (some? (get-in gs [:encounters :ice])))
               (get-in gs [:encounters :no-action])
               (:no-action run))]
     (cond (keyword? v) (name v) (string? v) v :else nil)))
@@ -1522,6 +1625,32 @@
       :else
       "⏳ Waiting on Runner — active player acts first; your sub-step is next.")))
 
+(defn encountered-ice
+  "The ICE the Runner is actually encountering: the wire's own encounter summary
+   [:encounters :ice] first, the position-derived ICE only as a fallback.
+
+   A FORCED encounter puts the Runner on ICE that :position does not point at,
+   so position is not the authority — the same rule the card resolvers had to
+   learn twice (#100, #152). It matters here because these lines NAME the ICE
+   and now key the tank check on that name: get the identity wrong and the
+   guidance is confidently about the wrong card.
+
+   Trustworthy as a liveness signal too: the engine keeps :encounters as a stack
+   and POPS it when the encounter ends (game.core.runs), so a present :ice means
+   an encounter that is actually happening."
+  [state]
+  (or (get-in state [:game-state :encounters :ice])
+      (core/current-run-ice state)))
+
+(defn live-encounter?
+  "True when the wire reports an encounter in progress, whatever the run phase
+   says. A forced encounter (an on-access Archangel, say) is live while
+   [:run :phase] reads \"success\" — gating the break/tank guidance on the phase
+   string alone left exactly that case being told 'use continue to pass
+   priority', the #92 lie in the one phase nobody had checked (guest panel)."
+  [state]
+  (some? (get-in state [:game-state :encounters :ice])))
+
 (defn runner-encounter-unbroken-count
   "Count of subroutines on the current encounter ICE that the Runner has neither
    broken nor already fired — i.e. the subs still pending a break/tank decision.
@@ -1529,7 +1658,7 @@
    authority on whether `continue` will pass or be refused here. `state` is the
    full client-state map. Returns 0 when there is no rezzed current ICE."
   [state]
-  (let [ice (core/current-run-ice state)]
+  (let [ice (encountered-ice state)]
     (if (and ice (:rezzed ice))
       (count (filter #(and (not (:broken %)) (not (:fired %)))
                      (:subroutines ice)))
@@ -1549,14 +1678,51 @@
    phase == \"movement\"), and leaving mid-encounter would skip the unbroken
    subroutines outright. Offering it here taught seats to do exactly that — 11 of
    the 28 jack-outs across the archived replays fired at an encounter. Say why it
-   is absent, so a seat doesn't go hunting for the option it half-remembers."
-  [ice-title unbroken-count]
-  [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
-           unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
-   "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
-   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances." ice-title)
-   "      (You cannot jack out during an encounter — that is a movement-window action. If the"
-   "       entry cost was misjudged, `tank` through and jack out at the next movement window.)"])
+   is absent, so a seat doesn't go hunting for the option it half-remembers.
+   Once the Runner HAS tanked this ICE (`tank \"X\"`, `--tank`, `--tank-all`),
+   the decision is made and re-printing the menu is a lie in the other
+   direction: `tank` prints \"✅ Authorized … 📡 Signaling Corp\" and the
+   auto-prompt echo used to re-ask \"you must decide: break OR tank\" directly
+   underneath, which reads as the tank having failed (#151 item 2). Pass
+   `tank-authorized?` true for the confirmation form: the tank stands, the Corp
+   owes the subs, and the command that advances from here is `wait`."
+  ([ice-title unbroken-count]
+   (runner-encounter-decline-hint-lines ice-title unbroken-count false))
+  ([ice-title unbroken-count tank-authorized?]
+   (if tank-authorized?
+     [(format "    → Tank stands on %s — you have declined to break; the Corp now owes you the %d unbroken subroutine%s."
+              ice-title unbroken-count (if (= unbroken-count 1) "" "s"))
+      "      • `wait` — the subs fire on the Corp's action, then the run advances."
+      (format "      • Changed your mind? Break %s with an icebreaker before the Corp fires." ice-title)
+      "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
+     [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
+              unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
+      "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
+      (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances." ice-title)
+      "      (You cannot jack out during an encounter — that is a movement-window action. If the"
+      "       entry cost was misjudged, `tank` through and jack out at the next movement window.)"])))
+
+(defn forced-encounter-advisory-lines
+  "Guidance for a Runner at a FORCED encounter — one the wire reports live
+   ([:encounters :ice]) while [:run :phase] says something else, e.g. an
+   on-access Archangel during \"success\".
+
+   Deliberately NOT the break/tank menu. `tank` only sets a flag, and the handler
+   that turns that flag into the Corp-facing signal
+   (handle-runner-encounter-ice) gates on run-phase == \"encounter-ice\"; the
+   Corp's auto-fire gates the same way. So at this window `tank` is a no-op, and
+   printing it would be the same class of bug as the \"use continue to pass
+   priority\" steer this branch replaced — a command that reads as progress and
+   does nothing. Breaking still works: use-ability is phase-independent.
+
+   Pure; returns lines to println."
+  [ice-title unbroken-count phase]
+  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (phase: %s)."
+           ice-title unbroken-count (if (= unbroken-count 1) "" "s") (or phase "?"))
+   "      • Break it with an icebreaker if you can — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
+   "      • `continue` does NOT pass an encounter, and `tank` cannot help here: its signal is only sent from the standard"
+   "        encounter window, so it would set a flag and do nothing visible."
+   "      • If the window does not clear on its own after the subs resolve, escalate (`./dev/umpire-ping`) rather than re-sending."])
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
@@ -1584,7 +1750,9 @@
    jack-out / escalate guidance the identical situation gets at #1 Run begins. Two
    Luna seats re-sent continue and then pinged the umpire."
   [state run run-phase my-side]
-  (let [runner-unbroken (when (and (= my-side "runner") (= run-phase "encounter-ice"))
+  (let [runner-unbroken (when (and (= my-side "runner")
+                                   (or (= run-phase "encounter-ice")
+                                       (live-encounter? state)))
                           (runner-encounter-unbroken-count state))
         ;; A Corp that has already passed this window is in the SAME position the
         ;; Runner's already-passed branch describes: `continue` is a no-op and the
@@ -1611,9 +1779,21 @@
       ;; Runner at an encounter with subs still to break/tank: `continue` is
       ;; refused (#92). Name the real options instead of the impossible pass.
       (and runner-unbroken (pos? runner-unbroken))
-      (doseq [line (runner-encounter-decline-hint-lines
-                    (:title (core/current-run-ice state) "this ICE") runner-unbroken)]
-        (println line))
+      (let [ice-title (:title (encountered-ice state) "this ICE")]
+        (if (= run-phase "encounter-ice")
+          (doseq [line (runner-encounter-decline-hint-lines
+                        ice-title runner-unbroken
+                        (state/tank-authorized? ice-title))]
+            (println line))
+          ;; A FORCED encounter outside the standard window. The break/tank menu
+          ;; must NOT be printed here: `tank` writes a flag that only
+          ;; handle-runner-encounter-ice acts on, and that handler gates on
+          ;; run-phase == "encounter-ice" (ai-run-runner-handlers) — as does the
+          ;; Corp's auto-fire. Offering `tank` here would advertise a command
+          ;; that silently does nothing, which is worse than the wrong steer it
+          ;; replaced. Say what is true and what still works instead.
+          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase)]
+            (println line))))
 
       ;; Corp at approach-ice having already declined/passed: don't offer it a rez
       ;; it can no longer take, and don't call a no-op a priority pass (#115).
@@ -1920,8 +2100,13 @@
                 ;; bare phase line for any phase the ladder doesn't model.
                 (when-not (print-run-phase-ladder! state run my-side)
                   (println (str "  Run Phase: " run-phase)))
-                ;; During encounter-ice, show ICE and breaker info
-                (when (= run-phase "encounter-ice")
+                ;; During an encounter, show ICE and breaker info. Keyed on the
+                ;; live encounter as well as the phase: at a forced encounter the
+                ;; guidance below was printing while the ICE and the playable
+                ;; breakers — the two things a seat needs to act on it — were
+                ;; suppressed by the phase gate (guest re-review).
+                (when (or (= run-phase "encounter-ice")
+                          (live-encounter? state))
                   (show-encounter-ice-info state run my-side))
                 ;; Whose move is it now + what 'continue' does — shared with the
                 ;; `status` command so both surface the same run-priority read.
@@ -2256,7 +2441,11 @@
         (println (clojure.string/join "" (repeat 70 "="))))
 
       :else
-      (println "❌ Card not found installed:" card-name))))
+      ;; Ambiguity is not absence (#151 item 5): a duplicate title has already
+      ;; printed its "❓ Multiple copies" list by the time we get here, and a
+      ;; flat not-found beneath it tells the seat its own board is wrong.
+      (core/report-installed-lookup-miss! card-name
+                                          (if corp-viewer? [:corp] [:runner :corp])))))
 
 ;; ============================================================================
 ;; High-Level Workflows
@@ -2575,7 +2764,9 @@
       ;; branch above and told the seat to `choose`, contradicting what `prompt`
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
       (and (:in-run? ts) prompt (not waiting?))
-      (let [runner-unbroken (when (and (= my-side-lc "runner") (= run-phase "encounter-ice"))
+      (let [runner-unbroken (when (and (= my-side-lc "runner")
+                                       (or (= run-phase "encounter-ice")
+                                           (live-encounter? cs)))
                               (runner-encounter-unbroken-count cs))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
@@ -2598,11 +2789,17 @@
           ;; is refused (#92), so naming it here (as this branch used to) is the lie
           ;; that agreed with the prompt display and deadlocked marquee G2.
           (and runner-unbroken (pos? runner-unbroken))
-          (do
-            (println "   → Owner: YOU — a break/tank decision, not a both-pass window.")
+          (let [ice-title (:title (encountered-ice cs) "this ICE")
+                tanked? (state/tank-authorized? ice-title)]
+            ;; A tanked encounter is NOT still owed a decision by us — saying
+            ;; "Owner: YOU" there is the same false failure `tank` itself used to
+            ;; print (#151 item 2). diagnose-blocker is where a seat goes when it
+            ;; already suspects it is stuck; it must not manufacture the suspicion.
+            (println (if tanked?
+                       "   → Owner: the CORP — your tank stands; they owe the subs."
+                       "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
-                          (:title (core/current-run-ice cs) "this ICE")
-                          runner-unbroken)]
+                          ice-title runner-unbroken tanked?)]
               (println line)))
 
           :else

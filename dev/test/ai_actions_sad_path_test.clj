@@ -324,3 +324,129 @@
                    "exception at a model seat — and unlike a display, several of "
                    "these run automatically from inside other actions:\n  "
                    (clojure.string/join "\n  " throwers))))))))
+
+;; ============================================================================
+;; Ambiguity is not absence (#151 item 5)
+;; ============================================================================
+;; A duplicate-title lookup prints "❓ Multiple copies of 'X' installed" and
+;; returns nil. The caller then read that nil as "no such card" and printed
+;; "❌ Card not found installed: X" underneath — two contradictory verdicts on
+;; one card, from a seat that was holding two of them. The Corp half of this was
+;; already fixed (ambiguous-or-missing-error), but it counted CORP installs
+;; only, so from a Runner seat the count was always 0 and every Runner
+;; ambiguity fell through to the not-found lie.
+
+(def ^:private two-leeches
+  {:program [{:cid 101 :title "Leech" :zone [:rig :program] :counter {:virus 2}
+              :abilities [{:label "Spend 1 hosted virus counter"}]}
+             {:cid 102 :title "Leech" :zone [:rig :program] :counter {:virus 0}
+              :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+
+(defn- runner-rig-state [rig]
+  (mock-client-state
+   :side "runner"
+   :game-state {:runner {:click 3 :credit 5 :hand [] :rig rig}
+                :corp {:click 0 :credit 5 :hand [] :servers {}}
+                :active-player "runner"}))
+
+(deftest test-use-ability-ambiguous-runner-card-is-not-not-found
+  (testing "two copies installed: say which to specify, never 'not found'"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech" 0)))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "a card the seat has TWO of is not missing, got: " out))
+        (is (clojure.string/includes? out "[0]")
+            (str "expected the [N] suffix hint, got: " out)))))
+  (testing "the returned status names ambiguity, not absence"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [result (atom nil)
+            _ (with-out-str
+                (with-redefs [ws/send-message! (fn [_ _] true)]
+                  (reset! result (ai-actions/use-ability! "Leech" 0))))
+            result @result]
+        (is (= :error (:status result)))
+        (is (clojure.string/includes? (str (:reason result)) "Ambiguous")
+            (str "expected an ambiguity reason, got: " (:reason result))))))
+  (testing "a genuinely absent card still reports not-found"
+    (with-mock-state (runner-rig-state {:program [{:cid 103 :title "Buzzsaw"
+                                                   :zone [:rig :program]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech" 0)))]
+        (is (clojure.string/includes? out "Card not found installed")
+            (str "absence must still be reported as absence, got: " out))))))
+
+(deftest test-trash-installed-ambiguous-runner-card-is-not-not-found
+  (testing "trash-installed on a duplicate title does not claim the card is missing"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/trash-installed! "Leech")))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "ambiguity is not absence, got: " out))))))
+
+(deftest test-abilities-ambiguous-runner-card-is-not-not-found
+  (testing "the abilities display does not claim a duplicated card is missing"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str (ai-actions/show-card-abilities "Leech"))]
+        (is (clojure.string/includes? out "Multiple copies")
+            (str "expected the disambiguation list, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "ambiguity is not absence, got: " out))))))
+
+(deftest test-explicit-index-out-of-range-is-not-ambiguity
+  ;; Guest panel: "Leech [9]" with two Leeches missed the lookup, and the honest-
+  ;; error helper stripped the suffix, counted two, and told the seat to "specify
+  ;; [N]" — advice it had just taken — with a worked example of `"Leech [9] [0]"`,
+  ;; which is not something you can type. An out-of-range index is its own state.
+  (testing "the range is named, and the example is typeable"
+    (with-mock-state (runner-rig-state two-leeches)
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [9]" 0)))]
+        (is (clojure.string/includes? out "0..1")
+            (str "expected the valid index range, got: " out))
+        (is (not (clojure.string/includes? out "[9] [0]"))
+            (str "must not suggest a doubled suffix, got: " out))
+        (is (not (clojure.string/includes? out "Card not found installed"))
+            (str "the card IS installed — twice, got: " out)))))
+  (testing "an explicit index on a title with no copies is still not-found"
+    (with-mock-state (runner-rig-state {:program [{:cid 103 :title "Buzzsaw"
+                                                   :zone [:rig :program]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [1]" 0)))]
+        (is (clojure.string/includes? out "Card not found installed")
+            (str "no Leech at all is absence, got: " out))))))
+
+(deftest test-explicit-index-outranks-the-single-match-shortcut
+  ;; With ONE copy installed, "Leech [9]" used to resolve to the Leech: the
+  ;; single-match branch ran before the explicit-index branch, so an index the
+  ;; seat deliberately typed was silently discarded — and it would have been
+  ;; told about it if it had owned two (guest re-review).
+  (testing "an out-of-range index on a single copy is refused, not silently used"
+    (with-mock-state (runner-rig-state
+                      {:program [{:cid 101 :title "Leech" :zone [:rig :program]
+                                  :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [9]" 0)))]
+        (is (clojure.string/includes? out "0..0")
+            (str "expected the valid range for one copy, got: " out)))))
+  (testing "an in-range explicit index on a single copy still works"
+    (with-mock-state (runner-rig-state
+                      {:program [{:cid 101 :title "Leech" :zone [:rig :program]
+                                  :abilities [{:label "Spend 1 hosted virus counter"}]}]})
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [_ _] true)]
+                    (ai-actions/use-ability! "Leech [0]" 0)))]
+        (is (not (clojure.string/includes? out "Card not found"))
+            (str "\"Leech [0]\" names the only Leech, got: " out))
+        (is (not (clojure.string/includes? out "0..0"))
+            (str "an in-range index is not an error, got: " out))))))

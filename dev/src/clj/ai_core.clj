@@ -992,8 +992,12 @@
         match-count (count matches)]
     (cond
       (zero? match-count) nil
-      (= 1 match-count) (first matches)
+      ;; An EXPLICIT index is a claim about which copy, and it outranks the
+      ;; single-match shortcut: with one Leech installed, "Leech [9]" used to act
+      ;; on the Leech, silently ignoring an index the seat asked for and would
+      ;; have been told about if it had owned two (guest re-review).
       explicit-index? (nth (vec matches) index nil)
+      (= 1 match-count) (first matches)
       :else
       (do
         (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
@@ -1040,8 +1044,10 @@
         match-count (count matches)]
     (cond
       (zero? match-count) nil
-      (= 1 match-count) (first matches)
+      ;; Explicit index before the single-match shortcut — same reason as
+      ;; find-installed-card above.
       explicit-index? (nth (vec matches) index nil)
+      (= 1 match-count) (first matches)
       :else
       (let [cs @state/client-state
             ;; A FORCED encounter can put the Runner on an ICE that :position
@@ -1066,6 +1072,72 @@
                     status (if rezzed? "rezzed" "unrezzed")]
                 (println (format "   → \"%s [%d]\" (%s, %s)" title idx location status))))
             nil))))))
+
+(defn installed-title-match-count
+  "How many INSTALLED cards in `scope` share the title parsed out of card-name
+   (the [N] suffix is stripped first, so \"Leech [1]\" counts Leeches).
+   `scope` is :runner (the rig) or :corp (every server's ICE + content).
+
+   This is the question \"was that nil ambiguity or absence?\" — the two states
+   a find-installed-* miss collapses into, which a caller cannot tell apart
+   from the nil alone."
+  [card-name scope]
+  (let [{:keys [title]} (parse-card-reference card-name)
+        installed (case scope
+                    :runner (let [rig (state/runner-rig)]
+                              (concat (:program rig) (:hardware rig) (:resource rig)))
+                    :corp (let [servers (state/corp-servers)]
+                            (concat (mapcat :ices (vals servers))
+                                    (mapcat :content (vals servers))))
+                    nil)]
+    (count (filter #(= title (:title %)) installed))))
+
+(defn report-installed-lookup-miss!
+  "Print the honest reason a find-installed-* lookup returned nil and return an
+   {:status :error :reason ...} map. `scopes` are the zones the caller actually
+   searched (:runner / :corp), in any order; the largest match count decides.
+
+   Ambiguity and absence are different facts. find-installed-card /
+   find-installed-corp-card return nil for BOTH, having already printed the
+   \"❓ Multiple copies\" list in the ambiguous case — so a caller that reads
+   nil as absence prints \"❌ Card not found installed: Leech\" directly beneath
+   a list of the seat's two Leeches (#151 item 5). Two verdicts, one card, and
+   the louder one is false: the seat is left believing its board is wrong.
+
+   The Corp half of this had a fix that counted CORP installs only, so from a
+   Runner seat the count was always 0 and every Runner ambiguity fell straight
+   through to the not-found lie."
+  [card-name scopes]
+  (let [{:keys [title index explicit-index?]} (parse-card-reference card-name)
+        best (apply max 0 (map #(installed-title-match-count card-name %) scopes))]
+    (cond
+      ;; The seat DID specify an index and the lookup still missed — the index is
+      ;; out of range. Telling it to "specify [N]" is advice it already took, and
+      ;; the worked example built from card-name reads "Leech [9] [0]", which is
+      ;; not a thing you can type (guest panel). Name the range instead.
+      (and explicit-index? (pos? best))
+      (do
+        (println (format "❌ No copy [%d] of '%s' — %d installed, so the valid indices are 0..%d."
+                         index title best (dec best)))
+        (println (format "   Re-run as \"%s [0]\"%s"
+                         title
+                         (if (> best 1) (format " … \"%s [%d]\"" title (dec best)) "")))
+        (flush)
+        {:status :error
+         :reason (format "Index out of range: %s has %d installed copies" title best)})
+
+      (> best 1)
+      (do
+        (println (str "   Re-run with the [N] suffix, e.g. \"" title " [0]\""))
+        (flush)
+        {:status :error
+         :reason (str "Ambiguous: multiple copies of " title " installed — specify [N]")})
+
+      :else
+      (do
+        (println (str "❌ Card not found installed: " card-name))
+        (flush)
+        {:status :error :reason (str "Card not found: " card-name)}))))
 
 (defn find-card-by-cid
   "Find a card by CID (card ID) anywhere in the game state.
