@@ -187,7 +187,7 @@
 ;; Diviner has ONE subroutine. In marquee 9242bc1b it fired TWICE (2 net damage,
 ;; 2 cards trashed) because handle-corp-fire-unbroken's "unbroken subs" view
 ;; filtered only :broken, not :fired — so on re-entry after the sub already
-;; fired it still saw the sub as fireable and (when the :fired-at-position guard
+;; fired it still saw the sub as fireable and (when the :fired-at-encounter guard
 ;; was stale) re-sent the fire command. The engine's own resolve-unbroken-subs!
 ;; excludes :fired; the client's view must match. A :fired sub is resolved, not
 ;; fireable.
@@ -206,7 +206,7 @@
                 :subroutines [{:broken false :fired true}]}]
          :log [{:text "ai-runner indicates to fire all unbroken subroutines on Diviner"}])
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          ;; :fired-at-position deliberately absent — simulate the stale re-entry
+          ;; :fired-at-encounter deliberately absent — simulate the stale re-entry
           ;; that let the double-fire through. The sub-state guard must stand on
           ;; its own, not lean on the position bookkeeping.
           (runs/set-strategy! {:fire-unbroken true})
@@ -836,7 +836,7 @@
                 "Must not re-send continue while waiting for the Corp")))))))
 
 (deftest test-pass-fired-ice-resets-across-runs
-  (testing "passed-ice-position does not leak across runs: after reset-state!
+  (testing "passed-ice-encounter does not leak across runs: after reset-state!
             (which auto-continue-loop! now calls on run-complete), the same
             fired ICE gets a fresh pass-continue instead of being treated as
             already-passed. Guards against run-event runs (Jailbreak/Conduit)
@@ -945,7 +945,7 @@
     (let [sent (atom [])]
       (with-mock-state
         (apply mock-state-with-run (mapcat identity encounter-cant-break-state))
-        (reset! runner-handlers/signaled-fire-position nil)
+        (reset! runner-handlers/signaled-fire-encounter nil)
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (runs/set-strategy! {:full-break true})
           (let [result (runs/continue-run!)]
@@ -960,7 +960,7 @@
     (let [sent (atom [])]
       (with-mock-state
         (apply mock-state-with-run (mapcat identity encounter-cant-break-state))
-        (reset! runner-handlers/signaled-fire-position nil)
+        (reset! runner-handlers/signaled-fire-encounter nil)
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           (runs/set-strategy! {:full-break true :tank #{"Palisade"}})
           (let [result (runs/continue-run!)]
@@ -1016,7 +1016,7 @@
 ;; loop marched on while the Corp sat on an unhandled prompt. These guard the
 ;; pure decision: a sub-opened prompt → :decision-required (loop pauses to
 ;; resolve), no prompt → :action-taken (loop continues). Both keep
-;; :fired-at-position so re-entry never re-fires.
+;; :fired-at-encounter so re-entry never re-fires.
 
 (deftest fire-unbroken-strategy-result-waiting-prompt-is-the-runners-decision
   (testing "#151 item 3: a fired sub that hands the RUNNER a decision (Karunā's 'trash 2 / jack out?') shows up on our side as a NEW prompt of type \"waiting\" — it is not ours to resolve, so it must not be announced as 'a prompt the Corp must resolve' with choose-value steering"
@@ -1033,7 +1033,7 @@
           (str "must say whose decision it is, got:\n" out))
       (is (not= :decision-required (:status result))
           (str "not a Corp decision — must not pause the loop as one, got: " result))
-      (is (= 1 (:fired-at-position result))
+      (is (= 1 (:fired-at-encounter result))
           "the ICE WAS fired; re-entry must still not re-fire"))))
 
 (deftest extract-run-events-ignores-the-run-start-line-and-pre-run-entries
@@ -1076,8 +1076,8 @@
       (is (= :decision-required (:status result))
           "an open prompt must pause the loop (terminal status), not let it march on")
       (is (= prompt (:prompt result)) "the opened prompt is threaded back to the caller")
-      (is (= 1 (:fired-at-position result))
-          "still records fired-at-position so re-entry never re-fires the ICE")
+      (is (= 1 (:fired-at-encounter result))
+          "still records fired-at-encounter so re-entry never re-fires the ICE")
       (is (= :auto-fired-subs (:action result)))
       (is (clojure.string/includes? out "Brân 1.0")
           "names the ICE whose sub opened the prompt")
@@ -1092,7 +1092,7 @@
                                   "Palisade" 2 0 nil)]
       (is (= :action-taken (:status result))
           "no prompt → keep auto-continuing, as before")
-      (is (= 0 (:fired-at-position result)) "fired-at-position is preserved")
+      (is (= 0 (:fired-at-encounter result)) "fired-at-encounter is preserved")
       (is (= 2 (:sub-count result)))
       (is (nil? (:prompt result)) "no prompt threaded when none opened")
       (is (empty? lines) "the no-prompt path stays quiet (the fire line is printed by the caller)"))))

@@ -344,7 +344,14 @@
      - :paused-cannot-break   - full-break path, unbreakable/unaffordable ICE
      - :fire-decision-required - NOT-full-break path (handle-runner-encounter-ice),
                                  rezzed ICE with unbroken subs and no tank auth
-   Both must map to :tank, or the loop falls to :continue and spins forever."
+   Both must map to :tank, or the loop falls to :continue and spins forever.
+
+   NB :continue is a NO-OP tick, not an action: the consumer's :continue branch
+   returns nil and sends nothing. Any new status that needs a command sent must
+   map to something else, or the loop re-derives the same status forever with no
+   stall backstop watching (an active run is excluded from own-turn spin
+   tracking). A #160 remediation mapped a new decision status here and would have
+   spun exactly that way; the addition was removed instead."
   [result]
   (case (:status result)
     :decision-required      :handle-prompt

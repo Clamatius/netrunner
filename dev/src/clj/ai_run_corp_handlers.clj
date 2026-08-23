@@ -71,12 +71,12 @@
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
 
-;; {:key [position ice-cid] :at ms} of the encounter whose closing pass THIS
+;; {:key [encounter-key ice-cid] :at ms} of the encounter whose closing pass THIS
 ;; seat has already SENT (#150 guest finding): the engine acks a `continue`
 ;; through a WebSocket diff, and until it lands [:encounters :no-action] still
 ;; reads as un-passed, so an ack-based guard alone re-sends (and re-prints)
 ;; every loop tick in that window — the short burst variant, which can trip the
-;; stuck detector. Corp twin of runner-handlers/passed-ice-position.
+;; stuck detector. Corp twin of runner-handlers/passed-ice-encounter.
 ;;
 ;; TIME-BOUNDED (second guest pass): the latch exists only to cover the ack
 ;; window, so it is honoured for encounter-pass-latch-ms and then ignored. That
@@ -271,7 +271,7 @@
    the Corp sat on an unhandled prompt — the same flow-stall class #23 fixed, on
    the un-babysat path.
 
-   Both branches keep :fired-at-position so the caller still records it (the ICE
+   Both branches keep :fired-at-encounter so the caller still records it (the ICE
    was fired; re-entry must not re-fire). Only :status differs: :decision-required
    pauses the loop to resolve the opened prompt; :action-taken lets it continue.
 
@@ -284,11 +284,11 @@
    recorded.
 
    Returns {:lines [str...] :result <status-map>}."
-  [ice-title sub-count position new-prompt]
+  [ice-title sub-count enc-key new-prompt]
   (let [base {:action :auto-fired-subs
               :ice ice-title
               :sub-count sub-count
-              :fired-at-position position}]
+              :fired-at-encounter enc-key}]
     (cond
       (and (some? new-prompt) (state/waiting-prompt-type? (:prompt-type new-prompt)))
       {:lines [(format "⏳ A subroutine on %s handed the RUNNER a decision: %s"
@@ -317,32 +317,40 @@
    Waits for Runner's signal before firing (model-vs-model coordination)."
   [{:keys [side run-phase strategy state gameid]}]
   (when (and (= side "corp")
-             (= run-phase "encounter-ice")
+             ;; at-encounter?, not the phase string: the Corp twin of the Runner's
+             ;; tank gap (#160). A forced encounter reads phase "success", so a
+             ;; Corp running `monitor-run --persistent --fire-unbroken` never
+             ;; recognised the fire decision and both seats waited on each other.
+             (core/at-encounter? state run-phase)
              (:fire-unbroken strategy))
     (let [run (get-in state [:game-state :run])
           position (:position run)
-          already-fired-here? (= (:fired-at-position strategy) position)
-          current-ice (core/current-run-ice state)
+          enc-key (core/encounter-key state)
+          ;; Keyed on encounter IDENTITY, not :position: a forced encounter
+          ;; leaves :position pointing elsewhere, so a position-keyed latch both
+          ;; misses re-entries and blocks a genuinely new encounter (#160).
+          already-fired-here? (= (:fired-at-encounter strategy) enc-key)
+          current-ice (core/encountered-ice state)
           ice-title (:title current-ice "ICE")
           subroutines (:subroutines current-ice)
           ;; A :fired sub is RESOLVED, not fireable — exclude it, matching the
           ;; engine's resolve-unbroken-subs! and the sibling fire handlers. Without
           ;; this, a post-fire re-entry saw the fired sub as still fireable and
-          ;; (when :fired-at-position was stale) re-sent the fire command, firing
+          ;; (when the fired-at latch was stale) re-sent the fire command, firing
           ;; the same sub twice. #71 (Diviner: 2 net damage from one subroutine).
           unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
           runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)]
       (cond
         already-fired-here? nil
         (nil? current-ice)
-        (do (println "   --fire-unbroken: no ICE at current position") nil)
+        (do (println "   --fire-unbroken: no ICE is being encountered") nil)
         (empty? unbroken-subs) nil
         (not runner-signaled?) nil
         :else
         (do
           (println (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (Runner signaled)"
                           (count unbroken-subs) ice-title))
-          ;; Note: caller must call set-strategy! to mark fired-at-position
+          ;; Note: caller must call set-strategy! to mark fired-at-encounter
           ;; (result carries it in both branches). We capture the pre-fire prompt
           ;; so that — if a fired sub OPENS a prompt (issue #24) — we surface it as
           ;; :decision-required instead of letting the loop march on (the same
@@ -359,7 +367,7 @@
                   ;; sub-opened one (see core/new-prompt? rationale).
                   new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
                   {:keys [lines result]} (fire-unbroken-strategy-result
-                                          ice-title (count unbroken-subs) position new-prompt)]
+                                          ice-title (count unbroken-subs) enc-key new-prompt)]
               (doseq [l lines] (println l))
               result)))))))
 
@@ -417,7 +425,7 @@
              (:fire-if-asked strategy))
     (let [run (get-in state [:game-state :run])
           position (:position run)
-          current-ice (core/current-run-ice state)]
+          current-ice (core/encountered-ice state)]
       (cond
         ;; Approach-ice with unrezzed ICE - WAKE UP for rez decision
         ;; Unless --rez or --no-rez strategy already handles it
@@ -428,13 +436,14 @@
              (not (:rez strategy)))
         nil  ; Fall through to rez-decision handler
 
-        ;; Encounter-ice - check for unbroken subs
-        (= run-phase "encounter-ice")
+        ;; Any live encounter — the normal phase OR a forced one (#160)
+        (core/at-encounter? state run-phase)
         (let [ice-title (:title current-ice "ICE")
               subroutines (:subroutines current-ice)
               unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
               runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)
-              already-fired-here? (= (:fired-at-position strategy) position)]
+              enc-key (core/encounter-key state)
+              already-fired-here? (= (:fired-at-encounter strategy) enc-key)]
           (cond
             ;; Already fired at this position - continue
             already-fired-here?
@@ -462,7 +471,7 @@
                 (let [cur-prompt (state/get-prompt)
                       new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
                       {:keys [lines result]} (fire-unbroken-strategy-result
-                                              ice-title (count unbroken-subs) position new-prompt)]
+                                              ice-title (count unbroken-subs) enc-key new-prompt)]
                   (doseq [l lines] (println l))
                   result)))
 
@@ -535,14 +544,14 @@
    'Waiting for Runner to continue past <ice>' idle wait."
   [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "corp")
-             (= run-phase "encounter-ice")
+             (core/at-encounter? state run-phase)
              (not (core/i-already-passed-run-window? state side))
              (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
-    (let [current-ice (core/current-run-ice state)
+    (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          pass-key [(get-in state [:game-state :run :position]) (:cid current-ice)]]
-      (when (and current-ice (:rezzed current-ice) (seq subroutines) (empty? actionable-subs)
+          pass-key [(core/encounter-key state) (:cid current-ice)]]
+      (when (and (core/encounter-ice-active? state current-ice) (seq subroutines) (empty? actionable-subs)
                  ;; Pass already SENT for this encounter, ack not yet in the
                  ;; mirror — fall through (idle), don't re-send/re-print.
                  (not (passed-encounter-recently? pass-key)))
@@ -560,8 +569,8 @@
    If Runner hasn't passed yet, wait. If Runner already passed, continue."
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "corp")
-             (= run-phase "encounter-ice"))
-    (let [current-ice (core/current-run-ice state)
+             (core/at-encounter? state run-phase))
+    (let [current-ice (core/encountered-ice state)
           ice-title (:title current-ice "ICE")
           log (get-in state [:game-state :log])
           recent-log (take 10 (reverse log))
@@ -572,7 +581,7 @@
         (let [recent-entries (take 5 (reverse log))
               runner-passed? (some #(re-find #"(?i)ai-runner has no further action" (str (:text %))) recent-entries)
               position (get-in state [:game-state :run :position])
-              pass-key [position (:cid current-ice)]]
+              pass-key [(core/encounter-key state) (:cid current-ice)]]
           (if (and runner-passed?
                    ;; Same sent-pass latch as handle-corp-all-subs-resolved
                    ;; (second guest pass): in the Runner-first ordering the log

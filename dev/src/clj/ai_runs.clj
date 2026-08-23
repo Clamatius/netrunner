@@ -1623,13 +1623,13 @@
                   ;; fire-if-asked is "sleep mode" - handles fire and empty windows
                   (fn [ctx]  ; Wrapper to update strategy after firing
                     (when-let [result (corp-handlers/handle-corp-fire-if-asked ctx)]
-                      (when-let [pos (:fired-at-position result)]
-                        (set-strategy! {:fired-at-position pos}))
+                      (when-let [k (:fired-at-encounter result)]
+                        (set-strategy! {:fired-at-encounter k}))
                       result))
                   (fn [ctx]  ; Wrapper to update strategy after firing
                     (when-let [result (corp-handlers/handle-corp-fire-unbroken ctx)]
-                      (when-let [pos (:fired-at-position result)]
-                        (set-strategy! {:fired-at-position pos}))
+                      (when-let [k (:fired-at-encounter result)]
+                        (set-strategy! {:fired-at-encounter k}))
                       result))
                   corp-handlers/handle-corp-fire-decision
                   corp-handlers/handle-corp-all-subs-resolved
@@ -1872,8 +1872,8 @@
                 (print-while-you-slept! start-log-count))
               (when (or (= status :run-complete) (= status :no-run))
                 (basic/check-auto-end-turn!)
-                ;; Clear per-run runner handler atoms (passed-ice-position,
-                ;; signaled-fire-position, etc.) now that the run is over.
+                ;; Clear per-run runner handler atoms (passed-ice-encounter,
+                ;; signaled-fire-encounter, etc.) now that the run is over.
                 ;; run!/monitor-run! only reset at their START, so a later
                 ;; run-event run (Jailbreak/Conduit) that enters via continue-run!
                 ;; would otherwise inherit stale [position ice] keys and skip a

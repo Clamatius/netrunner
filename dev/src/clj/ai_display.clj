@@ -1586,8 +1586,15 @@
         ;; runs while :phase reads something else, and reading the run-level
         ;; :no-action there made the headline ("your move") contradict the
         ;; encounter guidance printed directly beneath it (guest re-review).
+        ;; The same ledger choice the send guards make (core/encounter-window?),
+        ;; expressed on a bare game-state: the SUMMARY's presence, not any field
+        ;; in it. Keying on :ice left the headline reading the run ledger on
+        ;; exactly the boards the guards read the encounter ledger on, so
+        ;; "your move" could contradict the guidance printed beneath it (guest
+        ;; panel, 2nd pass — the first pass fixed the phase half of this and
+        ;; stopped one step short).
         v   (if (or (= "encounter-ice" (:phase run))
-                    (some? (get-in gs [:encounters :ice])))
+                    (seq (:encounters gs)))
               (get-in gs [:encounters :no-action])
               (:no-action run))]
     (cond (keyword? v) (name v) (string? v) v :else nil)))
@@ -1625,31 +1632,22 @@
       :else
       "⏳ Waiting on Runner — active player acts first; your sub-step is next.")))
 
-(defn encountered-ice
-  "The ICE the Runner is actually encountering: the wire's own encounter summary
-   [:encounters :ice] first, the position-derived ICE only as a fallback.
+(def encountered-ice
+  "The ICE the Runner is actually encountering — see ai-core/encountered-ice.
+   Re-exported here because these display lines NAME the ICE and key the tank
+   check on that name: get the identity wrong and the guidance is confidently
+   about the wrong card. It moved to ai-core when the run HANDLERS needed the
+   same authority (#160) — one definition, not a display copy and a handler
+   copy."
+  core/encountered-ice)
 
-   A FORCED encounter puts the Runner on ICE that :position does not point at,
-   so position is not the authority — the same rule the card resolvers had to
-   learn twice (#100, #152). It matters here because these lines NAME the ICE
-   and now key the tank check on that name: get the identity wrong and the
-   guidance is confidently about the wrong card.
-
-   Trustworthy as a liveness signal too: the engine keeps :encounters as a stack
-   and POPS it when the encounter ends (game.core.runs), so a present :ice means
-   an encounter that is actually happening."
-  [state]
-  (or (get-in state [:game-state :encounters :ice])
-      (core/current-run-ice state)))
-
-(defn live-encounter?
+(def live-encounter?
   "True when the wire reports an encounter in progress, whatever the run phase
-   says. A forced encounter (an on-access Archangel, say) is live while
-   [:run :phase] reads \"success\" — gating the break/tank guidance on the phase
-   string alone left exactly that case being told 'use continue to pass
-   priority', the #92 lie in the one phase nobody had checked (guest panel)."
-  [state]
-  (some? (get-in state [:game-state :encounters :ice])))
+   says — see ai-core/live-encounter?. Gating the break/tank guidance on the
+   phase string alone left a forced encounter (live while [:run :phase] reads
+   \"success\") being told \"use continue to pass priority\", the #92 lie in the
+   one phase nobody had checked (guest panel)."
+  core/live-encounter?)
 
 (defn runner-encounter-unbroken-count
   "Count of subroutines on the current encounter ICE that the Runner has neither
@@ -1659,7 +1657,7 @@
    full client-state map. Returns 0 when there is no rezzed current ICE."
   [state]
   (let [ice (encountered-ice state)]
-    (if (and ice (:rezzed ice))
+    (if (core/encounter-ice-active? state ice)
       (count (filter #(and (not (:broken %)) (not (:fired %)))
                      (:subroutines ice)))
       0)))
@@ -1685,16 +1683,36 @@
    auto-prompt echo used to re-ask \"you must decide: break OR tank\" directly
    underneath, which reads as the tank having failed (#151 item 2). Pass
    `tank-authorized?` true for the confirmation form: the tank stands, the Corp
-   owes the subs, and the command that advances from here is `wait`."
+   owes the subs, and the command that advances from here is `wait`.
+
+   `corp-declined?` is the THIRD form, and it is the one that makes the flat
+   \"continue will NOT pass this window\" a lie if left out. Once the Corp is
+   recorded as this encounter's passer, game.core.runs `continue :encounter-ice`
+   ENDS the encounter on our continue and the unbroken subs never resolve — a
+   free pass, verified against the engine in
+   game.ai-forced-encounter-wire-test. The #92 rule holds only while the window
+   is still open on both sides (guest panel CRITICAL, #160)."
   ([ice-title unbroken-count]
-   (runner-encounter-decline-hint-lines ice-title unbroken-count false))
+   (runner-encounter-decline-hint-lines ice-title unbroken-count false false))
   ([ice-title unbroken-count tank-authorized?]
-   (if tank-authorized?
+   (runner-encounter-decline-hint-lines ice-title unbroken-count tank-authorized? false))
+  ([ice-title unbroken-count tank-authorized? corp-declined?]
+   (cond
+     corp-declined?
+     [(format "    → The Corp has PASSED this encounter — it is not going to fire the %d remaining subroutine%s on %s."
+              unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
+      "      • `continue` — ends the encounter here; the unresolved subs never fire. This is a free pass."
+      (format "      • Or break %s first if a break itself earns you something." ice-title)
+      "      (This is the one encounter state where `continue` DOES advance you.)"]
+
+     tank-authorized?
      [(format "    → Tank stands on %s — you have declined to break; the Corp now owes you the %d unbroken subroutine%s."
               ice-title unbroken-count (if (= unbroken-count 1) "" "s"))
       "      • `wait` — the subs fire on the Corp's action, then the run advances."
       (format "      • Changed your mind? Break %s with an icebreaker before the Corp fires." ice-title)
       "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
+
+     :else
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
               unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
       "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
@@ -1707,22 +1725,29 @@
    ([:encounters :ice]) while [:run :phase] says something else, e.g. an
    on-access Archangel during \"success\".
 
-   Deliberately NOT the break/tank menu. `tank` only sets a flag, and the handler
-   that turns that flag into the Corp-facing signal
-   (handle-runner-encounter-ice) gates on run-phase == \"encounter-ice\"; the
-   Corp's auto-fire gates the same way. So at this window `tank` is a no-op, and
-   printing it would be the same class of bug as the \"use continue to pass
-   priority\" steer this branch replaced — a command that reads as progress and
-   does nothing. Breaking still works: use-ability is phase-independent.
+   This is the ordinary break/tank menu with the odd phase NAMED, because both
+   options really do work here now. It used to say `tank` could not help, which
+   was true when it was written: the handler that turns the tank flag into the
+   Corp-facing signal, and the Corp's auto-fire that answers it, both gated on
+   run-phase == \"encounter-ice\". #160 moved every one of those gates onto
+   core/at-encounter?, mirroring the engine's own `continue` dispatch (which
+   tests the encounter BEFORE the phase). Advertising a no-op would be the same
+   bug class as the \"use continue to pass priority\" steer this branch replaced —
+   so if those gates are ever narrowed back to the phase string, this text is
+   wrong again and must move with them.
+
+   The phase line stays: a seat that reads \"success\" in the ladder and a live
+   encounter here needs to be told those are the same window, not two.
 
    Pure; returns lines to println."
   [ice-title unbroken-count phase]
   [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (phase: %s)."
            ice-title unbroken-count (if (= unbroken-count 1) "" "s") (or phase "?"))
-   "      • Break it with an icebreaker if you can — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
-   "      • `continue` does NOT pass an encounter, and `tank` cannot help here: its signal is only sent from the standard"
-   "        encounter window, so it would set a flag and do nothing visible."
-   "      • If the window does not clear on its own after the subs resolve, escalate (`./dev/umpire-ping`) rather than re-sending."])
+   "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
+   "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
+   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title)
+   "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
+   "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"])
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
@@ -1779,19 +1804,18 @@
       ;; Runner at an encounter with subs still to break/tank: `continue` is
       ;; refused (#92). Name the real options instead of the impossible pass.
       (and runner-unbroken (pos? runner-unbroken))
-      (let [ice-title (:title (encountered-ice state) "this ICE")]
-        (if (= run-phase "encounter-ice")
+      (let [ice-title (:title (encountered-ice state) "this ICE")
+            corp-declined? (core/opponent-passed-encounter? state my-side)]
+        (if (or (= run-phase "encounter-ice") corp-declined?)
           (doseq [line (runner-encounter-decline-hint-lines
                         ice-title runner-unbroken
-                        (state/tank-authorized? ice-title))]
+                        (state/tank-authorized? ice-title)
+                        corp-declined?)]
             (println line))
-          ;; A FORCED encounter outside the standard window. The break/tank menu
-          ;; must NOT be printed here: `tank` writes a flag that only
-          ;; handle-runner-encounter-ice acts on, and that handler gates on
-          ;; run-phase == "encounter-ice" (ai-run-runner-handlers) — as does the
-          ;; Corp's auto-fire. Offering `tank` here would advertise a command
-          ;; that silently does nothing, which is worse than the wrong steer it
-          ;; replaced. Say what is true and what still works instead.
+          ;; A FORCED encounter outside the standard window. Same two options
+          ;; (#160 put the handlers on core/at-encounter?, so `tank` is no longer
+          ;; a no-op here), but the phase is named — the ladder above says
+          ;; "success" and the seat has to be told that is still this encounter.
           (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase)]
             (println line))))
 
