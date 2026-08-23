@@ -3029,13 +3029,23 @@
 ;; Second guest pass — over the fixes the first pass produced
 ;; ============================================================================
 
-(deftest test-forced-encounter-does-not-advertise-a-no-op-tank
-  ;; The first pass's fix widened the break/tank menu to any live encounter. But
-  ;; `tank` only writes a flag, and the handler that turns it into the Corp-facing
-  ;; signal gates on run-phase == "encounter-ice" (ai-run-runner-handlers), as
-  ;; does the Corp's auto-fire. So outside that window the menu advertised a
-  ;; command that sets a flag and does nothing — the same class of bug as the
-  ;; "use continue to pass priority" steer it replaced, and harder to notice.
+(deftest test-forced-encounter-advertises-exactly-what-works
+  ;; History, because this test has now asserted both directions and the reason
+  ;; it flipped is the whole point:
+  ;;
+  ;;   * The #151 first pass widened the break/tank menu to any live encounter.
+  ;;   * The second pass NARROWED it back: `tank` only writes a flag, and the
+  ;;     handler that turns it into the Corp-facing signal gated on run-phase ==
+  ;;     "encounter-ice", as did the Corp's auto-fire. Offering it advertised a
+  ;;     command that sets a flag and does nothing.
+  ;;   * #160 moved those gates onto core/at-encounter?, mirroring the engine's
+  ;;     own `continue` dispatch. `tank` now really does send here, so withholding
+  ;;     it became the lie instead.
+  ;;
+  ;; The invariant under all three, and what this test is actually for: the menu
+  ;; offers exactly the commands that can fire in this window — no more, no less.
+  ;; If the handler gates are ever narrowed back to the phase string, this must
+  ;; flip again.
   (let [archangel {:cid 77 :title "Archangel" :rezzed true
                    :subroutines [{:broken false :fired false}]}
         on-access (mock-client-state
@@ -3046,7 +3056,7 @@
                                 :encounters {:ice archangel}
                                 :corp {:servers {:rd {:ices []}}}
                                 :runner {:click 1 :credit 3 :rig {}}})]
-    (testing "the forced encounter is surfaced, but tank is not offered as the way out"
+    (testing "the forced encounter is surfaced, with both commands that work in it"
       (with-mock-state on-access
         (reset! ai-state/run-strategy {})
         (let [out (with-out-str
@@ -3058,8 +3068,10 @@
               (str "the seat must be told what it is encountering, got: " out))
           (is (re-find #"(?i)forced encounter" out)
               (str "name the situation, got: " out))
-          (is (not (re-find #"tank \"Archangel\"" out))
-              (str "must not advertise a command that cannot fire here, got: " out))
+          (is (re-find #"tank \"Archangel\"" out)
+              (str "tank reaches the Corp from here now (#160) — offer it, got: " out))
+          (is (not (re-find #"(?i)tank cannot help" out))
+              (str "and do not simultaneously disclaim it, got: " out))
           (is (not (str/includes? out "pass priority"))
               (str "continue does not pass an encounter either, got: " out))
           (is (re-find #"(?i)icebreaker" out)

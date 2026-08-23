@@ -468,14 +468,25 @@
 ;; with unbroken subs to break/tank/jack-out instead of `continue`; those hints
 ;; are only truthful if the seat's `continue` genuinely cannot pass here.
 ;;
-;; This also FALSIFIES a plausible review finding (GPT-5.6 Sol, #92 panel) that
-;; the decline hint is wrong once the Corp has passed the encounter: the AI
-;; seat's refusal is decided by handle-runner-encounter-ice, which reads
-;; RUN-level :no-action — and set-phase (engine runs.clj:98) resets that to false
-;; on entering encounter-ice, while `continue :encounter-ice` (runs.clj:426) only
-;; ever writes the ENCOUNTER-level passer. So corp-passed? is false throughout an
-;; encounter and `continue` is refused regardless of the encounter-level passer.
-;; The hint is correct in every state the seat can actually reach.
+;; This section once claimed to FALSIFY a review finding (GPT-5.6 Sol, #92 panel)
+;; that the decline hint is wrong after the Corp has passed the encounter. That
+;; claim has itself been falsified (#160, second Sol panel) and the reasoning is
+;; worth keeping because it was subtly wrong in an instructive way.
+;;
+;; What it got right: handle-runner-encounter-ice DID read run-level :no-action,
+;; set-phase does reset that to false on entering encounter-ice, and
+;; `continue :encounter-ice` only ever writes the ENCOUNTER-level passer. So the
+;; seat's corp-passed? was indeed false for the whole encounter.
+;;
+;; What it got wrong: it concluded the HINT was therefore correct — reasoning
+;; from what our client happened to do, not from what the engine does. The engine
+;; ends the encounter on our continue when the other side is the recorded passer,
+;; without looking at the subroutines at all; the Runner walks past unbroken subs
+;; for free. Proven, rather than argued, in
+;; game.ai-forced-encounter-wire-test/a-continue-after-the-opponent-passed-ends-
+;; the-encounter-with-subs-unfired. The old behaviour was a stall in the one
+;; encounter state that has a free exit, and the seat was told the exit did not
+;; exist. The reads are now encounter-level on both sides of that question.
 ;; =============================================================================
 
 (defn- runner-encounter-ctx-state
@@ -516,21 +527,31 @@
           (is (not-any? #(= "continue" (:command %)) @sent)
               "no continue may reach the engine while unbroken subs remain"))))))
 
-(deftest encounter-refuses-continue-even-when-corp-passed-the-window
-  (testing "FALSIFIES the corp-passed review finding (#92 panel): with the Corp
-            recorded as the encounter passer, the AI seat STILL cannot pass with
-            continue — handle-runner-encounter-ice gates on RUN-level :no-action
-            (held false all encounter), so it refuses regardless of the
-            encounter-level passer. The decline hint is correct in this state too."
+(deftest encounter-with-corp-as-passer-takes-the-free-exit
+  (testing "#160: with the Corp recorded as the encounter passer, our continue
+            ENDS the encounter and the unbroken subs never fire (engine:
+            game.core.runs `continue :encounter-ice`). The seat must take that
+            pass, not sit on a fire decision the Corp has already declined to
+            make. This test asserted the opposite until the engine was asked."
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
+          (runner-handlers/reset-state!)
+          (with-out-str (ai/continue-run!))
+          (is (some #(= "continue" (:command %)) @sent)
+              (str "the closing pass is free here and must be sent, got: " @sent))
+          (runner-handlers/reset-state!)))))
+  (testing "and while the Corp has NOT passed, continue is still refused (#92 unchanged)"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs nil)
+          (runner-handlers/reset-state!)
           (with-out-str
             (let [r (ai/continue-run!)]
               (is (= :fire-decision-required (:status r))
-                  (str "continue must still be refused when Corp passed the encounter, got: " r))))
-          (is (not-any? #(= "continue" (:command %)) @sent)
-              "the seat must not silently pass an unbroken-sub encounter"))))))
+                  (str "the window is still open on both sides, got: " r))))
+          (is (not-any? #(= "continue" (:command %)) @sent))
+          (runner-handlers/reset-state!))))))
 
 ;; =============================================================================
 ;; Test: monitor-run --persistent must NOT drop the defender loop after a rez
@@ -1223,7 +1244,7 @@
                      (pr-str out)))))))))
 
 (deftest all-subs-resolved-passes-once-while-the-ack-is-in-flight
-  (testing "#150 guest finding (the short 12-line burst): the engine acks the Corp's continue through a diff; until it lands the encounter still reads un-passed. Repeated ticks on that pre-ack snapshot must send ONE continue and print ONE line — the Runner's passed-ice-position latch, mirrored"
+  (testing "#150 guest finding (the short 12-line burst): the engine acks the Corp's continue through a diff; until it lands the encounter still reads un-passed. Repeated ticks on that pre-ack snapshot must send ONE continue and print ONE line — the Runner's passed-ice-encounter latch, mirrored"
     (let [sent (atom [])
           ctx (-> (all-subs-resolved-ctx nil)
                   (assoc-in [:state :game-state :corp :servers :remote1 :ices]

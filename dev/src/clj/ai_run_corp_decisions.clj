@@ -180,7 +180,10 @@
         phase (:phase run)
         position (:position run)
         prompt (corp-prompt state)
-        current-ice (core/current-run-ice state)
+        ;; The ENCOUNTERED ICE (wire [:encounters :ice] first): a forced
+        ;; encounter is not at :position, so the position-derived card is a
+        ;; different card or none at all (#100, #152, #160).
+        current-ice (core/encountered-ice state)
         unbroken-subs (seq (unbroken-unfired-subs current-ice))]
     (cond
       (nil? run)
@@ -208,7 +211,12 @@
        :ice (assoc (select-keys current-ice [:cid :title :type :rezzed])
                    :position position)}
 
-      (and (= "encounter-ice" phase)
+      ;; at-encounter?, not the phase string: force-ice-encounter calls
+      ;; show-run-prompts, so the Corp DOES hold a run prompt at a forced
+      ;; encounter — it just reads phase "success", which left this classifier
+      ;; reporting no fire decision at all and `monitor-run --fire-if-asked`
+      ;; sitting on its hands (#160).
+      (and (core/at-encounter? state phase)
            prompt
            current-ice
            unbroken-subs)

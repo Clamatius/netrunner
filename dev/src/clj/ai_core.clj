@@ -1609,6 +1609,56 @@
   [state]
   (get-in state [:game-state :run :phase]))
 
+(defn live-encounter?
+  "True when the wire reports an ICE encounter in progress, WHATEVER the run
+   phase says.
+
+   This is the client-side mirror of the engine's own authority. game.core.runs
+   dispatches `continue` on
+
+       (if (get-current-encounter state) :encounter-ice (:phase (:run @state)))
+
+   — the encounter outranks the phase there, and the encounter stack is POPPED
+   when the encounter ends, so a present [:encounters :ice] means an encounter
+   that is actually happening. A FORCED encounter (an on-access Archangel, a
+   redirect) is live while [:run :phase] still reads \"success\": every client
+   gate written as (= run-phase \"encounter-ice\") is therefore blind to exactly
+   the case the engine handles fine (#160)."
+  [state]
+  (some? (get-in state [:game-state :encounters :ice])))
+
+(defn encounter-window?
+  "True when the current priority window is an ENCOUNTER's, so its pass ledger —
+   [:encounters :no-action] — is the one that answers \"who has passed?\".
+
+   Two signals, either is enough. A live [:encounters :ice] is the obvious one.
+   The second is the ledger's own PRESENCE: a wire snapshot can carry
+   {:encounters {:no-action \"corp\"}} with no :ice — encounter-ice-summary
+   returns nil if get-card cannot resolve the card and select-non-nil-keys then
+   drops the key — and several recorded #150 boards look exactly like that.
+   Keying only on :ice quietly handed those boards back to the run-level ledger,
+   which is the bug this whole predicate exists to stop.
+
+   contains?, not a truthiness test: the ledger's meaningful states are
+   absent (nobody has passed) and naming-a-side. Reading absent as \"fall back to
+   the other ledger\" is the (or supplied (live-read)) trap this codebase keeps
+   re-learning."
+  [state]
+  (boolean (or (live-encounter? state)
+               (contains? (get-in state [:game-state :encounters] {}) :no-action))))
+
+(defn at-encounter?
+  "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
+   the phase string does not name. The gate every encounter handler should use
+   in place of a bare (= run-phase \"encounter-ice\").
+
+   Tolerates a wire that reports the phase without an encounter summary (older
+   serializations, a diff that has not landed yet), so switching a gate to this
+   can only ever widen it, never drop the case that already worked."
+  [state run-phase]
+  (boolean (or (= run-phase "encounter-ice")
+               (live-encounter? state))))
+
 (defn- own-prompt
   "The given side's engine prompt-state (nil when it holds none). The ONE
    side-keyed prompt read in the wake path — has-prompt? and the #102 waiting-
@@ -1822,11 +1872,19 @@
                          (not corp-passed?)   :corp     ; Runner passed, Corp owes the second
                          :else nil)))]                  ; both passed — window is closing, nothing to own
     (cond
+      ;; The ENCOUNTER outranks the phase, and it is tested first for the same
+      ;; reason the engine tests it first: game.core.runs dispatches `continue`
+      ;; on (if (get-current-encounter state) :encounter-ice (:phase ...)). A
+      ;; FORCED encounter is a both-must-pass window too and records its pass on
+      ;; the encounter, but [:run :phase] there reads "success" — or "movement",
+      ;; which the run-pass-window? branch below would have answered from the
+      ;; WRONG ledger. Phase-only left that window with no owner and `wait` slept
+      ;; through it (#160, the forced twin of #102 items 4/6).
+      (or (= phase "encounter-ice") (encounter-window? state))
+      (owner-from (get-in state [:game-state :encounters :no-action]))
+
       (run-pass-window? phase)
       (owner-from (get-in state [:game-state :run :no-action]))
-
-      (= phase "encounter-ice")
-      (owner-from (get-in state [:game-state :encounters :no-action]))
 
       :else nil)))
 
@@ -1844,15 +1902,49 @@
    Single-valued caveat (see run-window-owner): :no-action records only the
    FIRST passer and set-phase resets it, so when it names the OPPONENT we may
    legitimately owe the closing pass — this predicate is true ONLY when it
-   names US."
+   names US.
+
+   ONE ledger at a time, chosen the way run-window-owner chooses it (#160, guest
+   panel CRITICAL). This used to OR the two together, which is safe only while
+   they describe the same window. A FORCED encounter breaks that: the run-level
+   key still holds the passer of the SUSPENDED outer window — a redirect during
+   movement, where we may well have passed movement already — and ORing it in
+   answered \"you have already passed\" about an encounter we have not touched.
+   Both send chokepoints consult this predicate, so the encounter's closing pass
+   was suppressed while the Runner-side latch had already recorded it as sent:
+   a silent deadlock, not a retry."
   [state side]
   (when side
     (let [side-name (str/lower-case (name (keyword side)))  ; "Corp"-tolerant (#69)
           mine #{(keyword side-name) side-name}
-          enc-no-action (get-in state [:game-state :encounters :no-action])
-          run-no-action (get-in state [:game-state :run :no-action])]
-      (boolean (or (contains? mine enc-no-action)
-                   (contains? mine run-no-action))))))
+          no-action (if (encounter-window? state)
+                      (get-in state [:game-state :encounters :no-action])
+                      (get-in state [:game-state :run :no-action]))]
+      (boolean (contains? mine no-action)))))
+
+(defn opponent-passed-encounter?
+  "True when the OPPONENT is recorded as the passer of the current encounter, so
+   our own `continue` will END the encounter rather than merely pass priority.
+
+   game.core.runs `continue :encounter-ice` reads: if the encounter's :no-action
+   names the other side, `encounter-ends`. It does NOT check whether subroutines
+   are still unbroken — the Corp declining to fire is the Corp's whole turn at
+   this window, and the subs simply never resolve. Verified against the engine in
+   game.ai-forced-encounter-wire-test for both a normal and a forced encounter:
+   Bank Job survives, the sub is neither broken nor fired, the run moves on.
+
+   This is why a seat facing unbroken subs cannot be told a flat \"continue does
+   not pass an encounter\" (the #92 rule): true while the window is still open,
+   false — and stalling — once the opponent has passed it."
+  [state side]
+  ;; Expressed as \"somebody passed this encounter and it was not us\" so the side
+  ;; normalization stays in i-already-passed-run-window? — the #127 ratchet is
+  ;; right that a second hand-rolled derivation is how the 45 got there.
+  (boolean (and side
+                (encounter-window? state)
+                (contains? #{:corp "corp" :runner "runner"}
+                           (get-in state [:game-state :encounters :no-action]))
+                (not (i-already-passed-run-window? state side)))))
 
 (defn- my-run-window?
   "True when THIS side currently owns the un-passed pass at an active run window.
@@ -2455,6 +2547,65 @@
             ice-index (dec position)]
         (when (<= position ice-count)
           (nth ice-list ice-index nil))))))
+
+(defn encountered-ice
+  "The ICE the Runner is actually encountering: the wire's own encounter summary
+   [:encounters :ice] first, the position-derived `current-run-ice` only as a
+   fallback.
+
+   A FORCED encounter puts the Runner on ICE that :position does not point at,
+   so position is not the authority — the rule the card resolvers had to learn
+   twice (#100, #152) and the run handlers a third time (#160). The summary is a
+   full card-summary (game.core.diffs/encounter-ice-summary), so it carries :cid,
+   :rezzed and :subroutines just like the installed card."
+  [state]
+  (or (get-in state [:game-state :encounters :ice])
+      (current-run-ice state)))
+
+(defn encounter-ice-active?
+  "True when `ice` is one whose subroutines this seat may act on — the client
+   mirror of the engine's own `active-ice?` (game.core.ice):
+
+       \"Ice is active when installed and rezzed or is the current encounter\"
+
+   The second clause is not a nicety. A forced encounter's ICE is very often NOT
+   installed and never rezzed: an on-access Archangel is encountered straight out
+   of HQ, and the wire summary for it carries `:zone [:hand]` and no `:rezzed`
+   key at all. Every encounter handler guarded on a bare `(:rezzed ice)`, so at
+   the case #160 is about they all fell through even after their phase gates were
+   widened — the fix would have been a no-op against the real payload. Found by
+   game.ai-forced-encounter-wire-test driving the actual engine; the hand-written
+   mocks all said `:rezzed true`, which reality does not provide.
+
+   Keep the `:rezzed` clause for the position-derived fallback, where there is no
+   encounter on the wire to vouch for the card."
+  [state ice]
+  (boolean (and ice (or (:rezzed ice) (live-encounter? state)))))
+
+(defn encounter-key
+  "Latch key for the encountered CARD — the encountered ICE's :cid, falling back
+   to :position when the wire gives us no encounter. Used by the \"I already
+   signalled here\" / \"I already fired here\" latches.
+
+   Strictly better than the :position it replaced, which a forced encounter
+   leaves pointing somewhere else entirely (usually 0), so two different forced
+   encounters in one run shared a key and the second was treated as already
+   handled.
+
+   NOT a per-ENCOUNTER identity, and deliberately no longer named as one (guest
+   panel, #160): a :cid is stable across two encounters of the SAME physical
+   card, which Sisyphus Protocol produces inside a single run. The wire carries
+   no encounter id to key on — game.core.diffs/encounter-keys is
+   [:encounter-count :ice :no-action], and the engine's own encounter :eid is not
+   serialized — so closing that gap needs a client-side encounter-transition
+   observer. Tracked separately; see the follow-up issue linked from #160. The
+   Corp's fire latch is partly covered already, because
+   runner-signaled-let-fire? independently requires a signal NEWER than this
+   ice's most recent encounter marker in the log."
+  [state]
+  (let [ice (encountered-ice state)]
+    (or (:cid ice)
+        (get-in state [:game-state :run :position]))))
 
 ;; ============================================================================
 ;; First-Seen Card Display

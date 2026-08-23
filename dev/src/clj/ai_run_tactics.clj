@@ -293,11 +293,14 @@
    Falls through to full-break handler if no tactics defined or no match."
   [{:keys [side run-phase state strategy]}]
   (when (and (= side "runner")
-             (= run-phase "encounter-ice")
+             ;; Same encounter authority as the rest of the run automation
+             ;; (#160): gated on the phase string, a tactic configured for a
+             ;; forced-encounter ICE was silently ignored (guest panel).
+             (core/at-encounter? state run-phase)
              (:tactics strategy))
-    (let [ice (core/current-run-ice state)
+    (let [ice (core/encountered-ice state)
           ice-name (:title ice)]
-      (when (and ice (:rezzed ice))
+      (when (core/encounter-ice-active? state ice)
         (let [tactics-map (:tactics strategy)
               tactic (or (get tactics-map ice-name)
                          (get tactics-map :default))]
