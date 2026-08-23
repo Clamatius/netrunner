@@ -346,19 +346,17 @@
                                  rezzed ICE with unbroken subs and no tank auth
    Both must map to :tank, or the loop falls to :continue and spins forever.
 
-   :corp-declined-encounter is the third of the family and maps to :continue, not
-   :tank (#160). The Corp has already passed that encounter, so there is nothing
-   to tank INTO — the subs are not going to fire and our continue simply ends the
-   encounter. Tanking there would re-send a signal nobody is listening for and
-   leave the window open, which is the shape every autonomous deadlock in this
-   project has had: a handler returning a decide-this status the bot loop never
-   converts into an action."
+   NB :continue is a NO-OP tick, not an action: the consumer's :continue branch
+   returns nil and sends nothing. Any new status that needs a command sent must
+   map to something else, or the loop re-derives the same status forever with no
+   stall backstop watching (an active run is excluded from own-turn spin
+   tracking). A #160 remediation mapped a new decision status here and would have
+   spun exactly that way; the addition was removed instead."
   [result]
   (case (:status result)
-    :decision-required        :handle-prompt
-    :paused-cannot-break      :tank
-    :fire-decision-required   :tank
-    :corp-declined-encounter  :continue
+    :decision-required      :handle-prompt
+    :paused-cannot-break    :tank
+    :fire-decision-required :tank
     :continue))
 
 (defn- player-names

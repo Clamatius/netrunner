@@ -500,7 +500,13 @@
    :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
    :side "runner"
    :game-state {:active-player "runner"
-                :encounters {:no-action encounter-passer}
+                ;; :encounter-count is always stamped by encounters-summary; a
+                ;; nil :no-action is DROPPED by select-non-nil-keys, so a
+                ;; nobody-has-passed encounter really is just {:encounter-count 1}
+                ;; on the wire (guest panel, 3rd pass — the old fixture wrote
+                ;; {:no-action nil}, which the engine cannot produce).
+                :encounters (cond-> {:encounter-count 1}
+                              encounter-passer (assoc :no-action encounter-passer))
                 :run {:phase "encounter-ice" :position 1
                       :server [:rd] :no-action false}
                 :runner {:credit 5 :click 2
@@ -527,41 +533,22 @@
           (is (not-any? #(= "continue" (:command %)) @sent)
               "no continue may reach the engine while unbroken subs remain"))))))
 
-(deftest encounter-with-corp-as-passer-offers-the-free-exit
+(deftest encounter-with-corp-as-passer-takes-the-free-exit
   (testing "#160: with the Corp recorded as the encounter passer, our continue
             ENDS the encounter and the unbroken subs never fire (engine:
             game.core.runs `continue :encounter-ice`, pinned in
-            game.ai-forced-encounter-wire-test). The seat must be TOLD that —
-            this test asserted the exact opposite until the engine was asked —
-            but the pass is not taken for it: passing forfeits the break, and a
-            break can be worth more than the tempo (Hippo). A window that is
-            nobody's is the bug; a window that is the Runner's is the fix."
+            game.ai-forced-encounter-wire-test). This test asserted the exact
+            opposite until the engine was asked — it reasoned from what our
+            client happened to do. The seat takes the pass; the forgone break
+            (Hippo) is #165, and it is a value question, not a deadlock."
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
           (runner-handlers/reset-state!)
-          (let [r (atom nil)
-                out (with-out-str (reset! r (ai/continue-run!)))]
-            (is (= :corp-declined-encounter (:status @r))
-                (str "the chain must own this window, got: " @r))
-            (is (re-find #"(?i)continue" out)
-                (str "and name continue as the exit, got: " out)))
-          (is (not-any? #(= "continue" (:command %)) @sent)
-              "but not send it unprompted — the break is still on the table")
+          (with-out-str (ai/continue-run!))
+          (is (some #(= "continue" (:command %)) @sent)
+              (str "the closing pass is free here and must be sent, got: " @sent))
           (runner-handlers/reset-state!)))))
-  (testing "with the ICE tanked, the seat has already declined to break — take the pass"
-    (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
-          (runner-handlers/reset-state!)
-          (reset! state/run-strategy {:tank #{"Whitespace"}})
-          (try
-            (with-out-str (ai/continue-run!))
-            (is (some #(= "continue" (:command %)) @sent)
-                (str "expected the free pass, got: " @sent))
-            (finally
-              (reset! state/run-strategy {})
-              (runner-handlers/reset-state!)))))))
   (testing "and while the Corp has NOT passed, continue is still refused (#92 unchanged)"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]

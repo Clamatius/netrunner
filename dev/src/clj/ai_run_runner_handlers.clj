@@ -342,7 +342,15 @@
               ;; NOTE: full-break previously ignored the :tank set entirely, so `tank`
               ;; was silently inert on full-break runs and the autonomous loop spun
               ;; forever on an unbreakable encounter.
-              (if (ice-authorized-for-fire? strategy ice-title)
+              (if (and (ice-authorized-for-fire? strategy ice-title)
+                       ;; …but never signal a Corp that has already passed this
+                       ;; encounter. It is not going to fire, and the signal is a
+                       ;; system-msg nobody is reading; returning
+                       ;; :waiting-for-corp-fire here parked the seat forever
+                       ;; against an opponent who had already left (guest panel
+                       ;; CRITICAL, 3rd pass). Falling through reaches
+                       ;; handle-runner-pass-broken-ice, which closes it.
+                       (not (core/opponent-passed-encounter? state side)))
                 (do
                   (when (not= @signaled-fire-encounter (core/encounter-key state))
                     (reset! signaled-fire-encounter (core/encounter-key state))
@@ -525,16 +533,23 @@
           ;; is a free pass, and refusing it left the Runner with no handler at
           ;; all — the window was nobody's (guest panel CRITICAL, #160).
           ;;
-          ;; But taking it AUTOMATICALLY is not free (guest panel, 2nd pass): the
-          ;; pass forfeits the break, and a break can be worth more than the
-          ;; tempo — Hippo trashes the outermost ICE when you break all its subs,
-          ;; and no subroutine has to resolve for that to pay. So we take the
-          ;; pass only when the seat has already said it is not breaking this ICE
-          ;; (tank / --tank-all / --full-break, which breaks first anyway).
-          ;; Otherwise handle-runner-corp-declined-encounter reports it as the
-          ;; decision it is.
-          corp-declined? (and (core/opponent-passed-encounter? state side)
-                              (state/tank-authorized? (:title current-ice)))]
+          ;; Taken unconditionally, and that is a judged tradeoff rather than an
+          ;; oversight (#160, guest passes 2 and 3). The 2nd pass was right that
+          ;; the pass forfeits a break which can be worth more than the tempo —
+          ;; Hippo trashes the outermost ICE for a full break with no subroutine
+          ;; resolving. The 2nd remediation therefore made this a reported
+          ;; DECISION with its own status, and the 3rd pass found two deadlocks
+          ;; in that addition: the autonomous loop's :continue action is a no-op
+          ;; tick, so the decision status span forever, and --full-break masked
+          ;; the new handler and signalled a Corp that had already left.
+          ;;
+          ;; A twice-patched addition gets removed, not patched again. Passing
+          ;; here cannot lose the game: the subs do not fire either way, so the
+          ;; worst case is a forgone break-trigger in a card interaction our
+          ;; decks do not contain. A deadlock in the un-babysat path is strictly
+          ;; worse than that. The forgone value is issue #165, and `status`
+          ;; already tells a hand-driven seat it may break first.
+          corp-declined? (core/opponent-passed-encounter? state side)]
       (when (and (core/encounter-ice-active? state current-ice) (seq subroutines)
                  (or (empty? actionable-subs) corp-declined?))
         (let [ice-title (:title current-ice "ICE")
@@ -565,47 +580,6 @@
                          (format "   → All subs %s on %s, Runner passing ICE"
                                  (if all-fired? "resolved" "broken") ice-title)))
               (send-continue! gameid))))))))
-
-(defn handle-runner-corp-declined-encounter
-  "Priority 2.65: the Corp has PASSED this encounter and subs are still unbroken.
-
-   `continue` here ends the encounter and those subs never fire — a free pass —
-   so this is not the ordinary break/tank fire decision and must not be reported
-   as one: there is nothing left to authorize and nobody to wait for. It is also
-   not automatic. Breaking can be worth more than the tempo (Hippo trashes the
-   outermost ICE for a full break, with no subroutine resolving), so a seat that
-   has not already declined to break gets the choice; a seat that HAS
-   (tank/--tank-all/--full-break) never reaches here — handle-runner-pass-broken-ice
-   takes the pass above.
-
-   Without this the window was nobody's: the fire-decision handler correctly
-   declines the state and every pass handler required resolved subs, so an
-   un-babysat Runner sat on an open encounter the Corp had already walked away
-   from (guest panel CRITICAL, #160)."
-  [{:keys [side run-phase state my-prompt]}]
-  (when (and (= side "runner")
-             (core/at-encounter? state run-phase)
-             (core/opponent-passed-encounter? state side)
-             (not (has-real-decision? my-prompt)))
-    (let [current-ice (core/encountered-ice state)
-          unbroken (filter #(and (not (:broken %)) (not (:fired %)))
-                           (:subroutines current-ice))]
-      (when (and (core/encounter-ice-active? state current-ice) (seq unbroken))
-        (let [ice-title (:title current-ice "ICE")
-              status-key [:corp-declined (core/encounter-key state) ice-title]]
-          (when-not (= @last-waiting-status status-key)
-            (reset! last-waiting-status status-key)
-            (println (format "⚖️  Corp PASSED %s without firing — %d subroutine%s left unresolved."
-                             ice-title (count unbroken) (if (= 1 (count unbroken)) "" "s")))
-            (println "   → continue          - end the encounter now; those subs never fire (free pass)")
-            (println (format "   → Or break %s first if the break itself earns you something" ice-title))
-            (println "     (e.g. Hippo). Nothing is waiting on the Corp — this window is yours to close."))
-          {:status :corp-declined-encounter
-           :wake-reason :decision-required
-           :message (format "Corp passed %s without firing - continue ends the encounter (%d sub(s) unresolved)"
-                            ice-title (count unbroken))
-           :ice ice-title
-           :unbroken-count (count unbroken)})))))
 
 (defn handle-runner-pass-fired-ice
   "Priority 2.7: Runner at encounter-ice after subs have fired.

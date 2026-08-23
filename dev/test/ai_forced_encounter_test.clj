@@ -269,18 +269,15 @@
                       :strategy {}
                       :my-prompt nil}))
               "not a fire decision — the Corp is not going to fire")
-          ;; SOMETHING must own this window. Which handler depends on whether the
-          ;; seat has already declined to break — see
-          ;; corp-declined-is-a-decision-unless-the-seat-already-declined-to-break.
-          ;; Here it has not, so the decision handler owns it rather than the pass.
-          (let [r (runner-handlers/handle-runner-corp-declined-encounter
-                   {:side "runner"
-                    :run-phase "success"
-                    :state @ai-state/client-state
-                    :my-prompt nil})]
-            (is (= :corp-declined-encounter (:status r))
-                (str "the window must not be nobody's, got: " r))
-            (is (empty? @sent) "and nothing is sent without the seat's say-so")))))))
+          ;; SOMETHING must own this window; the pass handler does.
+          (runner-handlers/handle-runner-pass-broken-ice
+           {:side "runner"
+            :run-phase "success"
+            :state @ai-state/client-state
+            :gameid "g1"
+            :my-prompt nil})
+          (is (some #(= "continue" (get-in % [:data :command])) @sent)
+              (str "the closing pass must be sent — it is free here. got: " @sent)))))))
 
 (deftest corp-declined-is-reported-as-a-free-pass-not-a-refusal
   ;; The seat-facing half of the same defect: the decline hint said flatly that
@@ -556,41 +553,58 @@
                (core/i-already-passed-run-window? @ai-state/client-state "corp"))
             (str "display and send guards must agree for " (pr-str enc)))))))
 
-(deftest corp-declined-is-a-decision-unless-the-seat-already-declined-to-break
-  ;; CRITICAL (guest panel, 2nd pass): the first remediation auto-passed whenever
-  ;; the Corp had declined. The pass forfeits the break, and a break can be worth
-  ;; more than the tempo (Hippo trashes the outermost ICE for a full break, with
-  ;; no subroutine resolving). Only a seat that has already said it is not
-  ;; breaking may have the pass taken for it.
-  (testing "no tank authorization: reported as a decision, nothing sent"
+(deftest a-corp-that-has-passed-is-never-signalled-and-never-waited-for
+  ;; Third guest pass, two CRITICALs, both in the SECOND pass's remediation
+  ;; rather than in the original change — the pattern this project keeps
+  ;; measuring. That remediation made the Corp-declined encounter a reported
+  ;; decision with its own status, to preserve a break the pass forfeits (Hippo).
+  ;; It deadlocked twice over: the autonomous loop's :continue action is a no-op
+  ;; tick so the status re-derived forever, and --full-break sat in front of the
+  ;; new handler and signalled a Corp that had already left. The addition is
+  ;; gone; the value question is #165. What must hold is only this: nothing waits
+  ;; on an opponent who has already passed.
+  (testing "the free pass is taken, with or without a tank authorization"
+    (doseq [strategy [{} {:tank #{"Archangel"}}]]
+      (let [sent (atom [])]
+        (with-mock-state (forced-encounter-state :side "runner" :no-action "corp")
+          (runner-handlers/reset-state!)
+          (reset! ai-state/run-strategy strategy)
+          (try
+            (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+              (runner-handlers/handle-runner-pass-broken-ice
+               {:side "runner" :run-phase "success" :state @ai-state/client-state
+                :gameid "g1" :my-prompt nil})
+              (is (some #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "strategy " (pr-str strategy) " — expected the free pass, got: " @sent)))
+            (finally (reset! ai-state/run-strategy {})))))))
+  (testing "--full-break with no breaker does NOT signal a Corp that already passed"
+    ;; It used to: tank authorized + can't break -> let-subs-fire-signal! and
+    ;; :waiting-for-corp-fire, parking the seat against an opponent who had
+    ;; already walked away. It must fall through to the pass instead.
     (let [sent (atom [])]
       (with-mock-state (forced-encounter-state :side "runner" :no-action "corp")
         (runner-handlers/reset-state!)
-        (reset! ai-state/run-strategy {})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-          (runner-handlers/handle-runner-pass-broken-ice
-           {:side "runner" :run-phase "success" :state @ai-state/client-state
-            :gameid "g1" :my-prompt nil})
-          (is (empty? @sent) (str "the break must not be silently forfeited, got: " @sent))
-          (let [r (runner-handlers/handle-runner-corp-declined-encounter
+          (let [r (runner-handlers/handle-runner-full-break
                    {:side "runner" :run-phase "success" :state @ai-state/client-state
-                    :my-prompt nil})]
-            (is (= :corp-declined-encounter (:status r))
-                (str "the window must be owned by SOMETHING, got: " r))
-            (is (= "Archangel" (:ice r))))))))
-  (testing "tank authorized: the seat already declined to break, so take the free pass"
+                    :strategy {:full-break true :tank #{"Archangel"}}
+                    :gameid "g1" :my-prompt nil})]
+            (is (not= :waiting-for-corp-fire (:status r))
+                (str "nobody is coming to fire these subs, got: " r))
+            (is (not-any? #(= "system-msg" (get-in % [:data :command])) @sent)
+                (str "no signal may be sent to a departed Corp, got: " @sent)))))))
+  (testing "and it DOES still signal while the Corp still owns its half of the window"
     (let [sent (atom [])]
-      (with-mock-state (forced-encounter-state :side "runner" :no-action "corp")
+      (with-mock-state (forced-encounter-state :side "runner" :log [forced-marker])
         (runner-handlers/reset-state!)
-        (reset! ai-state/run-strategy {:tank #{"Archangel"}})
-        (try
-          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
-            (runner-handlers/handle-runner-pass-broken-ice
-             {:side "runner" :run-phase "success" :state @ai-state/client-state
-              :gameid "g1" :my-prompt nil})
-            (is (some #(= "continue" (get-in % [:data :command])) @sent)
-                (str "expected the free pass, got: " @sent)))
-          (finally (reset! ai-state/run-strategy {}))))))
-  (testing "the autonomous loop converts the decision into an action, not a spin"
-    (is (= :continue (heuristic/run-result->next-action {:status :corp-declined-encounter}))
-        "tanking would re-signal a Corp that has already walked away")))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runner-handlers/handle-runner-full-break
+           {:side "runner" :run-phase "success" :state @ai-state/client-state
+            :strategy {:full-break true :tank #{"Archangel"}}
+            :gameid "g1" :my-prompt nil})
+          (is (some #(= "system-msg" (get-in % [:data :command])) @sent)
+              (str "the ordinary tank signal must still go out, got: " @sent))))))
+  (testing "the autonomous loop's :continue is a no-op tick, so no status may rely on it"
+    ;; Pinning the trap rather than the fix: the removed status mapped here.
+    (is (= :continue (heuristic/run-result->next-action {:status :something-new}))
+        "an unmapped status falls to :continue, which sends nothing at all")))
