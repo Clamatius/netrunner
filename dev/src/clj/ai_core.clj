@@ -1631,21 +1631,25 @@
   "True when the current priority window is an ENCOUNTER's, so its pass ledger —
    [:encounters :no-action] — is the one that answers \"who has passed?\".
 
-   Two signals, either is enough. A live [:encounters :ice] is the obvious one.
-   The second is the ledger's own PRESENCE: a wire snapshot can carry
-   {:encounters {:no-action \"corp\"}} with no :ice — encounter-ice-summary
-   returns nil if get-card cannot resolve the card and select-non-nil-keys then
-   drops the key — and several recorded #150 boards look exactly like that.
-   Keying only on :ice quietly handed those boards back to the run-level ledger,
-   which is the bug this whole predicate exists to stop.
+   The authoritative signal is the PRESENCE OF THE SUMMARY, not any field in it.
+   game.core.diffs/encounters-summary emits a map only while a current encounter
+   exists, and it always stamps :encounter-count — but BOTH other keys are
+   optional. :ice is dropped when encounter-ice-summary cannot resolve the card,
+   and :no-action is absent until somebody passes. So the honest minimum for a
+   live encounter nobody has passed yet is exactly {:encounter-count 1}, and two
+   narrower drafts of this predicate each missed a real board:
 
-   contains?, not a truthiness test: the ledger's meaningful states are
-   absent (nobody has passed) and naming-a-side. Reading absent as \"fall back to
-   the other ledger\" is the (or supplied (live-read)) trap this codebase keeps
+     * keying on :ice alone handed the recorded #150 boards
+       ({:encounters {:no-action \"corp\"}}, no :ice) back to the run ledger;
+     * adding :no-action still missed {:encounter-count 1}, which is the state a
+       forced encounter is in for its whole first half (guest panel, 2nd pass).
+
+   seq, not a truthiness test on a field: the ledger's meaningful states are
+   ABSENT (nobody has passed) and naming-a-side, and reading absent as \"use the
+   other ledger\" is the (or supplied (live-read)) trap this codebase keeps
    re-learning."
   [state]
-  (boolean (or (live-encounter? state)
-               (contains? (get-in state [:game-state :encounters] {}) :no-action))))
+  (boolean (seq (get-in state [:game-state :encounters]))))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
@@ -1657,7 +1661,7 @@
    can only ever widen it, never drop the case that already worked."
   [state run-phase]
   (boolean (or (= run-phase "encounter-ice")
-               (live-encounter? state))))
+               (encounter-window? state))))
 
 (defn- own-prompt
   "The given side's engine prompt-state (nil when it holds none). The ONE

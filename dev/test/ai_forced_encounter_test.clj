@@ -32,6 +32,7 @@
             [ai-run-corp-decisions :as decisions]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
+            [ai-heuristic-runner :as heuristic]
             [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
@@ -96,11 +97,20 @@
                      :servers {:hq {:ices position-ice}}
                      :prompt-state (when (= side "corp") prompt)}}))))
 
+(def forced-marker
+  "The encounter marker a FORCED encounter actually writes. Not
+   'encounters Archangel protecting HQ' — that is the INSTALLED form. An
+   on-access card is still in its zone, so game.core.to-string/card-str gives
+   ' in HQ'. Copied from a real engine log; the invented 'protecting' form in the
+   first draft of these mocks hid a CRITICAL (see
+   a-stale-signal-from-a-prior-forced-encounter-must-not-authorise-a-fire)."
+  {:text "ai-runner encounters Archangel in HQ."})
+
 (def signal-log
   "The log as it reads once the Runner has tanked: the system-msg the Corp's
    runner-signaled-let-fire? scans for, after this encounter's own marker."
   [{:text "ai-runner accesses Archangel from HQ."}
-   {:text "ai-runner encounters Archangel protecting HQ."}
+   forced-marker
    {:text "ai-runner indicates to fire all unbroken subroutines on Archangel"}])
 
 ;; ============================================================================
@@ -170,7 +180,7 @@
     (let [sent (atom [])]
       (with-mock-state (forced-encounter-state
                         :side "runner"
-                        :log [{:text "ai-runner encounters Archangel protecting HQ."}])
+                        :log [forced-marker])
         (reset! runner-handlers/signaled-fire-encounter nil)
         (reset! runner-handlers/last-waiting-status nil)
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
@@ -220,7 +230,7 @@
     (let [sent (atom [])
           st (-> (forced-encounter-state
                   :side "runner"
-                  :log [{:text "ai-runner encounters Archangel protecting HQ."}])
+                  :log [forced-marker])
                  (assoc-in [:game-state :run :no-action] "corp"))]
       (with-mock-state st
         (reset! runner-handlers/signaled-fire-encounter nil)
@@ -259,14 +269,18 @@
                       :strategy {}
                       :my-prompt nil}))
               "not a fire decision — the Corp is not going to fire")
-          (runner-handlers/handle-runner-pass-broken-ice
-           {:side "runner"
-            :run-phase "success"
-            :state @ai-state/client-state
-            :gameid "g1"
-            :my-prompt nil})
-          (is (some #(= "continue" (get-in % [:data :command])) @sent)
-              (str "the closing pass must be sent — it is free here. got: " @sent)))))))
+          ;; SOMETHING must own this window. Which handler depends on whether the
+          ;; seat has already declined to break — see
+          ;; corp-declined-is-a-decision-unless-the-seat-already-declined-to-break.
+          ;; Here it has not, so the decision handler owns it rather than the pass.
+          (let [r (runner-handlers/handle-runner-corp-declined-encounter
+                   {:side "runner"
+                    :run-phase "success"
+                    :state @ai-state/client-state
+                    :my-prompt nil})]
+            (is (= :corp-declined-encounter (:status r))
+                (str "the window must not be nobody's, got: " r))
+            (is (empty? @sent) "and nothing is sent without the seat's say-so")))))))
 
 (deftest corp-declined-is-reported-as-a-free-pass-not-a-refusal
   ;; The seat-facing half of the same defect: the decline hint said flatly that
@@ -394,7 +408,7 @@
   (testing "without the Runner's signal it is an opponent wait, not a fire"
     (with-mock-state (forced-encounter-state
                       :side "corp"
-                      :log [{:text "ai-runner encounters Archangel protecting HQ."}]
+                      :log [forced-marker]
                       :prompt {:msg "encountering Archangel" :prompt-type "run" :eid 91})
       (is (= :waiting-runner-signal
              (:kind (decisions/corp-run-decision @ai-state/client-state)))))))
@@ -442,3 +456,141 @@
       (is (not (re-find #"(?i)tank cannot help" out)) (str "got:\n" out)))
     (testing "breaking is still offered"
       (is (re-find #"(?i)icebreaker" out)))))
+
+
+;; ============================================================================
+;; Second guest pass — over the fixes the first pass produced
+;; ============================================================================
+
+(deftest a-stale-signal-from-a-prior-forced-encounter-must-not-authorise-a-fire
+  ;; CRITICAL (guest panel, 2nd pass). runner-signaled-let-fire? decides a signal
+  ;; belongs to the CURRENT encounter by comparing it against this ice's most
+  ;; recent encounter marker. That marker matcher required ' protecting', which
+  ;; only the INSTALLED form writes — so for a forced encounter no marker was
+  ;; ever found, the boundary test degenerated into "does a signal exist
+  ;; anywhere", and a tank from an EARLIER Archangel authorised the next one.
+  ;; With #160's widened Corp gates that is an unrequested fire: the Corp
+  ;; resolves subs the Runner never declined to break.
+  (let [stale-then-new-encounter
+        [{:text "ai-runner accesses Archangel from HQ."}
+         forced-marker
+         {:text "ai-runner indicates to fire all unbroken subroutines on Archangel"}
+         {:text "ai-corp resolves 1 unbroken subroutine on Archangel"}
+         ;; …later in the same turn, a SECOND Archangel access. No new signal.
+         {:text "ai-runner accesses Archangel from HQ."}
+         forced-marker]]
+    (testing "the marker is recognised in the forced (' in HQ') form"
+      (with-mock-state (forced-encounter-state :side "corp" :log stale-then-new-encounter)
+        (is (false? (decisions/runner-signaled-let-fire? @ai-state/client-state "Archangel"))
+            "the signal predates this encounter's marker — it authorises nothing")))
+    (testing "so the Corp does not fire"
+      (let [sent (atom [])]
+        (with-mock-state (forced-encounter-state :side "corp" :log stale-then-new-encounter)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        ai-state/get-prompt (constantly nil)]
+            (is (nil? (corp-handlers/handle-corp-fire-unbroken
+                       {:side "corp" :run-phase "success"
+                        :strategy {:fire-unbroken true}
+                        :state @ai-state/client-state :gameid "g1"})))
+            (is (empty? @sent) (str "nothing may be sent, got: " @sent))))))
+    (testing "and a FRESH signal after the new marker still works"
+      (with-mock-state (forced-encounter-state
+                        :side "corp"
+                        :log (conj stale-then-new-encounter
+                                   {:text "ai-runner indicates to fire all unbroken subroutines on Archangel"}))
+        (is (true? (decisions/runner-signaled-let-fire? @ai-state/client-state "Archangel"))))))
+  (testing "the installed form still matches, and prefix collisions still do not"
+    (with-mock-state (forced-encounter-state
+                      :side "corp"
+                      :log [{:text "ai-runner indicates to fire all unbroken subroutines on Fairchild"}
+                            {:text "ai-runner encounters Fairchild 3.0 protecting HQ at position 0."}])
+      (is (true? (decisions/runner-signaled-let-fire? @ai-state/client-state "Fairchild"))
+          "'Fairchild 3.0' is a DIFFERENT card — its marker must not end Fairchild's signal")
+      (is (false? (decisions/runner-signaled-let-fire? @ai-state/client-state "Fairchild 3.0"))
+          "and 3.0 was never signalled at all"))))
+
+(deftest a-live-encounter-nobody-has-passed-is-still-an-encounter-window
+  ;; CRITICAL (guest panel, 2nd pass). encounters-summary always stamps
+  ;; :encounter-count but BOTH other keys are optional — :ice is dropped when the
+  ;; card cannot be resolved, :no-action is absent until somebody passes. So the
+  ;; honest minimum for a live, un-passed encounter is exactly {:encounter-count 1},
+  ;; and a predicate keyed on :ice or :no-action hands that board back to the
+  ;; SUSPENDED run ledger.
+  (let [bare (mock-client-state
+              :side "runner"
+              :game-state {:run {:phase "movement" :position 1 :no-action "runner"}
+                           :encounters {:encounter-count 1}
+                           :runner {} :corp {}})]
+    (with-mock-state bare
+      (is (true? (core/encounter-window? @ai-state/client-state))
+          "an encounter summary with neither :ice nor :no-action is still an encounter")
+      (is (true? (core/at-encounter? @ai-state/client-state "movement")))
+      (is (false? (core/i-already-passed-run-window? @ai-state/client-state "runner"))
+          "we passed MOVEMENT, not this encounter — the send guards must not swallow the pass")))
+  (testing "with no encounter at all the run ledger is still the answer"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:run {:phase "movement" :position 1 :no-action "runner"}
+                                   :runner {} :corp {}})
+      (is (false? (core/encounter-window? @ai-state/client-state)))
+      (is (true? (core/i-already-passed-run-window? @ai-state/client-state "runner"))))))
+
+(deftest the-headline-and-the-send-guards-read-the-same-ledger
+  ;; MAJOR (guest panel, 2nd pass): the display's effective-window-passer chose
+  ;; its ledger from phase-or-:ice while the send guards chose from the summary's
+  ;; presence, so on a no-:ice encounter board the headline could say "your move"
+  ;; while the guards treated the window as already passed.
+  (doseq [enc [{:encounter-count 1}
+               {:encounter-count 1 :no-action "runner"}
+               {:encounter-count 1 :ice (archangel)}]]
+    (let [gs {:run {:phase "movement" :position 1 :no-action "corp"}
+              :encounters enc
+              :runner {} :corp {}}
+          st (mock-client-state :side "runner" :game-state gs)]
+      (is (= (display/effective-window-passer gs)
+             (some-> (get enc :no-action) name)
+             )
+          (str "the display must read the ENCOUNTER ledger for " (pr-str enc)))
+      (with-mock-state st
+        (is (= (boolean (= "corp" (display/effective-window-passer gs)))
+               (core/i-already-passed-run-window? @ai-state/client-state "corp"))
+            (str "display and send guards must agree for " (pr-str enc)))))))
+
+(deftest corp-declined-is-a-decision-unless-the-seat-already-declined-to-break
+  ;; CRITICAL (guest panel, 2nd pass): the first remediation auto-passed whenever
+  ;; the Corp had declined. The pass forfeits the break, and a break can be worth
+  ;; more than the tempo (Hippo trashes the outermost ICE for a full break, with
+  ;; no subroutine resolving). Only a seat that has already said it is not
+  ;; breaking may have the pass taken for it.
+  (testing "no tank authorization: reported as a decision, nothing sent"
+    (let [sent (atom [])]
+      (with-mock-state (forced-encounter-state :side "runner" :no-action "corp")
+        (runner-handlers/reset-state!)
+        (reset! ai-state/run-strategy {})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (runner-handlers/handle-runner-pass-broken-ice
+           {:side "runner" :run-phase "success" :state @ai-state/client-state
+            :gameid "g1" :my-prompt nil})
+          (is (empty? @sent) (str "the break must not be silently forfeited, got: " @sent))
+          (let [r (runner-handlers/handle-runner-corp-declined-encounter
+                   {:side "runner" :run-phase "success" :state @ai-state/client-state
+                    :my-prompt nil})]
+            (is (= :corp-declined-encounter (:status r))
+                (str "the window must be owned by SOMETHING, got: " r))
+            (is (= "Archangel" (:ice r))))))))
+  (testing "tank authorized: the seat already declined to break, so take the free pass"
+    (let [sent (atom [])]
+      (with-mock-state (forced-encounter-state :side "runner" :no-action "corp")
+        (runner-handlers/reset-state!)
+        (reset! ai-state/run-strategy {:tank #{"Archangel"}})
+        (try
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (runner-handlers/handle-runner-pass-broken-ice
+             {:side "runner" :run-phase "success" :state @ai-state/client-state
+              :gameid "g1" :my-prompt nil})
+            (is (some #(= "continue" (get-in % [:data :command])) @sent)
+                (str "expected the free pass, got: " @sent)))
+          (finally (reset! ai-state/run-strategy {}))))))
+  (testing "the autonomous loop converts the decision into an action, not a spin"
+    (is (= :continue (heuristic/run-result->next-action {:status :corp-declined-encounter}))
+        "tanking would re-signal a Corp that has already walked away")))

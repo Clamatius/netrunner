@@ -85,12 +85,33 @@
             text)))
 
 (defn- encounter-of-ice?
-  "True when a log line is the encounter marker for THIS ice: 'encounters <ice>
-   protecting …'. Anchored on the following ' protecting' so \"Fairchild\" does not
-   match 'encounters Fairchild 3.0 protecting …'."
+  "True when a log line is the encounter marker for THIS ice, in ANY of the forms
+   game.core.to-string/card-str can produce:
+
+     installed ice   'Runner encounters Tithe protecting HQ at position 0.'
+     in a zone       'Runner encounters Archangel in HQ.'          <- FORCED
+     root of a server'Runner encounters X in the root of HQ.'       (' in ' covers it)
+     hosted          'Runner encounters X hosted on Y.'
+
+   This used to require ' protecting', which is the INSTALLED form only. A forced
+   encounter is an on-access card still in its zone, so its marker reads ' in HQ'
+   and no marker was ever found — encounter-idx stayed -1, and
+   runner-signaled-let-fire?'s \"is this signal from the CURRENT encounter\" test
+   silently degenerated into \"does a signal exist anywhere in the log\". A tank
+   from an EARLIER forced encounter of the same-titled card therefore authorised
+   the next one, and with #160's widened Corp gates that is an unrequested fire:
+   the Corp resolves subs the Runner never declined to break. Guest panel
+   CRITICAL, second pass; the marker text was confirmed by dumping a real engine
+   log, not read off card-str.
+
+   Still title-anchored, which is the point of the trailing alternation:
+   \"Fairchild\" must not match 'encounters Fairchild 3.0 protecting …', and
+   ' 3.0 ' matches none of the four continuations."
   [text ice-title]
   (boolean
-   (re-find (re-pattern (str "(?i)encounters " (java.util.regex.Pattern/quote ice-title) " protecting"))
+   (re-find (re-pattern (str "(?i)encounters "
+                             (java.util.regex.Pattern/quote ice-title)
+                             "(?: protecting | in | hosted on |\\.|$)"))
             text)))
 
 (defn runner-signaled-let-fire?

@@ -1652,6 +1652,10 @@
                   runner-handlers/handle-runner-full-break
                   runner-handlers/handle-runner-encounter-ice
                   runner-handlers/handle-runner-pass-broken-ice
+                  ;; After the pass handlers, which take the free pass when the
+                  ;; seat has already declined to break; this one reports it as a
+                  ;; decision when it has not (#160).
+                  runner-handlers/handle-runner-corp-declined-encounter
                   runner-handlers/handle-runner-pass-fired-ice
                   handle-waiting-for-opponent
                   handle-real-decision

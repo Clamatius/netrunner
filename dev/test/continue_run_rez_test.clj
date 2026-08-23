@@ -527,20 +527,41 @@
           (is (not-any? #(= "continue" (:command %)) @sent)
               "no continue may reach the engine while unbroken subs remain"))))))
 
-(deftest encounter-with-corp-as-passer-takes-the-free-exit
+(deftest encounter-with-corp-as-passer-offers-the-free-exit
   (testing "#160: with the Corp recorded as the encounter passer, our continue
             ENDS the encounter and the unbroken subs never fire (engine:
-            game.core.runs `continue :encounter-ice`). The seat must take that
-            pass, not sit on a fire decision the Corp has already declined to
-            make. This test asserted the opposite until the engine was asked."
+            game.core.runs `continue :encounter-ice`, pinned in
+            game.ai-forced-encounter-wire-test). The seat must be TOLD that —
+            this test asserted the exact opposite until the engine was asked —
+            but the pass is not taken for it: passing forfeits the break, and a
+            break can be worth more than the tempo (Hippo). A window that is
+            nobody's is the bug; a window that is the Runner's is the fix."
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
           (runner-handlers/reset-state!)
-          (with-out-str (ai/continue-run!))
-          (is (some #(= "continue" (:command %)) @sent)
-              (str "the closing pass is free here and must be sent, got: " @sent))
+          (let [r (atom nil)
+                out (with-out-str (reset! r (ai/continue-run!)))]
+            (is (= :corp-declined-encounter (:status @r))
+                (str "the chain must own this window, got: " @r))
+            (is (re-find #"(?i)continue" out)
+                (str "and name continue as the exit, got: " out)))
+          (is (not-any? #(= "continue" (:command %)) @sent)
+              "but not send it unprompted — the break is still on the table")
           (runner-handlers/reset-state!)))))
+  (testing "with the ICE tanked, the seat has already declined to break — take the pass"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs "corp")
+          (runner-handlers/reset-state!)
+          (reset! state/run-strategy {:tank #{"Whitespace"}})
+          (try
+            (with-out-str (ai/continue-run!))
+            (is (some #(= "continue" (:command %)) @sent)
+                (str "expected the free pass, got: " @sent))
+            (finally
+              (reset! state/run-strategy {})
+              (runner-handlers/reset-state!)))))))
   (testing "and while the Corp has NOT passed, continue is still refused (#92 unchanged)"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]

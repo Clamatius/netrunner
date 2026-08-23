@@ -1586,8 +1586,15 @@
         ;; runs while :phase reads something else, and reading the run-level
         ;; :no-action there made the headline ("your move") contradict the
         ;; encounter guidance printed directly beneath it (guest re-review).
+        ;; The same ledger choice the send guards make (core/encounter-window?),
+        ;; expressed on a bare game-state: the SUMMARY's presence, not any field
+        ;; in it. Keying on :ice left the headline reading the run ledger on
+        ;; exactly the boards the guards read the encounter ledger on, so
+        ;; "your move" could contradict the guidance printed beneath it (guest
+        ;; panel, 2nd pass — the first pass fixed the phase half of this and
+        ;; stopped one step short).
         v   (if (or (= "encounter-ice" (:phase run))
-                    (some? (get-in gs [:encounters :ice])))
+                    (seq (:encounters gs)))
               (get-in gs [:encounters :no-action])
               (:no-action run))]
     (cond (keyword? v) (name v) (string? v) v :else nil)))

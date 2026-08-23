@@ -344,12 +344,21 @@
      - :paused-cannot-break   - full-break path, unbreakable/unaffordable ICE
      - :fire-decision-required - NOT-full-break path (handle-runner-encounter-ice),
                                  rezzed ICE with unbroken subs and no tank auth
-   Both must map to :tank, or the loop falls to :continue and spins forever."
+   Both must map to :tank, or the loop falls to :continue and spins forever.
+
+   :corp-declined-encounter is the third of the family and maps to :continue, not
+   :tank (#160). The Corp has already passed that encounter, so there is nothing
+   to tank INTO — the subs are not going to fire and our continue simply ends the
+   encounter. Tanking there would re-send a signal nobody is listening for and
+   leave the window open, which is the shape every autonomous deadlock in this
+   project has had: a handler returning a decide-this status the bot loop never
+   converts into an action."
   [result]
   (case (:status result)
-    :decision-required      :handle-prompt
-    :paused-cannot-break    :tank
-    :fire-decision-required :tank
+    :decision-required        :handle-prompt
+    :paused-cannot-break      :tank
+    :fire-decision-required   :tank
+    :corp-declined-encounter  :continue
     :continue))
 
 (defn- player-names
