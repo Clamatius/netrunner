@@ -27,6 +27,8 @@
             [game.core.ice :refer [active-ice?]]
             [game.test-framework :refer :all]
             [ai-core :as ai-core]
+            [ai-run-corp-decisions]
+            [ai-display]
             [clojure.test :refer :all]))
 
 (defn- runner-wire-state
@@ -249,3 +251,151 @@
       (is (some? (core/get-current-encounter state))
           "one pass does not end it — the Corp still owes its own")
       (is (= :runner (:no-action (core/get-current-encounter state)))))))
+
+;; ============================================================================
+;; #164: a forced encounter with NO :run at all
+;; ============================================================================
+;; Everything above drives a forced encounter that still sits inside a run, so
+;; every client predicate could keep its `is there a run?` guard and still be
+;; fixed by #160's phase-string widening. Quest Completed → Ganked! produces the
+;; other shape: `force-ice-encounter` has an explicit cleanup branch for
+;; `(and (not (:run @state)) (empty? (:encounters @state)))`, so an encounter
+;; outliving its run is a state the engine plans for — and on that wire
+;; [:encounters :ice] is populated while [:run] is nil.
+
+(defn- force-runless-encounter!
+  "Leaves the game at a forced Ice Wall encounter with NO run in progress.
+   Recipe lifted from game.core.runs-test's
+   `forced-encounters-forced-encounters-outside-of-run`, minus the icebreakers —
+   we want the sub left UNBROKEN so the seats have a real decision to own."
+  [state]
+  (play-from-hand state :corp "Ice Wall" "New remote")
+  (play-from-hand state :corp "Ganked!" "Server 1")
+  (take-credits state :corp)
+  (take-credits state :runner)
+  (take-credits state :corp)
+  (let [iw (get-ice state :remote1 0)]
+    (rez state :corp iw)
+    (run-empty-server state :archives)
+    (run-empty-server state :rd)
+    (click-prompt state :runner "No action")
+    (run-empty-server state :hq)
+    (click-prompt state :runner "No action")
+    (play-from-hand state :runner "Quest Completed")
+    (click-card state :runner (get-content state :remote1 0))
+    (click-prompt state :corp "Yes")
+    (click-card state :corp iw)))
+
+(defn- runless-game []
+  {:corp {:deck [(qty "Hedge Fund" 5)]
+          :hand ["Ice Wall" "Ganked!"]}
+   :runner {:hand ["Quest Completed"] :credits 20}})
+
+(deftest a-forced-encounter-can-outlive-its-run-entirely
+  (testing "#164's premise: [:encounters :ice] populated, [:run] nil, on both wires"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (is (some? (core/get-current-encounter state)) "sanity: the engine is mid-encounter")
+      (is (nil? (:run @state)) "sanity: and there is no run")
+      (doseq [[label wire] [["runner" (runner-wire-state state)]
+                            ["corp" (corp-wire-state state)]]]
+        (is (nil? (get-in wire [:game-state :run]))
+            (str label ": the wire carries no :run map at all"))
+        (is (nil? (wire-phase wire))
+            (str label ": so there is no phase string for any gate to match"))
+        (is (some? (get-in wire [:game-state :encounters :ice]))
+            (str label ": but the encounter IS on the wire"))
+        (is (true? (ai-core/live-encounter? wire)) (str label ": live-encounter?"))
+        (is (true? (ai-core/at-encounter? wire (wire-phase wire)))
+            (str label ": at-encounter? answers without a run"))
+        (is (= "Ice Wall" (:title (ai-core/encountered-ice wire)))
+            (str label ": and names the encountered card"))))))
+
+(deftest the-runless-encounter-has-an-owner
+  (testing "#164: run-window-owner / my-run-window? must not require a run"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (let [wire (runner-wire-state state)]
+        (is (nil? (get-in wire [:game-state :encounters :no-action]))
+            "nobody has passed this encounter yet")
+        (is (true? (#'ai-core/my-run-window? wire "runner"))
+            "the Runner owes the first pass — `wait` must have a window to own")
+        (is (false? (#'ai-core/my-run-window? wire "corp"))
+            "and the Corp does not, until the Runner passes"))
+      (core/process-action "continue" state :runner nil)
+      (is (some? (core/get-current-encounter state))
+          "one pass does not end it, exactly as inside a run")
+      (let [wire (corp-wire-state state)]
+        (is (= :runner (get-in wire [:game-state :encounters :no-action])))
+        (is (true? (#'ai-core/my-run-window? wire "corp"))
+            "now the Corp owes the closing pass")))))
+
+(deftest the-runner-decision-wake-fires-without-a-run
+  (testing "#164: runner-encounter-decision-pending? gated on phase AND position"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (let [wire (runner-wire-state state)]
+        (is (nil? (#'ai-core/current-run-ice wire))
+            "position resolves to nothing: there is no run to hold a position")
+        (is (true? (#'ai-core/runner-encounter-decision-pending? wire "runner"))
+            "the Runner is stopped at an unbroken sub — that is a pending decision")
+        (is (false? (#'ai-core/runner-encounter-decision-pending? wire "corp"))
+            "the Corp's decision is a fire decision, not this one"))
+      (core/process-action "continue" state :runner nil)
+      (let [wire (runner-wire-state state)]
+        (is (false? (#'ai-core/runner-encounter-decision-pending? wire "runner"))
+            "once we have passed, we are waiting on the Corp — not still deciding")))))
+
+(deftest the-corp-classifier-sees-a-runless-fire-decision
+  (testing "#164: corp-run-decision returned :none on (nil? run) before it looked"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (let [wire (corp-wire-state state)
+            decision (ai-run-corp-decisions/corp-run-decision wire)]
+        (is (not= :none (:kind decision))
+            (str "monitor-run --fire-if-asked sat on its hands here. got: " decision))
+        (is (contains? #{:fire-unbroken :waiting-runner-signal} (:kind decision))
+            (str "the Corp owes a fire-or-pass decision on Ice Wall. got: " decision))
+        (is (= "Ice Wall" (get-in decision [:ice :title]))
+            "and it is about the ENCOUNTERED card")
+        (is (= 1 (get-in decision [:ice :unbroken-count])))))))
+
+(deftest diagnose-blocker-owns-the-runless-encounter
+  (testing "#164: the stuck seat's own command gated its encounter branch on :in-run?"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (let [out (with-out-str
+                  (#'ai-display/show-blocker-diagnosis* (runner-wire-state state)))]
+        (is (clojure.string/includes? out "Ice Wall")
+            (str "the diagnosis must name the ICE the seat is stuck on. got:\n" out))
+        (is (not (clojure.string/includes? out "Nothing is blocking"))
+            (str "and must not report a clear board. got:\n" out))))))
+
+(deftest prompt-does-not-call-the-runless-encounter-a-paid-ability-window
+  (testing "#164: `prompt` keyed its run context on (:phase run), which is nil here"
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (let [wire (runner-wire-state state)
+            p (get-in wire [:game-state :runner :prompt-state])]
+        ;; The engine DOES surface a prompt — force-ice-encounter calls
+        ;; show-run-prompts — but it carries no :choices and no :selectable, so
+        ;; it lands in show-prompt-detailed's passive/paid-ability arm.
+        (is (= :run (:prompt-type p)) "a run prompt, not a choose prompt")
+        (is (empty? (:choices p)) "with nothing to choose")
+        (is (empty? (:selectable p)) "and nothing to select")
+        (let [out (with-out-str (ai-display/show-prompt-detailed wire))]
+          (is (clojure.string/includes? out "Ice Wall")
+              (str "`prompt` must name the encounter it is stuck at. got:\n" out))
+          (is (not (clojure.string/includes? out "run-only"))
+              (str "and must NOT say `continue` is run-only — `continue` is the "
+                   "only exit from this window. got:\n" out))
+          (is (not (clojure.string/includes? out "Paid ability window (no run active)"))
+              (str "nor call a live encounter an empty paid-ability window. got:\n" out))
+          (is (not (clojure.string/includes? out "Run Phase: \n"))
+              (str "and must not print a phase label with no phase. got:\n" out)))))))

@@ -1627,6 +1627,15 @@
   [state]
   (some? (get-in state [:game-state :encounters :ice])))
 
+(defn encounter-window-gs?
+  "encounter-window? on a BARE [:game-state] map, for the callers that already
+   hold one (the park loop's wake reason, the display's window-passer). ONE
+   definition of \"is this an encounter window\" rather than a second hand-rolled
+   `(seq (:encounters gs))` per caller — the #127 ratchet is about exactly that
+   drift, and #164 added three more call sites at once."
+  [gs]
+  (boolean (seq (:encounters gs))))
+
 (defn encounter-window?
   "True when the current priority window is an ENCOUNTER's, so its pass ledger —
    [:encounters :no-action] — is the one that answers \"who has passed?\".
@@ -1649,7 +1658,7 @@
    other ledger\" is the (or supplied (live-read)) trap this codebase keeps
    re-learning."
   [state]
-  (boolean (seq (get-in state [:game-state :encounters]))))
+  (encounter-window-gs? (:game-state state)))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
@@ -1760,6 +1769,8 @@
   (boolean (some ping-message? (drop start-count log))))
 
 (declare current-run-ice)
+(declare encountered-ice)
+(declare encounter-ice-active?)
 
 (defn- in-active-game?
   "True once a game has actually started: we hold a :side AND the game-state
@@ -1770,20 +1781,6 @@
   [state]
   (boolean (and (:side state)
                 (get-in state [:game-state :active-player]))))
-
-(defn- runner-passed-encounter?
-  "True when the Runner has already passed priority in the current ICE
-   encounter — i.e. they have resolved their break/tank/jack-out choice and are
-   now waiting on the Corp to fire subs. The engine records encounter pass-state
-   on the current encounter, serialized to the client under
-   [:game-state :encounters :no-action]; the run also carries a SEPARATE
-   run-level :no-action for earlier phases. We check the encounter first and
-   fall back to run-level for wire-shape tolerance."
-  [state]
-  (let [enc-no-action (get-in state [:game-state :encounters :no-action])
-        run-no-action (get-in state [:game-state :run :no-action])]
-    (boolean (or (contains? #{:runner "runner"} enc-no-action)
-                 (contains? #{:runner "runner"} run-no-action)))))
 
 (defn- run-pass-window?
   "Run phases whose advance is a PRIORITY PASS via `continue` (not an encounter
@@ -1954,9 +1951,14 @@
   "True when THIS side currently owns the un-passed pass at an active run window.
    Waking on this is safe from the old :run-active spin (see relevance-reason): a
    side owns the window only while it still owes its pass, so it wakes once, passes
-   (flipping :no-action), and then sleeps until it acquires the NEXT window."
+   (flipping :no-action), and then sleeps until it acquires the NEXT window.
+
+   An ENCOUNTER counts as an active window even with no run behind it (#164):
+   a forced encounter can outlive its run entirely (Quest Completed → Ganked!),
+   and run-window-owner already names an owner there — this guard was the only
+   thing throwing that answer away, so `wait` had no window to own and slept."
   [state side]
-  (boolean (and (run-active? state)
+  (boolean (and (or (run-active? state) (encounter-window? state))
                 (= (some-> (run-window-owner state) name) (name (keyword side))))))
 
 (defn- runner-encounter-decision-pending?
@@ -1971,17 +1973,31 @@
    (once we pass, the decision is made and we're merely waiting on the Corp to
    fire — that is :waiting-for-opponent, not a pending decision). Strategy-level
    pre-auth (:tank) is intentionally NOT consulted — `wait` carries no strategy,
-   and a live encounter is worth waking on regardless of how we'll resolve it."
+   and a live encounter is worth waking on regardless of how we'll resolve it.
+
+   Three gates here each answered about a run rather than about the encounter,
+   and a forced encounter fails all three (#160's rule, pushed up a level for
+   #164):
+     * the phase string — `at-encounter?` instead, the same swap the run
+       automation got;
+     * the position-derived `current-run-ice` and its bare `:rezzed` — an
+       encounter's ICE need be neither at :position nor rezzed, so
+       `encountered-ice` + `encounter-ice-active?`, which is the engine's own
+       active-ice? rule;
+     * the pass ledger — `i-already-passed-run-window?`, which picks ONE
+       ledger the way run-window-owner picks it. The old read ORed run-level in,
+       so a Runner who had already passed the SUSPENDED outer window was told it
+       had passed an encounter it had not touched."
   [state side]
   (boolean
     (and (= (keyword side) :runner)
-         (= (run-phase state) "encounter-ice")
-         (let [current-ice (current-run-ice state)
+         (at-encounter? state (run-phase state))
+         (let [current-ice (encountered-ice state)
                subs (:subroutines current-ice)
                unbroken (filter #(and (not (:broken %)) (not (:fired %))) subs)]
-           (and current-ice (:rezzed current-ice)
+           (and current-ice (encounter-ice-active? state current-ice)
                 (seq unbroken)
-                (not (runner-passed-encounter? state)))))))
+                (not (i-already-passed-run-window? state side)))))))
 
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
