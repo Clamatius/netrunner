@@ -327,7 +327,13 @@
             (println "\nTurn:" turn-num "-" display-side)
 
             ;; Active player / waiting status
-            (if run-state
+            ;; `or an encounter`, not `run-state` alone (#164): a forced encounter
+            ;; can outlive its run entirely, and run-status-headline already reads
+            ;; the ENCOUNTER's ledger through effective-window-passer. Left on
+            ;; run-state, `status` — the first command a stuck seat runs — printed
+            ;; the turn-level "waiting for the Runner" while `prompt`, `diagnose`
+            ;; and `wait` all said the window was ours.
+            (if (or run-state (core/encounter-window-gs? gs))
               ;; During an active run, run-window priority is authoritative. The
               ;; turn-level active-side ('it's the Runner's turn') misleads inside
               ;; a run — the Corp still owns its rez / upgrade sub-steps — so a
@@ -376,6 +382,20 @@
               ;; `prompt` command shows) — status used to print only the ladder,
               ;; leaving the seat to guess whose window it was.
               (print-run-window-priority! @state/client-state run-state (:phase run-state)
+                                          (clojure.string/lower-case (or my-side "runner"))))
+
+            ;; The same block for an encounter with NO run behind it (#164). Kept
+            ;; separate rather than folded into the run section above, which prints
+            ;; a server, a phase ladder and a position — none of which exist here.
+            (when (and (not run-state) (live-encounter? @state/client-state))
+              (println "\n⚔️  FORCED ENCOUNTER (no run in progress):")
+              (when-let [current-ice (encountered-ice @state/client-state)]
+                (println (format "  🧊 ICE: %s" (:title current-ice "ICE")))
+                (when (:rezzed current-ice)
+                  (println (format "     Type: %s"
+                                   (clojure.string/join " " (or (:subtypes current-ice) []))))
+                  (println (format "     Subs: %s" (sub-count-summary (:subroutines current-ice))))))
+              (print-run-window-priority! @state/client-state nil nil
                                           (clojure.string/lower-case (or my-side "runner"))))
 
             (println "\n--- RUNNER ---")
@@ -970,6 +990,10 @@
 
             prompt-str (cond
                         run-state (format "Run:%s" (run-server-display (last (:server run-state))))
+                        ;; #164: no run, but an encounter — the polled one-liner
+                        ;; must not read as an idle board at a window we own.
+                        (live-encounter? state)
+                        (format "Enc:%s" (:title (encountered-ice state) "ICE"))
                         waiting-start? "awaiting-start"
                         prompt (let [msg (:msg prompt)]
                                 (if (> (count msg) 30)
@@ -2212,6 +2236,13 @@
           (:in-run? ts)
           (println (format "🏃 A run is in progress on %s → use 'monitor-run' / 'continue'."
                            (or (:run-server ts) "?")))
+
+          ;; #164: the with-prompt arm above was widened, but a seat that is
+          ;; TRANSIENTLY promptless at this window fell through to the turn
+          ;; boundary steers and was told to `wait` at a window it owned.
+          (live-encounter? state)
+          (println (format "⚔️  Forced encounter with %s (no run) → use 'continue' / 'monitor-run'."
+                           (:title (encountered-ice state) "an ICE")))
 
           ;; Turn boundary, my turn to start.
           (and (:waiting-to-start? ts) (= next-lc my-lc))

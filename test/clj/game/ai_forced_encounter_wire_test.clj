@@ -29,6 +29,7 @@
             [ai-core :as ai-core]
             [ai-run-corp-decisions]
             [ai-display]
+            [ai-state]
             [clojure.test :refer :all]))
 
 (defn- runner-wire-state
@@ -399,3 +400,47 @@
               (str "nor call a live encounter an empty paid-ability window. got:\n" out))
           (is (not (clojure.string/includes? out "Run Phase: \n"))
               (str "and must not print a phase label with no phase. got:\n" out)))))))
+
+(defmacro with-client-state
+  "Point the AI client's state atom at a captured wire map for the body."
+  [wire & body]
+  `(let [prev# @ai-state/client-state]
+     (try (reset! ai-state/client-state ~wire)
+          ~@body
+          (finally (reset! ai-state/client-state prev#)))))
+
+(deftest every-seat-surface-agrees-at-a-runless-encounter
+  (testing "#164 (Fable pass, the unaddressed remainder of the issue's own opening
+            line — 'everything that asks is-there-a-run before is-there-an-
+            encounter'): `status` is the FIRST command a stuck seat runs, and it
+            gated its headline, its run section and its compact one-liner on
+            :run alone. So it printed a turn-level 'waiting for the Runner' while
+            `prompt`, `diagnose` and `wait` all said the window was ours — four
+            surfaces, two answers."
+    (do-game
+      (new-game (runless-game))
+      (force-runless-encounter! state)
+      (doseq [[label wire] [["runner" (runner-wire-state state)]
+                            ["corp" (corp-wire-state state)]]]
+        (let [;; show-status has no captured-state arity — it reads the client
+              ;; atom — so drive it the way the seat does.
+              full    (with-out-str (with-client-state wire (ai-display/show-status)))
+              compact (with-out-str (#'ai-display/show-status-compact* wire))
+              promptd (with-out-str (ai-display/show-prompt-detailed wire))]
+          ;; NOT (includes? full "Ice Wall") — Ice Wall is INSTALLED in Server 1,
+          ;; so the board dump names it whether or not `status` knows there is an
+          ;; encounter. That assertion passed with the fix reverted, i.e. it
+          ;; pinned nothing. Key on the section only the encounter can print.
+          (is (clojure.string/includes? full "FORCED ENCOUNTER")
+              (str label ": `status` must show the encounter section. got:\n" full))
+          (is (clojure.string/includes? compact "Enc:Ice Wall")
+              (str label ": and the polled one-liner must not read as idle. got:\n" compact))
+          ;; The point is AGREEMENT: `status` must not describe an idle board
+          ;; while `prompt` describes a live window.
+          (is (clojure.string/includes? promptd "Ice Wall")
+              (str label ": prompt names the window. got:\n" promptd))
+          ;; The headline must come from run-status-headline (which reads the
+          ;; ENCOUNTER's ledger) rather than the turn-level status text. Both of
+          ;; its arms name the window explicitly; the turn-level text never does.
+          (is (re-find #"Status:.*(Your move|Waiting on|window)" full)
+              (str label ": the headline must be the WINDOW's, not the turn's. got:\n" full)))))))
