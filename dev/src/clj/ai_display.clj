@@ -46,6 +46,146 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn- rig-card-seq
+  "Every card in a rig collection, depth-first, hosted cards included.
+
+   #161: a program hosted on another rig card — Leech on a Leprechaun, anything
+   on a host console — is NOT at the top level of `[:runner :rig :program]`. It
+   lives in that host's `:hosted` vector (its own `:zone` is `[:onhost]`, which
+   is not a real zone; see game.ai-hosted-card-ref-test). Both rig renderers
+   read the top level only, so such a card was absent from `board` and
+   `board-compact` entirely — name, strength and counters — while
+   `status-compact`'s virus segment DID recurse. The two views disagreed about
+   whether the card existed.
+
+   Scope: the rig only. A program hosted on ICE (Botulus, Trypano) is in the
+   Corp server's `:hosted`, not the Runner's rig, and is out of this seq by
+   construction — see #171, where both compact views are consistently blind, so
+   the #161 symptom does not recur there."
+  [cards]
+  (mapcat (fn [c] (cons c (rig-card-seq (:hosted c)))) cards))
+
+(defn- rig-card-title
+  "The name a rig card goes by, or nil when the wire withheld it.
+
+   `:title` is not the only place a name lives (guest re-review, MAJOR). A
+   CONDITION COUNTER — On the Lam hosted on a resource, Jailbreak-class effects,
+   anything through `card/convert-to-condition-counter` (src/cljc/game/core/card.cljc:550)
+   — is rebuilt as `{:type \"Counter\" :printed-title <name>}` with **no `:title`
+   at all**, and it is installed, active, and can prevent three tags or three
+   damage. Reading a missing `:title` as \"withheld\" rendered a live On the Lam as
+   `?card` in both views. Verified on the wire: `:printed-title \"On the Lam\"`,
+   `:type \"Counter\"`, `:installed :this-turn`."
+  [card]
+  (or (:title card) (:printed-title card)))
+
+(def ^:private rig-piece-types
+  "The three types the rig's own categories hold, and the only types the
+   `Prog[n] HW[n] Res[n]` counts are about."
+  #{"Program" "Hardware" "Resource"})
+
+(defn- guest-role
+  "What a hosted card IS, in the four states the wire can actually put it in.
+
+   Round after round of this fix shipped a renderer that stated a falsehood about
+   a state I had not enumerated, so the enumeration is written out here once:
+
+   - `:withheld` — no name of any kind. `diffs/private-card-keys` drops `:title`,
+     `:printed-title` and `:type` together, so nothing can be said. Rendered
+     `?card`, counted as nothing, and NOT claimed to be uninstalled: absence of
+     `:installed` is not evidence when we were shown nothing.
+
+   - `:foreign` — a named card that is not a rig piece: the opponent's `:side`, or
+     a `:type` outside `rig-piece-types`. Confirmed on the wire: Film Critic hosts
+     an accessed agenda as `{:title \"Project Vitruvius\" :type \"Agenda\"
+     :side \"Corp\"}`; DJ Fenris hosts a live g-mod identity as `:type
+     \"Fake-Identity\"`; On the Lam becomes `:type \"Counter\"`. None is installed
+     rig hardware and none is parked-installable — calling any of them
+     \"uninstalled\" told a seat its own active card was not in play, and hid a
+     scoreable agenda inside a count whose stated meaning is \"cards you can
+     install\". Named with its type, no install claim, counted as nothing.
+
+     This branch is checked BEFORE `:installed` deliberately. The same agenda on
+     the same Film Critic arrives with `:installed true` when accessed from a
+     server and without it when accessed from HQ (`hosting/host` copies the
+     card's existing keys) — so keying on `:installed` first made one physical
+     board render two different ways depending on where the card was accessed.
+
+   - `:installed` — a rig piece the wire marks installed. `:installed` is
+     `:this-turn` on install and `true` afterwards; always truthy.
+
+   - `:parked` — a rig piece we can see whose keys do not include `:installed`.
+     Street Peddler's three face-down stack cards, The Supplier's grip cards:
+     real, installable later, and NOT rig contents. Counting them said the seat
+     owned a Clone Chip it could not use."
+  [card]
+  (let [;; The wire sends "Runner"/"Corp"; fixtures and pre-serialization code
+        ;; use the keyword. Match both, as every other :side/:prompt-type reader
+        ;; in this project has had to learn to.
+        stated-side (:side card)
+        opponents? (and stated-side (not (contains? #{"Runner" :runner} stated-side)))
+        ;; A MISSING :side is not evidence of anything — the same mistake as
+        ;; reading a missing :installed as "uninstalled". Only a side the wire
+        ;; actually stated, and which is not the Runner's, makes a guest foreign;
+        ;; otherwise the type decides.
+        non-rig-type? (not (contains? rig-piece-types (:type card)))]
+    (cond
+      (nil? (rig-card-title card)) :withheld
+      (or opponents? non-rig-type?) :foreign
+      (:installed card) :installed
+      :else :parked)))
+
+(defn- rig-type-tag
+  "The prefix that keeps the named list invertible against the
+   `Prog[n] HW[n] Res[n]` counts beside it.
+
+   The default is OPEN — an unrecognised type names ITSELF (`Agenda:`,
+   `Counter:`, `Fake-Identity:`) rather than falling through to the empty tag.
+   A closed `case` listing the types I happened to think of is what put an
+   untagged agenda in a list whose empty tag means \"program\" while `Prog[0]`
+   denied one existed, and adding \"Counter\" to that list would only have moved
+   the same bug to the next type the engine invents.
+
+   The tag is NOT part of the title: `find-installed-card` given a pasted
+   `HW:Dhuv` matches nothing and reports \"not found installed\" for a card that
+   exists (guest re-review). No card title contains `HW:` or `Res:`, but titles
+   with colons do exist (\"Apex: Invasive Predator\"), so a seat pasting a token
+   from this line has no local signal about which side of the colon is the name.
+   Left as a documented papercut rather than a resolver change — the resolver's
+   inability to reach anything this line names is #170, and the tag is one more
+   face of it, not a separate problem."
+  [card]
+  (let [t (:type card)]
+    (cond
+      (nil? t) ""                       ; withheld: `?card` already says so
+      (= "Program" t) ""                ; what the list is presumed to hold
+      (= "Hardware" t) "HW:"
+      (= "Resource" t) "Res:"
+      :else (str t ":"))))
+
+(defn- rig-type-count
+  "How many cards of `type-str` the rig holds — the category's own vector, plus
+   any INSTALLED hosted card of that type anywhere in the rig.
+
+   The counts label the list beside them, so a count that stopped at the top
+   level while the list recursed would be a new contradiction, not a smaller one.
+
+   Two deliberate asymmetries:
+   - The top level is counted by CATEGORY, not by `:type`, because a private card
+     serializes without one (`diffs/private-card-keys` omits `:type` and
+     `:title`) and counting those by type would silently drop cards the old code
+     showed.
+   - Hosted cards are counted by `:type` AND gated on `guest-role`, so nothing
+     parked, withheld or foreign (an accessed agenda on a Film Critic) inflates
+     `HW[n]`."
+  [rig category type-str]
+  (+ (count (get rig category))
+     (count (filter #(and (= :installed (guest-role %)) (= type-str (:type %)))
+                    (rig-card-seq (mapcat :hosted
+                                          (concat (:program rig)
+                                                  (:hardware rig)
+                                                  (:resource rig))))))))
+
 (defn compact-counter-suffix
   "Pure: the counters on a card, in the compact board's one-line idiom —
    \"(3v)\", \"(2v,1p)\", \"(12c)\", \"(2adv)\" — or \"\" when the card carries
@@ -74,6 +214,145 @@
     (if (seq parts)
       (str "(" (str/join "," parts) ")")
       "")))
+
+(defn- rig-card-name
+  "A rig card's display name, with the `[N]` suffix duplicates need.
+
+   Indexes on `rig-card-title`, not on `:title`, so a condition counter is named
+   by its `:printed-title` instead of being mistaken for a withheld card. The
+   duplicate rule is `core/format-card-name-with-index`'s, restated here rather
+   than delegated because that function keys on `:title`: every counter has
+   `:title` nil, so delegating would make all of them duplicates of each other.
+
+   Falls back to `?card` only when the wire gave NO name of either kind — a
+   private card carries neither (`diffs/private-card-keys`), and `(str nil)` is
+   the empty string, so an unnamed guest would render as `Leprechaun{(2v)}`,
+   which reads as a rendering fault rather than as a card the seat is not allowed
+   to see. Same `?card` idiom the compact server view uses for an unrezzed root
+   card.
+
+   Withheld cards are still positionally disambiguated (`?card [0]`, `?card [1]`
+   …) when more than one shares a host — the Corp's view of a Street Peddler is
+   three of them, and three identical tokens claim they are interchangeable
+   (guest panel)."
+  [card siblings]
+  (if-let [title (rig-card-title card)]
+    (let [same-name (vec (filter #(= title (rig-card-title %)) siblings))]
+      (if (> (count same-name) 1)
+        (str title " [" (.indexOf same-name card) "]")
+        title))
+    (let [untitled (vec (remove rig-card-title siblings))]
+      (if (> (count untitled) 1)
+        (str "?card [" (.indexOf untitled card) "]")
+        "?card"))))
+
+(defn- parked-suffix
+  "The `+N uninstalled` tail for guests that are hosted but not installed.
+
+   Street Peddler's three face-down stack cards and The Supplier's grip cards are
+   real information — the seat CAN install them, which is what this bucket's name
+   asserts — but they are NOT rig contents, and naming them beside installed
+   programs is what made `HW[1]` claim a Clone Chip the seat could not use.
+   Summarised rather than enumerated because the compact line's job is the rig;
+   the full board names them individually.
+
+   Only `:parked` guests land here. An accessed agenda on a Film Critic is not
+   something the Runner can install, so hiding it in this count stated the
+   opposite of the truth about the most decision-relevant card on the board."
+  [hosted]
+  (let [parked (filter #(= :parked (guest-role %)) hosted)]
+    (when (seq parked)
+      (str "+" (count parked) " uninstalled"))))
+
+(defn- print-rig-cards!
+  "Print one rig category for the full board, one bullet per card, recursing
+   into `:hosted` with a deeper indent and a marker:
+
+       • Leprechaun
+         ↳ Leech (Program) [2virus]
+       • The Supplier
+         ↳ Clone Chip (Hardware) (not installed)
+       • Daily Casts
+         ↳ On the Lam (Counter)
+
+   Same omission as the compact board (#161), and worse here: this is the view a
+   seat opens when the one-line rig is ambiguous, so a card missing from BOTH is
+   a card the seat cannot find at all. Indent-plus-marker rather than a flat
+   bullet because which card is paying the memory is the reason the host was
+   installed.
+
+   `(not installed)` is not decoration: without it this view says a parked Clone
+   Chip and an installed Leech are the same kind of thing (guest panel).
+   Strength is printed only for programs — the old code reserved that path for
+   them, and `:current-strength` is stamped by ice.clj alone, so widening it to
+   hardware and resources would have rested on an engine invariant this file
+   neither owns nor tests."
+  ([cards indent] (print-rig-cards! cards indent "•"))
+  ([cards indent bullet]
+   (doseq [card cards]
+     (println (str indent bullet " " (rig-card-name card cards)
+                   ;; GUESTS name their type. A guest is printed inside whatever
+                   ;; section its HOST belongs to, so an Adjusted Matrix under a
+                   ;; program, or a condition counter under a resource, otherwise
+                   ;; reads as one more card of the section's own type — and the
+                   ;; section header's count does not include it. Top-level cards
+                   ;; need no tag: the section header already states their type.
+                   (when (and (= "↳" bullet) (:type card))
+                     (str " (" (:type card) ")"))
+                   (when (and (= "Program" (:type card)) (:current-strength card))
+                     (str " (str: " (:current-strength card) ")"))
+                   (format-counters card)
+                   (when (= "↳" bullet)
+                     (case (guest-role card)
+                       :parked " (not installed)"
+                       ;; A withheld guest is already rendered `?card`, which says
+                       ;; we were not shown it. Adding "(not installed)" would turn
+                       ;; that honest silence into a false claim (guest re-review).
+                       :withheld " (install state not shown)"
+                       ;; :foreign says what it is via its type, above. It is not
+                       ;; the Runner's to install, so neither marker applies.
+                       nil))))
+     (when-let [hosted (seq (:hosted card))]
+       (print-rig-cards! hosted (str indent "  ") "↳")))))
+
+(defn- compact-rig-entry
+  "Pure: one rig card in the compact board's idiom — `Name(counters)`, plus
+   `{child,child}` when it hosts anything: `Leprechaun{Leech(2v)}`.
+
+   The host relationship is RENDERED, not flattened, so the seat can still tell
+   what is paying memory for what — a flat `Leprechaun,Leech` says the Runner
+   has two MU of programs when the whole point of the host is that the Leech
+   costs none (#161). Recursive, because a host's guest can itself be a host.
+
+   BRACES, not the brackets #161 suggested, because `[...]` already means two
+   other things on this line: `Prog[2]` is a count and `Leech [1]` is the
+   duplicate index that `core/parse-card-reference` reads back. Two Leprechauns,
+   the second hosting, would have rendered `Leprechaun [1][Leech(2v)]` — three
+   grammars, one line, for a reader that is itself a text parser (guest panel).
+
+   Guests are NAMED unless the wire says they are merely parked, in which case
+   `parked-suffix` counts them instead. A withheld guest is named `?card`: we
+   cannot say it is parked, so we do not (guest re-review). Non-program guests
+   carry the same `HW:`/`Res:` tag their hosts do, so the named tree stays
+   invertible against the counts at every depth, not just the first.
+
+   `siblings` is the collection the card is indexed within, so duplicate titles
+   keep their `[N]` suffix; children index within their host's `:hosted`.
+
+   CAVEAT the seat needs and this line cannot give it: a guest named here is NOT
+   addressable by bare title. `core/find-installed-card` searches the three
+   top-level vectors only, so `use Leech` resolves to a top-level Leech — or
+   reports \"not found installed\" — however this line renders. That is #170, and
+   naming guests here is what arms it."
+  [card siblings]
+  (let [hosted (seq (:hosted card))
+        named (remove #(= :parked (guest-role %)) hosted)
+        parts (concat (map #(str (rig-type-tag %) (compact-rig-entry % hosted)) named)
+                      (when-let [p (parked-suffix hosted)] [p]))]
+    (str (rig-card-name card siblings)
+         (compact-counter-suffix card)
+         (when (seq parts)
+           (str "{" (str/join "," parts) "}")))))
 
 (defn compact-unrezzed-content
   "Pure: the compact board's summary of a server's UNREZZED root cards, e.g.
@@ -673,34 +952,60 @@
 
     ;; Runner Rig
     (println "\n--- RUNNER RIG ---")
+    ;; #161 (guest panel): the section header carries the SAME total the compact
+    ;; line prints, and "(none)" is only said when that total is zero. A Corroder
+    ;; hosted on a console used to make compact say `Prog[1]` while this view —
+    ;; the one a seat opens to resolve exactly that ambiguity — said
+    ;; "Programs: (none)". That is the contradiction #161 was filed about,
+    ;; between the same two views, and the first draft of this fix re-created it.
     (let [programs (:program runner-rig)
           hardware (:hardware runner-rig)
-          resources (:resource runner-rig)]
-      (if (seq programs)
-        (do
-          (println "\n💾 Programs:")
-          (doseq [prog programs]
-            (let [prog-name (core/format-card-name-with-index prog programs)]
-              (println (str "  • " prog-name
-                           (when-let [strength (:current-strength prog)] (str " (str: " strength ")"))
-                           (format-counters prog))))))
-        (println "\n💾 Programs: (none)"))
-
-      (if (seq hardware)
-        (do
-          (println "\n🔧 Hardware:")
-          (doseq [hw hardware]
-            (let [hw-name (core/format-card-name-with-index hw hardware)]
-              (println (str "  • " hw-name (format-counters hw))))))
-        (println "🔧 Hardware: (none)"))
-
-      (if (seq resources)
-        (do
-          (println "\n📦 Resources:")
-          (doseq [res resources]
-            (let [res-name (core/format-card-name-with-index res resources)]
-              (println (str "  • " res-name (format-counters res))))))
-        (println "📦 Resources: (none)")))
+          resources (:resource runner-rig)
+          ;; The note fires whenever the header total exceeds what this section
+          ;; body ACTUALLY PRINTS — which is `cards` plus everything
+          ;; print-rig-cards! recurses into, not `cards` alone.
+          ;;
+          ;; Subtracting only the top level (the second draft of this fix) put a
+          ;; false note on the commonest hosting board in the game: Leprechaun
+          ;; hosting a Leech is program-on-program, so `Programs [2]:` listed
+          ;; BOTH and then claimed "1 more hosted on another card" — a phantom
+          ;; third program, pointing the seat at the section it was already
+          ;; reading (guest re-review, MAJOR). Dhegdheer, Progenitor,
+          ;; Scheherazade and Off-Campus Apartment all host within their own
+          ;; category too; the cross-category case (Corroder on a console) was
+          ;; simply the only one the tests covered, and `includes?` assertions
+          ;; cannot see a spurious extra line.
+          shown-here (fn [cards type-str]
+                       (+ (count cards)
+                          (count (filter #(and (= :installed (guest-role %))
+                                               (= type-str (:type %)))
+                                         (rig-card-seq (mapcat :hosted cards))))))
+          section! (fn [icon label cards type-str total]
+                     (println (str "\n" icon " " label " [" total "]:"))
+                     (when (seq cards) (print-rig-cards! cards "  "))
+                     (let [elsewhere (- total (shown-here cards type-str))]
+                       (cond
+                         (pos? elsewhere)
+                         (println (str "  (" (if (seq cards)
+                                               (str elsewhere " more, hosted on another card")
+                                               (str "none at the top level; " elsewhere
+                                                    " hosted on another card"))
+                                       ;; Not "in the host's own section": with
+                                       ;; Flame-out hosting a Leprechaun hosting a
+                                       ;; Leech, both programs sit under Hardware,
+                                       ;; and the inner one's host is itself a
+                                       ;; program with no section of its own
+                                       ;; (guest re-review). True at any depth:
+                                       ;; they are somewhere in this rig, under a
+                                       ;; host.
+                                       " — shown elsewhere in this rig, under their hosts)"))
+                         (empty? cards) (println "  (none)"))))]
+      (section! "💾" "Programs" programs "Program"
+                (rig-type-count runner-rig :program "Program"))
+      (section! "🔧" "Hardware" hardware "Hardware"
+                (rig-type-count runner-rig :hardware "Hardware"))
+      (section! "📦" "Resources" resources "Resource"
+                (rig-type-count runner-rig :resource "Resource")))
 
     ;; Deck/Discard counts
     (println "\n--- DECK STATUS ---")
@@ -762,17 +1067,33 @@
     ;; Runner rig - one line
     (let [programs (:program runner-rig)
           hardware (:hardware runner-rig)
-          resources (:resource runner-rig)]
+          resources (:resource runner-rig)
+          ;; #161: the named list is every top-level program, PLUS any hardware
+          ;; or resource that is hosting something — otherwise a program on a
+          ;; host console stays invisible for exactly the reason a program on a
+          ;; Leprechaun did. A non-hosting console still shows only in HW[n].
+          ;;
+          ;; Non-program entries carry a TYPE TAG. Without one, `Prog[1] HW[1] -
+          ;; Dhuv{Corroder}` invites the reader to pair "one program" with the one
+          ;; named top-level entry and conclude Dhuv is it, and a hosting resource
+          ;; being listed while a non-hosting one is not leaves presence-in-list
+          ;; carrying no invertible meaning (guest panel).
+          ;;
+          ;; Each entry carries the collection it is INDEXED within, so a
+          ;; duplicate title keeps its [N] suffix against its own category.
+          named (concat (map #(vector % programs "") programs)
+                        (map #(vector % hardware "HW:") (filter (comp seq :hosted) hardware))
+                        (map #(vector % resources "Res:") (filter (comp seq :hosted) resources)))]
       (println (format "Rig: Prog[%d] HW[%d] Res[%d]%s"
-                      (count programs)
-                      (count hardware)
-                      (count resources)
-                      (if (seq programs)
+                      (rig-type-count runner-rig :program "Program")
+                      (rig-type-count runner-rig :hardware "Hardware")
+                      (rig-type-count runner-rig :resource "Resource")
+                      (if (seq named)
                         (str " - " (clojure.string/join
                                     ","
-                                    (map #(str (core/format-card-name-with-index % programs)
-                                               (compact-counter-suffix %))
-                                         programs)))
+                                    (map (fn [[card siblings tag]]
+                                           (str tag (compact-rig-entry card siblings)))
+                                         named)))
                         ""))))
     nil))
 
