@@ -90,9 +90,12 @@
      ;; stats/fetch-replay serves shared / bug-reported replays to anyone, but
      ;; it lives under /profile's ::auth, which 401s a logged-out viewer before
      ;; the handler runs — so a shared link never worked. This public twin
-     ;; serves ONLY shared / bug-reported replays (no owner clause: this fork's
-     ;; wrap-user dev fallback mints a user from ?client-id=ai-client-*, which
-     ;; would make an owner check forgeable here). Owners keep /profile/...
+     ;; serves ONLY shared / bug-reported replays, and deliberately has no owner
+     ;; clause — when it was written, this fork's wrap-user dev fallback minted
+     ;; a user from ?client-id=ai-client-* on every route, so an owner check
+     ;; here was forgeable. #157 confined that fallback to /chsk, but the route
+     ;; is outside ::auth either way, so it keeps no owner clause and owners
+     ;; keep /profile/...
      ["/replay-data/:gameid" {:get #'stats/fetch-shared-replay :middleware [::forgery]}]
      ["/register" {:post #'auth/register-handler :middleware [::forgery]}]
      ["/check-username/:username" {:get #'auth/check-username-handler :middleware [::forgery]}]

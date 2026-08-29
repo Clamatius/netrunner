@@ -9,6 +9,23 @@
               :app #ig/ref :web/app}
  :web/auth {:expiration 60
             :secret "Dev salt"
+            ;; #157: lets the AI seats connect to /chsk with a bare
+            ;; ?client-id=ai-client-<name> instead of a login. wrap-user refuses
+            ;; to mint that synthetic user unless this is true, and even then
+            ;; only on /chsk - so no other route honours a forged client-id.
+            ;; NB this file is the BASE config (prod.edn deep-merges over it),
+            ;; so this is an opt-OUT: a deployment that wants no synthetic users
+            ;; must set the key false in its own prod.edn. It suppresses the
+            ;; synthetic :user only - sente's :user-id-fn (web.ws) accepts a
+            ;; raw ?client-id as the socket uid regardless of this flag (#173).
+            ;; Deliberately NOT set false in docker/docker-prod.edn: despite the
+            ;; name, docker-compose.yml mounts that file as the LOCAL dev
+            ;; server's prod.edn (the same compose stack bind-mounts src/ and
+            ;; runs a lein repl), so disabling it there would only break docker
+            ;; dev seats. Dockerfile.prod installs no config at all - a real
+            ;; deployment mounts its own prod.edn, and that is where to set
+            ;; :allow-ai-client-fallback? false.
+            :allow-ai-client-fallback? true
             :cookie {:http-only true
                      :same-site :lax
                      :secure true

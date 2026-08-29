@@ -81,7 +81,14 @@
   ;; the synthetic user "AI-runner" with no cookie at all. The first cut of
   ;; this fix reused fetch-replay (owner clause) on the public route, so this
   ;; request returned the private replay of AI-runner's game with 200.
-  (let [app (api/make-app {})]
+  ;;
+  ;; #157 has since confined that fallback to /chsk, so on THIS route no user
+  ;; is minted at all any more and the 401 no longer depends on the missing
+  ;; owner clause — fetch-shared-replay-handler above is what pins that. The
+  ;; system map still switches the fallback on (:allow-ai-client-fallback?, as
+  ;; resources/dev.edn does), so this stays a test of the route rather than an
+  ;; accidental test of a flag being off. web.ai-client-auth-test pins #157.
+  (let [app (api/make-app {:web/auth {:allow-ai-client-fallback? true}})]
     (testing "anonymous GET /replay-data/<private>?client-id=ai-client-runner is 401, not the replay"
       (with-redefs [mc/find-one-as-map (fn [& _] private-replay)]
         (let [resp (app {:request-method :get :uri "/replay-data/g1"

@@ -51,10 +51,64 @@
       (handler req)
       (response 401 {:message "Not authorized"}))))
 
+(def ^:private ai-client-id-prefix "ai-client-")
+
+(def ^:private ai-client-fallback-uris
+  "The only endpoints the AI seats need the client-id fallback on: the sente
+   websocket handshake and its ajax-post twin, both served at /chsk. Every
+   other route is reachable by a browser with a real session, so none of them
+   has any business minting a user out of a query parameter."
+  #{"/chsk"})
+
+(defn- ai-client-fallback-user
+  "TEMP: lets a dev AI seat connect without a login, by turning
+   ?client-id=ai-client-<suffix> into the synthetic user AI-<suffix>.
+
+   #157: this used to run on EVERY route, because wrap-user is global
+   middleware — so a bare `?client-id=ai-client-runner` forged that user
+   against anything behind ::auth (e.g. GET /profile/history/full/<gameid>
+   returned the private replay of AI-runner's game). Two gates now stand in
+   front of it:
+
+     1. the request must be for the websocket endpoint the seats actually
+        use (`ai-client-fallback-uris`). This is the gate that closes the
+        reported hole, and it holds on every deployment; and
+     2. :web/auth :allow-ai-client-fallback? must be true — an off switch for
+        a deployment that wants no synthetic USERS.
+
+   Two things gate 2 is NOT, both found by the #157 review panel:
+
+     - it is not fail-closed. web.system/server-config deep-merges
+       resources/prod.edn OVER resources/dev.edn, and dev.edn sets it true, so
+       a deployment inherits `true` unless its own prod.edn says otherwise.
+       Gate 1 is the one that holds everywhere; do not lean on gate 2 alone.
+     - it does not stop an anonymous socket from CLAIMING an identity. sente's
+       :user-id-fn (web.ws) has its own, separate client-id fallback and takes
+       `?client-id=<anything>` as the uid with :authorized?-fn (constantly
+       true) — and :game/action authorizes on that uid, not on :user. Turning
+       this flag off suppresses the synthetic :user map and nothing else.
+       Tracked as #173; this function cannot reach it.
+
+   Returns nil when either gate is shut."
+  [{auth :system/auth :keys [uri params]}]
+  (let [client-id (str (:client-id params))]
+    (when (and (:allow-ai-client-fallback? auth)
+               (contains? ai-client-fallback-uris uri)
+               (str/starts-with? client-id ai-client-id-prefix))
+      ;; A bare "ai-client-" would mint the shared identity "AI-" for every
+      ;; malformed client, and sente would route all their pushes to one uid.
+      (when-let [client-suffix (not-empty (subs client-id (count ai-client-id-prefix)))]
+        {:username (str "AI-" client-suffix)
+         :emailhash "ai"
+         :_id (str "ai-player-" client-suffix)
+         :special true
+         :options {:default-format "standard" :pronouns "none"}
+         :stats {:games-started 0 :games-completed 0}}))))
+
 (defn wrap-user [handler]
   (fn [{db :system/db
         auth :system/auth
-        :keys [cookies params] :as req}]
+        :keys [cookies] :as req}]
     ;; Session token comes from Cookie header (set by wrap-session middleware)
     (let [session-token (get-in cookies ["session" :value])
           user (some-> session-token
@@ -63,17 +117,7 @@
                                                          :emailhash (:emailhash %)}))
                        (select-keys user-keys)
                        (update :_id str))
-          ;; TEMP: Allow AI players without authentication (fallback for dev)
-          ;; Create a fake user for client-ids that start with "ai-client-"
-          client-id (:client-id params)
-          ai-user (when (and (not user) client-id (str/starts-with? (str client-id) "ai-client-"))
-                    (let [client-suffix (subs (str client-id) 10)]
-                      {:username (str "AI-" client-suffix)
-                       :emailhash "ai"
-                       :_id (str "ai-player-" client-suffix)
-                       :special true
-                       :options {:default-format "standard" :pronouns "none"}
-                       :stats {:games-started 0 :games-completed 0}}))
+          ai-user (when-not user (ai-client-fallback-user req))
           final-user (or user ai-user)]
       (if (or (active-user? final-user) ai-user)
         (handler (-> req
