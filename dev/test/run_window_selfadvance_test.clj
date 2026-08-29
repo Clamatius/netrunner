@@ -656,7 +656,20 @@
       (runs/reset-reported-events!)
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state
-          (runner-state :phase "encounter-ice" :position 1 :no-action false
+          ;; approach-ice, not encounter-ice (#167). This fixture is a rezzed ICE
+          ;; with NO :subroutines, and at an ENCOUNTER that is no longer a window
+          ;; where the Runner "holds nothing" — it is a zero-subroutine encounter,
+          ;; which handle-runner-pass-broken-ice now owns and passes. The test was
+          ;; unknowingly resting on the hole #167 closed: the only reason
+          ;; handle-events got to speak at that window was that no pass handler
+          ;; would touch it. Approach-ice with an already-rezzed ICE is a window
+          ;; the Runner genuinely holds nothing at (see
+          ;; approach-ice-rezzed-ice-is-not-a-decision above), so the sequence
+          ;; this test is about — event reported, then a decision arrives — is
+          ;; preserved exactly. The decision-blocks-the-pass claim at a zero-sub
+          ;; ENCOUNTER is pinned separately, against the real engine, in
+          ;; game.ai-zero-sub-encounter-wire-test.
+          (runner-state :phase "approach-ice" :position 1 :no-action false
                         :ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
                         :prompt nil :log rez-log)
           ;; 1. Rez lands while I hold nothing -> reported, entry now deduped.

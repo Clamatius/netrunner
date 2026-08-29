@@ -55,14 +55,22 @@
      :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
 
     :else
-    (do
-      (ws/send-message! :game/action
-                        {:gameid gameid
-                         :command "continue"
-                         :args nil})
+    (let [sent? (boolean (ws/send-message! :game/action
+                                           {:gameid gameid
+                                            :command "continue"
+                                            :args nil}))]
       (Thread/sleep 100)
+      ;; :sent — the Corp copy of this sender has carried it since #150; this
+      ;; one did not, which is the N-senders-one-command shape again.
+      ;; ws/send-message! reports a failed send (reconnect exhausted) as false,
+      ;; and BOTH suppression branches above return without sending at all.
+      ;; A caller that latches "I have passed here" on :action-taken alone
+      ;; therefore latches on a pass the engine never received — and this
+      ;; handler's re-entry branch then waits for a Corp reply forever
+      ;; (guest panel CRITICAL, #167 review).
       {:status :action-taken
-       :action :sent-continue})))
+       :action :sent-continue
+       :sent sent?})))
 
 (defn- filter-meaningful-log-entries
   "Filter log entries to exclude 'no further action' spam."
@@ -510,10 +518,22 @@
 ;; ============================================================================
 
 (defn handle-runner-pass-broken-ice
-  "Priority 2.6: Runner at encounter-ice when all subs are resolved (broken or fired).
+  "Priority 2.6: Runner at encounter-ice with nothing left to act on — every
+   subroutine resolved (broken or fired), the Corp already gone, or the ICE never
+   had a subroutine at all.
    Sends a single continue to pass our priority, then waits for the Corp to pass
    its priority. Re-sending continue every loop iteration (the old behavior) spun
-   against the unchanged encounter-ice phase and tripped the stuck-state guard."
+   against the unchanged encounter-ice phase and tripped the stuck-state guard.
+
+   No longer requires `(seq subroutines)` (#167). That guard read as a sanity
+   check — an ICE with no subroutines looks like a summary we have not finished
+   reading — but a Tour Guide with no rezzed assets HAS none, and the Corp's pass
+   handler carried the same guard, so the window was owned by NEITHER seat and
+   sat open until the 300s deadline. `encounter-ice-active?` is the discriminator
+   the guard was reaching for: it demands a resolvable, engine-active ICE.
+   game.ai-zero-sub-encounter-wire-test pins the premise that makes the swap
+   sound — on a resolved encounter summary an absent :subroutines key means the
+   ICE has none, never that we have not been told."
   [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
              ;; at-encounter?: a forced encounter ends the same way — both sides
@@ -523,7 +543,16 @@
              (core/at-encounter? state run-phase)
              ;; Defer to handle-real-decision when a real prompt is pending (e.g. a
              ;; mid-subroutine "Jack out?" window) - passing here would mask it.
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; And to the opponent when our own prompt is a WAITING prompt: the
+             ;; engine is mid-checkpoint on them and send-continue! will refuse
+             ;; the send anyway. Mirroring that chokepoint as an outer guard is
+             ;; the Corp handler's #150 rule — "nothing is printed that is not
+             ;; going to be sent" — which this handler needed as soon as the
+             ;; latch stopped being set before the send (guest panel MAJOR,
+             ;; #167 round 3). A waiting prompt carries no choices, so
+             ;; has-real-decision? does not cover it.
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
@@ -550,13 +579,53 @@
           ;; worse than that. The forgone value is issue #165, and `status`
           ;; already tells a hand-driven seat it may break first.
           corp-declined? (core/opponent-passed-encounter? state side)]
-      (when (and (core/encounter-ice-active? state current-ice) (seq subroutines)
+      ;; No (seq subroutines) here — see the docstring. A zero-subroutine
+      ;; encounter is a both-must-pass window like any other (#167).
+      ;;
+      ;; Passing first cedes the LAST WORD but not the response, and the
+      ;; difference was measured against the engine rather than assumed: after
+      ;; our pass the Corp can rez an asset, Tour Guide goes 0 -> 1 subroutines,
+      ;; and the encounter's :no-action is never reset — but the encounter is
+      ;; still open, a break still resolves (probed with Mimic: the new sub
+      ;; broke), and handle-runner-encounter-ice above carries no pass-once
+      ;; latch, so it re-surfaces the break/tank decision on the next tick.
+      ;; What we give up is the tempo of answering first, which is the #165
+      ;; ledger — not the ability to answer.
+      (when (and (core/encounter-ice-active? state current-ice)
                  (or (empty? actionable-subs) corp-declined?))
         (let [ice-title (:title current-ice "ICE")
               position (get-in state [:game-state :run :position])
               all-fired? (every? :fired subroutines)
-              pass-key [(core/encounter-key state) ice-title]]
-          (if (= @passed-ice-encounter pass-key)
+              pass-key [(core/encounter-key state) ice-title]
+              ;; The latch is only ever evidence, and the LEDGER outranks it
+              ;; (guest panel CRITICAL, #167 round 2). ws/send-message! returns
+              ;; true when the socket ACCEPTED the message, not when the engine
+              ;; processed it — its cursor wait can time out and it still
+              ;; returns true — so a continue can be latched and lost. If the
+              ;; encounter is still open and its :no-action names the OPPONENT,
+              ;; our pass provably never landed: had it landed, their pass would
+              ;; have ENDED the encounter and there would be no encounter here
+              ;; to read. Re-send rather than wait for a reply to a pass the
+              ;; engine never saw — the deadlock this issue exists to remove.
+              ;;
+              ;; This is also what keeps #163 (encounter-key is a card cid, not
+              ;; an encounter identity) from being a hang on this path: a
+              ;; Sisyphus re-encounter of the same card inherits the stale key,
+              ;; but as soon as the Corp passes it, this override closes it.
+              latch-is-stale? (core/opponent-passed-encounter? state side)]
+          ;; The LEDGER naming us is as good as the latch, and better: the latch
+          ;; is one slot, set by these two handlers only, so a pass sent by any
+          ;; other sender (a hand-driven `continue`) or displaced by a second
+          ;; encounter leaves it empty while the engine has our pass. Without
+          ;; this the else branch printed "Runner passing ICE" and then had the
+          ;; send suppressed by the #98 chokepoint — every tick, for up to 300s.
+          ;; That is #150's print-then-suppressed burst, relocated to this seat
+          ;; by the latch-after-send fix (guest panel MAJOR, #167 round 3).
+          ;; Safe beside the override: the ledger cannot name us and the
+          ;; opponent at once, so latch-is-stale? and this are exclusive.
+          (if (and (or (= @passed-ice-encounter pass-key)
+                       (core/i-already-passed-run-window? state side))
+                   (not latch-is-stale?))
             ;; Already passed our priority here - wait for Corp, don't re-send.
             (let [status-key [:passed-ice pass-key]]
               (when-not (= @last-waiting-status status-key)
@@ -573,13 +642,31 @@
                :position position})
             ;; First time at this ICE/position - send one continue to pass.
             (do
-              (reset! passed-ice-encounter pass-key)
-              (println (if (and corp-declined? (seq actionable-subs))
+              (println (cond
+                         (and corp-declined? (seq actionable-subs))
                          (format "   → Corp declined to fire on %s — passing ends the encounter with %d sub(s) unresolved"
                                  ice-title (count actionable-subs))
+                         ;; "All subs broken" is a claim about state, and with no
+                         ;; subroutines at all it is a false one — (every? :fired [])
+                         ;; and (every? :broken []) are both true, so the old
+                         ;; formats would have reported breaking subs that never
+                         ;; existed (#167).
+                         (empty? subroutines)
+                         (format "   → %s has no subroutines, Runner passing ICE" ice-title)
+                         :else
                          (format "   → All subs %s on %s, Runner passing ICE"
                                  (if all-fired? "resolved" "broken") ice-title)))
-              (send-continue! gameid))))))))
+              ;; Latch AFTER the send, on a send that actually happened. The
+              ;; latch used to be set first, so a continue suppressed by
+              ;; send-continue!'s own chokepoints — or lost to an exhausted
+              ;; reconnect — still recorded us as having passed, and every later
+              ;; tick took the branch above and waited for a Corp reply to a pass
+              ;; the engine never saw. Same discipline the Corp's
+              ;; latch-encounter-pass! has carried since #150.
+              (let [r (send-continue! gameid)]
+                (when (and (= :action-taken (:status r)) (:sent r))
+                  (reset! passed-ice-encounter pass-key))
+                r))))))))
 
 (defn handle-runner-pass-fired-ice
   "Priority 2.7: Runner at encounter-ice after subs have fired.
@@ -598,7 +685,9 @@
              ;; subs-resolved? log heuristic matches a single "uses <ICE>" line, so
              ;; it fires on the FIRST sub of a multi-sub ICE (e.g. Karunā) while a
              ;; mid-subroutine "Jack out?" decision is still open - masking it.
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; Same waiting-prompt chokepoint mirror as its sibling above.
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/encountered-ice state)
           ice-title (:title current-ice "ICE")
           position (get-in state [:game-state :run :position])
@@ -610,7 +699,12 @@
                                          (str (:text %)))
                                recent-log)]
       (when (and (core/encounter-ice-active? state current-ice) subs-resolved?)
-        (if (= @passed-ice-encounter pass-key)
+        ;; Same stale-latch override as the sibling handler: the encounter's own
+        ;; ledger naming the OPPONENT proves our pass never landed, because a
+        ;; landed pass plus theirs would have ended the encounter.
+        (if (and (or (= @passed-ice-encounter pass-key)
+                     (core/i-already-passed-run-window? state side))
+                 (not (core/opponent-passed-encounter? state side)))
           ;; Already passed our priority here - wait for Corp, don't re-send.
           (let [status-key [:passed-fired-ice pass-key]]
             (when-not (= @last-waiting-status status-key)
@@ -622,6 +716,11 @@
              :ice ice-title
              :position position})
           (do
-            (reset! passed-ice-encounter pass-key)
             (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
-            (send-continue! gameid)))))))
+            ;; Same latch-after-a-real-send discipline as its sibling above.
+            ;; These two handlers SHARE passed-ice-encounter, so a dishonest
+            ;; latch set here deadlocks the other one just as surely.
+            (let [r (send-continue! gameid)]
+              (when (and (= :action-taken (:status r)) (:sent r))
+                (reset! passed-ice-encounter pass-key))
+              r)))))))
