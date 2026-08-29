@@ -1020,16 +1020,23 @@
      :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
 
     :else
-    (do
-      (ws/send-message! :game/action
-                        {:gameid gameid
-                         :command "continue"
-                         :args nil})
+    (let [sent? (boolean (ws/send-message! :game/action
+                                           {:gameid gameid
+                                            :command "continue"
+                                            :args nil}))]
       ;; Brief wait for WebSocket state update to arrive
       ;; Without this, caller may see stale state on next read
       (Thread/sleep 100)
+      ;; :sent, like the other two copies of this sender (#150 Corp, #167
+      ;; Runner) — one contract for one command. No caller here LATCHES on
+      ;; having passed, so a false :sent is a wasted tick rather than the
+      ;; permanent stall it is on the other two paths; the :status is left
+      ;; alone deliberately, because changing what the loop treats as progress
+      ;; is a behaviour change no test in this repo pins (guest panel MAJOR,
+      ;; #167 round 2 — reported honestly rather than fixed blind).
       {:status :action-taken
-       :action :sent-continue})))
+       :action :sent-continue
+       :sent sent?})))
 
 (defn- send-choice!
   "Helper to send choice command and return action-taken result.
@@ -1069,8 +1076,15 @@
       (println "⚠️  continue can re-fire the checkpoint and mint DUPLICATE")
       (println "⚠️  prompts (#75/#77) — the normal path suppresses this.")
       (println ""))
-    (let [run (get-in state [:game-state :run])]
-      (if (nil? run)
+    (let [run (get-in state [:game-state :run])
+          ;; --force is the seat's MANUAL escape hatch, and a forced encounter can
+          ;; outlive its run entirely (#164). Gated on :run alone, `continue
+          ;; --force` reported "Run complete" and sent nothing at a live encounter
+          ;; — so the one command a stuck seat has left did nothing, at exactly the
+          ;; window where the automation may have no owner (#167). The encounter is
+          ;; a both-must-pass window; a continue is a legal, meaningful action there.
+          encounter? (core/encounter-window? state)]
+      (if (and (nil? run) (not encounter?))
         ;; Run is complete, don't send spurious continues
         (do
           (println "✅ Run complete (force mode)")
@@ -1097,7 +1111,28 @@
      :message (str (clojure.string/capitalize opp-side) " pressed WAIT - please pause")}))
 
 (defn handle-run-complete
-  "Priority 7: Run complete (run object is nil)"
+  "Priority 7: Run complete (run object is nil).
+
+   DELIBERATELY does not ask about the encounter, and that is not an oversight of
+   #164 — it is a landmine marker, now a smaller one. #167 gave the
+   zero-subroutine encounter an owner: both seats' pass handlers dropped their
+   `(seq subroutines)` gate, so a resolvable, engine-active encounter ICE is
+   passed by 2.6 / 1.74 and the chain never reaches this handler while that
+   window is live.
+
+   What is left unowned is narrower: an encounter whose summary carries no
+   resolvable `:ice` at all (the tolerated `{:encounter-count 1}` payload), where
+   `encounter-ice-active?` correctly refuses to vouch for a card nobody can name.
+   There this handler is still the only thing that TERMINATES the loop, and
+   \"✅ Run complete\" is still a lie there.
+
+   Adding `(not (core/encounter-window? state))` here — which is where the #164
+   rule points — was tried and REVERTED (guest panel, 2nd pass): with no handler
+   left to match, the chain falls to handle-unexpected-state and the loop never
+   terminates at all. That objection now applies ONLY to the unresolvable-summary
+   case above, which is exactly the case a guard here would strand. So the guard
+   still waits — not on #167 any more, but on the client being able to own an
+   encounter it cannot name."
   [{:keys [state my-prompt]}]
   (let [run (get-in state [:game-state :run])]
     (when (nil? run)
@@ -1106,7 +1141,9 @@
        :wake-reason :run-complete})))
 
 (defn handle-no-run
-  "Priority 8: No active run"
+  "Priority 8: No active run. Same landmine as handle-run-complete above, and
+   the same narrowing after #167 — see there for what is still unowned and why
+   this does NOT consult the encounter."
   [{:keys [state my-prompt]}]
   (let [run (get-in state [:game-state :run])]
     (when (and (nil? run)
@@ -1923,7 +1960,19 @@
             (let [cur-state @state/client-state
                   my-side (:side cur-state)
                   my-prompt (get-in cur-state [:game-state (keyword my-side) :prompt-state])
-                  run-active? (some? (get-in cur-state [:game-state :run]))]
+                  ;; "Is there still a window here?" — NOT "is there a run?".
+                  ;; A forced encounter can outlive its run entirely (#164), and
+                  ;; this is the ONE place that decides idle-and-wait vs.
+                  ;; terminate: a persistent Corp that had passed a run-less
+                  ;; encounter and was waiting for the Runner's closing pass fell
+                  ;; out with :no-run, which park-and-monitor! treats as "back to
+                  ;; the post" — and park-wake-reason then re-read the same live
+                  ;; encounter as :run. That is a hot re-entry loop with no sleep,
+                  ;; and it is the ORDINARY #164 path, not an edge case (guest
+                  ;; panel, 3rd pass). One rule about what a window is, applied at
+                  ;; every layer that asks.
+                  run-active? (or (some? (get-in cur-state [:game-state :run]))
+                                  (core/encounter-window? cur-state))]
               (cond
                 ;; #43: continue-run! mislabeled this as an opponent-wait, but THIS
                 ;; seat is holding its own on-steal/on-score agenda-trigger prompt
@@ -2085,7 +2134,11 @@
         my-turn? (core/my-turn-to-act? state side)]
     (cond
       (state/game-over? gs) :game-over
-      (some? (:run gs)) :run
+      ;; A live ENCOUNTER is a window to own even with no run behind it (#164):
+      ;; Quest Completed → Ganked! leaves [:encounters] populated with :run nil,
+      ;; and a parked defender that reads only :run walks away from a window it
+      ;; owes a pass at — the un-babysat deadlock this whole issue is about.
+      (or (some? (:run gs)) (core/encounter-window-gs? gs)) :run
       (or (seat-owns-trigger-decision? my-prompt)
           (has-real-decision? my-prompt)) :decision-required
       my-turn? :my-turn
@@ -2187,6 +2240,16 @@
           (let [result (monitor-active-run! flags)]
             (if (park-continuable? (:status result))
               (do (println "🅿️  Run ended — back to the post (opponent's turn continues)")
+                  ;; Sleep BEFORE returning to the post. park-wake-reason is a pure
+                  ;; read of the same state monitor-active-run! just gave up on, so
+                  ;; if it answers :run again we have made no progress and the recur
+                  ;; is a busy spin — which is exactly what a run-less encounter the
+                  ;; automation cannot advance produces (#167 via #164, guest panel
+                  ;; 3rd pass): "Run ended" printed thousands of times until the
+                  ;; 300s deadline. A re-entry that cannot have made progress must
+                  ;; not be a hot one. Costs one tick per genuine run-end, which the
+                  ;; :park branch below was going to spend anyway.
+                  (park-sleep!)
                   (recur))
               (assoc result :cursor (state/get-cursor))))
 
@@ -2218,8 +2281,15 @@
    Flags:
      --no-rez            Auto-decline all rez opportunities
      --rez <ice-name>    Auto-rez named ICE; PAUSE (return a rez decision) on other unrezzed ICE
-     --fire-unbroken     Auto-fire unbroken subs when Runner signals
-     --fire-if-asked     Sleep mode: auto-fire, auto-continue, wake only for rez
+     --fire-unbroken     Auto-fire unbroken subs once the Runner is done with the
+                         encounter — either a `tank` signal OR the encounter's pass
+                         ledger. The standing commitment: it is the only mode that
+                         fires on a pass alone (#169)
+     --fire-if-asked     Sleep mode: auto-continue empty windows, auto-fire on a
+                         `tank` SIGNAL, wake for rez. A Runner who merely PASSES is
+                         surfaced as a fire-or-pass decision, not fired on — a pass
+                         is not an ask, and it does not say which subroutines it
+                         covered (#169)
      --persistent        Stay in the loop across empty opponent-priority windows
                          (sleep & recheck instead of exiting on :waiting-for-opponent).
                          For autonomous Corp seats — one monitor-run owns the whole
@@ -2239,12 +2309,25 @@
         since-cursor (:since flags)
         current-cursor (state/get-cursor)
         run (get-in @state/client-state [:game-state :run])
+        ;; The window this command exists to own is the ENCOUNTER, and an
+        ;; encounter can outlive its run entirely (#164). Every gate below asked
+        ;; only about :run, so `continue` / `monitor-run --fire-if-asked` at a
+        ;; Quest Completed → Ganked! encounter returned :no-run without ever
+        ;; reaching the handler chain — the classifier and the wake predicates
+        ;; were fixed while the one command that consumes them still refused to
+        ;; look. (Guest panel CRITICAL. The lesson this project keeps re-learning:
+        ;; a green predicate test proves nothing until you check which sender the
+        ;; CLI actually reaches.)
+        encounter? (core/encounter-window? @state/client-state)
         ;; ONE idle-park budget for this whole invocation, shared by every
         ;; re-entry to the post (see park-and-monitor!).
         deadline (park-deadline flags)]
     (cond
       ;; --since fast-return: check if state already advanced
-      (and since-cursor (> current-cursor since-cursor) (nil? run))
+      ;; "run ended" is a claim about state, and it is false while an encounter
+      ;; is still live (#164) — the seat would be told to move on from a window
+      ;; it still owes a pass at.
+      (and since-cursor (> current-cursor since-cursor) (nil? run) (not encounter?))
       (do
         (println (format "⚡ Fast-return: run ended (cursor %d > %d)" current-cursor since-cursor))
         {:status :run-complete
@@ -2264,7 +2347,7 @@
       ;; --persistent PARKS here (owns the opponent's whole turn) instead of
       ;; abandoning the post — see park-and-monitor! for why (#31 Fix A).
       ;; Hand-driven monitor-run keeps the old immediate :no-run return.
-      (nil? run)
+      (and (nil? run) (not encounter?))
       (if (:persistent flags)
         (park-and-monitor! flags deadline)
         (do
