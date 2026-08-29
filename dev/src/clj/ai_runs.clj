@@ -1020,16 +1020,23 @@
      :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
 
     :else
-    (do
-      (ws/send-message! :game/action
-                        {:gameid gameid
-                         :command "continue"
-                         :args nil})
+    (let [sent? (boolean (ws/send-message! :game/action
+                                           {:gameid gameid
+                                            :command "continue"
+                                            :args nil}))]
       ;; Brief wait for WebSocket state update to arrive
       ;; Without this, caller may see stale state on next read
       (Thread/sleep 100)
+      ;; :sent, like the other two copies of this sender (#150 Corp, #167
+      ;; Runner) — one contract for one command. No caller here LATCHES on
+      ;; having passed, so a false :sent is a wasted tick rather than the
+      ;; permanent stall it is on the other two paths; the :status is left
+      ;; alone deliberately, because changing what the loop treats as progress
+      ;; is a behaviour change no test in this repo pins (guest panel MAJOR,
+      ;; #167 round 2 — reported honestly rather than fixed blind).
       {:status :action-taken
-       :action :sent-continue})))
+       :action :sent-continue
+       :sent sent?})))
 
 (defn- send-choice!
   "Helper to send choice command and return action-taken result.
@@ -1107,23 +1114,25 @@
   "Priority 7: Run complete (run object is nil).
 
    DELIBERATELY does not ask about the encounter, and that is not an oversight of
-   #164 — it is a landmine marker. A forced encounter can outlive its run, and at
-   a ZERO-SUBROUTINE encounter (a Tour Guide with no rezzed assets) no pass
-   handler on either side owns the window, because they all gate on
-   `(seq subroutines)` — issue #167. This handler is therefore the only thing
-   that TERMINATES the loop there, and \"✅ Run complete\" is a lie.
+   #164 — it is a landmine marker, now a smaller one. #167 gave the
+   zero-subroutine encounter an owner: both seats' pass handlers dropped their
+   `(seq subroutines)` gate, so a resolvable, engine-active encounter ICE is
+   passed by 2.6 / 1.74 and the chain never reaches this handler while that
+   window is live.
+
+   What is left unowned is narrower: an encounter whose summary carries no
+   resolvable `:ice` at all (the tolerated `{:encounter-count 1}` payload), where
+   `encounter-ice-active?` correctly refuses to vouch for a card nobody can name.
+   There this handler is still the only thing that TERMINATES the loop, and
+   \"✅ Run complete\" is still a lie there.
 
    Adding `(not (core/encounter-window? state))` here — which is where the #164
    rule points — was tried and REVERTED (guest panel, 2nd pass): with no handler
    left to match, the chain falls to handle-unexpected-state and the loop never
-   terminates at all. The park layer's hot-spin half of that has since been fixed
-   independently (auto-continue-loop!'s idle branch now asks about the WINDOW, and
-   park-and-monitor! sleeps before a re-entry that cannot have progressed), so the
-   remaining objection is narrower: this handler is still the only thing that
-   TERMINATES the chain at a window nobody owns.
-
-   So the lie stays until #167 gives the window a real owner. Fix that first;
-   this guard is the second step, not the first."
+   terminates at all. That objection now applies ONLY to the unresolvable-summary
+   case above, which is exactly the case a guard here would strand. So the guard
+   still waits — not on #167 any more, but on the client being able to own an
+   encounter it cannot name."
   [{:keys [state my-prompt]}]
   (let [run (get-in state [:game-state :run])]
     (when (nil? run)
@@ -1132,8 +1141,9 @@
        :wake-reason :run-complete})))
 
 (defn handle-no-run
-  "Priority 8: No active run. Same #167 landmine as handle-run-complete above —
-   see there for why this does NOT consult the encounter."
+  "Priority 8: No active run. Same landmine as handle-run-complete above, and
+   the same narrowing after #167 — see there for what is still unowned and why
+   this does NOT consult the encounter."
   [{:keys [state my-prompt]}]
   (let [run (get-in state [:game-state :run])]
     (when (and (nil? run)

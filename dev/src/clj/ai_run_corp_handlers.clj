@@ -523,7 +523,17 @@
         :else nil))))
 
 (defn handle-corp-all-subs-resolved
-  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired).
+  "Priority 1.74: Corp at encounter-ice with nothing left to fire — every
+   subroutine resolved (broken or fired), or the ICE never had one.
+
+   The zero-subroutine half is #167. This handler and its Runner twin both
+   required `(seq subroutines)`, so a Tour Guide with no rezzed assets — which
+   really does have none — was a live both-must-pass window that neither seat's
+   automation would close. `encounter-ice-active?` carries the weight the guard
+   was meant to carry (a resolvable, engine-active ICE), and
+   game.ai-zero-sub-encounter-wire-test pins the premise it rests on: on a
+   resolved encounter summary an absent :subroutines key means the ICE has none,
+   not that the summary is half-read.
 
    Passes AT MOST ONCE per window: if :no-action already records the Corp's pass,
    fall through instead of re-sending — the condition (all subs resolved) stays
@@ -551,14 +561,20 @@
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
           pass-key [(core/encounter-key state) (:cid current-ice)]]
-      (when (and (core/encounter-ice-active? state current-ice) (seq subroutines) (empty? actionable-subs)
+      ;; No (seq subroutines) — a zero-sub encounter is still a window we owe a
+      ;; pass at (#167).
+      (when (and (core/encounter-ice-active? state current-ice) (empty? actionable-subs)
                  ;; Pass already SENT for this encounter, ack not yet in the
                  ;; mirror — fall through (idle), don't re-send/re-print.
                  (not (passed-encounter-recently? pass-key)))
         (let [ice-title (:title current-ice "ICE")
               all-broken? (every? :broken subroutines)]
-          (println (format "   All subs %s on %s, Corp continuing"
-                          (if all-broken? "broken" "resolved") ice-title))
+          ;; (every? :broken []) is true, so the old single format would have
+          ;; announced "All subs broken" about an ICE that never had one (#167).
+          (println (if (empty? subroutines)
+                     (format "   %s has no subroutines, Corp continuing" ice-title)
+                     (format "   All subs %s on %s, Corp continuing"
+                             (if all-broken? "broken" "resolved") ice-title)))
           (let [r (send-continue! gameid)]
             (when (= :action-taken (:status r))
               (latch-encounter-pass! pass-key (:sent r)))
