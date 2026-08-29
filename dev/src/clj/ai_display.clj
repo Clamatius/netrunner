@@ -327,7 +327,13 @@
             (println "\nTurn:" turn-num "-" display-side)
 
             ;; Active player / waiting status
-            (if run-state
+            ;; `or an encounter`, not `run-state` alone (#164): a forced encounter
+            ;; can outlive its run entirely, and run-status-headline already reads
+            ;; the ENCOUNTER's ledger through effective-window-passer. Left on
+            ;; run-state, `status` — the first command a stuck seat runs — printed
+            ;; the turn-level "waiting for the Runner" while `prompt`, `diagnose`
+            ;; and `wait` all said the window was ours.
+            (if (or run-state (core/encounter-window-gs? gs))
               ;; During an active run, run-window priority is authoritative. The
               ;; turn-level active-side ('it's the Runner's turn') misleads inside
               ;; a run — the Corp still owns its rez / upgrade sub-steps — so a
@@ -376,6 +382,20 @@
               ;; `prompt` command shows) — status used to print only the ladder,
               ;; leaving the seat to guess whose window it was.
               (print-run-window-priority! @state/client-state run-state (:phase run-state)
+                                          (clojure.string/lower-case (or my-side "runner"))))
+
+            ;; The same block for an encounter with NO run behind it (#164). Kept
+            ;; separate rather than folded into the run section above, which prints
+            ;; a server, a phase ladder and a position — none of which exist here.
+            (when (and (not run-state) (live-encounter? @state/client-state))
+              (println "\n⚔️  FORCED ENCOUNTER (no run in progress):")
+              (when-let [current-ice (encountered-ice @state/client-state)]
+                (println (format "  🧊 ICE: %s" (:title current-ice "ICE")))
+                (when (:rezzed current-ice)
+                  (println (format "     Type: %s"
+                                   (clojure.string/join " " (or (:subtypes current-ice) []))))
+                  (println (format "     Subs: %s" (sub-count-summary (:subroutines current-ice))))))
+              (print-run-window-priority! @state/client-state nil nil
                                           (clojure.string/lower-case (or my-side "runner"))))
 
             (println "\n--- RUNNER ---")
@@ -970,6 +990,10 @@
 
             prompt-str (cond
                         run-state (format "Run:%s" (run-server-display (last (:server run-state))))
+                        ;; #164: no run, but an encounter — the polled one-liner
+                        ;; must not read as an idle board at a window we own.
+                        (live-encounter? state)
+                        (format "Enc:%s" (:title (encountered-ice state) "ICE"))
                         waiting-start? "awaiting-start"
                         prompt (let [msg (:msg prompt)]
                                 (if (> (count msg) 30)
@@ -1578,7 +1602,7 @@
    encounter ([:encounters :no-action]) — the engine resets the run-level
    :no-action on movement entry, so [:run :no-action] is stale there (engine
    runs.clj `continue :encounter-ice`); every other window uses [:run
-   :no-action]. Mirrors the client's runner-passed-encounter? (ai-core). `gs` is
+   :no-action]. Same ledger choice as ai-core/i-already-passed-run-window?. `gs` is
    the [:game-state] map."
   [gs]
   (let [run (:run gs)
@@ -1594,7 +1618,7 @@
         ;; panel, 2nd pass — the first pass fixed the phase half of this and
         ;; stopped one step short).
         v   (if (or (= "encounter-ice" (:phase run))
-                    (seq (:encounters gs)))
+                    (core/encounter-window-gs? gs))
               (get-in gs [:encounters :no-action])
               (:no-action run))]
     (cond (keyword? v) (name v) (string? v) v :else nil)))
@@ -1708,7 +1732,7 @@
      tank-authorized?
      [(format "    → Tank stands on %s — you have declined to break; the Corp now owes you the %d unbroken subroutine%s."
               ice-title unbroken-count (if (= unbroken-count 1) "" "s"))
-      "      • `wait` — the subs fire on the Corp's action, then the run advances."
+      "      • `wait` — the subs fire on the Corp's action, and the encounter then resolves."
       (format "      • Changed your mind? Break %s with an icebreaker before the Corp fires." ice-title)
       "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
 
@@ -1716,9 +1740,12 @@
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
               unbroken-count (if (= unbroken-count 1) "" "s") ice-title)
       "      • break it with an icebreaker (see 'Icebreakers with playable abilities' above), OR"
-      (format "      • tank \"%s\"  — decline to break: let the subs fire, then the run advances." ice-title)
-      "      (You cannot jack out during an encounter — that is a movement-window action. If the"
-      "       entry cost was misjudged, `tank` through and jack out at the next movement window.)"])))
+      (format "      • tank \"%s\"  — decline to break: let the subs fire, and the encounter resolves." ice-title)
+      ;; No promise of a "next movement window": a forced encounter can outlive
+      ;; its run entirely (#164), and there is no movement window after it at all.
+      "      (You cannot jack out during an encounter — that is a movement-window action."
+      "       If the entry cost was misjudged, resolve this encounter first, then jack out"
+      "       at the next movement window IF the run is still going.)"])))
 
 (defn forced-encounter-advisory-lines
   "Guidance for a Runner at a FORCED encounter — one the wire reports live
@@ -1741,9 +1768,15 @@
 
    Pure; returns lines to println."
   [ice-title unbroken-count phase]
-  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (phase: %s)."
-           ice-title unbroken-count (if (= unbroken-count 1) "" "s") (or phase "?"))
-   "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
+  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
+           ice-title unbroken-count (if (= unbroken-count 1) "" "s")
+           (if phase (str "phase: " phase) "there is no run at all"))
+   (if phase
+     "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
+     ;; Quest Completed → Ganked! (#164): the encounter outlived its run entirely,
+     ;; so there is no phase line above to reconcile — the seat has to be told the
+     ;; window is real anyway, or "no run" reads as "nothing to do".
+     "      (The encounter outlived its run — it is still live, and still yours to resolve.)")
    "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
    (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title)
    "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
@@ -2117,13 +2150,28 @@
           (let [run (get-in state [:game-state :run])
                 run-phase (when run (:phase run))
                 my-side (clojure.string/lower-case (or side "runner"))]
-            (if run-phase
+            ;; `run-phase`, not `run-phase or an encounter`, was the bug (#164).
+            ;; A forced encounter can outlive its RUN — Quest Completed → Ganked!
+            ;; leaves [:encounters :ice] populated with [:run] nil — and the
+            ;; Runner's prompt there is a real one ({:prompt-type :run,
+            ;; :msg "You are encountering Ice Wall"}) with no choices and no
+            ;; selectables, so it lands in exactly this arm. With no phase to
+            ;; find, `prompt` took the not-in-a-run branch and told the seat
+            ;; "'continue' is run-only here — take your next action, or 'wait'":
+            ;; the precise opposite of the truth at a window whose ONLY exit is
+            ;; `continue`, printed by the command a stuck seat runs first.
+            (if (or run-phase (live-encounter? state))
               ;; Show run phase context
               (do
                 ;; Explicit YOU-ARE-HERE ladder (forum [099]); falls back to the
                 ;; bare phase line for any phase the ladder doesn't model.
                 (when-not (print-run-phase-ladder! state run my-side)
-                  (println (str "  Run Phase: " run-phase)))
+                  (println (if run-phase
+                             (str "  Run Phase: " run-phase)
+                             ;; No run to have a phase (#164). "Run Phase: " with
+                             ;; nothing after it reads as a broken renderer, which
+                             ;; is the last thing a stuck seat needs.
+                             "  ⚔️  Forced encounter — no run is in progress.")))
                 ;; During an encounter, show ICE and breaker info. Keyed on the
                 ;; live encounter as well as the phase: at a forced encounter the
                 ;; guidance below was printing while the ICE and the playable
@@ -2188,6 +2236,13 @@
           (:in-run? ts)
           (println (format "🏃 A run is in progress on %s → use 'monitor-run' / 'continue'."
                            (or (:run-server ts) "?")))
+
+          ;; #164: the with-prompt arm above was widened, but a seat that is
+          ;; TRANSIENTLY promptless at this window fell through to the turn
+          ;; boundary steers and was told to `wait` at a window it owned.
+          (live-encounter? state)
+          (println (format "⚔️  Forced encounter with %s (no run) → use 'continue' / 'monitor-run'."
+                           (:title (encountered-ice state) "an ICE")))
 
           ;; Turn boundary, my turn to start.
           (and (:waiting-to-start? ts) (= next-lc my-lc))
@@ -2760,6 +2815,15 @@
         next-lc (clojure.string/lower-case (or (:next-player ts) ""))
         run (get-in cs [:game-state :run])
         run-phase (:phase run)
+        ;; A forced encounter can outlive its run entirely — Quest Completed →
+        ;; Ganked! leaves [:encounters :ice] populated with no :run at all, and
+        ;; :in-run? is (boolean run). Every encounter branch below hung off
+        ;; :in-run?, so the one command a stuck seat reaches for fell through to
+        ;; the turn-boundary branches and told it to `wait` on a window it owned
+        ;; (#164). The encounter is the window; the run is just the usual way of
+        ;; being in one.
+        encounter? (live-encounter? cs)
+        in-run-window? (or (:in-run? ts) encounter?)
         my-side-lc (when side (clojure.string/lower-case side))
         ;; A prompt is resolvable-via-choose only if it carries actual choices or
         ;; selectable cards. A passive run priority / paid-ability window has a
@@ -2787,10 +2851,10 @@
       ;; "Waiting for Corp paid abilities" window) fell through to the actionable
       ;; branch above and told the seat to `choose`, contradicting what `prompt`
       ;; and `continue` say. Now diagnose-blocker agrees with them. (backlog #4)
-      (and (:in-run? ts) prompt (not waiting?))
+      (and in-run-window? prompt (not waiting?))
       (let [runner-unbroken (when (and (= my-side-lc "runner")
                                        (or (= run-phase "encounter-ice")
-                                           (live-encounter? cs)))
+                                           encounter?))
                               (runner-encounter-unbroken-count cs))]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
@@ -2840,10 +2904,15 @@
           (println "   → They're still on their opening mulligan. Use: wait, then start-turn once it clears.")
           (println "   → Use: wait --since <cursor>")))
 
-      ;; Active run, no prompt for us yet.
-      (:in-run? ts)
+      ;; Active run (or a run-less forced encounter), no prompt for us yet.
+      in-run-window?
       (do
-        (println (format "🏃 A run is in progress on %s." (or (:run-server ts) "?")))
+        (println (if (:in-run? ts)
+                   (format "🏃 A run is in progress on %s." (or (:run-server ts) "?"))
+                   ;; No run to name a server for: say what IS happening rather
+                   ;; than printing "a run is in progress on ?" (#164).
+                   (format "⚔️  You are in a forced encounter with %s — no run is in progress."
+                           (:title (encountered-ice cs) "an ICE"))))
         ;; #110: this offered `continue-run` — the single-step alias — as a way to
         ;; "advance" a run, which is both the undocumented verb and the wrong one
         ;; for the job. Name `continue`; monitor-run stays because the Corp brief

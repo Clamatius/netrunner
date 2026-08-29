@@ -207,7 +207,14 @@
         current-ice (core/encountered-ice state)
         unbroken-subs (seq (unbroken-unfired-subs current-ice))]
     (cond
-      (nil? run)
+      ;; "No run" is not the same question as "no encounter". Quest Completed →
+      ;; Ganked! leaves [:encounters :ice] populated with [:run] nil — a state
+      ;; force-ice-encounter has its own cleanup branch for, so the engine plans
+      ;; for it — and this guard answered :none before it ever looked at the
+      ;; encounter, so `monitor-run --fire-if-asked` reported no decision at a
+      ;; window where the Corp owed a fire-or-pass (#164). Same reorder
+      ;; run-window-owner got in #160: consult the encounter first.
+      (and (nil? run) (not (core/encounter-window? state)))
       {:kind :none
        :summary "No active run"
        :server nil}
