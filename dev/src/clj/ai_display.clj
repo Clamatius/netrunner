@@ -3,6 +3,7 @@
   (:require [ai-state :as state]
             [ai-hud-utils :as hud]
             [ai-core :as core]
+            [ai-run-corp-decisions :as corp-decisions]
             [ai-basic-actions :as actions]
             [clojure.string :as str]
             [jinteki.cards :refer [all-cards]]))
@@ -1857,6 +1858,43 @@
       corp-already-passed?
       (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
+
+      ;; Corp at an encounter the RUNNER has already passed: `continue` does not
+      ;; pass priority here, it ENDS the encounter (game.core.runs
+      ;; `continue :encounter-ice` — the opponent is already named, so our
+      ;; continue is the second pass). Telling the seat otherwise is the exact
+      ;; contradiction #169 is about, one surface further out: the classifier and
+      ;; the automation were fixed while `prompt` and `status` went on saying the
+      ;; window was a priority pass (guest panel CRITICAL).
+      (and (= my-side "corp")
+           (core/opponent-passed-encounter? state my-side))
+      (let [ice (encountered-ice state)
+            ice-title (:title ice "this ICE")
+            unbroken (count (filter #(and (not (:broken %)) (not (:fired %)))
+                                    (:subroutines ice)))
+            ;; Ask the GATE, do not re-derive it. In round 2's version of this
+            ;; fix, re-deriving from the ledger and a sub count made this branch
+            ;; advertise a fire the automation had just refused — two surfaces
+            ;; disagreeing about one window, which is the defect this whole issue
+            ;; is about, and it does not stop being one because the second
+            ;; surface is a print (guest panel MAJOR). That divergence cannot
+            ;; recur in the shipped rule, where the authorization is pure and
+            ;; never lapses; asking the gate is kept because the NEXT thing added
+            ;; here would re-derive it again.
+            authorization (corp-decisions/fire-authorization state my-side ice-title)]
+        (println (format "    → Runner has PASSED this encounter on %s — this window is yours to close."
+                         ice-title))
+        (when (pos? unbroken)
+          (println (format "    → %d unbroken sub%s: fire-subs \"%s\" resolves them (the encounter stays open)."
+                           unbroken (if (= unbroken 1) "" "s") ice-title))
+          ;; Named, because the automation deliberately does NOT take this fire
+          ;; on a pass alone (#169): a pass is not a `tank`, and only
+          ;; --fire-unbroken opts into firing on it. A seat reading this should
+          ;; know the decision is genuinely theirs rather than something the
+          ;; loop is about to do for them.
+          (when (= :runner-passed authorization)
+            (println "    → (a pass is not a 'let it fire' signal, so --fire-if-asked leaves this to you; --fire-unbroken fires it.)")))
+        (println "    → 'continue' ENDS the encounter (it is the second pass), not merely a priority pass."))
 
       (= my-side "corp")
       (do
