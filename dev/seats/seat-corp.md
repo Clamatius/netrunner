@@ -148,7 +148,10 @@ Then commit your decision by re-entering the monitor with a strategy flag
 - **Rez the approached ICE:** `./dev/send_command corp monitor-run --persistent --rez "<ICE name>"`
 - **Decline to rez (this run):** `./dev/send_command corp monitor-run --persistent --no-rez`
 - **Low-stakes run, just let it play out:** `./dev/send_command corp monitor-run --persistent --fire-if-asked`
-  (auto-fires unbroken subs, auto-continues, wakes you only for rez decisions)
+  (auto-continues, fires unbroken subs when the Runner *signals* with `tank`, and
+  wakes you for rez decisions — and for a fire-or-pass decision if the Runner simply
+  passes the encounter without breaking. Use `--fire-unbroken` instead if you want a
+  plain pass fired on without being asked.)
 
 The pause text itself offers a different verb — `continue --rez "<ICE>"` /
 `continue --no-rez`. **Both are correct and they do the same thing at this

@@ -191,11 +191,52 @@
        :checkpoint checkpoint
        :card (select-keys (first upgrades) [:cid :title :type :rezzed])})))
 
+
+(defn fire-authorization
+  "Why — if at all — the Corp may act on the unbroken subs of this encounter:
+   :runner-signaled (a `tank` system message) or :runner-passed (the encounter's
+   own pass ledger), else nil. Pure.
+
+   The two are NOT equivalent, and the difference is what an earlier version of
+   this fix got wrong (#169, three review rounds). A `tank` signal is the
+   Runner asking for the subs to fire: consent to whatever resolves. A PASS says
+   only that the Runner spent its half of a both-must-pass window — and
+   subroutines can appear AFTER it, because rezzing an asset mid-encounter grows
+   a Tour Guide while the ledger still names the Runner. Both guest seats
+   reproduced the Corp firing a subroutine created after the pass, against a
+   Runner whose own client was correctly re-opening the break decision for it.
+
+   Three rounds went into trying to tell those subroutines apart client-side —
+   recording what the board looked like when the pass was observed — and each
+   round found the bookkeeping wrong in a new way: retrospective baselines,
+   baselines outliving their encounter (`encounter-key` is a card cid, #163),
+   fired subs freeing capacity. The wire carries no encounter identity and no
+   subroutine identity (diffs/subroutine-keys is
+   `[:broken :fired :label :msg :resolve]`), so the question is not answerable
+   here at all; #177 tracks the engine-side fix.
+
+   What IS answerable is who owns the window, which is all this issue actually
+   needed. So the ledger authorizes the Corp to ACT — the decision surfaces, the
+   closing pass can be sent — while AUTO-firing on a pass alone is left to
+   `--fire-unbroken`, whose contract is a standing \"fire whatever is unbroken\"
+   commitment its operator opted into. `--fire-if-asked` fires on the signal and
+   surfaces the pass as a decision, which is the honest reading of \"if asked\":
+   a pass is not an ask."
+  [state side ice-title]
+  (cond
+    (runner-signaled-let-fire? state ice-title) :runner-signaled
+    (core/opponent-passed-encounter? state side) :runner-passed
+    :else nil))
+
 (defn corp-run-decision
   "Classify the current Corp run decision without taking action.
 
    Missing an auto-sleep is acceptable; sleeping through a real decision is not.
-   Strategy/policy should consume this result elsewhere."
+   Strategy/policy should consume this result elsewhere.
+
+   At an encounter the result carries :authorization — :runner-signaled or
+   :runner-passed — because what the Corp may do differs between them and both
+   the guidance text and the fire handlers key on it (#169)."
   [state]
   (let [run (get-in state [:game-state :run])
         phase (:phase run)
@@ -205,7 +246,18 @@
         ;; encounter is not at :position, so the position-derived card is a
         ;; different card or none at all (#100, #152, #160).
         current-ice (core/encountered-ice state)
-        unbroken-subs (seq (unbroken-unfired-subs current-ice))]
+        unbroken-subs (seq (unbroken-unfired-subs current-ice))
+        ;; Asked HERE, before any branch can return early, because the coverage
+        ;; baseline has to be taken at the moment the pass is observed — and the
+        ;; window that most needs it is the one with NOTHING in it yet. A Runner
+        ;; passing a zero-subroutine Tour Guide consents to zero subroutines; if
+        ;; the first thing that ever asked was the fire branch, it could not run
+        ;; until a subroutine existed, and it would then bless the very
+        ;; subroutine the pass does not cover (guest panel CRITICAL, #169).
+        ;; Pure (see fire-authorization); bound out here only because both arms
+        ;; of the encounter branch below read it.
+        authorization (when (and (core/at-encounter? state phase) current-ice)
+                        (fire-authorization state :corp (:title current-ice "ICE")))]
     (cond
       ;; "No run" is not the same question as "no encounter". Quest Completed →
       ;; Ganked! leaves [:encounters :ice] populated with [:run] nil — a state
@@ -248,12 +300,38 @@
            prompt
            current-ice
            unbroken-subs)
-      (let [ice-title (:title current-ice "ICE")]
-        (if (runner-signaled-let-fire? state ice-title)
+      (let [ice-title (:title current-ice "ICE")
+            ;; TWO independent authorizations, and the LEDGER is the stronger
+            ;; one (#169). runner-signaled-let-fire? scans for the system
+            ;; message a `tank` emits; a plain `continue` emits none, and the
+            ;; engine's own "has no further action" line is filtered out of the
+            ;; scan by design. So at an encounter the Runner had PASSED with
+            ;; subs unbroken, this reported :waiting-runner-signal — while
+            ;; run-window-owner said the Corp owned the window and `wait` woke
+            ;; it for exactly that. The Corp idled, the Runner waited on the
+            ;; Corp: a mutual stall, and the ownership layer contradicting the
+            ;; action layer.
+            ;;
+            ;; The #90 concern the signal heuristic exists to serve — never fire
+            ;; on a Runner who is still breaking — is answered by the pass, but
+            ;; not in the way the issue text puts it. The engine does NOT lock a
+            ;; passed Runner out of breaking (measured under #167). What the pass
+            ;; settles is INTENT: the Runner spent its half of a both-must-pass
+            ;; window with these subs unbroken. What it does NOT settle is subs
+            ;; that appear afterwards — see fire-authorization, which is the one
+            ;; place both this classifier and the two fire handlers ask.
+            ;; The Runner side has read this ledger since #160; the Corp side had
+            ;; no consumer at all.
+            ]
+        (if authorization
           {:kind :fire-unbroken
            :wake-reason :fire-decision
            :server (attacked-server-key state)
            :phase phase
+           ;; WHY we may fire, because the guidance below says it out loud and
+           ;; "the Runner signaled" is a false claim about a Runner who merely
+           ;; passed (guidance-text-is-code).
+           :authorization authorization
            :ice {:cid (:cid current-ice)
                  :title ice-title
                  :position position
@@ -288,9 +366,19 @@
           sub-count (get-in decision [:ice :unbroken-count] 0)]
       [(format "Subs unbroken: %s (%d sub%s)"
                title sub-count (if (= sub-count 1) "" "s"))
-       "   Runner has signaled 'let subs fire'"
+       (if (= :runner-passed (:authorization decision))
+         ;; A Runner who passed did not "signal" anything, and telling a hand-
+         ;; driven Corp that it did is a false claim about the other seat (#169).
+         ;; Scoped to `continue`, not to "your move": fire-subs does NOT end the
+         ;; encounter (Tithe resolves and the window stays open), only the pass
+         ;; does — the guest seat was right that the broader wording was itself
+         ;; a false claim.
+         "   Runner has PASSED this encounter - your 'continue' ends it"
+         "   Runner has signaled 'let subs fire'")
        (format "   fire-subs \"%s\"  - fire the unbroken subs" title)
-       "   continue          - pass without firing"])
+       (if (= :runner-passed (:authorization decision))
+         "   continue          - end the encounter with the subs unresolved"
+         "   continue          - pass without firing")])
 
     :waiting-runner-signal
     (let [title (get-in decision [:ice :title] "ICE")

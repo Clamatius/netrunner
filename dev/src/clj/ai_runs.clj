@@ -2281,8 +2281,15 @@
    Flags:
      --no-rez            Auto-decline all rez opportunities
      --rez <ice-name>    Auto-rez named ICE; PAUSE (return a rez decision) on other unrezzed ICE
-     --fire-unbroken     Auto-fire unbroken subs when Runner signals
-     --fire-if-asked     Sleep mode: auto-fire, auto-continue, wake only for rez
+     --fire-unbroken     Auto-fire unbroken subs once the Runner is done with the
+                         encounter — either a `tank` signal OR the encounter's pass
+                         ledger. The standing commitment: it is the only mode that
+                         fires on a pass alone (#169)
+     --fire-if-asked     Sleep mode: auto-continue empty windows, auto-fire on a
+                         `tank` SIGNAL, wake for rez. A Runner who merely PASSES is
+                         surfaced as a fire-or-pass decision, not fired on — a pass
+                         is not an ask, and it does not say which subroutines it
+                         covered (#169)
      --persistent        Stay in the loop across empty opponent-priority windows
                          (sleep & recheck instead of exiting on :waiting-for-opponent).
                          For autonomous Corp seats — one monitor-run owns the whole
