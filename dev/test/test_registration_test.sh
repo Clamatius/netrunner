@@ -21,10 +21,10 @@
 #      that is still green, and it can hide a drop elsewhere.
 #   3. The list is sorted, which keeps concurrent appends landing at different
 #      insertion points instead of colliding at the end.
-#   4. Every dev/test/*_test.sh appears in the `test-shell` recipe. That recipe
-#      is the same hand-maintained-list trap in the same file — and one of its
-#      lines is this guard's own on-switch, so a botched resolve there would
-#      silently disable every shell test including this one.
+#
+# The `test-shell` recipe is the same hand-maintained-list trap in the same file,
+# and one of its lines is this guard's own on-switch. A check for that was tried
+# here and removed as unsound; see the note further down and #185.
 #
 # OWNERSHIP. This repo is a fork: test/clj is mostly upstream jinteki (~50
 # game.core.* / game.cards.* / web.* namespaces we intentionally never run), so
@@ -98,8 +98,13 @@ owned_namespaces() {
   while IFS= read -r f; do
     # upstream's file -> upstream's problem
     git cat-file -e "$UPSTREAM_REF:$f" 2>/dev/null && continue
-    # ours, but defines no tests (harness scripts, #182) -> nothing to register
-    grep -q '^(deftest' "$f" || continue
+    # ours, but defines no tests (harness scripts, #182) -> nothing to register.
+    # NOT anchored at column 0: this repo already wraps deftests in a shared-setup
+    # `(let [...] (deftest a ...) (deftest b ...))` in three card-test files, and an
+    # anchored match would read such a file as "defines no tests" and silently
+    # exempt it from ever needing registration — the same invisibility this guard
+    # exists to remove, moved down into ownership detection.
+    grep -qE '^[[:space:]]*\(deftest[[:space:](]' "$f" || continue
     ns="$(ns_of "$f")" || die "no usable (ns ...) form in $f"
     printf '%s\n' "$ns" >> "$out"
   done < "$WORK/testfiles.txt"
@@ -126,6 +131,7 @@ expand_registered > "$WORK/registered-raw.txt"
 [ -s "$WORK/registered-raw.txt" ] || die "could not expand 'make -n test' (got nothing)"
 sort "$WORK/registered-raw.txt" > "$WORK/registered.txt"
 
+UPSTREAM_DATE="$(cd "$REPO_ROOT" && git log -1 --format=%cs "$UPSTREAM_REF" 2>/dev/null || echo unknown)"
 owned_namespaces "$WORK/owned-raw.txt"
 sort -u "$WORK/owned-raw.txt" > "$WORK/owned.txt"
 [ -s "$WORK/owned.txt" ] || die "found no owned test namespaces — ownership detection is broken"
@@ -145,7 +151,14 @@ else
 but \`make test\` never runs them. They will not fail — they will silently not run:
 $MISSING
 Add each to the lein test list in the Makefile (alphabetical position), or, if the
-omission is deliberate, add it to EXCLUDED in this script with a reason."
+omission is deliberate, add it to EXCLUDED in this script with a reason.
+
+BEFORE believing this: your $UPSTREAM_REF is dated $UPSTREAM_DATE.
+Ownership is 'absent from $UPSTREAM_REF', so a STALE ref misreports upstream's own
+new test files as ours — and upstream lands here in big merge bursts, which is
+exactly when this check is least trusted and most likely to be wrong. If any name
+above looks like upstream's (game.core.*, game.cards.*, jinteki.*, web.* that is
+not ours), re-run after:  git fetch upstream"
 fi
 
 echo "--- the registered list has no duplicates ---"
@@ -167,23 +180,20 @@ branches adding a test insert at different points instead of colliding at the en
 of the list. Re-sort it (LC_ALL=C)."
 fi
 
-echo "--- every shell test is wired into \`make test-shell\` ---"
-( cd "$REPO_ROOT" && make -n test-shell 2>/dev/null ) > "$WORK/shell-recipe.txt" \
-  || die "could not expand 'make -n test-shell'"
-UNWIRED=""
-for f in "$REPO_ROOT"/dev/test/*_test.sh; do
-  [ -e "$f" ] || continue
-  base="$(basename "$f")"
-  grep -q "$base" "$WORK/shell-recipe.txt" || UNWIRED="$UNWIRED$base
-"
-done
-if [ -z "$UNWIRED" ]; then
-  ok "all-shell-tests-wired"
-else
-  nope "all-shell-tests-wired" \
-"These shell tests exist but \`make test-shell\` never runs them:
-${UNWIRED}Add each to the test-shell recipe in the Makefile."
-fi
+# NOTE: a check that every dev/test/*_test.sh is wired into `make test-shell`
+# was tried here and REMOVED, deliberately — see #185.
+#
+# It matched the script's basename against the text of the expanded recipe, which
+# is not proof that anything runs: commenting a line out (`#@./dev/test/foo.sh`)
+# leaves the basename in the text, so the check stayed green over a fully
+# disabled test. That is the same "text that looks like a signal is not the
+# signal" defect this guard was rewritten to remove one layer down, reintroduced
+# in its own new check.
+#
+# Doing it properly means parsing the recipe into real invocations rather than
+# grepping it, which is a second parser to get wrong. Rather than patch a
+# twice-defective addition a third time inside a guard whose core check has to
+# stay trustworthy, it is filed as its own piece of work.
 
 # ---------------------------------------------------------------------------
 # Mutation tests. A guard that cannot go red proves nothing.
