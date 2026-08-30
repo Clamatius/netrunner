@@ -86,6 +86,7 @@ test-shell:
 	@./dev/test/peer_status_test.sh
 	@./dev/test/game_gone_gate_test.sh
 	@./dev/test/check_ai_worktree_test.sh
+	@./dev/test/test_registration_test.sh
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:
