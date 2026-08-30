@@ -34,7 +34,47 @@ check-full:
 # Run unit tests
 test:
 	@echo "Running unit tests..."
-	lein test ai-actions-test ai-loop-sync-test ai-actions-sad-path-test ai-basic-actions-test ai-connection-test ai-heuristic-corp-test ai-heuristic-runner-test ai-runs-test ai-run-corp-decisions-test ai-stall-test ai-websocket-diff-test ai-websocket-error-recovery-test ai-display-test ai-state-test ai-prompts-test ai-pure-functions-test ai-turn-validation-test ai-turn-boundary-test ai-ability-legality-test ai-wait-test continue-run-rez-test run-window-selfadvance-test game.ai-upgrade-rez-timing-test game.ai-duplicate-continue-test game.ai-waiting-prompt-test game.ai-ability-legality-test web.lobby-disconnect-test game.ai-pay-all-test ai-phase-window-test ai-forced-encounter-test ai-wire-card-ref-test game.ai-hosted-card-ref-test game.ai-phase-windows-test game.ai-forced-encounter-wire-test game.ai-zero-sub-encounter-wire-test game.ai-corp-pass-ledger-wire-test web.replay-share-test send-command-inventory-test game.ai-end-turn-gate-test game.ai-hosted-rig-wire-test
+	lein test \
+	  ai-ability-legality-test \
+	  ai-actions-sad-path-test \
+	  ai-actions-test \
+	  ai-basic-actions-test \
+	  ai-connection-test \
+	  ai-display-test \
+	  ai-forced-encounter-test \
+	  ai-heuristic-corp-test \
+	  ai-heuristic-runner-test \
+	  ai-loop-sync-test \
+	  ai-phase-window-test \
+	  ai-prompts-test \
+	  ai-pure-functions-test \
+	  ai-run-corp-decisions-test \
+	  ai-runs-test \
+	  ai-stall-test \
+	  ai-state-test \
+	  ai-turn-boundary-test \
+	  ai-turn-validation-test \
+	  ai-wait-test \
+	  ai-websocket-diff-test \
+	  ai-websocket-error-recovery-test \
+	  ai-wire-card-ref-test \
+	  continue-run-rez-test \
+	  game.ai-ability-legality-test \
+	  game.ai-corp-pass-ledger-wire-test \
+	  game.ai-duplicate-continue-test \
+	  game.ai-end-turn-gate-test \
+	  game.ai-forced-encounter-wire-test \
+	  game.ai-hosted-card-ref-test \
+	  game.ai-hosted-rig-wire-test \
+	  game.ai-pay-all-test \
+	  game.ai-phase-windows-test \
+	  game.ai-upgrade-rez-timing-test \
+	  game.ai-waiting-prompt-test \
+	  game.ai-zero-sub-encounter-wire-test \
+	  run-window-selfadvance-test \
+	  send-command-inventory-test \
+	  web.lobby-disconnect-test \
+	  web.replay-share-test
 
 # Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
 test-shell:
