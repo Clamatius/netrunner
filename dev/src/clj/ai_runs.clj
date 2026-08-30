@@ -721,33 +721,6 @@
     ;; Use includes? because log entries may have trailing punctuation
     (some #(clojure.string/includes? (str (:text %)) indicate-pattern) recent-log)))
 
-(defn opponent-passed-priority?
-  "Check if opponent passed priority recently (via log).
-   Looks for 'AI-{opponent} has no further action' in recent log entries.
-   This provides a second source of truth when :no-action state hasn't synced yet."
-  [state side]
-  (let [log (get-in state [:game-state :log])
-        opp-side (core/other-side side)
-        ;; Log uses "AI-runner" or "AI-corp" format
-        opp-name (str "AI-" opp-side)
-        pass-pattern (str opp-name " has no further action")
-        ;; Check LAST 5 entries (most recent)
-        recent-log (take-last 5 log)]
-    ;; Use includes? because log entries may have trailing punctuation
-    (some #(clojure.string/includes? (str (:text %)) pass-pattern) recent-log)))
-
-(defn i-passed-priority?
-  "Check if I passed priority recently (via log).
-   Looks for 'AI-{my-side} has no further action' in recent log entries."
-  [state side]
-  (let [log (get-in state [:game-state :log])
-        my-name (str "AI-" side)
-        pass-pattern (str my-name " has no further action")
-        ;; Check LAST 5 entries (most recent)
-        recent-log (take-last 5 log)]
-    ;; Use includes? because log entries may have trailing punctuation
-    (some #(clojure.string/includes? (str (:text %)) pass-pattern) recent-log)))
-
 (defn has-real-decision?
   "True if prompt has 2+ meaningful choices (not just Done/Continue),
    or has 1+ selectable cards (for 'select' type prompts like credit sources)."
