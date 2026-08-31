@@ -74,6 +74,7 @@ test:
 	  game.core.turns-test \
 	  run-window-selfadvance-test \
 	  send-command-inventory-test \
+	  web.ai-client-auth-test \
 	  web.lobby-disconnect-test \
 	  web.replay-share-test
 

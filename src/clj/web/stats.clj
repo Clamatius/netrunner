@@ -399,10 +399,13 @@
 (defn fetch-shared-replay
   "Public twin of fetch-replay for the /replay-data route (AI-player fork, #89):
    serves a replay ONLY if it is shared or bug-reported. Deliberately NO owner
-   clause — this route sits outside ::auth, and this fork's wrap-user mints a
-   synthetic AI user from a bare ?client-id=ai-client-* query param (the dev
-   fallback), so an owner check here would let an anonymous request read an AI
-   player's private replay (guest panel, CRITICAL). Owners fetch their private
+   clause — this route sits outside ::auth, and when it was written this fork's
+   wrap-user minted a synthetic AI user from a bare ?client-id=ai-client-*
+   query param on every route, so an owner check here would have let an
+   anonymous request read an AI player's private replay (guest panel,
+   CRITICAL). #157 has since confined that fallback to /chsk, so the premise no
+   longer holds — but the missing owner clause is what makes this route safe
+   to sit outside ::auth at all, so it stays. Owners fetch their private
    replays through /profile/history/full as before."
   [{db :system/db
     {:keys [gameid]} :path-params}]
