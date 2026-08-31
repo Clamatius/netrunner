@@ -71,17 +71,57 @@
       (is (= :ok (:sweep r)) "FALSE RED: sweep rejected a healthy file")
       (is (:agree r) (str "sweep disagreed with load-file: " r))))
 
-  (testing "panel defect 4: a tagged literal is read inertly, not executed"
-    ;; *read-eval* false blocks #= but NOT registered data-reader fns. On the
-    ;; warm path those side effects would land in the long-lived shared REPL.
+  (testing "panel defect 4: a REGISTERED tag is read inertly, not executed"
+    ;; *read-eval* false blocks #= but NOT registered data-reader fns. This
+    ;; project registers 21 of them, including `dbg`, `break` and `break!` —
+    ;; firing those inside the long-lived shared REPL on the warm path is not a
+    ;; hypothetical cost. clojure.core/*data-readers* is where real
+    ;; registrations live, and the sweep remaps exactly those to inert
+    ;; construction.
     (let [fired (atom 0)]
-      (binding [clojure.tools.reader/*data-readers*
-                {'oracle/boom (fn [_] (swap! fired inc) :detonated)}]
-        ;; the sweep rebinds *data-readers* to {} internally, so the reader above
-        ;; must NOT run even though it is registered in this scope
+      (binding [clojure.core/*data-readers*
+                (assoc clojure.core/*data-readers*
+                       'oracle/boom (fn [_] (swap! fired inc) :detonated))]
         (sweep/parse-source "inert" "(ns oracle.tagged)\n(def t #oracle/boom 1)\n"))
       (is (zero? @fired)
-          "a registered data reader executed during a supposedly read-only sweep"))))
+          "a registered data reader executed during a supposedly read-only sweep")))
+
+  (testing "round-2 defect: an UNREGISTERED tag must be rejected, as loading rejects it"
+    ;; The first fix for defect 4 bound *default-data-reader-fn* to accept ANY
+    ;; tag inertly, which read #bogus/tag clean while real loading fails —
+    ;; a false green. Nothing binds that fn now, so unknown tags throw.
+    (let [r (agrees? "(ns oracle.unknowntag)\n(def t #bogus/tag 1)\n")]
+      (is (= :error (:load r)) "real loading rejects an unregistered tag")
+      (is (= :error (:sweep r)) "FALSE GREEN: sweep accepted an unregistered tag")
+      (is (:agree r) (str "sweep disagreed with load-file: " r))))
+
+  (testing "built-in literals still work, and a malformed one still fails"
+    ;; #inst / #uuid are built into the reader, not supplied via *data-readers*,
+    ;; so remapping that map must not disturb them in either direction.
+    (let [good (agrees? "(ns oracle.inst)\n(def t #inst \"2026-01-01\")\n")
+          bad  (agrees? "(ns oracle.badinst)\n(def t #inst \"not-a-date\")\n")]
+      (is (= :ok (:load good)))
+      (is (:agree good) (str "valid #inst: " good))
+      (is (= :error (:load bad)))
+      (is (:agree bad) (str "malformed #inst: " bad)))))
+
+(deftest known-gap-undeclared-alias-is-not-caught
+  ;; DOCUMENTED MISS, asserted so it cannot change silently (#187).
+  ;;
+  ;; The sweep resolves every alias to a synthetic namespace, so `::bogus/x` —
+  ;; a typo — reads clean while real loading rejects it. Closing this means
+  ;; parsing the ns form's :require shapes to build the real alias map, and a
+  ;; wrong parser there fails HEALTHY trees, which is worse than this miss.
+  ;;
+  ;; This test does not endorse the gap. It pins it, so that whoever closes
+  ;; #187 gets a red test telling them to move this case into the agreement
+  ;; corpus above rather than discovering the behaviour by accident.
+  (testing "an undeclared alias keyword currently sweeps clean though loading rejects it"
+    (let [r (agrees? "(ns oracle.badalias)\n(def k ::bogus/x)\n")]
+      (is (= :error (:load r)) "real loading rejects an undeclared alias")
+      (is (= :ok (:sweep r))
+          "if this is now :error, #187 is fixed — move this case into the agreement corpus")
+      (is (not (:agree r)) "this is the known disagreement; see #187"))))
 
 (deftest sweep-refuses-to-pass-on-an-empty-directory
   (testing "sweeping zero files is a failure, not a pass"

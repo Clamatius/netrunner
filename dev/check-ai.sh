@@ -74,11 +74,30 @@ echo "   (${NS_COUNT} namespaces + parse-only sweep of dev/src/clj)"
 # everything" is not available. A NEW ai namespace therefore gets parse-only
 # coverage until someone adds it to the list — narrower than compile coverage,
 # and stated here rather than left to be discovered.
-PARSE_EXPR='(do (require (quote check-ai-sweep))
+# `:reload` deliberately, matching REQUIRE_EXPR below. Without it the WARM path
+# would keep whatever check-ai-sweep it loaded first: edit the sweep in a live
+# session and the gate silently keeps running the old one. Harmless in a cold JVM.
+PARSE_EXPR='(do (require (quote check-ai-sweep) :reload)
                 (println (str "   parse-only: "
                               ((resolve (quote check-ai-sweep/sweep!)) "dev/src/clj")
                               " files in dev/src/clj read clean"
                               " (syntax only — requires are NOT resolved)")))'
+
+# Build the WARM-path expression: sweep first, then reload every listed namespace.
+# `:reload` forces a recompile in the long-lived REPL rather than trusting what it
+# happens to have loaded.
+#
+# This builder was accidentally deleted while the sweep was being added, and
+# nothing here noticed: a worktree ALWAYS takes the cold path (the foreign-REPL
+# guard below), so `make verify` stayed green while "$REQUIRE_EXPR" silently
+# expanded to the empty string and the warm path degraded to a cold fallback on
+# every run. Caught by a round-2 review seat, not by the suite. If you touch this
+# file from a worktree, remember that half of it is unexecuted there.
+REQUIRE_EXPR="(do $PARSE_EXPR"
+for ns in "${AI_NAMESPACES[@]}"; do
+    REQUIRE_EXPR="$REQUIRE_EXPR (require '$ns :reload)"
+done
+REQUIRE_EXPR="$REQUIRE_EXPR :check-success)"
 
 # Ask the REPL which checkout it is actually reading.
 #

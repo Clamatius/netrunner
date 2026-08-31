@@ -21,11 +21,13 @@
        `load-file`s two files that do not exist, and reads perfectly clean.
      - anything semantic. This is a parser, not a compiler.
 
-   THE ORACLE
-   The only sound definition of correct here is AGREEMENT WITH `load-file`: this
-   must reject exactly what real loading rejects, no more and no less. A
-   review panel found three ways the first cut broke that, all reproduced
-   against real loading, all now pinned by check-ai-sweep-test:
+   HOW CORRECTNESS IS JUDGED — and the limit of that
+   At the READER level the target is agreement with `load-file`: reject what real
+   loading rejects, accept what it accepts. That is not a general oracle and the
+   test does not claim to be one — `load-file` EVALUATES, so it also rejects
+   missing requires, unresolved symbols and runtime failures that this sweep
+   permits on purpose. What the suite pins is a curated corpus of reader-level
+   cases where the two must agree, each one a defect that actually shipped:
      1. the EOF sentinel was an ordinary readable keyword, so a file CONTAINING
         that keyword ended the read early and the rest of a broken file was
         never seen -> false GREEN. It is an identity-compared Object now.
@@ -55,13 +57,34 @@
   (let [eof (Object.)
         rdr (rt/indexing-push-back-reader src)]
     (binding [*read-eval* false
-              ;; Registered readers would otherwise RUN. Inert construction
-              ;; keeps the form readable without executing anything.
-              tr/*data-readers* {}
-              tr/*default-data-reader-fn* (fn [tag value] (tagged-literal tag value))
+              ;; Registered readers would otherwise RUN — and this project
+              ;; registers 21, including `dbg`, `break` and `break!`, which is
+              ;; not a hypothetical thing to trigger inside a shared REPL. So
+              ;; every REGISTERED tag is remapped to inert construction: the form
+              ;; still reads, nobody's function executes.
+              ;;
+              ;; Note what is deliberately NOT bound: *default-data-reader-fn*.
+              ;; Leaving it unset means an UNREGISTERED tag (`#bogus/tag`) throws,
+              ;; which is what real loading does. An earlier cut accepted every
+              ;; tag inertly and so read `#bogus/tag` clean — a false green a
+              ;; review seat caught. #inst and #uuid are built into the reader
+              ;; and unaffected by this map, so they keep working (and a
+              ;; malformed #inst still fails, matching the compiler).
+              tr/*data-readers* (into {}
+                                      (map (fn [[tag _]]
+                                             [tag (fn [value] (tagged-literal tag value))]))
+                                      clojure.core/*data-readers*)
               ;; The ns form is not evaluated, so no alias is ever established.
               ;; Any alias resolves to a synthetic ns: we are checking syntax,
               ;; not resolving vars, and a real resolution would need loading.
+              ;;
+              ;; KNOWN GAP, stated rather than papered over (#187): because this
+              ;; accepts EVERY alias, an UNDECLARED one — `::bogus/x`, i.e. a
+              ;; typo — reads clean here while real loading rejects it. Closing
+              ;; that means parsing the ns form's :require shapes to build the
+              ;; real alias map, and a wrong parser there produces false REDS on
+              ;; a healthy tree, which is worse than this miss. Filed, not
+              ;; guessed at.
               tr/*alias-map* (fn [alias] (symbol (str "check-ai-sweep.unresolved." alias)))]
       (loop [n 0]
         (let [form (try

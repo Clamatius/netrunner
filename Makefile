@@ -23,7 +23,9 @@ help:
 	@echo "  make clean         - Kill background processes"
 
 # Quick AI-only compile check
-# Fast (~1s) when REPL running + Babashka installed, slower (~30s) cold start
+# Fast (~1s) when REPL running + Babashka installed. Cold start otherwise:
+# ~20s with a warm lein/JVM cache, ~85s without. A worktree is ALWAYS cold —
+# the foreign-REPL guard in check-ai.sh refuses a REPL rooted in another tree.
 check:
 	@./dev/check-ai.sh
 
