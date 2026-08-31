@@ -19,7 +19,19 @@
      - unresolvable `require` targets and unresolvable symbols. Only real
        loading finds those. dev/src/clj/start_ai.clj is a live specimen: it
        `load-file`s two files that do not exist, and reads perfectly clean.
+     - the PAYLOAD of a registered tagged literal (#189). Validating it means
+       running the reader function, which is precisely what this refuses to do,
+       so a malformed #time/date reads clean and dies at load. Built-in
+       #inst/#uuid are unaffected — the reader validates those itself.
      - anything semantic. This is a parser, not a compiler.
+
+   AND ONE REASON THE CORPUS BELOW CANNOT SIMPLY BE WIDENED
+   For REGISTERED tags there is no portable account of what loading does to
+   agree with in the first place: *data-readers* values are unbound vars until
+   something happens to load their namespace, so a well-formed #dbg or
+   #ordered/map fails in a cold JVM and succeeds in a warm one. A test asserting
+   agreement on those would be asserting this JVM incidental load order. That is
+   why the corpus uses built-ins and a locally-bound reader only.
 
    HOW CORRECTNESS IS JUDGED — and the limit of that
    At the READER level the target is agreement with `load-file`: reject what real
@@ -67,9 +79,19 @@
               ;; Leaving it unset means an UNREGISTERED tag (`#bogus/tag`) throws,
               ;; which is what real loading does. An earlier cut accepted every
               ;; tag inertly and so read `#bogus/tag` clean — a false green a
-              ;; review seat caught. #inst and #uuid are built into the reader
-              ;; and unaffected by this map, so they keep working (and a
-              ;; malformed #inst still fails, matching the compiler).
+              ;; review seat caught.
+              ;;
+              ;; #inst and #uuid are BUILT INTO the reader, not supplied by this
+              ;; map, so they keep working AND keep validating: a malformed
+              ;; #inst still fails here, matching the compiler.
+              ;;
+              ;; Registered tags do NOT validate, and cannot (#189). Inert
+              ;; construction is exactly the refusal to run the reader function,
+              ;; and the payload check lives inside that function — so a
+              ;; malformed #time/date reads clean here and fails at load. An
+              ;; earlier version of this comment claimed the #inst behaviour
+              ;; covered registered tags too. It does not; that was a
+              ;; third-round finding.
               tr/*data-readers* (into {}
                                       (map (fn [[tag _]]
                                              [tag (fn [value] (tagged-literal tag value))]))

@@ -105,6 +105,25 @@
       (is (= :error (:load bad)))
       (is (:agree bad) (str "malformed #inst: " bad)))))
 
+(deftest known-gap-registered-tag-payload-is-not-validated
+  ;; DOCUMENTED MISS, asserted so it cannot change silently (#189).
+  ;;
+  ;; A registered tag is read INERTLY — that is the fix for "registered data
+  ;; readers must not execute during the sweep". But the payload check lives
+  ;; inside the reader function we are declining to run, so a malformed payload
+  ;; to a registered tag reads clean and fails at load. Unlike #inst/#uuid,
+  ;; which the reader validates itself, this cannot be closed without giving up
+  ;; the non-execution property.
+  ;;
+  ;; Round 2 pinned this class for built-ins and stopped one map short; round 3
+  ;; found the gap AND found the comment claiming otherwise. Pinned now.
+  (testing "a malformed payload to a registered tag sweeps clean though loading rejects it"
+    (let [r (agrees? "(ns oracle.badpayload)\n(def t #time/date \"not-a-date\")\n")]
+      (is (= :error (:load r)) "real loading rejects the malformed payload")
+      (is (= :ok (:sweep r))
+          "if this is now :error, #189 changed — check it was not closed by making readers execute")
+      (is (not (:agree r)) "this is the known disagreement; see #189"))))
+
 (deftest known-gap-undeclared-alias-is-not-caught
   ;; DOCUMENTED MISS, asserted so it cannot change silently (#187).
   ;;
