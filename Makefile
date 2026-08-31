@@ -5,7 +5,8 @@ help:
 	@echo "AI Development Commands:"
 	@echo ""
 	@echo "  make check         - Quick AI code compile check"
-	@echo "                       (~1s with REPL+bb, ~30s cold start)"
+	@echo "                       (~1s with REPL+bb; cold start ~20s warm cache,"
+	@echo "                        ~85s uncached — always cold in a worktree)"
 	@echo "  make test          - Run unit tests (~2s)"
 	@echo "  make verify        - check + test + test-shell"
 	@echo ""
@@ -58,6 +59,7 @@ test:
 	  ai-websocket-diff-test \
 	  ai-websocket-error-recovery-test \
 	  ai-wire-card-ref-test \
+	  check-ai-sweep-test \
 	  continue-run-rez-test \
 	  game.ai-ability-legality-test \
 	  game.ai-corp-pass-ledger-wire-test \
@@ -79,16 +81,36 @@ test:
 	  web.replay-share-test
 
 # Run shell-level tests (fast, no REPL/server needed) — e.g. send_command output filters
+# #185: no list. The eight scripts used to be named one per line, which is the
+# same shape as #180 — forget a line, or lose one resolving a conflict, and the
+# script silently never runs while `make verify` still reports green. It is worse
+# here than in the `lein test` list, because one of those lines is the on-switch
+# for the registration guard itself: a botched resolve disabled every shell test
+# INCLUDING the one that would have noticed.
+#
+# The obvious guard (grep each basename out of `make -n test-shell`) was written,
+# and removed, because commenting a line out leaves the basename in the recipe
+# text and the check stays green. A substring match over uninterpreted recipe
+# text answers "is this name mentioned?", not "does this run?".
+#
+# So: glob, and there is nothing left to forget. `dev/test/*_test.sh` is what
+# runs, in shell glob order (sorted, deterministic). The trade, stated out loud:
+# a new matching file is picked up with no opt-in, and the recipe can no longer
+# run one script in isolation — run it directly for that.
 test-shell:
 	@echo "Running shell tests..."
-	@./dev/test/send_command_filter_test.sh
-	@./dev/test/send_command_help_test.sh
-	@./dev/test/send_command_wrap_test.sh
-	@./dev/test/ai_eval_charset_test.sh
-	@./dev/test/peer_status_test.sh
-	@./dev/test/game_gone_gate_test.sh
-	@./dev/test/check_ai_worktree_test.sh
-	@./dev/test/test_registration_test.sh
+	@set -e; \
+	  found=0; \
+	  for t in dev/test/*_test.sh; do \
+	    [ -f "$$t" ] || continue; \
+	    found=$$((found + 1)); \
+	    "$$t"; \
+	  done; \
+	  if [ "$$found" -eq 0 ]; then \
+	    echo "❌ no shell tests matched dev/test/*_test.sh — the glob is broken, not the suite empty"; \
+	    exit 1; \
+	  fi; \
+	  echo "✅ $$found shell test scripts passed."
 
 # Run behavioral tests (slow, requires game server)
 test-behavioral:

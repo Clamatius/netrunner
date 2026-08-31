@@ -1,5 +1,13 @@
-;; Full game test: 2 AI clients playing against each other
-(ns full-game-test
+;; Full game HARNESS: 2 AI clients playing against each other.
+;;
+;; #182: this was full_game_test.clj and contains zero deftests. It is a manual
+;; scenario harness with fixed System Gateway decks, driven by hand from a REPL
+;; (`run-full-game-test!`, below) — not part of `make test`, and never was.
+;; Sitting in the SOURCE tree under a *_test.clj name, it fell through both
+;; gates: `make test` did not run it (correctly — nothing to run) and
+;; `make check` did not read it, so it read as covered while nothing touched it.
+;; Renamed to say what it is. It is now read by check-ai.sh's parse-only sweep.
+(ns full-game-harness
   (:require
    [cheshire.core :as json]
    [clojure.edn :as edn]

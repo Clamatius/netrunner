@@ -3,7 +3,7 @@
 #
 # Strategy:
 # 1. If Runner REPL (port 7889) is running AND Babashka available, use it (~5s)
-# 2. Otherwise, fall back to cold JVM start (~30s)
+# 2. Otherwise, fall back to cold JVM start (~20s warm cache, ~85s cold)
 #
 # Uses targeted require instead of full lein check (which compiles entire Jinteki)
 
@@ -46,14 +46,39 @@ AI_NAMESPACES=(
 
 NS_COUNT="${#AI_NAMESPACES[@]}"
 echo "🔍 Checking AI client code compilation..."
-echo "   (${NS_COUNT} namespaces)"
+echo "   (${NS_COUNT} namespaces + parse-only sweep of dev/src/clj)"
 
-# Build require expression with :reload to force recompile
-REQUIRE_EXPR="(do"
-for ns in "${AI_NAMESPACES[@]}"; do
-    REQUIRE_EXPR="$REQUIRE_EXPR (require '$ns :reload)"
-done
-REQUIRE_EXPR="$REQUIRE_EXPR :check-success)"
+# #184: the list above is hand-maintained, and it had already drifted — 21 names
+# for 35 .clj files. Two of the strays are require'd transitively so nothing was
+# lost; ai_client_init.clj is not required by ANYTHING, because
+# start-ai-client-repl.sh brings it in with `load-file`. So the file that boots
+# both AI seats could carry a syntax error through a clean `make check` and only
+# blow up later at `make reset`, looking like an environment fault.
+#
+# Rather than append one name to the list that just proved it drifts, sweep the
+# whole directory. The sweep is PARSE-ONLY — every form is read, none evaluated —
+# which is what makes it safe to point at ai_client_init.clj at all: loading that
+# file reads AI_USERNAME/AI_PASSWORD from the environment and opens a WebSocket to
+# localhost:1042, and a static gate that needs the game server up is a flaky gate.
+#
+# The sweep itself lives in dev/src/clj/check_ai_sweep.clj, NOT inline here, and
+# is pinned by dev/test/check_ai_sweep_test.clj against real `load-file`. That is
+# deliberate: the first cut WAS fifteen lines of Clojure embedded in this shell
+# string, and a review panel found three separate ways it disagreed with real
+# loading — two of them false GREENS. A gate that cannot be unit-tested is a gate
+# whose defects are found in production. See that namespace's docstring for the
+# full list and for what parsing still cannot catch.
+#
+# AI_NAMESPACES above stays hand-maintained on purpose: some files in this tree
+# have load-time side effects (ai_client_init.clj is the example), so "require
+# everything" is not available. A NEW ai namespace therefore gets parse-only
+# coverage until someone adds it to the list — narrower than compile coverage,
+# and stated here rather than left to be discovered.
+PARSE_EXPR='(do (require (quote check-ai-sweep))
+                (println (str "   parse-only: "
+                              ((resolve (quote check-ai-sweep/sweep!)) "dev/src/clj")
+                              " files in dev/src/clj read clean"
+                              " (syntax only — requires are NOT resolved)")))'
 
 # Ask the REPL which checkout it is actually reading.
 #
@@ -114,6 +139,11 @@ if [ "$USE_REPL" = true ]; then
     # Use ai-eval.sh which handles nREPL properly
     if TIMEOUT=30 "$SCRIPT_DIR/ai-eval.sh" "runner" "$RUNNER_PORT" "$REQUIRE_EXPR" > "$TMPFILE" 2>&1; then
         if grep -q ":check-success" "$TMPFILE"; then
+            # Surface the sweep's own line. Without this the warm path prints only
+            # the two green ticks and silently drops the caveat that requires are
+            # NOT resolved — #184 asked specifically that "✅" not imply more than
+            # was checked, and on the fast path it did.
+            grep "parse-only:" "$TMPFILE" || true
             echo -e "${GREEN}✅ All ${NS_COUNT} AI namespaces compiled successfully${NC}"
             echo -e "${GREEN}✅ AI client code compiles successfully (REPL check ~fast)${NC}"
             exit 0
@@ -121,13 +151,13 @@ if [ "$USE_REPL" = true ]; then
     fi
 
     # Check for compilation errors in output
-    if grep -q "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find\|Exception:" "$TMPFILE"; then
+    if grep -q "AI-PARSE-ERROR\|Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find\|Exception:" "$TMPFILE"; then
         echo ""
         echo -e "${RED}❌ Compilation FAILED${NC}"
         echo ""
         echo "Error details:"
         echo "--------------"
-        cat "$TMPFILE" | grep -B 2 -A 10 "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find\|Exception:" | head -40
+        cat "$TMPFILE" | grep -B 2 -A 10 "AI-PARSE-ERROR\|Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find\|Exception:" | head -40
         exit 1
     fi
 
@@ -143,7 +173,7 @@ fi
 echo -e "${CYAN}   Cold JVM start — compiling $REPO_ROOT${NC}"
 
 # Build require expression for cold start (with System/exit)
-COLD_REQUIRE_EXPR="(do"
+COLD_REQUIRE_EXPR="(do $PARSE_EXPR"
 for ns in "${AI_NAMESPACES[@]}"; do
     COLD_REQUIRE_EXPR="$COLD_REQUIRE_EXPR (require '$ns)"
 done
@@ -153,7 +183,19 @@ COLD_REQUIRE_EXPR="$COLD_REQUIRE_EXPR (println \"✅ All ${NS_COUNT} AI namespac
 TMPFILE=$(mktemp)
 trap "rm -f $TMPFILE" EXIT
 
-TIMEOUT_SECS=${1:-60}  # Default 60 seconds, can override with arg
+# Default was 60s, chosen when the header still said cold start took ~30s. It
+# does not: measured on this tree, a cold JVM is ~20s with a warm lein/JVM cache
+# and ~85s without one. 60s therefore sat right in the middle, and the path that
+# ALWAYS pays the cold cost is the worktree — the #147 guard above forces cold
+# start whenever the REPLs are rooted elsewhere, which is every worktree, which
+# is where CLAUDE.md says feature work happens.
+#
+# So `make verify` failed for worktree sessions by default, with
+# "⚠️  Compilation check timed out" and `make: *** [check] Error 1` — a red gate
+# that means nothing about the code. A timeout is a backstop against a hang, not
+# a performance budget; 180s still catches a hang and stops lying about a
+# healthy tree. Override positionally: ./dev/check-ai.sh 60
+TIMEOUT_SECS=${1:-180}
 
 # Guard on PIPESTATUS, not on the `if`. A pipeline's status is its LAST command's
 # — here `tee`, which succeeds whatever lein did — so `if ... | tee` printed
@@ -169,20 +211,20 @@ if [ "$EXIT_CODE" -eq 0 ]; then
 fi
 
 # Check if it was a compilation error
-if grep -q "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find" "$TMPFILE"; then
+if grep -q "AI-PARSE-ERROR\|Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find" "$TMPFILE"; then
     echo ""
     echo -e "${RED}❌ Compilation FAILED${NC}"
     echo ""
     echo "Error details:"
     echo "--------------"
-    grep -B 2 -A 10 "Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find" "$TMPFILE" | head -30
+    grep -B 2 -A 10 "AI-PARSE-ERROR\|Syntax error\|EOF while reading\|CompilerException\|Unable to resolve\|Cannot find" "$TMPFILE" | head -30
     exit 1
 fi
 
 # Timeout
 if [ "$EXIT_CODE" -eq 124 ]; then
     echo -e "${YELLOW}⚠️  Compilation check timed out after ${TIMEOUT_SECS}s${NC}"
-    echo "   Try: ./dev/check-ai.sh 90  (for longer timeout)"
+    echo "   Try: ./dev/check-ai.sh $((TIMEOUT_SECS * 2))  (for longer timeout)"
     exit 1
 fi
 
