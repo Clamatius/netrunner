@@ -314,7 +314,11 @@
 
 (defn handle-corp-fire-unbroken
   "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs.
-   Waits for Runner's signal before firing (model-vs-model coordination)."
+
+   Waits for the Runner to be DONE with this encounter before firing
+   (model-vs-model coordination). Done is either of two things, and for a long
+   time this only knew one: the `tank` system message, or the encounter's pass
+   ledger naming the Runner — which is all a plain `continue` leaves (#169)."
   [{:keys [side run-phase strategy state gameid]}]
   (when (and (= side "corp")
              ;; at-encounter?, not the phase string: the Corp twin of the Runner's
@@ -339,17 +343,28 @@
           ;; (when the fired-at latch was stale) re-sent the fire command, firing
           ;; the same sub twice. #71 (Diviner: 2 net damage from one subroutine).
           unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-          runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)]
+          ;; The pass LEDGER authorizes as well as the tank signal does (#169) —
+          ;; a plain `continue` emits no signal, so this gate refused to fire at
+          ;; a window the Runner had already left and the loop idle-polled for a
+          ;; signal that could never arrive. What each authorization COVERS
+          ;; differs; see fire-authorization.
+          authorization (decisions/fire-authorization state side ice-title)]
       (cond
         already-fired-here? nil
         (nil? current-ice)
         (do (println "   --fire-unbroken: no ICE is being encountered") nil)
         (empty? unbroken-subs) nil
-        (not runner-signaled?) nil
+        (not authorization) nil
         :else
         (do
-          (println (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (Runner signaled)"
-                          (count unbroken-subs) ice-title))
+          ;; Say which authorization, because "Runner signaled" about a Runner
+          ;; who merely passed is a false claim about the other seat — the same
+          ;; defect this issue fixes in the guidance text (#169, guest panel).
+          (println (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (%s)"
+                          (count unbroken-subs) ice-title
+                          (if (= :runner-passed authorization)
+                            "Runner passed the encounter"
+                            "Runner signaled")))
           ;; Note: caller must call set-strategy! to mark fired-at-encounter
           ;; (result carries it in both branches). We capture the pre-fire prompt
           ;; so that — if a fired sub OPENS a prompt (issue #24) — we surface it as
@@ -372,13 +387,27 @@
               result)))))))
 
 (defn handle-corp-fire-decision
-  "Priority 1.7: Corp at encounter-ice WITHOUT fire strategy - pause for human decision.
-   Returns :decision-required if Runner has signaled, :waiting-for-runner-signal otherwise."
+  "Priority 1.7: Corp at encounter-ice with a fire decision nobody automated -
+   pause for the seat to decide.
+
+   Returns :decision-required once the Runner is done with the encounter (a
+   `tank` signal OR a pass on the encounter ledger), :waiting-for-runner-signal
+   while they are still deciding. Normally skipped for a --fire-unbroken seat,
+   which fires at 1.6 instead — but NOT when that handler declined an authorized
+   fire, because the alternative there is a silent idle (see the guard)."
   [{:keys [side strategy state]}]
-  (when (and (= side "corp")
-             (not (:fire-unbroken strategy)))
+  (when (= side "corp")
     (let [decision (decisions/corp-run-decision state)]
-      (when (contains? #{:fire-unbroken :waiting-runner-signal} (:kind decision))
+      (when (and (contains? #{:fire-unbroken :waiting-runner-signal} (:kind decision))
+                 ;; A --fire-unbroken seat normally never reaches here: handler
+                 ;; 1.6 fires and stops the chain. It reaches here only when 1.6
+                 ;; DECLINED an authorized fire — a stale :fired-at-encounter
+                 ;; latch after a re-encounter of the same card (#163) is the
+                 ;; known way — and surfacing that as a decision is better than
+                 ;; the silent idle it used to be. While the Runner is merely
+                 ;; still deciding, the old silence is kept.
+                 (or (not (:fire-unbroken strategy))
+                     (= :fire-unbroken (:kind decision))))
         (let [ice-title (get-in decision [:ice :title] "ICE")
               sub-count (get-in decision [:ice :unbroken-count] 0)
               position (get-in decision [:ice :position])
@@ -417,9 +446,15 @@
   "Priority 1.65: Corp --fire-if-asked strategy - sleeps through run, wakes only for rez.
    Unlike --fire-unbroken which wakes for each fire decision, this:
    1. Silently waits while Runner breaks (no output)
-   2. Auto-fires when Runner signals
-   3. Auto-continues through empty windows
-   4. ALWAYS wakes for rez decisions (rez is a real choice)"
+   2. Auto-fires when the Runner SIGNALS via `tank`
+   3. Surfaces a Runner who merely PASSED as a fire-or-pass decision rather than
+      firing on it (#169): a pass is not an ask, and the wire cannot say which
+      subroutines it covered (#177). It used to idle forever on such a pass
+      waiting for a signal that could not come; falling through to
+      handle-corp-fire-decision turns that into a wake. `--fire-unbroken` is the
+      mode for a seat that wants a pass fired on regardless
+   4. Auto-continues through empty windows
+   5. ALWAYS wakes for rez decisions (rez is a real choice)"
   [{:keys [side run-phase my-prompt strategy state gameid]}]
   (when (and (= side "corp")
              (:fire-if-asked strategy))
@@ -441,7 +476,9 @@
         (let [ice-title (:title current-ice "ICE")
               subroutines (:subroutines current-ice)
               unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
-              runner-signaled? (decisions/runner-signaled-let-fire? state ice-title)
+              ;; Same two authorizations as --fire-unbroken above (#169), with
+              ;; the same difference in what each one covers.
+              authorization (decisions/fire-authorization state side ice-title)
               enc-key (core/encounter-key state)
               already-fired-here? (= (:fired-at-encounter strategy) enc-key)]
           (cond
@@ -453,8 +490,19 @@
             (or (nil? current-ice) (empty? unbroken-subs))
             nil
 
-            ;; Runner signaled - auto-fire!
-            runner-signaled?
+            ;; The Runner PASSED rather than asked. "--fire-if-asked" means what
+            ;; it says: a pass is not an ask, and firing on it can resolve a
+            ;; subroutine that appeared after the pass, which the wire gives us
+            ;; no way to tell apart (#169, three rounds; #177 for the engine-side
+            ;; fix). Fall through — handle-corp-fire-decision surfaces it as the
+            ;; Corp's own fire-or-pass decision, which is a WAKE, not the
+            ;; idle-forever this issue is about. --fire-unbroken is the standing
+            ;; commitment for a seat that wants it fired regardless.
+            (= :runner-passed authorization)
+            nil
+
+            ;; The Runner asked for the subs to fire - auto-fire!
+            (= :runner-signaled authorization)
             (do
               (println (format "   --fire-if-asked: Runner signaled, firing %d sub(s) on %s"
                               (count unbroken-subs) ice-title))
@@ -475,7 +523,7 @@
                   (doseq [l lines] (println l))
                   result)))
 
-            ;; Runner hasn't signaled yet - silently wait (poll again)
+            ;; The Runner is still deciding - silently wait (poll again)
             :else
             {:status :waiting-for-runner-signal
              :wake-reason :waiting-for-opponent
@@ -523,7 +571,17 @@
         :else nil))))
 
 (defn handle-corp-all-subs-resolved
-  "Priority 1.74: Corp at encounter-ice when all subs are resolved (broken or fired).
+  "Priority 1.74: Corp at encounter-ice with nothing left to fire — every
+   subroutine resolved (broken or fired), or the ICE never had one.
+
+   The zero-subroutine half is #167. This handler and its Runner twin both
+   required `(seq subroutines)`, so a Tour Guide with no rezzed assets — which
+   really does have none — was a live both-must-pass window that neither seat's
+   automation would close. `encounter-ice-active?` carries the weight the guard
+   was meant to carry (a resolvable, engine-active ICE), and
+   game.ai-zero-sub-encounter-wire-test pins the premise it rests on: on a
+   resolved encounter summary an absent :subroutines key means the ICE has none,
+   not that the summary is half-read.
 
    Passes AT MOST ONCE per window: if :no-action already records the Corp's pass,
    fall through instead of re-sending — the condition (all subs resolved) stays
@@ -551,14 +609,20 @@
           subroutines (:subroutines current-ice)
           actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
           pass-key [(core/encounter-key state) (:cid current-ice)]]
-      (when (and (core/encounter-ice-active? state current-ice) (seq subroutines) (empty? actionable-subs)
+      ;; No (seq subroutines) — a zero-sub encounter is still a window we owe a
+      ;; pass at (#167).
+      (when (and (core/encounter-ice-active? state current-ice) (empty? actionable-subs)
                  ;; Pass already SENT for this encounter, ack not yet in the
                  ;; mirror — fall through (idle), don't re-send/re-print.
                  (not (passed-encounter-recently? pass-key)))
         (let [ice-title (:title current-ice "ICE")
               all-broken? (every? :broken subroutines)]
-          (println (format "   All subs %s on %s, Corp continuing"
-                          (if all-broken? "broken" "resolved") ice-title))
+          ;; (every? :broken []) is true, so the old single format would have
+          ;; announced "All subs broken" about an ICE that never had one (#167).
+          (println (if (empty? subroutines)
+                     (format "   %s has no subroutines, Corp continuing" ice-title)
+                     (format "   All subs %s on %s, Corp continuing"
+                             (if all-broken? "broken" "resolved") ice-title)))
           (let [r (send-continue! gameid)]
             (when (= :action-taken (:status r))
               (latch-encounter-pass! pass-key (:sent r)))
@@ -566,7 +630,15 @@
 
 (defn handle-corp-waiting-after-subs-fired
   "Priority 1.75: Corp at encounter-ice after subs have fired.
-   If Runner hasn't passed yet, wait. If Runner already passed, continue."
+   If Runner hasn't passed yet, wait. If Runner already passed, continue.
+
+   \"Has the Runner passed?\" is answered from the encounter's LEDGER, not from
+   the log (#169). The log read was `#\"(?i)ai-runner has no further action\"` —
+   the opponent's username baked into a regex, so it answered NO for a human
+   opponent, for a renamed seat, and for anyone but our own bot, and the Corp
+   then sat on a closing pass it owed. The ledger says the same thing without
+   knowing anyone's name, and it is the key the engine's own
+   `continue :encounter-ice` reads."
   [{:keys [side run-phase state gameid]}]
   (when (and (= side "corp")
              (core/at-encounter? state run-phase))
@@ -577,9 +649,17 @@
           subs-resolved? (some #(re-find (re-pattern (str "(?i)resolves.*subroutines on " ice-title))
                                          (str (:text %)))
                                recent-log)]
-      (when (and current-ice subs-resolved?)
-        (let [recent-entries (take 5 (reverse log))
-              runner-passed? (some #(re-find #"(?i)ai-runner has no further action" (str (:text %))) recent-entries)
+      ;; subs-resolved? is a LOG heuristic and the log outlives the encounter:
+      ;; a "resolves … subroutines on Tithe" line from encounter ONE is still
+      ;; within the ten-entry window when Sisyphus Protocol re-encounters the
+      ;; same card, and composing it with encounter TWO's ledger sent a pass that
+      ;; left the fresh subroutines unresolved (guest panel MAJOR, #169). The
+      ;; serialized subroutines are the authority on whether anything is left to
+      ;; fire; the log only ever answered "did something fire recently".
+      (when (and current-ice subs-resolved?
+                 (empty? (filter #(and (not (:broken %)) (not (:fired %)))
+                                 (:subroutines current-ice))))
+        (let [runner-passed? (core/opponent-passed-encounter? state side)
               position (get-in state [:game-state :run :position])
               pass-key [(core/encounter-key state) (:cid current-ice)]]
           (if (and runner-passed?

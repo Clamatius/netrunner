@@ -343,6 +343,156 @@
         (is (not (str/includes? line "[\"rd\"]"))
             (str "must not leak raw EDN server vector, got: " line))))))
 
+(deftest test-board-compact-rig-counts-and-private-hosted-cards
+  ;; #161 fallout, at the unit level. Three separate things the wire can hand a
+  ;; renderer, each of which the first draft of this fix got wrong:
+  ;;   - an INSTALLED guest (:installed stamped) — count it, name it
+  ;;   - a PARKED guest (hosted, no :installed: Street Peddler, The Supplier) —
+  ;;     never count it, never name it beside rig contents
+  ;;   - a WITHHELD guest (private: `diffs/private-card-keys` drops :title and
+  ;;     :type both) — name it `?card`, claim nothing about it
+  ;; The engine-side premises for all three are pinned in
+  ;; game.ai-hosted-rig-wire-test against the real serializer; these fix the
+  ;; rendering decisions given that shape.
+  (testing "installed hosted cards are ADDED to the type counts, not swapped in for them"
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program [{:title "Leprechaun" :type "Program" :side "Runner"
+                                                             :installed true
+                                                             :hosted [{:title "Leech" :type "Program" :side "Runner"
+                                                                       :installed true
+                                                                       :counter {:virus 2}}]}]
+                                                  :hardware [] :resource []}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "Prog[2]")
+            (str "host + guest, not one or the other, got: " line))
+        (is (str/includes? line "Leprechaun{Leech(2v)}")
+            (str "host relationship rendered, in BRACES, got: " line))
+        (is (not (str/includes? line "Leprechaun[Leech"))
+            (str "brackets are reserved for counts and duplicate indices, got: " line)))))
+
+  (testing "a card merely PARKED on its host is neither counted nor named as rig contents"
+    ;; The Supplier hosts cards from the grip to install later; Street Peddler
+    ;; hosts three off the stack. Counting them said the seat owned hardware it
+    ;; could not use.
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program [] :hardware []
+                                                  :resource [{:title "The Supplier" :type "Resource" :side "Runner"
+                                                              :installed true
+                                                              :hosted [{:title "Clone Chip" :type "Hardware" :side "Runner"}]}]}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "HW[0]")
+            (str "a parked Clone Chip is not installed hardware, got: " line))
+        (is (str/includes? line "Res:The Supplier{+1 uninstalled}")
+            (str "it is summarised, and the host is type-tagged, got: " line))
+        (is (not (str/includes? line "{Clone Chip}"))
+            (str "and never named as though it were rig contents, got: " line)))))
+
+  (testing "a top-level card the serializer withheld still counts (it is counted by CATEGORY)"
+    ;; SYNTHETIC fixture, deliberately: `is-public?` makes every installed rig
+    ;; card public unless facedown, and facedown top-level cards live in the
+    ;; rig's :facedown category, so the real wire cannot produce a titleless
+    ;; top-level :resource (guest panel corrected an earlier docstring here that
+    ;; claimed it could). It is kept because it is the only thing pinning the
+    ;; counting RULE: count the top level by category, never by :type. Someone
+    ;; "simplifying" rig-type-count to a single type filter goes red here.
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program [] :hardware []
+                                                  :resource [{:cid 99}]}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "Res[1]")
+            (str "a private resource is still one resource, got: " line)))))
+
+  (testing "a hosted card with no title renders as ?card, not as nothing"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program [{:title "Leprechaun" :type "Program" :side "Runner"
+                                                             :installed true
+                                                             ;; NO :installed — private-card-keys
+                                                             ;; drops it along with :title/:type.
+                                                             :hosted [{:cid 42
+                                                                       :counter {:virus 2}}]}]
+                                                  :hardware [] :resource []}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "Leprechaun{?card(2v)}")
+            (str "the withheld guest is named ?card, got: " line))
+        (is (str/includes? line "Prog[1]")
+            (str "and is not counted as a program, since nothing says it is one, got: " line))
+        ;; A private card carries no :installed either. Bucketing it as parked
+        ;; would state the opposite of reality about a card we were not shown.
+        (is (not (str/includes? line "uninstalled"))
+            (str "a withheld card is not a card we know to be uninstalled, got: " line)))))
+
+  (testing "withheld guests sharing a host keep positional identity"
+    ;; The Corp's view of a Street Peddler is three private cards. Three
+    ;; identical `?card` tokens assert they are interchangeable (guest panel).
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program [] :hardware []
+                                                  :resource [{:title "Street Peddler" :type "Resource" :side "Runner"
+                                                              :installed true
+                                                              :hosted [{:cid 1} {:cid 2} {:cid 3}]}]}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "?card [0],?card [1],?card [2]")
+            (str "each withheld guest is positionally distinct, got: " line)))))
+
+  (testing "a hosting hardware is named, type-tagged, and its guest counted as a program"
+    ;; Without this a program on a host console is invisible for exactly the
+    ;; reason a program on a Leprechaun was.
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program []
+                                                  :hardware [{:title "Dhuv" :type "Hardware" :side "Runner"
+                                                              :installed true
+                                                              :hosted [{:title "Corroder" :type "Program" :side "Runner"
+                                                                        :installed true}]}]
+                                                  :resource []}}})
+      (let [line (str/trim (with-out-str (display/show-board-compact)))]
+        (is (str/includes? line "HW:Dhuv{Corroder}")
+            (str "the host console's guest is named, host type-tagged, got: " line))
+        (is (str/includes? line "Prog[1] HW[1]")
+            (str "and counted as the program it is, got: " line)))))
+
+  (testing "the full board agrees with that count instead of saying (none)"
+    ;; The contradiction #161 was filed about, between the same two views: the
+    ;; first draft of this fix re-created it (guest panel). `board` is the view a
+    ;; seat opens BECAUSE the compact line was ambiguous.
+    (with-mock-state (mock-client-state
+                      :side "runner"
+                      :game-state {:active-player "runner" :turn 3
+                                   :corp {:servers {}}
+                                   :runner {:rig {:program []
+                                                  :hardware [{:title "Dhuv" :type "Hardware" :side "Runner"
+                                                              :installed true
+                                                              :hosted [{:title "Corroder" :type "Program" :side "Runner"
+                                                                        :installed true}]}]
+                                                  :resource []}}})
+      (let [out (with-out-str (display/show-board))]
+        (is (str/includes? out "Programs [1]:")
+            (str "the section header carries the same total the compact line does, got: " out))
+        (is (not (str/includes? out "Programs [1]:\n  (none)"))
+            (str "and must not then say there are none, got: " out))
+        (is (str/includes? out "none at the top level; 1 hosted on another card")
+            (str "it accounts for the header total instead of leaving it unexplained, got: " out))
+        (is (str/includes? out "shown elsewhere in this rig, under their hosts")
+            (str "and points the seat at where the program actually is, got: " out))
+        (is (str/includes? out "\u21b3 Corroder")
+            (str "and Corroder is findable under its host, got: " out))))))
+
 (deftest test-status-compact-hosted-credits
   ;; Credits hosted on rig/play-area cards (issue #21) must surface as (+N) so
   ;; the seat doesn't undercount affordability. The (+N) form avoids colliding

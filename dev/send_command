@@ -486,13 +486,15 @@ ${GREEN}Running:${NC}
   ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE
     --rez <name>     Corp: auto-rez ICE matching <name>; pause on other unrezzed ICE
-    --fire-unbroken  Corp: auto-fire unbroken subroutines
+    --fire-unbroken  Corp: auto-fire unbroken subroutines once the Runner is
+                     done with the encounter (tank signal OR a plain pass)
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start
     --single         Take ONE step and return (what 'continue-run' is an alias for)
 
   ${BLUE}monitor-run Flags:${NC} (Corp)
-    --fire-if-asked  Sleep mode: auto-fire, auto-continue, wake for rez/upgrade
+    --fire-if-asked  Sleep mode: auto-fire on a tank SIGNAL, auto-continue, wake
+                     for rez/upgrade — a plain Runner pass wakes you to decide
     --persistent     Own the WHOLE Runner run with one command: sleep through
                      empty priority windows instead of exiting, wake only for a
                      real rez/fire/upgrade/access decision or run end. Use this for

@@ -502,8 +502,8 @@ Flags can be passed to `run!`, `continue-run!`, or `monitor-run!` to automate de
 |------|-------------|
 | `--no-rez` | Auto-decline all rez opportunities |
 | `--rez <ice>` | Auto-rez the named ICE (can repeat). Any *other* unrezzed ICE PAUSES and hands back a rez decision — it is NOT silently declined. To decline the rest, send `--no-rez` (or re-enter `--rez "<that ICE>"`). |
-| `--fire-unbroken` | Auto-fire unbroken subs when Runner signals done breaking |
-| `--fire-if-asked` | Wait silently while Runner breaks, auto-fire when signaled, wake only for rez decisions |
+| `--fire-unbroken` | Auto-fire unbroken subs once the Runner is done with the encounter — a `tank` signal **or** a plain pass on the encounter ledger. The only mode that fires on a pass (#169) |
+| `--fire-if-asked` | Wait silently while Runner breaks, auto-fire on a `tank` **signal**, wake for rez. A Runner who merely **passes** surfaces as a fire-or-pass decision — a pass is not an ask (#169) |
 
 ### Both Sides
 

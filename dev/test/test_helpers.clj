@@ -111,7 +111,13 @@
   [sent-atom]
   (fn [event-type data]
     (swap! sent-atom conj {:type event-type :data data})
-    nil))
+    ;; TRUE, not nil: ai-websocket-client-v2/send-message! returns its truthy
+    ;; result on a successful send and false when the reconnect is exhausted,
+    ;; and callers that LATCH on having passed a window key on exactly that
+    ;; (#150 for the Corp, #167 for the Runner). Returning nil made this helper
+    ;; model a FAILED send, so every test using it silently exercised the
+    ;; retry path — invisible until the first guard actually read the value.
+    true))
 
 (defn mock-websocket-receive!
   "Simulate receiving a WebSocket message

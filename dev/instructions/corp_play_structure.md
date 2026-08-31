@@ -243,7 +243,7 @@ Corp gets priority at specific timing windows:
 | Fire unbroken subs | `fire-subs` | After Runner declines to break |
 | Rez upgrade (Manegarm etc.) | `continue --rez "Upgrade Name"` | On approach to server |
 | Auto-handle full run | `monitor-run` | Convenience command (see caveats below) |
-| Sleep until run ends | `monitor-run --fire-if-asked` | Auto-fire, auto-continue, wake only for rez |
+| Sleep until run ends | `monitor-run --fire-if-asked` | Auto-fire on a Runner `tank` signal, auto-continue, wake for rez — and wake for a fire-or-pass decision if the Runner simply passes (#169) |
 | Fast-return check | `monitor-run --since <cursor>` | Immediately return if run already ended |
 
 ### Typical Corp Run Flow
@@ -298,7 +298,7 @@ Corp gets priority at specific timing windows:
 ./dev/send_command corp monitor-run                     # Auto-pass until decision needed
 ./dev/send_command corp monitor-run --no-rez            # Also auto-decline all rez
 ./dev/send_command corp monitor-run --rez "Tithe"       # Auto-rez Tithe; PAUSE on any other unrezzed ICE
-./dev/send_command corp monitor-run --fire-unbroken     # Auto-fire when Runner signals done
+./dev/send_command corp monitor-run --fire-unbroken     # Auto-fire once the Runner is done: signal OR plain pass
 ```
 
 **Sleep mode (--fire-if-asked):**

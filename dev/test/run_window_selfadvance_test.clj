@@ -23,6 +23,7 @@
             [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-runs :as runs]
+            [ai-core :as core]
             [ai-display :as display]
             [ai-state :as state]
             [ai-websocket-client-v2 :as ws]))
@@ -655,7 +656,20 @@
       (runs/reset-reported-events!)
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state
-          (runner-state :phase "encounter-ice" :position 1 :no-action false
+          ;; approach-ice, not encounter-ice (#167). This fixture is a rezzed ICE
+          ;; with NO :subroutines, and at an ENCOUNTER that is no longer a window
+          ;; where the Runner "holds nothing" — it is a zero-subroutine encounter,
+          ;; which handle-runner-pass-broken-ice now owns and passes. The test was
+          ;; unknowingly resting on the hole #167 closed: the only reason
+          ;; handle-events got to speak at that window was that no pass handler
+          ;; would touch it. Approach-ice with an already-rezzed ICE is a window
+          ;; the Runner genuinely holds nothing at (see
+          ;; approach-ice-rezzed-ice-is-not-a-decision above), so the sequence
+          ;; this test is about — event reported, then a decision arrives — is
+          ;; preserved exactly. The decision-blocks-the-pass claim at a zero-sub
+          ;; ENCOUNTER is pinned separately, against the real engine, in
+          ;; game.ai-zero-sub-encounter-wire-test.
+          (runner-state :phase "approach-ice" :position 1 :no-action false
                         :ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
                         :prompt nil :log rez-log)
           ;; 1. Rez lands while I hold nothing -> reported, entry now deduped.
@@ -724,3 +738,141 @@
         (assoc (mock-client-state :side "corp" :game-state {:log log}) :gameid "game-B")
         (is (= :ice-rezzed (:status (runs/handle-events (runs/extract-run-events log))))
             "A DIFFERENT game must start from a clean slate")))))
+
+;; ============================================================================
+;; #164 (guest panel CRITICAL): the CLI path, not just the predicates
+;; ============================================================================
+;; A forced encounter can outlive its run ENTIRELY — Quest Completed → Ganked!
+;; leaves [:encounters :ice] populated with [:run] nil (pinned against the real
+;; engine in game.ai-forced-encounter-wire-test). The ownership predicates and
+;; the Corp classifier were fixed to answer there; every test for that calls
+;; them DIRECTLY. `monitor-run!` — the function behind both `continue` and
+;; `monitor-run` — still asked only about :run and returned :no-run before the
+;; handler chain ever ran, so the whole fix was unreachable from the CLI. The
+;; lesson this project keeps re-learning: a green predicate test proves nothing
+;; until you check which sender the command actually reaches.
+
+(defn- runless-encounter-state
+  "A Corp client-state at a forced encounter with NO run: exactly the wire shape
+   game.ai-forced-encounter-wire-test asserts the engine produces."
+  []
+  (mock-client-state
+   :side "corp"
+   :game-state {:run nil
+                :active-player "runner"
+                :encounters {:encounter-count 1
+                             :ice {:cid "ice-1" :title "Ice Wall"
+                                   :subroutines [{:label "End the run"}]}}}))
+
+(deftest monitor-run-owns-a-runless-encounter
+  (testing "#164: monitor-run! must reach the handler chain when an encounter is
+            live with no run — it used to return :no-run and leave the window
+            unattended, which is the unattended deadlock the issue is about.
+
+            Claims exactly one thing and no more (guest panel, 2nd pass): that the
+            OUTER GATE is entered. monitor-active-run! is redefined away, so this
+            says nothing about whether the chain then advances the encounter — that
+            is the engine-driven half, in game.ai-forced-encounter-wire-test, and
+            the zero-subroutine hole is #167."
+    (let [entered (atom false)]
+      (with-mock-state (runless-encounter-state)
+        (with-redefs [runs/monitor-active-run! (fn [_flags]
+                                                 (reset! entered true)
+                                                 {:status :waiting-for-opponent})
+                      state/get-cursor (fn [] 1)]
+          (let [result (runs/monitor-run!)]
+            (is (not= :no-run (:status result))
+                (str "must not refuse a live encounter. got: " result))
+            (is (true? @entered)
+                "and must actually enter the monitoring loop")))))))
+
+(deftest monitor-run-since-does-not-call-a-live-encounter-a-finished-run
+  (testing "#164: the --since fast-return read (nil? run) as 'run ended'"
+    (with-mock-state (runless-encounter-state)
+      (with-redefs [runs/monitor-active-run! (fn [_flags] {:status :waiting-for-opponent})
+                    state/get-cursor (fn [] 99)]
+        (let [result (runs/monitor-run! "--since" "1")]
+          (is (not= :run-complete (:status result))
+              (str "the run did not 'end' — an encounter is still live. got: " result)))))))
+
+(deftest park-wake-reason-treats-a-runless-encounter-as-a-window
+  (testing "#164: a parked defender read only :run, so it walked away from a
+            window it owed a pass at"
+    (is (= :run (runs/park-wake-reason (runless-encounter-state) "corp"))
+        "the encounter IS the window to go own")))
+
+(deftest force-mode-can-still-act-at-a-runless-encounter
+  (testing "#164: --force is the seat's MANUAL escape hatch. Gated on :run alone it
+            reported 'Run complete' and sent NOTHING at a live run-less encounter —
+            leaving a stuck seat with no exit at all, at exactly the window whose
+            automation may have no owner (#167)."
+    (let [sent (atom [])]
+      (with-mock-state (runless-encounter-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (runs/handle-force-mode
+                        {:strategy {:force true}
+                         :state @state/client-state
+                         :gameid (:gameid @state/client-state)})]
+            (is (= :action-taken (:status result))
+                (str "must actually act at a live encounter. got: " result))
+            (is (some #(= "continue" (get-in % [:data :command])) @sent)
+                "and the continue must reach the wire")))))
+    (testing "and it still refuses to send when the run really is over"
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state :side "corp"
+                                            :game-state {:run nil :active-player "runner"})
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [result (runs/handle-force-mode
+                          {:strategy {:force true}
+                           :state @state/client-state
+                           :gameid (:gameid @state/client-state)})]
+              (is (= :run-complete (:status result)))
+              (is (empty? @sent) "no spurious continue"))))))))
+
+(deftest park-does-not-hot-spin-on-a-window-it-cannot-advance
+  (testing "#164 3rd guest pass: park-wake-reason now answers :run for a run-less
+            encounter, and park-continuable? sends :run-complete/:no-run straight
+            back to the post. park-wake-reason is a PURE read of the same state
+            monitor-active-run! just gave up on, so it answers :run again — a
+            busy spin printing 'Run ended' until the 300s deadline. A re-entry
+            that cannot have made progress must not be a hot one."
+    (let [entries (atom 0)
+          sleeps (atom 0)]
+      (with-mock-state (runless-encounter-state)
+        (with-redefs [runs/monitor-active-run! (fn [_flags]
+                                                 (swap! entries inc)
+                                                 ;; the shape #167 produces: terminal,
+                                                 ;; while the encounter is still live
+                                                 {:status :run-complete})
+                      state/get-cursor (fn [] 1)
+                      runs/park-sleep! (fn []
+                                         (swap! sleeps inc)
+                                         ;; third tick: the encounter finally clears
+                                         (when (= @sleeps 3)
+                                           (swap! state/client-state
+                                                  update :game-state dissoc :encounters)))]
+          (runs/monitor-run! "--persistent")
+          (is (= @entries @sleeps)
+              (str "every re-entry must be preceded by a sleep — entries " @entries
+                   ", sleeps " @sleeps))
+          (is (< @entries 10)
+              "and the loop must actually converge, not spin"))))))
+
+(deftest persistent-idle-wait-survives-a-runless-encounter
+  (testing "#164 3rd guest pass: auto-continue-loop!'s persistent idle branch gated
+            on (some? :run). A Corp that had passed a RUN-LESS encounter and was
+            waiting on the Runner's closing pass fell out with :no-run instead of
+            idling — the ordinary #164 path, and the feed for the park spin above."
+    (let [cur (mock-client-state
+               :side "corp"
+               :game-state {:run nil
+                            :active-player "runner"
+                            :encounters {:encounter-count 1
+                                         :ice {:cid "ice-1" :title "Ice Wall"}
+                                         :no-action :corp}})]
+      (is (true? (core/encounter-window? cur))
+          "the window is live even though :run is nil — so the idle branch must see it"))
+    (testing "and a board with neither a run nor an encounter is still terminal"
+      (let [done (mock-client-state :side "corp"
+                                    :game-state {:run nil :active-player "runner"})]
+        (is (false? (core/encounter-window? done)))))))
