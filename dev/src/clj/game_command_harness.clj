@@ -1,8 +1,17 @@
-;; Game command test: Direct game engine testing with fixed decks
-;; This bypasses WebSocket layer and tests game actions directly
-;; Allows deterministic games with known card positions for AI testing
+;; Game command HARNESS: drives the game engine directly with fixed decks.
+;; Bypasses the WebSocket layer, for deterministic games with known card
+;; positions.
+;;
+;; #182: this was game_command_test.clj and contains zero deftests — it is a
+;; manual REPL harness, not part of `make test`. Named *_test.clj in the SOURCE
+;; tree, it was invisible to `make test` (nothing to run) AND to `make check`
+;; (not in check-ai.sh's namespace list), so 1865 lines read as covered while
+;; nothing read them. Renamed; now covered by check-ai.sh's parse-only sweep.
+;;
+;; It has no callers, which for a hand-driven REPL harness is expected rather
+;; than evidence of death — deleting it is a judgement call left open on #182.
 
-(ns game-command-test
+(ns game-command-harness
   (:require
    [game.core :as core]
    [game.core.card :refer [get-card get-counters]]

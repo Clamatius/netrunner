@@ -40,8 +40,12 @@
 #
 #     owned(f)  =  absent from upstream/master  AND  contains a (deftest ...)
 #
-# The deftest half is what correctly excludes dev/src/clj/{full_game,game_command}
-# _test.clj — 2271 lines named *_test.clj with zero deftests (see #182).
+# The deftest half is what USED TO exclude dev/src/clj/{full_game,game_command}
+# _test.clj — 2271 lines named *_test.clj with zero deftests. Those two were the
+# motivating example when this was written; #182 has since renamed them to
+# *_harness.clj, so `git ls-files '*_test.clj'` no longer matches them at all and
+# the deftest half never sees them. The check is unchanged and still correct —
+# it is only this justification that had gone stale.
 #
 # If upstream/master is not fetched, EVERY file classifies as ours and this guard
 # would flood with false reds. That case dies loudly rather than guessing.
