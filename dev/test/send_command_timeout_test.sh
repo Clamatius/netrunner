@@ -24,6 +24,9 @@ AI_EVAL="$SCRIPT_DIR/../ai-eval.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/nr-timeout-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 export HEARTBEAT_DIR="$TMP/heartbeats"
+# ~110 probe invocations would otherwise each append a line to the repo's real
+# logs/commands.log (round-4 guest MINOR).
+export SEND_COMMAND_LOG="$TMP/commands.log"
 
 fails=0
 ok()   { echo "ok   [$1] $2"; }
@@ -253,6 +256,34 @@ else
     ok "timeout-parse" "send_command propagates the refusal (exit $CODE)"
 fi
 
+# ...and `wait` SEPARATELY, because it is the one caller that captures `execute`
+# inside $( ) — with a `|| true` that LOOKS like it would swallow the refusal.
+#
+# It does not, and that is worth pinning rather than trusting. `execute` signals
+# "did not run" by calling `exit`, and `exit` inside a command substitution
+# terminates the subshell immediately: `||` is never evaluated, so the status
+# reaches the assignment and `set -e` ends the script. A round-4 review seat read
+# the `|| true` and filed this as a MAJOR — reasonable from the source, and wrong;
+# running the pre-change binary showed `wait 10000000` already exiting 78.
+#
+# So this test exists to keep that true, not because it was ever false. `wait` is
+# the seat's primary parked-play command and the one most likely to hit a
+# timeout; a refusal reaching an un-babysat driver as exit 0, with a cheerful
+# heartbeat footer, is the worst place to lose it.
+#
+# An 8-digit budget is refused by the length bound, so this needs no live REPL
+# and cannot actually park.
+OUT=$("$SEND_CMD" corp wait 10000000 2>&1) && CODE=0 || CODE=$?
+if [[ "$CODE" -eq 0 ]]; then
+    fail "wait-refusal" "the wait command exited 0 over a refused budget — an un-babysat
+       driver reads that as a completed quiet wait"
+elif [[ "$OUT" != *"did not run"* ]]; then
+    fail "wait-refusal" "the wait command exited $CODE but never said it did not run.
+       Got: $OUT"
+else
+    ok "wait-refusal" "the wait command propagates a refusal (exit $CODE) instead of a quiet wait"
+fi
+
 # ---------------------------------------------------------------------------
 # Half 2: every command is CLASSIFIED, and the blocking ones clear the ceiling.
 #
@@ -373,11 +404,34 @@ else
     # case label. It may pick up nested flag-parsing arms (`--since`, `on|off`)
     # and `)` from inside quoted Clojure (`gameid`, `nil`). That is fine; being
     # too greedy is the safe direction, and it needs no grammar.
+    #
+    # The charset is wide on purpose (round-4 guest MAJOR named the misses):
+    # `?` for the live `game-over?|game-over-status)` arm, SPACES so `foo | bar)`
+    # yields both, and an optional leading `(` for bash's `(foo)` form. What it
+    # deliberately excludes — `{`, `:`, `"`, `[` — is what keeps embedded Clojure
+    # from tripling the probe count for no gain.
     CANDIDATES=$(awk -v s="$CASE_START" -v e="$CASE_END" 'NR>s && NR<e' "$SEND_CMD" \
                  | grep -vE '^[[:space:]]*#' \
-                 | grep -oE '^[[:space:]]*[^[:space:]()]+\)' \
-                 | sed 's/)//' | tr -d ' ' | tr '|' '\n' \
+                 | grep -oE '^[[:space:]]*\(?[A-Za-z0-9*_.?|-][A-Za-z0-9*_.?| -]*\)' \
+                 | sed 's/)$//' | sed 's/^[[:space:]]*(\{0,1\}//' \
+                 | tr '|' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
                  | grep -v '^\*$' | grep -v '^$' | sort -u)
+
+    # The one arm layout no single-line scan can see: alternatives split across
+    # lines with a trailing `|`. Valid bash, unused here — so FAIL LOUDLY if it
+    # ever appears rather than silently dropping the continuation. A stated limit
+    # beats a silent miss; the whole point of this derivation is that a missing
+    # label cannot fail an "is it classified?" check.
+    CONT=$(awk -v s="$CASE_START" -v e="$CASE_END" 'NR>s && NR<e' "$SEND_CMD" \
+           | grep -vE '^[[:space:]]*#' \
+           | grep -cE '^[[:space:]]*[A-Za-z0-9*_.?|-][A-Za-z0-9*_.?| -]*\|[[:space:]]*$' || true)
+    if [[ "${CONT:-0}" -gt 0 ]]; then
+        fail "inventory" "send_command has $CONT case label(s) continued onto the
+       next line (a trailing '|'). This extraction is single-line, so those
+       alternatives would be dropped SILENTLY. Put the alternatives on one line."
+    else
+        ok "inventory" "no multi-line case labels (the one layout this cannot see)"
+    fi
 
     # STEP 2 — ask the DISPATCHER which of them it actually handles. Its `*)` arm
     # prints "Unknown command", so send_command itself is the authority on what
