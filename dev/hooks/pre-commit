@@ -29,7 +29,7 @@ done
 NAMESPACES=""
 for file in $STAGED_AI_FILES; do
     basename=$(basename "$file" .clj)
-    # Skip files without ns form (scripts like connect_ai.clj, start_ai.clj)
+    # Skip files without ns form (scripts like click_for_credit.clj, full_game_harness.clj)
     if ! grep -q "^(ns " "$file" 2>/dev/null; then
         echo "   Skipping $basename (no ns form)"
         continue
