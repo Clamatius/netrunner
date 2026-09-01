@@ -18,6 +18,19 @@ TIMEOUT=${TIMEOUT:-10}
 # cleanly. The grace exists so the REPL's own deadline always wins that race.
 TIMEOUT_GRACE=${TIMEOUT_GRACE:-15}
 
+# Validate rather than let $(( )) invent a budget: `TIMEOUT=foo` is arithmetic
+# zero — which now means "no backstop", the exact opposite of a small number —
+# and `TIMEOUT=1.5` aborts the script with a bash syntax error mid-command.
+for _v in TIMEOUT TIMEOUT_GRACE; do
+    case "${!_v}" in
+        ''|*[!0-9]*)
+            echo "❌ $_v must be a whole number of seconds, got: '${!_v}'" >&2
+            echo "   (TIMEOUT=0 means no backstop; there is no other special value.)" >&2
+            exit 2
+            ;;
+    esac
+done
+
 # TIMEOUT=0 means NO backstop. Exactly one caller needs it and it is not an
 # escape hatch for "this felt slow": `send_command bot-watch` runs
 # ai-heuristic-corp/watch-for-runs!, an intentionally infinite poll loop whose
@@ -172,4 +185,24 @@ else
         grep -v "^[[:space:]]*$"
 $EXPRESSION
 EOF
+    # PIPESTATUS[0], not $?. A pipeline's status is its LAST command's, and this
+    # one ends in `grep -v` — so a `timeout` kill was reported as whatever grep
+    # made of the partial output: 0 if any line survived the filters, 1 if none,
+    # never 124. send_command's timeout diagnosis keys on exactly 124, so on this
+    # branch a killed eval read as success and the dispatcher carried on into
+    # after_action. (Round-2 guest MAJOR. Pre-existing as a status bug; it only
+    # became load-bearing when something started depending on 124.)
+    #
+    # This branch is unreachable while `bb` is installed, which is why the guard
+    # in send_command_timeout_test.sh forces it explicitly with a PATH that hides
+    # bb — testing "whichever backend happens to be installed" is how it stayed
+    # green over this.
+    LEIN_STATUS=${PIPESTATUS[0]}
+    if [ "$LEIN_STATUS" -eq 124 ]; then
+        echo "❌ REPL on port $REPL_PORT did not answer within ${KILL_AFTER}s" >&2
+        echo "   (TIMEOUT=${TIMEOUT}s + ${TIMEOUT_GRACE}s grace). The socket accepted the" >&2
+        echo "   connection but the eval never returned — the REPL is wedged, not slow." >&2
+        echo "   Recover with: ./dev/ai-bounce.sh   (or: make reset)" >&2
+    fi
+    exit $LEIN_STATUS
 fi

@@ -121,6 +121,60 @@ if [[ "$PORT" != "0" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Half 1b: the lein FALLBACK must report a timeout too.
+#
+# Round-2 guest MAJOR. That branch ends in a `grep -v` pipeline, and a pipeline's
+# status is its LAST command's — so `timeout` killing lein was reported as
+# whatever grep made of the partial output: 0 if any line survived the filters,
+# never 124. send_command's timeout diagnosis keys on exactly 124, so on this
+# branch a killed eval read as SUCCESS and the dispatcher carried on.
+#
+# It survived because the branch is unreachable while `bb` is installed, and the
+# guard above tests whichever backend happens to be there. So force it: a PATH
+# with no bb, and a stub `lein` that emits a line the filters keep (making grep
+# exit 0 — the exact masking case) and then hangs.
+# ---------------------------------------------------------------------------
+
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/lein" <<'LEOF'
+#!/bin/bash
+# A line that survives every grep -v filter in ai-eval.sh, so the pipeline's own
+# exit status would be 0 — which is what used to mask the kill.
+echo "surviving output line"
+sleep 60
+LEOF
+chmod +x "$FAKEBIN/lein"
+# `timeout` itself lives in the same prefix as bb on this host, so link it in
+# rather than inheriting the directory that would bring bb back.
+ln -sf "$(command -v timeout)" "$FAKEBIN/timeout" 2>/dev/null || true
+
+if PATH="$FAKEBIN:/usr/bin:/bin" command -v bb >/dev/null 2>&1; then
+    fail "lein-fallback" "could not build a PATH without bb, so the fallback
+       branch cannot be forced and this assertion would test nothing"
+else
+    START=$(date +%s)
+    OUT=$(PATH="$FAKEBIN:/usr/bin:/bin" TIMEOUT=2 TIMEOUT_GRACE=1 \
+          timeout 25 "$AI_EVAL" fallback 9 '(+ 1 1)' 2>&1) && CODE=0 || CODE=$?
+    ELAPSED=$(( $(date +%s) - START ))
+    if [[ "$ELAPSED" -ge 20 ]]; then
+        fail "lein-fallback" "took ${ELAPSED}s — the outer kill fired, so the lein
+       branch is not bounded at all"
+    elif [[ "$CODE" -ne 124 ]]; then
+        fail "lein-fallback" "exited $CODE, not 124, after being killed. The
+       pipeline's status is grep's, not timeout's — use PIPESTATUS[0].
+       send_command keys its timeout diagnosis on 124, so this reads as success."
+    else
+        ok "lein-fallback" "reports 124 through the grep pipeline (${ELAPSED}s)"
+    fi
+    if [[ "$OUT" == *"wedged"* ]]; then
+        ok "lein-fallback" "diagnoses the wedge on this branch too"
+    else
+        fail "lein-fallback" "killed with no diagnosis. Got: $OUT"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Half 2: every command is CLASSIFIED, and the blocking ones clear the ceiling.
 #
 # Round 1 of this test hand-listed five blocking commands, and both review seats
@@ -184,10 +238,54 @@ if [[ -z "$CASE_START" || -z "$CASE_END" ]]; then
        test can no longer see what commands exist, so it is not a guard"
     LABELS=""
 else
-    LABELS=$(awk -v s="$CASE_START" -v e="$CASE_END" 'NR>s && NR<e' "$SEND_CMD" \
-             | grep -E '^    [a-zA-Z*][a-zA-Z0-9|*_-]*\)' \
-             | sed 's/).*//' | tr -d ' ' | tr '|' '\n' \
-             | grep -v '^\*$' | sort -u)
+    # Round-2 guest MINOR: this used to require EXACTLY four spaces and a label
+    # starting with a letter or `*`. A two-space-indented arm, or one whose first
+    # alternative starts with `-` (`--foo)`), was simply not extracted — the count
+    # stayed above the floor, nothing showed as unclassified, and the guard passed
+    # vacuously over the new command. That is the failure mode this whole
+    # derivation exists to remove, reintroduced one layer down.
+    #
+    # Widening the regex alone is wrong in the other direction. Two things here
+    # look like case arms and are not: NESTED `case` statements for flag parsing
+    # (`--since)`, `on|off)`), and a `)` inside a multi-line quoted Clojure
+    # argument (`gameid)`, `nil)`).
+    #
+    # Tracking quote balance to exclude the latter was tried and abandoned: a
+    # single apostrophe in prose desyncs it, and it silently ate a THIRD of the
+    # commands while still reporting a plausible count — the same vacuous-pass
+    # failure, one layer down again.
+    #
+    # So follow bash's own grammar instead, which needs neither columns nor
+    # quotes: an arm is the first thing after `case ... in`, or after a `;;`. A
+    # `)` in the middle of an execute block is neither. Depth keeps nested case
+    # statements out; `expect` keeps everything else out.
+    LABELS=$(awk -v s="$CASE_START" '
+        BEGIN { depth = 1; expect = 1 }
+        NR <= s { next }
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*#/ { next }
+        {
+            if (expect && depth == 1 &&
+                $0 ~ /^[[:space:]]*[A-Za-z0-9*_.|-][A-Za-z0-9|*_.-]*\)/) {
+                lbl = $0
+                sub(/\).*$/, "", lbl)
+                gsub(/[[:space:]]/, "", lbl)
+                print lbl
+                expect = 0
+            }
+            # `case ... in` opens a level; `esac` closes one. Depth starts at 1
+            # because NR>s means we are already inside the dispatch case.
+            if ($0 ~ /[Cc]ase[[:space:]].*[[:space:]]in[[:space:]]*$/) { depth++; expect = 0 }
+            if ($0 ~ /^[[:space:]]*esac[[:space:]]*$/) {
+                depth--
+                if (depth == 0) exit
+                expect = 0
+            }
+            # A `;;` at depth 1 ends a top-level arm, so the next real line is the
+            # next arm. At depth 2+ it ends a NESTED arm and means nothing here.
+            if (depth == 1 && $0 ~ /;;[[:space:]]*$/) expect = 1
+        }
+    ' "$SEND_CMD" | tr '|' '\n' | grep -v '^\*$' | grep -v '^$' | sort -u)
 fi
 
 LABEL_COUNT=$(printf '%s\n' "$LABELS" | grep -c . || true)
