@@ -29,8 +29,12 @@ TIMEOUT="${TIMEOUT:-20}"
 # single REPL budget by design: its 300s idle budget is deliberately NOT drawn
 # down by an active run (park-and-monitor!'s docstring says so), so total wall
 # time is 300s of parking plus one 300s loop per run the opponent makes. So this
-# is set far above any healthy invocation, purely so a WEDGED repl eventually
-# hands control back to the seat instead of hanging a marquee game forever.
+# is a backstop, not a bound: 1800 is 300s of parking plus five 300s runs, so a
+# slow model Runner making five or more runs in ONE turn can reach it while
+# perfectly healthy. That is unusual rather than impossible — do not read the
+# number as "cannot happen", read it as "if you hit this, suspect the game
+# before the REPL". It exists so a WEDGED repl eventually hands control back to
+# the seat instead of hanging a marquee game forever. Override per-invocation.
 REPL_BLOCKING_TIMEOUT="${REPL_BLOCKING_TIMEOUT:-1800}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
@@ -697,17 +701,40 @@ execute() {
     printf '%s' "$expr" > "$EXPR_FILE"
     trap "rm -f '$EXPR_FILE'" RETURN
 
+    # `|| EVAL_STATUS=$?` rather than `|| true`: the guard against `set -e` is
+    # still needed (ai-eval.sh exits non-zero whenever the REPL throws, and an
+    # unguarded capture would kill the command here with no output — #109), but
+    # throwing the status away meant NOTHING could distinguish "the REPL answered
+    # with an error" from "the REPL never answered". Guest panel MAJOR, #190
+    # round 1: automation such as ai-self-play.sh or a model driver read shell
+    # success and carried on as though the command had completed.
+    local EVAL_STATUS=0
     if [[ -n "$CLIENT_NAME" ]]; then
         # Multi-client mode: pass client name and port via stdin
         # Note: 2>&1 captures stderr too, so errors are visible
-        # The || true prevents set -e from exiting on non-zero return
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || true
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || EVAL_STATUS=$?
     else
         # Single-client mode: use default (backward compatible)
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin < "$EXPR_FILE" 2>&1) || true
+        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin < "$EXPR_FILE" 2>&1) || EVAL_STATUS=$?
     fi
-    # Note: $? here is from || true (always 0), but we parse errors from output
-    RET=$?
+    RET=$EVAL_STATUS
+
+    # 124 is `timeout`'s and ONLY timeout's: the eval was killed, so the command
+    # did not complete and its output (if any) is a fragment. Every other
+    # non-zero status is the REPL answering with an error, which the existing
+    # output parsing already handles — so this is deliberately narrow.
+    #
+    # Exit rather than fall through: after_action would send further evals to a
+    # client we just failed to reach, and the seat would be reading a partial
+    # answer as a whole one.
+    if [[ "$EVAL_STATUS" -eq 124 ]]; then
+        [[ -n "$RESULT" ]] && printf '%s\n' "$RESULT" | redact_secrets
+        echo "❌ '$COMMAND' did not complete: the REPL was still working after ${TIMEOUT}s (+grace)." >&2
+        echo "   Anything above is a FRAGMENT, not the command's answer." >&2
+        echo "   If this command legitimately blocks, re-run it with a bigger budget:" >&2
+        echo "     TIMEOUT=<seconds> ./dev/send_command $CLIENT_NAME $COMMAND ...   (TIMEOUT=0 = no limit)" >&2
+        exit 124
+    fi
 
     # If we wrapped it, the result is a string literal like "output\n". We need to unquote it.
     # If it wasn't wrapped, just print the result as is.
@@ -2010,6 +2037,8 @@ case "$COMMAND" in
         ;;
 
     bot)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         info "Heuristic ${CLIENT_NAME}: Making one decision..."
         execute "(do
@@ -2019,6 +2048,8 @@ case "$COMMAND" in
         ;;
 
     bot-turn)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         info "Heuristic ${CLIENT_NAME}: Playing full turn..."
         execute "(do
@@ -2102,6 +2133,8 @@ case "$COMMAND" in
         ;;
 
     bot-respond)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         info "Heuristic Corp: Responding to active run..."
         execute '(do
@@ -2111,6 +2144,10 @@ case "$COMMAND" in
         ;;
 
     bot-watch)
+        # watch-for-runs! is an intentionally INFINITE poll loop ("Ctrl+C to
+        # stop"), so any finite backstop truncates a healthy command. TIMEOUT=0
+        # is ai-eval.sh's "no backstop" (guest panel MAJOR, #190 round 1).
+        TIMEOUT=0
         ensure_connection
         info "Heuristic Corp: Watching for runs (Ctrl+C to stop)..."
         execute '(do

@@ -476,7 +476,6 @@ and either returns nil (not handled, try next) or returns a result map (stop cha
 | 4 | `handle-events` | Both | Pause for rez/ability/sub events |
 | 5 | `handle-access-display` | Runner | Show access info (returns nil) |
 | 5 | `handle-auto-choice` | Both | Auto-click single mandatory choice |
-| 5.5 | `handle-recently-passed-in-log` | Both | Backup wait detection via log |
 | 6 | `handle-auto-continue` | Both | Auto-pass empty paid ability windows |
 | 7 | `handle-run-complete` | Both | Run finished |
 | 8 | `handle-no-run` | Both | No active run |

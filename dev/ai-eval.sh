@@ -17,7 +17,18 @@ TIMEOUT=${TIMEOUT:-10}
 # exactly TIMEOUT would race them at the moment they were about to answer
 # cleanly. The grace exists so the REPL's own deadline always wins that race.
 TIMEOUT_GRACE=${TIMEOUT_GRACE:-15}
-KILL_AFTER=$((TIMEOUT + TIMEOUT_GRACE))
+
+# TIMEOUT=0 means NO backstop. Exactly one caller needs it and it is not an
+# escape hatch for "this felt slow": `send_command bot-watch` runs
+# ai-heuristic-corp/watch-for-runs!, an intentionally infinite poll loop whose
+# own help text says "Ctrl+C to stop". Any finite number truncates a healthy
+# command there, and a wedge is indistinguishable from "no runs happening"
+# anyway, so the honest budget is none. (Guest panel MAJOR, round 1 of #190.)
+if [ "$TIMEOUT" = "0" ]; then
+    KILL_AFTER=0
+else
+    KILL_AFTER=$((TIMEOUT + TIMEOUT_GRACE))
+fi
 
 # Parse arguments - support both old and new usage plus stdin mode
 # Stdin mode: ./ai-eval.sh --stdin client_name port < file_with_expression
@@ -73,7 +84,10 @@ if command -v bb &> /dev/null; then
     # was the branch taken — and the TIMEOUT it passed was read into a variable
     # that only the (unreachable) lein fallback below ever used. The bencode read
     # is blocking, so a wedged REPL hung `make check` indefinitely with no message.
-    timeout "$KILL_AFTER" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+    # KILL_AFTER=0 => run bare (see TIMEOUT=0 above). `timeout 0` means "no
+    # limit" in GNU coreutils but NOT everywhere, so branch rather than rely on it.
+    if [ "$KILL_AFTER" = "0" ]; then BB_TIMEOUT=(); else BB_TIMEOUT=(timeout "$KILL_AFTER"); fi
+    "${BB_TIMEOUT[@]}" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
           ;; Pin UTF-8 for BOTH the slurp of our code (which may carry accented
           ;; card names like \"Karunā\") and the decode of the nREPL response.
           ;; Under a C locale a JVM default charset mis-decodes multibyte chars
@@ -138,7 +152,8 @@ else
     # non-UTF-8 charset and mangles accented card names piped on stdin (issue #37).
     # Pin UTF-8 so multibyte input/output survives this path too.
     export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
-    timeout "$KILL_AFTER" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
+    if [ "$KILL_AFTER" = "0" ]; then LEIN_TIMEOUT=(); else LEIN_TIMEOUT=(timeout "$KILL_AFTER"); fi
+    "${LEIN_TIMEOUT[@]}" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
         grep -v "^user=>" | \
         grep -v "find-doc" | \
         grep -v "^  #_=>" | \

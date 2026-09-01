@@ -1458,94 +1458,137 @@
           (str "outermost of two ICE, in the ladder's convention, got:\n" out)))))
 
 ;; ============================================================================
-;; #191: handle-recently-passed-in-log matched a username nobody has.
+;; #191, round 2: the handler is GONE, and this is the state that killed it.
 ;;
-;; The handler rebuilt the seat's log name from its side — "AI-runner" — while
-;; `system-msg` prefixes the player's ACTUAL username, and `start-ai-client-repl.sh`
-;; names the seats `ai-runner` / `ai-corp`. re-find is case-sensitive, so priority
-;; 5.5 could never fire: the backup for the both-pass family (#31) was inert.
+;; #191 was filed as "priority 5.5 can never fire" — it matched "AI-runner"
+;; while the seats are named `ai-runner`. Fixing the name made a dead handler
+;; LIVE, and both review seats independently reproduced the same wedge by
+;; driving the real chain: a three-entry log scan has no window identity.
 ;;
-;; Per #31's own lesson, the fixture pins BOTH halves the bug lived in — the :log
-;; entry the engine really writes, and the :user :username the engine writes it
-;; from. A mock that omits either sails past this.
+;;   1. Runner passes a quiet encounter. Engine logs
+;;      "ai-runner has no further action." (game/core/runs.clj:428).
+;;   2. Both pass; movement starts. start-next-phase :movement sets
+;;      [:run :no-action] to FALSE (runs.clj:445) and logs
+;;      "ai-runner passes <ice>" (runs.clj:447).
+;;   3. The Runner now OWES the fresh movement window — but the run-level ledger
+;;      the handler gated on is empty, and the encounter's pass line is still
+;;      second of the last three. Priority 5.5 answered "waiting for Corp".
+;;   4. A Corp honouring active-player-first waits for the Runner. Both seats
+;;      wait: the #31 both-pass wedge, in the handler that existed to back it up.
 ;;
-;; The engine writes this line for exactly one side per window (game.core.runs):
-;; the Corp's initiation/approach-ice pass, and the RUNNER's encounter pass
-;; (`continue :encounter-ice`, runs.clj:426). The runner-encounter case is the
-;; one that is live in practice, because the encounter's pass is recorded on
-;; [:encounters :no-action] while the run-level ledger this handler gates on
-;; stays empty (see core/i-already-passed-run-window?).
+;; It was deleted rather than gated. `at-encounter?` would have narrowed the
+;; false positive without removing it (one encounter's pass line still
+;; contaminates a LATER encounter — #163's Sisyphus Protocol re-encounter is
+;; exactly that), and the window it would have been narrowed TO is already owned
+;; by handle-runner-encounter-ice at priority 2.5, which reads the encounter's
+;; own ledger. A log scan is a third re-derivation of "whose move", which is the
+;; mechanism behind #31 and #68 both.
+;;
+;; These two tests are the deadlock repros, kept as the reason not to re-add it.
 ;; ============================================================================
 
-(defmacro ^:private quietly
-  "Evaluate `body`, discarding what it prints, and return its value."
-  [& body]
-  `(let [r# (atom nil)]
-     (with-out-str (reset! r# (do ~@body)))
-     @r#))
+(defn- with-out-str-value
+  "Run `f`, discard what it prints, return what it returned."
+  [f]
+  (let [v (atom nil)]
+    (with-out-str (reset! v (f)))
+    @v))
 
-(defn- passed-in-log-state
-  "Client state at an encounter whose run-level ledger is empty, with `username`
-   recorded as our seat and the engine's real pass line in the log."
-  [side username log-name]
-  {:side side
-   :game-state {:run {:phase "encounter-ice" :position 1 :server ["hq"]}
-                :runner {:user {:username (if (= side "runner") username "ai-corp")}}
-                :corp {:user {:username (if (= side "corp") username "ai-runner")}}
-                :log [{:text "ai-runner spends [Click] to make a run on HQ."}
-                      {:text (str log-name " has no further action.")}]}})
+(deftest movement-after-a-quiet-encounter-continues-instead-of-waiting
+  (testing "#191: a stale encounter pass line must not claim the fresh movement window"
+    (runner-handlers/reset-state!)
+    (runs/reset-strategy!)
+    (let [sent (atom [])]
+      (with-mock-state
+        (-> (mock-state-with-run
+             :side "runner"
+             :run-phase "movement"
+             :position 1
+             :server ["hq"]
+             :ice [{:title "Ice Wall" :rezzed true}]
+             :no-action false
+             :prompt (make-prompt :prompt-type "run" :msg "" :choices [] :selectable [])
+             :log [{:text "ai-runner encounters Ice Wall."}
+                   ;; the Runner's ENCOUNTER pass — the only run-level window the
+                   ;; engine logs for this side, and the stale evidence
+                   {:text "ai-runner has no further action."}
+                   ;; ...and the line proving the window has already moved on
+                   {:text "ai-runner passes Ice Wall."}])
+            (assoc-in [:game-state :runner :user :username] "ai-runner")
+            (assoc-in [:game-state :corp :user :username] "ai-corp"))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (with-out-str-value #(runs/continue-run!))]
+            (is (not= :waiting-for-opponent-paid-abilities (:status result))
+                (str "the Runner owes this movement window; claiming a wait here is "
+                     "the #31 wedge. Got: " (pr-str result)))
+            (is (= 1 (count @sent))
+                (str "exactly one continue should have gone out, got: " (pr-str @sent)))
+            (is (= "continue" (get-in @sent [0 :data :command]))
+                (str "and it should be a continue, got: " (pr-str @sent)))))))))
 
-(deftest recently-passed-in-log-fires-on-the-name-the-engine-actually-wrote
-  (testing "#191: the seats are named ai-runner/ai-corp, and the handler must see them"
-    (doseq [side ["runner" "corp"]]
-      (let [username (str "ai-" side)
-            result (quietly
-                     (runs/handle-recently-passed-in-log
-                      {:side side
-                       :run-phase "encounter-ice"
-                       :state (passed-in-log-state side username username)}))]
-        (is (= :waiting-for-opponent-paid-abilities (:status result))
-            (str "side " side ": the log says we passed, so we are waiting"))
-        (is (true? (:we-passed result))
-            (str "side " side ": and we are the side that passed"))))))
+(deftest no-run-plus-a-turn-boundary-pass-line-is-not-a-run-wait
+  (testing "#191: turns.clj writes the same string for EITHER side at phase-12 and
+            post-discard, with no run in progress — that must not read as a run wait"
+    (runner-handlers/reset-state!)
+    (runs/reset-strategy!)
+    (with-mock-state
+      (-> (mock-state-with-run
+           :side "corp"
+           :run-phase nil
+           :log [{:text "ai-corp has no further action."}])
+          (assoc-in [:game-state :corp :user :username] "ai-corp")
+          (assoc-in [:game-state :runner :user :username] "ai-runner"))
+      (let [result (with-out-str-value #(runs/continue-run!))]
+        (is (not= :waiting-for-opponent-paid-abilities (:status result))
+            (str "a turn-boundary pass line must not read as a RUN wait. Got: "
+                 (pr-str result)))
+        ;; :run-complete, not :no-run — handle-run-complete owns (nil? run) at
+        ;; priority 7 and handle-no-run never gets there. That is pre-existing and
+        ;; is not what this test is about; what matters is that it is TERMINAL, so
+        ;; the auto-continue loop stops. The deleted handler's status was not, so a
+        ;; `continue` near a turn boundary idled in the loop instead — and printed
+        ;; "(null phase)", raw internals, on the seat surface.
+        (is (= :run-complete (:status result))
+            (str "and the loop must reach a terminal status. Got: "
+                 (pr-str result)))))))
 
-(deftest recently-passed-in-log-derives-the-name-rather-than-assuming-one
-  (testing "#191: a seat under any other username is still recognised"
-    (let [result (quietly
-                   (runs/handle-recently-passed-in-log
-                    {:side "runner"
-                     :run-phase "encounter-ice"
-                     :state (passed-in-log-state "runner" "Clamatius" "Clamatius")}))]
-      (is (= :waiting-for-opponent-paid-abilities (:status result))
-          "the name comes from the board, not from the side"))))
+;; ============================================================================
+;; core/my-username — what survived #191.
+;;
+;; The name a seat goes by is only ever knowable from the board: `system-msg`
+;; prefixes the player's ACTUAL username (game/core/say.clj:94),
+;; start-ai-client-repl.sh names the seats `ai-runner`/`ai-corp`, and a human
+;; seat is named whatever they registered. This is the one lookup, so a second
+;; copy cannot drift from it the way ai_basic_actions' did.
+;; ============================================================================
 
-(deftest recently-passed-in-log-does-not-fire-on-the-opponents-pass
-  (testing "#191: widening the match must not claim the OPPONENT's pass as ours"
-    (let [result (quietly
-                   (runs/handle-recently-passed-in-log
-                    {:side "runner"
-                     :run-phase "encounter-ice"
-                     ;; we are ai-runner; the line in the log is the Corp's
-                     :state (passed-in-log-state "runner" "ai-runner" "ai-corp")}))]
-      (is (nil? result)
-          "only OUR pass line makes us the passer"))))
+(deftest my-username-reads-the-board-not-the-side
+  (testing "the username comes from state, whatever it is"
+    (is (= "ai-runner" (ai-core/my-username
+                        {:side "runner"
+                         :game-state {:runner {:user {:username "ai-runner"}}
+                                      :corp {:user {:username "ai-corp"}}}})))
+    (is (= "Clamatius" (ai-core/my-username
+                        {:side "corp"
+                         :game-state {:corp {:user {:username "Clamatius"}}}}))))
+  (testing "a capitalized side still resolves (#69/#129: my-side-kw lowercases)"
+    (is (= "ai-corp" (ai-core/my-username
+                      {:side "Corp"
+                       :game-state {:corp {:user {:username "ai-corp"}}}}))))
+  (testing "nil, never a guess: an unnameable seat must make no claim about itself"
+    (is (nil? (ai-core/my-username {:side "runner" :game-state {:runner {}}})))
+    (is (nil? (ai-core/my-username {:game-state {:runner {:user {:username "x"}}}})))
+    (is (nil? (ai-core/my-username {})))))
 
-(deftest recently-passed-in-log-is-silent-when-the-board-names-no-seat
-  (testing "#191: no username on the board means no claim — not a guessed one"
-    (let [state (-> (passed-in-log-state "runner" "ai-runner" "ai-runner")
-                    (update-in [:game-state :runner] dissoc :user))
-          result (quietly
-                   (runs/handle-recently-passed-in-log
-                    {:side "runner" :run-phase "encounter-ice" :state state}))]
-      (is (nil? result)
-          "an unnameable seat cannot match a log line"))))
-
-(deftest recently-passed-in-log-defers-to-the-run-ledger-when-it-is-set
-  (testing "#191: the handler stays a BACKUP — a live :no-action still wins"
-    (let [state (assoc-in (passed-in-log-state "runner" "ai-runner" "ai-runner")
-                          [:game-state :run :no-action] "corp")
-          result (quietly
-                   (runs/handle-recently-passed-in-log
-                    {:side "runner" :run-phase "encounter-ice" :state state}))]
-      (is (nil? result)
-          "when the server set :no-action we trust it, not a possibly-stale log"))))
+(deftest usernames-are-not-safe-to-substring-match-in-a-log
+  (testing "#191 round 2 (guest panel MINOR): why no log scan is built on this.
+            A seat named `runner` facing an opponent named `ai-runner` cannot tell
+            its own pass line from theirs by substring — the opponent's line ENDS
+            with its own. Recorded as a property of the data, so the next person to
+            reach for (str/includes? text (my-username)) sees the trap."
+    (let [mine "runner"
+          opponent-line "ai-runner has no further action."]
+      (is (clojure.string/includes? opponent-line (str mine " has no further action"))
+          "substring: the OPPONENT's line matches us")
+      (is (not (clojure.string/starts-with? opponent-line (str mine " ")))
+          "prefix: it does not, because system-msg puts the username FIRST"))))
