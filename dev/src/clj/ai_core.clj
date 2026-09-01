@@ -2541,6 +2541,29 @@
   [side]
   (if (= side "runner") "corp" "runner"))
 
+(defn my-username
+  "The username the ENGINE prints for THIS client's side in the game log, read
+   off the board, or nil when the board does not name one.
+
+   Every \"has this seat done X?\" log scan needs this, and #191 is what happens
+   without it: the caller rebuilt the name from the side (\"AI-runner\") and got a
+   spelling nobody uses. `system-msg` prefixes the player's ACTUAL username
+   (game/core/say.clj:94), `start-ai-client-repl.sh` names the seats `ai-runner`
+   and `ai-corp`, and a human seat is named whatever they registered — so the
+   name is only ever knowable from state. The capitalised `AI-<suffix>` form the
+   old code assumed comes from the client-id fallback in web/auth.clj, which #157
+   confined to `/chsk` and which `make reset` does not use.
+
+   The side comes from `state/my-side-kw`, the #129 authority, rather than a
+   tenth hand-rolled `(keyword (:side ...))` here — this function exists BECAUSE
+   a second copy of a derivation drifted, so it would be a poor place to add one.
+
+   nil, deliberately, rather than a guess: a scan that cannot name us must make
+   no claim about us."
+  [state]
+  (when-let [side-kw (state/my-side-kw state)]
+    (get-in state [:game-state side-kw :user :username])))
+
 (defn current-run-ice
   "Get the ICE at the current run position from game state.
 

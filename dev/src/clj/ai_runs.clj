@@ -1180,8 +1180,23 @@
       (send-choice! gameid choice-uuid choice-value (:eid my-prompt)))))
 
 (defn handle-recently-passed-in-log
-  "Priority 5.5: Detect when we've passed via game log (backup for :no-action).
-   Only triggers when :no-action is nil/false - prevents stale log entries from blocking."
+  "Priority 5.5: Detect that WE passed the current window, from the game log
+   (backup for :no-action). Only triggers when the run-level :no-action is
+   nil/false — when the server set it, trust it over a possibly-stale log.
+
+   The name is read off the board (core/my-username), never rebuilt from the
+   side. #191: this used to match \"AI-runner has no further action\" while the
+   seats are named `ai-runner`, so priority 5.5 — the documented backup for the
+   both-pass family #31 established as game-deciding — could never fire, silently,
+   in the default configuration.
+
+   Scope of what it can see, since the engine does not log both sides' passes
+   (game/core/runs.clj): the Corp's `:initiation` and `:approach-ice` pass, and
+   the RUNNER's `:encounter-ice` pass. The Runner's movement pass is written as
+   \"will continue the run\" and is not this line at all. The runner-encounter case
+   is the live one: an encounter's pass is recorded on [:encounters :no-action]
+   while the run-level ledger gated on here stays empty, which is the same split
+   core/i-already-passed-run-window? exists to navigate."
   [{:keys [side state run-phase]}]
   (let [run (get-in state [:game-state :run])
         no-action (:no-action run)]
@@ -1190,9 +1205,13 @@
     (when-not no-action
       (let [log (get-in state [:game-state :log])
             recent-entries (take 3 (reverse log))
-            side-name (if (= side "runner") "AI-runner" "AI-corp")
-            passed-pattern (re-pattern (str side-name " has no further action"))
-            recently-passed? (some #(re-find passed-pattern (str (:text %))) recent-entries)
+            my-name (core/my-username state)
+            ;; Substring, not a re-pattern: a username is user-supplied text and
+            ;; may carry regex metacharacters. nil name => no claim (see my-username).
+            passed-line (when my-name (str my-name " has no further action"))
+            recently-passed? (and passed-line
+                                  (some #(clojure.string/includes? (str (:text %)) passed-line)
+                                        recent-entries))
             opp-side (if (= side "runner") "Corp" "Runner")]
         (when recently-passed?
           (let [status-key [:waiting-after-pass-log run-phase side]
