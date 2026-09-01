@@ -10,6 +10,60 @@ source "$SCRIPT_DIR/load-env.sh"
 
 TIMEOUT=${TIMEOUT:-10}
 
+# The shell timeout is a BACKSTOP against a wedged REPL — one that accepts the
+# socket and then never answers — not a second copy of the caller's own deadline.
+# Several REPL entry points park for their full budget on purpose (`wait` 300s,
+# monitor-run's 300s park, auto-continue-loop!'s 300s), and a shell kill at
+# exactly TIMEOUT would race them at the moment they were about to answer
+# cleanly. The grace exists so the REPL's own deadline always wins that race.
+TIMEOUT_GRACE=${TIMEOUT_GRACE:-15}
+
+# Validate rather than let $(( )) invent a budget, and normalize to DECIMAL.
+# Three separate ways an innocent-looking value went wrong (round-3 guest MAJOR,
+# all reproduced):
+#   TIMEOUT=foo  -> arithmetic ZERO, which since #190 means "no backstop" — the
+#                   exact opposite of the small number the caller asked for.
+#   TIMEOUT=010  -> bash reads a leading zero as OCTAL, so this is 8, and the
+#                   backstop is silently two seconds short of what was asked.
+#   TIMEOUT=08   -> "value too great for base": the script ABORTS mid-command.
+#   TIMEOUT=<max int> -> wraps NEGATIVE when the grace is added.
+# `wait` passes the seat's own number straight through, so `wait 08` was a live
+# path to two of these.
+#
+# EX_CONFIG (78), not a generic code: send_command distinguishes "this did not
+# run" from "the REPL answered with an error", and 1/2 are already spoken for.
+for _v in TIMEOUT TIMEOUT_GRACE; do
+    _val="${!_v}"
+    case "$_val" in
+        ''|*[!0-9]*)
+            echo "❌ $_v must be a whole number of seconds, got: '$_val'" >&2
+            echo "   (TIMEOUT=0 means no backstop; there is no other special value.)" >&2
+            exit 78
+            ;;
+    esac
+    # Bound the LENGTH before any arithmetic, so nothing can overflow into a
+    # negative budget. 7 digits is ~115 days.
+    if [ "${#_val}" -gt 7 ]; then
+        echo "❌ $_v is ${_val}s, which is not a timeout anyone meant." >&2
+        exit 78
+    fi
+done
+# 10# forces base 10 regardless of leading zeros.
+TIMEOUT=$((10#$TIMEOUT))
+TIMEOUT_GRACE=$((10#$TIMEOUT_GRACE))
+
+# TIMEOUT=0 means NO backstop. Exactly one caller needs it and it is not an
+# escape hatch for "this felt slow": `send_command bot-watch` runs
+# ai-heuristic-corp/watch-for-runs!, an intentionally infinite poll loop whose
+# own help text says "Ctrl+C to stop". Any finite number truncates a healthy
+# command there, and a wedge is indistinguishable from "no runs happening"
+# anyway, so the honest budget is none. (Guest panel MAJOR, round 1 of #190.)
+if [ "$TIMEOUT" = "0" ]; then
+    KILL_AFTER=0
+else
+    KILL_AFTER=$((TIMEOUT + TIMEOUT_GRACE))
+fi
+
 # Parse arguments - support both old and new usage plus stdin mode
 # Stdin mode: ./ai-eval.sh --stdin client_name port < file_with_expression
 if [ "${1:-}" == "--stdin" ]; then
@@ -59,7 +113,15 @@ if command -v bb &> /dev/null; then
     printf '%s' "$EXPRESSION" > "$EXPR_FILE"
     trap "rm -f '$EXPR_FILE'" EXIT
 
-    bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+    # #190: this branch used to run bare. `check-ai.sh` only takes its warm path
+    # when `command -v bb` succeeds, so whenever check-ai.sh was the caller this
+    # was the branch taken — and the TIMEOUT it passed was read into a variable
+    # that only the (unreachable) lein fallback below ever used. The bencode read
+    # is blocking, so a wedged REPL hung `make check` indefinitely with no message.
+    # KILL_AFTER=0 => run bare (see TIMEOUT=0 above). `timeout 0` means "no
+    # limit" in GNU coreutils but NOT everywhere, so branch rather than rely on it.
+    if [ "$KILL_AFTER" = "0" ]; then BB_TIMEOUT=(); else BB_TIMEOUT=(timeout "$KILL_AFTER"); fi
+    "${BB_TIMEOUT[@]}" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
           ;; Pin UTF-8 for BOTH the slurp of our code (which may carry accented
           ;; card names like \"Karunā\") and the decode of the nREPL response.
           ;; Under a C locale a JVM default charset mis-decodes multibyte chars
@@ -110,13 +172,22 @@ if command -v bb &> /dev/null; then
                       (when (and (map? result) (= :error (:status result)))
                         (System/exit 1)))
                     (catch Exception _ nil))))))"
+    BB_STATUS=$?
+    if [ "$BB_STATUS" -eq 124 ]; then
+        echo "❌ REPL on port $REPL_PORT did not answer within ${KILL_AFTER}s" >&2
+        echo "   (TIMEOUT=${TIMEOUT}s + ${TIMEOUT_GRACE}s grace). The socket accepted the" >&2
+        echo "   connection but the eval never returned — the REPL is wedged, not slow." >&2
+        echo "   Recover with: ./dev/ai-bounce.sh   (or: make reset)" >&2
+    fi
+    exit $BB_STATUS
 else
     # Fallback to lein repl :connect (slower, for compatibility). Unlike bb, this
     # is a stock JVM that honors file.encoding — under a C locale it defaults to a
     # non-UTF-8 charset and mangles accented card names piped on stdin (issue #37).
     # Pin UTF-8 so multibyte input/output survives this path too.
     export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
-    timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
+    if [ "$KILL_AFTER" = "0" ]; then LEIN_TIMEOUT=(); else LEIN_TIMEOUT=(timeout "$KILL_AFTER"); fi
+    "${LEIN_TIMEOUT[@]}" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
         grep -v "^user=>" | \
         grep -v "find-doc" | \
         grep -v "^  #_=>" | \
@@ -135,4 +206,24 @@ else
         grep -v "^[[:space:]]*$"
 $EXPRESSION
 EOF
+    # PIPESTATUS[0], not $?. A pipeline's status is its LAST command's, and this
+    # one ends in `grep -v` — so a `timeout` kill was reported as whatever grep
+    # made of the partial output: 0 if any line survived the filters, 1 if none,
+    # never 124. send_command's timeout diagnosis keys on exactly 124, so on this
+    # branch a killed eval read as success and the dispatcher carried on into
+    # after_action. (Round-2 guest MAJOR. Pre-existing as a status bug; it only
+    # became load-bearing when something started depending on 124.)
+    #
+    # This branch is unreachable while `bb` is installed, which is why the guard
+    # in send_command_timeout_test.sh forces it explicitly with a PATH that hides
+    # bb — testing "whichever backend happens to be installed" is how it stayed
+    # green over this.
+    LEIN_STATUS=${PIPESTATUS[0]}
+    if [ "$LEIN_STATUS" -eq 124 ]; then
+        echo "❌ REPL on port $REPL_PORT did not answer within ${KILL_AFTER}s" >&2
+        echo "   (TIMEOUT=${TIMEOUT}s + ${TIMEOUT_GRACE}s grace). The socket accepted the" >&2
+        echo "   connection but the eval never returned — the REPL is wedged, not slow." >&2
+        echo "   Recover with: ./dev/ai-bounce.sh   (or: make reset)" >&2
+    fi
+    exit $LEIN_STATUS
 fi

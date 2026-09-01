@@ -1179,32 +1179,33 @@
       (println (format "   → Auto-choosing: %s" choice-value))
       (send-choice! gameid choice-uuid choice-value (:eid my-prompt)))))
 
-(defn handle-recently-passed-in-log
-  "Priority 5.5: Detect when we've passed via game log (backup for :no-action).
-   Only triggers when :no-action is nil/false - prevents stale log entries from blocking."
-  [{:keys [side state run-phase]}]
-  (let [run (get-in state [:game-state :run])
-        no-action (:no-action run)]
-    ;; Only check log if :no-action is nil/false (server didn't set it)
-    ;; When :no-action has a value, trust it instead of potentially stale log
-    (when-not no-action
-      (let [log (get-in state [:game-state :log])
-            recent-entries (take 3 (reverse log))
-            side-name (if (= side "runner") "AI-runner" "AI-corp")
-            passed-pattern (re-pattern (str side-name " has no further action"))
-            recently-passed? (some #(re-find passed-pattern (str (:text %))) recent-entries)
-            opp-side (if (= side "runner") "Corp" "Runner")]
-        (when recently-passed?
-          (let [status-key [:waiting-after-pass-log run-phase side]
-                already-printed? (= @last-waiting-status status-key)]
-            (when-not already-printed?
-              (reset! last-waiting-status status-key)
-              (println (format "⏸️  Waiting for %s paid abilities (%s phase)" opp-side run-phase)))
-            {:status :waiting-for-opponent-paid-abilities
-             :wake-reason :waiting-for-opponent
-             :message (format "Waiting for %s to pass or use paid abilities" opp-side)
-             :phase run-phase
-             :we-passed true}))))))
+;; #191: `handle-recently-passed-in-log` (priority 5.5) lived here — "detect that
+;; we passed, from the game log", the documented backup for :no-action.
+;;
+;; It was DEAD for its whole life: it matched "AI-runner has no further action"
+;; while `system-msg` prefixes the seat's real username and the seats are named
+;; `ai-runner`/`ai-corp`. Fixing the name made it live, and two review seats
+;; independently reproduced the same wedge by driving the chain: a three-entry
+;; log scan has no window identity, so a pass line from the PREVIOUS window
+;; claims the current one. The engine hands it the evidence itself —
+;; start-next-phase :movement resets [:run :no-action] to false and logs
+;; "ai-runner passes <ice>" while the encounter's pass line is still in the
+;; window being scanned — so the Runner was told to wait at a movement window it
+;; owed, and a Corp honouring active-player-first waited back. The #31 both-pass
+;; wedge, inside the handler that existed to back #31 up.
+;;
+;; Gating it on `at-encounter?` was considered and rejected: it narrows the false
+;; positive without removing it (one encounter's line still contaminates a LATER
+;; encounter — #163's Sisyphus Protocol re-encounter is that case), and the
+;; window it narrows to is already owned by handle-runner-encounter-ice at
+;; priority 2.5, which reads [:encounters :no-action] directly.
+;;
+;; The real answers are core/i-already-passed-run-window? and
+;; core/opponent-passed-encounter?, which pick the ledger the window is actually
+;; on. What is genuinely missing — that `should-i-act?` / `waiting-for-opponent?`
+;; read the RUN ledger only, so no handler answers "I already passed THIS
+;; encounter" — is filed rather than approximated here. Pinned by
+;; ai-runs-test/movement-after-a-quiet-encounter-continues-instead-of-waiting.
 
 (defn handle-auto-continue
   "Priority 6: Auto-continue through paid ability windows where we don't need to act"
@@ -1668,7 +1669,6 @@
                   handle-events
                   handle-access-display
                   handle-auto-choice
-                  handle-recently-passed-in-log
                   handle-initiation-auto-pass
                   handle-auto-continue
                   handle-run-complete

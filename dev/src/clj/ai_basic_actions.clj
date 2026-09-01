@@ -33,15 +33,18 @@
 (defn- get-my-username
   "Get the username for the current side from game state.
    Falls back to UID if game state/username is missing.
-   Crucial for correctly identifying own log messages."
+   Crucial for correctly identifying own log messages.
+
+   The lookup itself lives in core/my-username — #191 was a SECOND, hand-rolled
+   copy of it drifting (it rebuilt the name from the side instead of reading it),
+   which is #129's argument in miniature. Only the uid fallback is local, because
+   only this caller wants one: a log scan that cannot name us should make no
+   claim, but these callers are asking \"which lines are mine\" and the uid is a
+   better-than-nothing answer."
   []
-  (let [client-state @state/client-state
-        side (:side client-state)
-        uid (:uid client-state)]
-    (if (and side (:game-state client-state))
-      (or (get-in client-state [:game-state (keyword side) :user :username])
-          uid)
-      uid)))
+  (let [client-state @state/client-state]
+    (or (core/my-username client-state)
+        (:uid client-state))))
 
 (defn- print-no-board-cause!
   "Say why there is no board, claiming only as much as the state actually shows.

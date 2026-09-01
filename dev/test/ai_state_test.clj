@@ -476,7 +476,7 @@
      - `(keyword side)` on an already-derived parameter — benign only for as
        long as every caller passes something normalized, which is precisely the
        assumption `reconnect-game!` breaks."
-  {"ai_basic_actions.clj" 20
+  {"ai_basic_actions.clj" 19
    "ai_card_actions.clj"   2
    "ai_core.clj"           9
    "ai_runs.clj"           5
