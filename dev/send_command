@@ -15,6 +15,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_EVAL_DEFAULT="$SCRIPT_DIR/ai-eval.sh"
 AI_EVAL="${AI_EVAL:-$AI_EVAL_DEFAULT}"
 TIMEOUT="${TIMEOUT:-20}"
+
+# Shell backstop for the commands whose REPL side legitimately BLOCKS.
+#
+# It is not their deadline — the REPL owns that (auto-continue-loop! :timeout-ms
+# 300s, monitor-run's :park-timeout-ms 300s, wait-for-relevant-diff's :timeout
+# 300s). Until #190 the bb path in ai-eval.sh ignored TIMEOUT entirely, so the
+# 20s default above was inert for these; honouring it without this would have
+# killed a healthy `monitor-run --persistent` after 20 seconds — the un-babysat
+# marquee workhorse — which is a far worse bug than the hang being fixed.
+#
+# There is no tight correct number. monitor-run --persistent can exceed ANY
+# single REPL budget by design: its 300s idle budget is deliberately NOT drawn
+# down by an active run (park-and-monitor!'s docstring says so), so total wall
+# time is 300s of parking plus one 300s loop per run the opponent makes. So this
+# is set far above any healthy invocation, purely so a WEDGED repl eventually
+# hands control back to the seat instead of hanging a marquee game forever.
+REPL_BLOCKING_TIMEOUT="${REPL_BLOCKING_TIMEOUT:-1800}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
 
@@ -1123,6 +1140,8 @@ case "$COMMAND" in
         ;;
 
     draw-to-card)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command draw-to-card \"Card Name\""
@@ -1131,6 +1150,8 @@ case "$COMMAND" in
         ;;
 
     find-card)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command find-card \"Card Name\""
@@ -1231,6 +1252,8 @@ case "$COMMAND" in
 
     # Running
     run)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         SERVER="${1:-}"
         shift
         [[ -z "$SERVER" ]] && error "Usage: send_command run <server> [--flags...]"
@@ -1460,6 +1483,8 @@ case "$COMMAND" in
         ;;
 
     continue)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         # Modes: --single (one step), --raw (dumb WebSocket), default is loop
         if [[ "${1:-}" == "--single" ]]; then
@@ -1515,6 +1540,8 @@ case "$COMMAND" in
 
     monitor-run)
         # Alias for 'continue' (loop mode is now default)
+        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do

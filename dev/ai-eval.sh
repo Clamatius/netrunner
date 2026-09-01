@@ -10,6 +10,15 @@ source "$SCRIPT_DIR/load-env.sh"
 
 TIMEOUT=${TIMEOUT:-10}
 
+# The shell timeout is a BACKSTOP against a wedged REPL — one that accepts the
+# socket and then never answers — not a second copy of the caller's own deadline.
+# Several REPL entry points park for their full budget on purpose (`wait` 300s,
+# monitor-run's 300s park, auto-continue-loop!'s 300s), and a shell kill at
+# exactly TIMEOUT would race them at the moment they were about to answer
+# cleanly. The grace exists so the REPL's own deadline always wins that race.
+TIMEOUT_GRACE=${TIMEOUT_GRACE:-15}
+KILL_AFTER=$((TIMEOUT + TIMEOUT_GRACE))
+
 # Parse arguments - support both old and new usage plus stdin mode
 # Stdin mode: ./ai-eval.sh --stdin client_name port < file_with_expression
 if [ "${1:-}" == "--stdin" ]; then
@@ -59,7 +68,12 @@ if command -v bb &> /dev/null; then
     printf '%s' "$EXPRESSION" > "$EXPR_FILE"
     trap "rm -f '$EXPR_FILE'" EXIT
 
-    bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
+    # #190: this branch used to run bare. `check-ai.sh` only takes its warm path
+    # when `command -v bb` succeeds, so whenever check-ai.sh was the caller this
+    # was the branch taken — and the TIMEOUT it passed was read into a variable
+    # that only the (unreachable) lein fallback below ever used. The bencode read
+    # is blocking, so a wedged REPL hung `make check` indefinitely with no message.
+    timeout "$KILL_AFTER" bb -e "(require '[bencode.core :as b] '[clojure.java.io :as io])
           ;; Pin UTF-8 for BOTH the slurp of our code (which may carry accented
           ;; card names like \"Karunā\") and the decode of the nREPL response.
           ;; Under a C locale a JVM default charset mis-decodes multibyte chars
@@ -110,13 +124,21 @@ if command -v bb &> /dev/null; then
                       (when (and (map? result) (= :error (:status result)))
                         (System/exit 1)))
                     (catch Exception _ nil))))))"
+    BB_STATUS=$?
+    if [ "$BB_STATUS" -eq 124 ]; then
+        echo "❌ REPL on port $REPL_PORT did not answer within ${KILL_AFTER}s" >&2
+        echo "   (TIMEOUT=${TIMEOUT}s + ${TIMEOUT_GRACE}s grace). The socket accepted the" >&2
+        echo "   connection but the eval never returned — the REPL is wedged, not slow." >&2
+        echo "   Recover with: ./dev/ai-bounce.sh   (or: make reset)" >&2
+    fi
+    exit $BB_STATUS
 else
     # Fallback to lein repl :connect (slower, for compatibility). Unlike bb, this
     # is a stock JVM that honors file.encoding — under a C locale it defaults to a
     # non-UTF-8 charset and mangles accented card names piped on stdin (issue #37).
     # Pin UTF-8 so multibyte input/output survives this path too.
     export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
-    timeout "$TIMEOUT" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
+    timeout "$KILL_AFTER" lein repl :connect localhost:$REPL_PORT <<EOF 2>&1 | \
         grep -v "^user=>" | \
         grep -v "find-doc" | \
         grep -v "^  #_=>" | \
