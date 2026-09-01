@@ -727,6 +727,17 @@ execute() {
     # Exit rather than fall through: after_action would send further evals to a
     # client we just failed to reach, and the seat would be reading a partial
     # answer as a whole one.
+    # 78 is ai-eval.sh's EX_CONFIG: it refused the invocation (a TIMEOUT that is
+    # not a whole number of seconds) and never reached the REPL. Same class as
+    # 124 for a caller — the command did not run — and it must not be swallowed
+    # by a `|| true` capture into an overall exit 0 (round-3 guest MAJOR: an
+    # un-babysat driver would believe it had waited when it had not).
+    if [[ "$EVAL_STATUS" -eq 78 ]]; then
+        [[ -n "$RESULT" ]] && printf '%s\n' "$RESULT" >&2
+        echo "❌ '$COMMAND' did not run: the eval backend refused the timeout it was given." >&2
+        exit 78
+    fi
+
     if [[ "$EVAL_STATUS" -eq 124 ]]; then
         [[ -n "$RESULT" ]] && printf '%s\n' "$RESULT" | redact_secrets
         echo "❌ '$COMMAND' did not complete: the REPL was still working after ${TIMEOUT}s (+grace)." >&2

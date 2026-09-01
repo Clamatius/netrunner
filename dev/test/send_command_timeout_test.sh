@@ -175,6 +175,85 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Half 1c: a budget bash cannot safely calculate must be REFUSED, not guessed.
+#
+# Round-3 guest MAJOR, all four reproduced. The digits-only check accepted values
+# that $(( )) then mangled, and `wait` passes the seat's own number straight
+# through, so `wait 08` was a live path to two of them:
+#   08   -> "value too great for base": bash ABORTS mid-command (leading zero =
+#           octal, and 8 is not an octal digit).
+#   010  -> octal 8, so the backstop is silently 2s shorter than asked for.
+#   foo  -> arithmetic ZERO, which now means "no backstop" — the opposite of a
+#           small number.
+#   maxint -> wraps NEGATIVE once the grace is added.
+# ---------------------------------------------------------------------------
+
+# Accepted and normalized as DECIMAL (these are the ones a seat can actually
+# produce): the command must reach the REPL and come back with the answer.
+# ("" is here deliberately: ${TIMEOUT:-10} treats empty as UNSET, so an empty
+# value means "use the default" and must not be refused as malformed.)
+#
+# "not refused" is NOT enough to assert here, and a mutation proved it: with the
+# 10# normalization removed, TIMEOUT=08 makes bash ABORT with "value too great
+# for base" — exit 1, not 78 — and a `-ne 78` check sailed straight over it. So
+# assert the absence of the arithmetic failure itself.
+for good in 08 010 5 ""; do
+    OUT=$(TIMEOUT="$good" "$AI_EVAL" probe 1 '(+ 1 1)' 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -eq 78 ]]; then
+        fail "timeout-parse" "TIMEOUT=$good was refused, but it is a whole number
+       of seconds — a leading zero must be read as decimal, not octal"
+    elif [[ "$OUT" == *"value too great"* || "$OUT" == *"error token"* ]]; then
+        fail "timeout-parse" "TIMEOUT=$good aborted bash arithmetic: $OUT
+       (a leading zero is being read as octal — normalize with 10#)"
+    else
+        ok "timeout-parse" "TIMEOUT='$good' accepted (decimal, or empty => default)"
+    fi
+done
+
+# ...and the VALUE has to be right, not merely accepted: octal 010 is 8, so a
+# budget two seconds short would otherwise pass every check above. Read the
+# number back out of the wedged-REPL diagnosis, which prints KILL_AFTER.
+if [[ "$PORT" != "0" ]]; then
+    sleep 60 | nc -l "$PORT" > /dev/null 2>&1 &
+    NC_PID=$!
+    sleep 0.5
+    OUT=$(TIMEOUT=010 TIMEOUT_GRACE=0 timeout 25 "$AI_EVAL" wedged "$PORT" '(+ 1 1)' 2>&1) || true
+    kill "$NC_PID" 2>/dev/null
+    if [[ "$OUT" == *"within 10s"* ]]; then
+        ok "timeout-parse" "TIMEOUT=010 is ten seconds, not octal eight"
+    elif [[ "$OUT" == *"within 8s"* ]]; then
+        fail "timeout-parse" "TIMEOUT=010 became 8s — bash read the leading zero as
+       octal, so every zero-padded budget is silently short"
+    else
+        fail "timeout-parse" "could not read the budget back from the diagnosis: $OUT"
+    fi
+fi
+
+# Refused, loudly, with the config exit code rather than a guessed budget.
+for bad in foo 1.5 9223372036854775807; do
+    OUT=$(TIMEOUT="$bad" "$AI_EVAL" probe 1 '(+ 1 1)' 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -ne 78 ]]; then
+        fail "timeout-parse" "TIMEOUT='$bad' exited $CODE, not 78. Whatever budget
+       bash computed from it, the caller did not ask for it."
+    else
+        ok "timeout-parse" "TIMEOUT='$bad' refused with EX_CONFIG"
+    fi
+done
+
+# ...and the dispatcher must not swallow that into an overall success. `execute`
+# captures with `|| EVAL_STATUS=$?`, so a refusal has to survive to the exit code
+# or an un-babysat driver believes the command ran.
+OUT=$(TIMEOUT=nonsense "$SEND_CMD" corp status 2>&1) && CODE=0 || CODE=$?
+if [[ "$CODE" -eq 0 ]]; then
+    fail "timeout-parse" "send_command exited 0 over a refused invocation"
+elif [[ "$OUT" != *"did not run"* ]]; then
+    fail "timeout-parse" "send_command exited $CODE but never said the command
+       did not run. Got: $OUT"
+else
+    ok "timeout-parse" "send_command propagates the refusal (exit $CODE)"
+fi
+
+# ---------------------------------------------------------------------------
 # Half 2: every command is CLASSIFIED, and the blocking ones clear the ceiling.
 #
 # Round 1 of this test hand-listed five blocking commands, and both review seats
@@ -220,7 +299,8 @@ declare -a FAST=(
     change chat choose choose-card choose-value clear-heartbeats clicks concede
     connect continue-run create-game credits dashboard dashboard-compact
     debug-chat diagnose-blocker discard discard-card end-phase-12
-    end-post-discard end-turn eval fire-subs fix-credits get-cursor hand
+    end-post-discard end-turn eval fire-subs fix-credits game-over? game-over-status
+    get-cursor hand
     hand-text heap indicate-action install install-index jack-out join keep-hand
     leave-game let-subs-fire list-game-ids list-lobbies list-playables log
     log-compact mulligan multi-choose nuke-state peer-status ping play
@@ -230,6 +310,47 @@ declare -a FAST=(
     trash-resource use-ability use-runner-ability draw
 )
 
+STUB="$TMP/stub-eval.sh"
+cat > "$STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--stdin" ]]; then
+    expr="$(cat)"
+else
+    expr="${!#}"
+fi
+# ensure_connection's probes set their own small TIMEOUT and are not the subject
+# here; record only the budget the COMMAND itself ran under.
+case "$expr" in
+    *ensure-connected!*|*sync-verdict!*) ;;
+    *) printf '%s\n%s\n' "${TIMEOUT:-unset}" "$expr" > "$STUB_TIMEOUT_FILE" ;;
+esac
+printf '"stub"\n'
+STUBEOF
+chmod +x "$STUB"
+
+# Ask the real dispatcher whether it handles a name. Its default arm prints
+# "Unknown command", which makes this authoritative in a way no regex is.
+probe_says_unknown() {
+    local out
+    out=$(AI_EVAL="$STUB" "$SEND_CMD" corp "$1" 2>&1) || true
+    [[ "$out" == *"Unknown command"* ]]
+}
+
+# Self-test the probe before trusting it to filter: if it answered "known" for
+# everything, every candidate would be classified-or-fail and the nested-case
+# junk would show up as noise; if it answered "unknown" for everything, LABELS
+# would be empty and the whole guard would pass vacuously — which is the exact
+# failure being engineered out.
+if probe_says_unknown "status"; then
+    fail "probe" "the dispatcher probe calls a REAL command unknown — it cannot
+       be used to derive the inventory"
+elif ! probe_says_unknown "definitely-not-a-command-xyzzy"; then
+    fail "probe" "the dispatcher probe calls a MADE-UP command known — it would
+       accept every candidate, including nested flag arms"
+else
+    ok "probe" "the dispatcher discriminates real commands from invented ones"
+fi
+
 # --- the derivation: what does send_command actually dispatch on? ---
 CASE_START=$(grep -n '^case "\$COMMAND" in' "$SEND_CMD" | tail -1 | cut -d: -f1)
 CASE_END=$(awk -v s="$CASE_START" 'NR>s && /^esac/ {print NR; exit}' "$SEND_CMD")
@@ -238,54 +359,38 @@ if [[ -z "$CASE_START" || -z "$CASE_END" ]]; then
        test can no longer see what commands exist, so it is not a guard"
     LABELS=""
 else
-    # Round-2 guest MINOR: this used to require EXACTLY four spaces and a label
-    # starting with a letter or `*`. A two-space-indented arm, or one whose first
-    # alternative starts with `-` (`--foo)`), was simply not extracted — the count
-    # stayed above the floor, nothing showed as unclassified, and the guard passed
-    # vacuously over the new command. That is the failure mode this whole
-    # derivation exists to remove, reintroduced one layer down.
+    # Two steps, because three rounds of review each found a DIFFERENT way a
+    # single clever extractor under-reported — and every time it stayed green,
+    # because a missing label cannot fail an "is it classified?" check:
+    #   r1: required exactly four-space indentation, missed a two-space arm.
+    #   r2: widening swept in nested `case` arms and `)` inside quoted Clojure.
+    #   r3: a bash-grammar parser in awk still excluded `?`, so the live
+    #       `game-over?|game-over-status)` arm was absent and the count looked fine.
+    # That is this repo's "three rounds means the plan is wrong" signal, so the
+    # parser is gone rather than patched a fourth time.
     #
-    # Widening the regex alone is wrong in the other direction. Two things here
-    # look like case arms and are not: NESTED `case` statements for flag parsing
-    # (`--since)`, `on|off)`), and a `)` inside a multi-line quoted Clojure
-    # argument (`gameid)`, `nil)`).
-    #
-    # Tracking quote balance to exclude the latter was tried and abandoned: a
-    # single apostrophe in prose desyncs it, and it silently ate a THIRD of the
-    # commands while still reporting a plausible count — the same vacuous-pass
-    # failure, one layer down again.
-    #
-    # So follow bash's own grammar instead, which needs neither columns nor
-    # quotes: an arm is the first thing after `case ... in`, or after a `;;`. A
-    # `)` in the middle of an execute block is neither. Depth keeps nested case
-    # statements out; `expect` keeps everything else out.
-    LABELS=$(awk -v s="$CASE_START" '
-        BEGIN { depth = 1; expect = 1 }
-        NR <= s { next }
-        /^[[:space:]]*$/ { next }
-        /^[[:space:]]*#/ { next }
-        {
-            if (expect && depth == 1 &&
-                $0 ~ /^[[:space:]]*[A-Za-z0-9*_.|-][A-Za-z0-9|*_.-]*\)/) {
-                lbl = $0
-                sub(/\).*$/, "", lbl)
-                gsub(/[[:space:]]/, "", lbl)
-                print lbl
-                expect = 0
-            }
-            # `case ... in` opens a level; `esac` closes one. Depth starts at 1
-            # because NR>s means we are already inside the dispatch case.
-            if ($0 ~ /[Cc]ase[[:space:]].*[[:space:]]in[[:space:]]*$/) { depth++; expect = 0 }
-            if ($0 ~ /^[[:space:]]*esac[[:space:]]*$/) {
-                depth--
-                if (depth == 0) exit
-                expect = 0
-            }
-            # A `;;` at depth 1 ends a top-level arm, so the next real line is the
-            # next arm. At depth 2+ it ends a NESTED arm and means nothing here.
-            if (depth == 1 && $0 ~ /;;[[:space:]]*$/) expect = 1
-        }
-    ' "$SEND_CMD" | tr '|' '\n' | grep -v '^\*$' | grep -v '^$' | sort -u)
+    # STEP 1 — candidates, deliberately OVER-inclusive: anything shaped like a
+    # case label. It may pick up nested flag-parsing arms (`--since`, `on|off`)
+    # and `)` from inside quoted Clojure (`gameid`, `nil`). That is fine; being
+    # too greedy is the safe direction, and it needs no grammar.
+    CANDIDATES=$(awk -v s="$CASE_START" -v e="$CASE_END" 'NR>s && NR<e' "$SEND_CMD" \
+                 | grep -vE '^[[:space:]]*#' \
+                 | grep -oE '^[[:space:]]*[^[:space:]()]+\)' \
+                 | sed 's/)//' | tr -d ' ' | tr '|' '\n' \
+                 | grep -v '^\*$' | grep -v '^$' | sort -u)
+
+    # STEP 2 — ask the DISPATCHER which of them it actually handles. Its `*)` arm
+    # prints "Unknown command", so send_command itself is the authority on what
+    # is a command; no parser of ours has to be right. ~65ms each against the
+    # stub backend, and it is the only step whose answer cannot silently drift.
+    LABELS=""
+    while read -r cand; do
+        [[ -z "$cand" ]] && continue
+        if ! probe_says_unknown "$cand"; then
+            LABELS+="$cand"$'\n'
+        fi
+    done <<< "$CANDIDATES"
+    LABELS=$(printf '%s' "$LABELS" | sort -u)
 fi
 
 LABEL_COUNT=$(printf '%s\n' "$LABELS" | grep -c . || true)
@@ -326,23 +431,6 @@ done < <(classified_names | sort -u)
 
 # --- drive the ones whose budget is a claim we can check ---
 
-STUB="$TMP/stub-eval.sh"
-cat > "$STUB" <<'STUBEOF'
-#!/usr/bin/env bash
-if [[ "${1:-}" == "--stdin" ]]; then
-    expr="$(cat)"
-else
-    expr="${!#}"
-fi
-# ensure_connection's probes set their own small TIMEOUT and are not the subject
-# here; record only the budget the COMMAND itself ran under.
-case "$expr" in
-    *ensure-connected!*|*sync-verdict!*) ;;
-    *) printf '%s\n%s\n' "${TIMEOUT:-unset}" "$expr" > "$STUB_TIMEOUT_FILE" ;;
-esac
-printf '"stub"\n'
-STUBEOF
-chmod +x "$STUB"
 
 # The REPL-side ceiling these must clear. Read from the source rather than
 # retyped, so a change to the loop budget fails here instead of drifting.

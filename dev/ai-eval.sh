@@ -18,18 +18,39 @@ TIMEOUT=${TIMEOUT:-10}
 # cleanly. The grace exists so the REPL's own deadline always wins that race.
 TIMEOUT_GRACE=${TIMEOUT_GRACE:-15}
 
-# Validate rather than let $(( )) invent a budget: `TIMEOUT=foo` is arithmetic
-# zero — which now means "no backstop", the exact opposite of a small number —
-# and `TIMEOUT=1.5` aborts the script with a bash syntax error mid-command.
+# Validate rather than let $(( )) invent a budget, and normalize to DECIMAL.
+# Three separate ways an innocent-looking value went wrong (round-3 guest MAJOR,
+# all reproduced):
+#   TIMEOUT=foo  -> arithmetic ZERO, which since #190 means "no backstop" — the
+#                   exact opposite of the small number the caller asked for.
+#   TIMEOUT=010  -> bash reads a leading zero as OCTAL, so this is 8, and the
+#                   backstop is silently two seconds short of what was asked.
+#   TIMEOUT=08   -> "value too great for base": the script ABORTS mid-command.
+#   TIMEOUT=<max int> -> wraps NEGATIVE when the grace is added.
+# `wait` passes the seat's own number straight through, so `wait 08` was a live
+# path to two of these.
+#
+# EX_CONFIG (78), not a generic code: send_command distinguishes "this did not
+# run" from "the REPL answered with an error", and 1/2 are already spoken for.
 for _v in TIMEOUT TIMEOUT_GRACE; do
-    case "${!_v}" in
+    _val="${!_v}"
+    case "$_val" in
         ''|*[!0-9]*)
-            echo "❌ $_v must be a whole number of seconds, got: '${!_v}'" >&2
+            echo "❌ $_v must be a whole number of seconds, got: '$_val'" >&2
             echo "   (TIMEOUT=0 means no backstop; there is no other special value.)" >&2
-            exit 2
+            exit 78
             ;;
     esac
+    # Bound the LENGTH before any arithmetic, so nothing can overflow into a
+    # negative budget. 7 digits is ~115 days.
+    if [ "${#_val}" -gt 7 ]; then
+        echo "❌ $_v is ${_val}s, which is not a timeout anyone meant." >&2
+        exit 78
+    fi
 done
+# 10# forces base 10 regardless of leading zeros.
+TIMEOUT=$((10#$TIMEOUT))
+TIMEOUT_GRACE=$((10#$TIMEOUT_GRACE))
 
 # TIMEOUT=0 means NO backstop. Exactly one caller needs it and it is not an
 # escape hatch for "this felt slow": `send_command bot-watch` runs
