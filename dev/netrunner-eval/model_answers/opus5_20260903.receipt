@@ -1,0 +1,21 @@
+{
+  "seat": "opus",
+  "backend": "claude",
+  "vendor": "anthropic",
+  "model": "opus",
+  "ok": true,
+  "reason": "ok",
+  "exit": 0,
+  "bytes": 39358,
+  "elapsed_s": 1054.3,
+  "ts": "2026-09-04T02:53:07Z",
+  "run_id": "nreval-20260903",
+  "provenance": "probed 2026-08-26",
+  "cmd": "claude --model opus -p <prompt>",
+  "prompt_bytes": 103912,
+  "prompt_sha256": "152098e5b58b2d6a8688b8740e441d792e4774c669d94c8246589bc91e8fe43b",
+  "token_source": "file",
+  "sandbox": "backend-default (--read-only not supported)",
+  "stderr_bytes": 0,
+  "output_sha256": "ae72946f8ee057d0a1b87774be595e90bca3a19ae610bd49a33d74cea369fcae"
+}

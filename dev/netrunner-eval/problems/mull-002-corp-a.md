@@ -5,7 +5,7 @@
 **Hand composition check:**
 - Economy: Government Subsidy (costs 10 credits - UNPLAYABLE, have 5)
 - ICE: Brân 1.0 (6 to rez - can't rez Turn 1 even with clicking for credits)
-- Agendas: THREE agendas (4 points total) - agenda flood
+- Agendas: THREE agendas (6 points total: Superconducting Hub 1 + Offworld Office 2 + Send a Message 3) - agenda flood
 
 **The verdict:**
 None of these cards are playable Turn 1. This is one of the worst possible hands.

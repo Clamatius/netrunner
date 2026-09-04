@@ -1,0 +1,633 @@
+## Solution: breach-001-runner
+
+### Answer
+**Q1:**
+- **Click 1:** Play [[Sure Gamble]] (pay 5 credits, gain 9 credits; 9 credits, 3 clicks remaining).
+- **Click 2:** Play [[Overclock]] targeting Server 1 (pay 1 credit, place 5 hosted credits on Overclock; 8 credits + 5 hosted, 2 clicks remaining).
+- **During Run:**
+  - *Encounter Brân 1.0:* Spend 2 clicks from your turn pool to break the two "End the run" subroutines (sub 2 and sub 3). Subroutine 1 resolves (Corp may install an ICE from HQ or Archives, but HQ has no ICE and Archives is empty). Clicks remaining: 0.
+  - *Approach Server 1:* [[Manegarm Skunkworks]] triggers. Pay 5 hosted credits from Overclock to bypass the requirement.
+  - *Breach Server 1:* Access the root card, steal the Agenda, and win the game (7 points).
+
+**Q2:**
+- **Click 1:** Install [[Mayfly]] (pay 1 credit; 4 credits, 3 clicks remaining).
+- **Click 2:** Play [[Overclock]] targeting Server 1 (pay 1 credit, place 5 hosted credits on Overclock; 3 credits + 5 hosted, 2 clicks remaining).
+- **During Run:**
+  - *Encounter Brân 1.0:* Spend 5 hosted credits from Overclock to boost Mayfly to strength 6 (+5 strength). Spend 2 credits from your pool to break both "End the run" subroutines with Mayfly. Mayfly trashes at the end of the run. Credits remaining: 1 credit, 2 clicks remaining.
+  - *Approach Server 1:* [[Manegarm Skunkworks]] triggers. Spend your 2 remaining clicks from your turn pool to bypass the condition.
+  - *Breach Server 1:* Access the root card, steal the Agenda, and win the game.
+
+**Q3:**
+- **Click 1:** Play [[Overclock]] targeting Server 1 (pay 1 credit, place 5 hosted credits on Overclock; 4 credits + 5 hosted, 3 clicks remaining).
+- **During Run:**
+  - *Encounter Brân 1.0:* Spend 2 clicks from your turn pool to break both "End the run" subroutines. Clicks remaining: 1.
+  - *Approach Server 1:* [[Manegarm Skunkworks]] triggers. Pay 5 hosted credits from Overclock.
+  - *Breach Server 1:* Access the root card, steal the Agenda, and win the game.
+
+**Q4:**
+The cheapest line is the basic run action: **Click 1: Run Server 1**.
+- It requires **0 cards** from your grip.
+- **Accounting:**
+  - Spend Click 1 to initiate the run (3 clicks, 5 credits remaining).
+  - Encounter Brân 1.0: Spend 2 clicks to break sub 2 and sub 3 (1 click, 5 credits remaining).
+  - Approach Server 1: Pay 5 credits from your pool to satisfy Manegarm Skunkworks (1 click, 0 credits remaining).
+  - Breach Server 1, access, and steal the Agenda for the win.
+
+### Reasoning
+Brân 1.0 is a Bioroid Barrier whose subroutines can be broken by spending clicks during the encounter. Manegarm Skunkworks demands either 2 clicks or 5 credits upon approaching the server. Starting with 4 clicks and 5 credits allows multiple valid resource trade-offs:
+- Basic run: Spend 2 clicks on Brân, pay 5 credits for Skunkworks, using 0 cards.
+- Overclock lines: Overclock supplies 5 credits to satisfy Skunkworks while clicks break Brân, or Overclock pumps Mayfly's strength while clicks handle Skunkworks.
+- Sure Gamble line: Generates excess credits so Overclock and clicks can be used freely.
+
+### If-Only-I'd-Known
+- When facing Bioroid ICE protecting upgrade taxes like Skunkworks, evaluate clicks and credits as an interchangeable economy pool across the entire run rather than analyzing each encounter step in isolation.
+
+### Confidence
+high - Exact mathematical accounting verifies all four paths reach and breach the server deterministically.
+
+---
+
+## Solution: break-001-runner
+
+### Answer
+**Sequencing:**
+- **Click 1:** Play [[Sure Gamble]] (pay 5 credits, gain 9 credits $\rightarrow$ 11 credits, 3 clicks remaining).
+- **Click 2:** Install [[Cleaver]] (pay 3 credits $\rightarrow$ 8 credits, 2 clicks remaining).
+- **Click 3:** Install [[Unity]] (pay 3 credits $\rightarrow$ 5 credits, 1 click remaining).
+- **Click 4:** Run Server 1 (5 credits, 0 clicks remaining).
+
+**Run Resolution & Credit Math:**
+1. **Encounter Whitespace (Code Gate, strength 0):**
+   - Unity is strength 1 ($1 \ge 0$).
+   - Pay 1 credit with Unity to break Subroutine 1 ("The Runner loses 3[credit]").
+   - Pay 1 credit with Unity to break Subroutine 2 ("If the Runner has 6[credit] or less, end the run").
+   - *Credits remaining:* $5 - 2 = 3$ credits.
+2. **Encounter Palisade (Barrier, strength 4 on remote):**
+   - Cleaver is base strength 3. Pay 2 credits to boost Cleaver $+1$ strength to 4 ($4 \ge 4$).
+   - Pay 1 credit with Cleaver to break Subroutine 1 ("End the run").
+   - *Credits remaining:* $3 - 3 = 0$ credits.
+3. **Breach Server 1:** Access the card in the root.
+
+### Reasoning
+Whitespace's first subroutine drains 3 credits before subroutine 2 checks if the Runner has $\le 6$ credits. Without a Decoder, even starting with 8 credits after Sure Gamble leaves the Runner with 5 credits after subroutine 1 fires, immediately ending the run on subroutine 2. Installing both Cleaver and Unity allows the Runner to break both Whitespace subroutines for 2 credits (preserving the credit pool) and Palisade for 3 credits, consuming exactly all 5 remaining credits.
+
+### If-Only-I'd-Known
+- Against Whitespace without a Decoder, the Runner must have at least 10 credits at encounter to survive the 3-credit drain and stay strictly above the 6-credit ETR threshold.
+
+### Confidence
+high - Exact credit and click accounting ($7 - 5 + 9 - 3 - 3 - 2 - 3 = 0$ credits, 4 clicks used).
+
+---
+
+## Solution: lethal-001-runner
+
+### Answer
+**Sequencing:**
+- **Click 1:** Run Archives (unprotected, 0 credits spent $\rightarrow$ 13 credits, 3 clicks remaining). Run is successful.
+- **Click 2:** Install [[Carmen]] from grip for 3 credits (discounted by 2 credits due to successful run this turn; 10 credits, 2 clicks remaining, 2 cards in grip: `[Carmen, Unity]`).
+- **Click 3:** Run HQ (10 credits, 1 click remaining).
+  - *Encounter Karunā:* Pay 2 credits to boost Carmen to strength 5, pay 2 credits to break both subroutines (4 credits spent $\rightarrow$ 6 credits remaining).
+  - *Breach HQ:* Access 1 random card.
+    - *Case A (Agenda accessed):* Steal the agenda and win immediately (7 points).
+    - *Case B (Manegarm Skunkworks accessed):* Pay 3 credits to trash Manegarm Skunkworks ($6 - 3 = 3$ credits remaining).
+- **Click 4 (only needed if Case B occurred):** Run HQ (3 credits, 0 clicks remaining).
+  - *Encounter Karunā:* Pay 2 credits to boost Carmen to strength 5, pay 1 credit to break Subroutine 2 ("Do 2 net damage"). 3 credits spent $\rightarrow$ 0 credits remaining.
+  - Subroutine 1 fires: Deal 2 net damage. Discard both remaining cards in grip (`[Carmen, Unity]`). You have 0 cards in grip, which survives (flatline requires damage strictly greater than cards in grip to discard). Decline to jack out.
+  - *Breach HQ:* Access the only remaining card in HQ (the Agenda), steal it, and win the game (7 points).
+
+### Reasoning
+Because HQ contains 2 cards (1 Agenda, 1 Skunkworks), accessing HQ once is only a 50% chance. To guarantee the steal this turn, the Runner must be able to run twice and trash Skunkworks if seen on the first breach. Running unprotected Archives on Click 1 enables Carmen's 2-credit discount. On Click 4, with 3 credits remaining, Carmen boosts and breaks 1 subroutine on Karunā, safely absorbing the other subroutine's 2 net damage using the 2-card grip.
+
+### If-Only-I'd-Known
+- When accessing HQ with multiple cards to find an agenda, budget credits and clicks to trash non-agenda cards on early breaches so follow-up runs guarantee seeing the agenda.
+
+### Confidence
+high - Accounts for all branching access possibilities and verifies net damage flatline conditions.
+
+---
+
+## Solution: midgame-001-runner
+
+### Answer
+**Identity of the Unrezzed Card:**
+The card with 2 advancement counters **must be either [[Send a Message]] (5/3 Agenda) or [[Urtica Cipher]] (Ambush)**. All other advanceable cards in the Corp deck ([[Offworld Office]] $\times 3$ and [[Superconducting Hub]] $\times 2$) are fully accounted for in score areas.
+
+**Plan for the Turn:**
+- **Turn Start:** Gain 1 credit from [[Smartware Distributor]] ($2 + 1 = 3$ credits).
+- **Click 1:** Take 3 credits from the installed [[Telework Contract]] ($3 + 3 = 6$ credits, 3 clicks remaining).
+- **Click 2:** Run Server 1 (6 credits, 2 clicks remaining).
+  - *Encounter Brân 1.0:* Spend your remaining 2 clicks to break both "End the run" subroutines (sub 2 and sub 3). Clicks remaining: 0.
+  - *Encounter Palisade:* Boost [[Cleaver]] to strength 4 (pay 2 credits), break subroutine 1 (pay 1 credit). Credits remaining: $6 - 3 = 3$ credits.
+  - *Encounter ICE installed by Brân sub 1 (if Corp installs inward):*
+    - If Corp installs and rezzes Palisade ($3): Cleaver boosts for 2 credits and breaks for 1 credit (3 credits spent $\rightarrow$ 0 credits remaining).
+    - If Corp installs and rezzes Whitespace ($2): Unity breaks subroutine 2 for 1 credit.
+  - *Breach Server 1:*
+    - If [[Send a Message]]: Steal it for 3 points $\rightarrow$ **Runner reaches 7 points and wins the game immediately!**
+    - If [[Urtica Cipher]]: Deals $2 + 2 = 4$ net damage. Discard 4 cards from your 5-card grip; you survive with 1 card remaining and neutralize the trap.
+
+### Reasoning
+If the card is Send a Message, ignoring it allows the Corp to triple-advance next turn and win the game ($4 + 3 = 7$). Because the Runner has 5 cards in grip, an Urtica Cipher at 2 counters (dealing 4 net damage) is non-lethal. Contesting Server 1 is completely safe from flatline and either wins the game immediately or defuses the Corp's bluff.
+
+### If-Only-I'd-Known
+- Track accounted agenda points: when only 3-point agendas remain un-scored and un-stolen, any 2-advanced remote is a game-ending threat that must be contested if your grip size exceeds maximum trap damage.
+
+### Confidence
+high - Complete deduction of deck composition and damage math guarantees safety.
+
+---
+
+## Solution: mull-001-corp
+
+### Answer
+**KEEP.**
+
+### Reasoning
+This hand contains an ideal, balanced opening structure:
+1. **Burst Economy:** [[Hedge Fund]] delivers immediate credit acceleration ($5 \rightarrow 9$ credits) on Turn 1 Click 1.
+2. **Central Defense:** Two cheap ICE of different types—[[Palisade]] (Barrier, rez 3) and [[Whitespace]] (Code Gate, rez 2)—protect both R&D and HQ.
+3. **Scoring Potential:** [[Offworld Office]] is ready to be installed into a remote once centrals are secured, providing follow-up economy (+7 credits) when scored.
+4. **Utility:** [[Urtica Cipher]] provides bluffing potential.
+
+### If-Only-I'd-Known
+- Keep opening hands that contain turn-1 burst economy plus two distinct ICE types for central protection.
+
+### Confidence
+high - Standard textbook keep according to fundamental Corp strategy.
+
+---
+
+## Solution: mull-002-corp
+
+### Answer
+**MULLIGAN.**
+
+### Reasoning
+This hand suffers from multiple critical structural failures:
+1. **Severe Agenda Flood:** Contains 6 agenda points across 3 cards ([[Superconducting Hub]], [[Send a Message]], [[Offworld Office]]).
+2. **Unplayable Economy:** [[Government Subsidy]] costs 10 credits to play; starting at 5 credits, it is unplayable without clicking for credits 5 times.
+3. **Unrezzed ICE:** Only 1 ICE ([[Brân 1.0]]), which costs 6 credits to rez. Starting at 5 credits, you cannot rez it on Turn 1.
+4. **Vulnerability:** An HQ run by the Runner on Turn 1 faces zero rezzed defenses and has a $3/5$ probability of hitting an agenda on every access.
+
+### If-Only-I'd-Known
+- Mulligan hands with heavy agenda flood and unplayable high-cost economy/ICE.
+
+### Confidence
+high - Clear-cut mulligan condition.
+
+---
+
+## Solution: mull-003-runner
+
+### Answer
+**KEEP.**
+
+### Reasoning
+This hand provides everything a Runner wants on Turn 1:
+1. **Burst Economy:** [[Sure Gamble]] immediately jumps from 5 to 9 credits on Click 1.
+2. **Drip Economy:** [[Smartware Distributor]] (cost 0) provides long-term credit flow when installed and loaded early.
+3. **Breaker Coverage:** Two critical breaker types in hand ([[Cleaver]] for Barriers, [[Carmen]] for Sentries).
+4. **Early Pressure:** [[Jailbreak]] allows an efficient run with extra access and card draw to find remaining pieces.
+
+### If-Only-I'd-Known
+- A Runner hand with Sure Gamble, drip economy, and two primary breaker types is an automatic keep.
+
+### Confidence
+high - Covers economy, rig building, and central pressure.
+
+---
+
+## Solution: mull-004-runner
+
+### Answer
+**MULLIGAN.**
+
+### Reasoning
+1. **No Real Economy:** Hand contains no burst economy operations ([[Sure Gamble]]) or drip resources. [[Overclock]] only provides run-specific temporary credits.
+2. **Tempo Loss:** Hand is choked with 4 expensive programs (install costs: 3, 3, 5, 3) including a dead duplicate Cleaver.
+3. **Slow Start:** Starting at 5 credits with no economy cards forces the Runner into inefficient basic clicks for credits.
+
+### If-Only-I'd-Known
+- Mulligan hands full of breakers but devoid of real bankable economy.
+
+### Confidence
+high - Definite mulligan due to lack of opening economy.
+
+---
+
+## Solution: multirun-001-runner
+
+### Answer
+**Maximum HQ Accesses:** **2 accesses**.
+
+**Sequence:**
+- **Click 1:** Run Archives (unprotected, 0 credits spent).
+  - Run is successful. [[Pennyshaver]] gains 1 hosted credit (now 2 hosted).
+  - Activates Carmen's successful run discount (9 credits, 3 clicks remaining).
+- **Click 2:** Install [[Carmen]] for 3 credits (discounted from 5 $\rightarrow$ 6 credits, 2 clicks remaining).
+- **Click 3:** Install [[Docklands Pass]] for 2 credits (4 credits, 1 click remaining).
+- **Click 4:** Run HQ (4 credits, 0 clicks remaining).
+  - *Encounter Karunā:* Pay 2 credits to boost Carmen to strength 5, pay 2 credits to break both subroutines (4 credits spent $\rightarrow$ 0 credits remaining).
+  - *Breach HQ:* Docklands Pass triggers on the first HQ breach of the turn, allowing you to access **2 cards from HQ**.
+
+### Reasoning
+Breaching HQ multiple times requires 4 credits per run to break Karunā. With 9 credits, you cannot afford two runs through Karunā (8 credits) while also paying to install Carmen (3 or 5 credits). By installing Docklands Pass (2 credits) after triggering Carmen's install discount via Archives (1 click), you achieve 2 HQ accesses in a single run on Click 4. Tanking damage from Karunā does not afford an extra run and risks flatline with only 2 cards remaining in grip.
+
+### If-Only-I'd-Known
+- When multi-access hardware costs less than the run tax of a fortified central, installing multi-access for a single breach yields more accesses than funding multiple runs.
+
+### Confidence
+high - Math on click economy and break costs confirms 2 accesses is the strict maximum.
+
+---
+
+## Solution: partial-001-runner
+
+### Answer
+**Q1 (Full Breaks):**
+- **Click 1:** Run Server 1.
+  - *Karunā:* Pay 2 credits to boost Carmen to strength 5, pay 2 credits to break both subroutines (4 credits spent).
+  - *Palisade:* Pay 2 credits to boost Cleaver to strength 4, pay 1 credit to break subroutine 1 (3 credits spent).
+  - *Breach:* Access the agenda.
+- **Ending Credits:** $7 - 7 =$ **0 credits**. **Ending Grip Size:** **3 cards**.
+
+**Q2 (Partial Break):**
+- **Click 1:** Run Server 1.
+  - *Karunā:* Pay 2 credits to boost Carmen to strength 5, pay 1 credit to break Subroutine 2 (3 credits spent). Subroutine 1 fires: take 2 net damage (discard 2 random cards from grip, grip goes from 3 to 1 card). Decline to jack out.
+  - *Palisade:* Pay 2 credits to boost Cleaver to strength 4, pay 1 credit to break subroutine 1 (3 credits spent).
+  - *Breach:* Access the agenda.
+- **Ending Credits:** $7 - 6 =$ **1 credit**. **Ending Grip Size:** **1 card**.
+
+**Q3 (Decision Criteria):**
+- **Choose Q2 (Partial Break)** when:
+  1. The cards in grip are low-value chaff/duplicates and preserving 1 credit is necessary (e.g. to pay an additional steal cost like NAPD Contract, or maintain an economic threshold).
+- **Choose Q1 (Full Break)** when:
+  1. Your grip contains high-value combo pieces, econ, or unique cards you cannot risk losing.
+  2. The Corp threatens follow-up damage next turn, where a 1-card grip would leave you vulnerable to flatline.
+
+### Reasoning
+Carmen requires 2 credits to boost to strength 5 regardless of how many subs are broken. Breaking 1 sub instead of 2 saves exactly 1 credit while absorbing 2 net damage. When grip cards are non-essential, taking the damage saves credits.
+
+### If-Only-I'd-Known
+- Compare the value of grip cards vs credit conservation: if grip cards are redundant and no follow-up damage is threatened, letting net damage fire converts hand size into credits.
+
+### Confidence
+high - Exact breakdown of subroutine choices and credit/card accounting.
+
+---
+
+## Solution: remote-001-corp
+
+### Answer
+**Q1:** **YES**, the Runner can breach Server 1 without drawing cards.
+- **Runner's Line:**
+  1. Turn start: Gain 1 credit from Smartware Distributor (3 credits in pool).
+  2. Click 1: Run Archives with [[Red Team]] (0 ICE). Run succeeds $\rightarrow$ gain 3 credits from Red Team (6 credits in pool). Pennyshaver goes to 3 hosted credits.
+  3. Click 2: Use [[Pennyshaver]] (add 1 credit to 4, take all 4 credits $\rightarrow$ 10 credits in pool, 2 clicks remaining).
+  4. Click 3: Run Server 1 (10 credits in pool, 1 click remaining).
+     - *Whitespace:* Subroutine 1 drains 3 credits ($10 \rightarrow 7$ credits). Subroutine 2 checks: Runner has 7 credits ($> 6$), so ETR does **not** fire.
+     - *Tithe:* Runner tanks 1 net damage (discards 1 card, survives).
+     - *Palisade #1 & #2:* Runner uses Cleaver on both ($2 \times 3 = 6$ credits spent).
+     - Runner breaches Server 1 with 1 credit remaining!
+
+**Q2:** **NO**, do **not** install and advance Offworld Office in Server 1. The server is not secure against the Runner's available board state. Furthermore, advancing twice leaves Corp at 6 credits, which is insufficient to rez Tithe ($1) and both Palisades ($3 each = $7 total).
+
+### Reasoning
+The Runner's installed economy on board (Red Team on open centrals + Pennyshaver) enables them to hit 10 credits in 2 clicks. This bypasses Whitespace's ETR subroutine without a Decoder and provides enough credits for Cleaver to break both Palisades.
+
+### If-Only-I'd-Known
+- Account for on-board click-for-credit engines (Red Team, Pennyshaver, resources) when checking if Runner can meet credit threshold ICE like Whitespace.
+
+### Confidence
+high - Precise calculation of Runner's on-board click economy and break math.
+
+---
+
+## Solution: remote-002-corp
+
+### Answer
+**Q1:** **YES**, Runner can easily steal it.
+- Palisade is rezzed (strength 4 on remote). Runner has Cleaver (strength 3) and 4 credits.
+- Breaking Palisade costs 3 credits (2 to boost to strength 4, 1 to break). Runner runs on Click 1, pays 3 credits, and steals Offworld Office.
+
+**Q2:**
+- Corp starts with 7 credits, spends 2 to advance twice $\rightarrow$ 5 credits left (enough to rez Karunā for 4 credits).
+- Runner has no Killer. When Runner encounters Karunā:
+  - Subroutine 1 fires: Runner takes 2 net damage (grip drops from 3 to 1 card).
+  - *Choice:* If Runner jacks out, the run ends safely, but Corp scores next turn. If Runner proceeds, Subroutine 2 fires: deals 2 net damage $\rightarrow$ **Runner flatlines and Corp wins immediately**.
+  - (Note: Runner can only survive by spending 2 clicks to draw up to 5 cards first, then facechecking).
+
+**Q3:**
+- Installing Nico Campaign builds long-term drip economy (+3 credits/turn), but **installing Offworld Office in Server 1 is significantly better** because it directly exploits the Runner's missing Killer to create an immediate scoring window and net 7 credits upon scoring.
+
+**Q4:**
+- **Best Line:**
+  - **Click 1:** Install [[Offworld Office]] in Server 1 (behind Karunā).
+  - **Click 2:** Advance Offworld Office (pay 1 credit).
+  - **Click 3:** Advance Offworld Office (pay 1 credit).
+  - *Ending State:* 5 credits remaining.
+- *Sequence Justification:* Install-Advance-Advance leaves 5 credits, preserving the exact 4 credits required to rez Karunā while putting Offworld at 2 counters, enabling an immediate score on Turn 5.
+
+### Reasoning
+Behind Karunā, an unrezzed Sentry is lethal to a 3-card Runner without a Killer. The Runner cannot facecheck Karunā without flatlining on subroutine 2, creating an uncontestable scoring window unless the Runner spends clicks drawing cards rather than developing their rig.
+
+### If-Only-I'd-Known
+- A rez-ready lethal Sentry in front of an empty remote creates an immediate hard scoring window against a Runner lacking a Killer.
+
+### Confidence
+high - Complete analysis of both subroutine paths and credit thresholds.
+
+---
+
+## Solution: score-001-corp
+
+### Answer
+**Best Line for Turn 9:**
+- **Click 1:** Install [[Superconducting Hub]] in Server 1 (behind Whitespace and Karunā).
+- **Click 2:** Advance Superconducting Hub (pay 1 credit $\rightarrow$ 11 credits, 1 advancement counter).
+- **Click 3:** Advance Superconducting Hub (pay 1 credit $\rightarrow$ 10 credits, 2 advancement counters).
+
+**Turn 10 Follow-up:**
+- Mandatory draw.
+- **Click 1:** Advance Superconducting Hub (pay 1 credit $\rightarrow$ 3 advancement counters).
+- **Score Superconducting Hub** (1 agenda point) $\rightarrow$ **Corp reaches 7 points and wins the game!**
+
+### Reasoning
+Corp needs only 1 point to win (at 6 points). Superconducting Hub requires 3 advancement counters. While Seamless Launch cannot be used on a card installed this turn, Server 1 is completely impenetrable to the Runner:
+- Server 1 has rezzed Karunā. Runner has 1 card in grip and no Killer. Running Server 1 results in instant flatline from Karunā's 2 net damage.
+- Centrals are also protected by lethal ICE (Tithe on HQ, Karunā on R&D), preventing any game-stealing central snipes.
+Installing Hub and advancing twice guarantees a win on Turn 10 Click 1.
+
+### If-Only-I'd-Known
+- When at 6 points with an impenetrable remote, install and double-advance a 3/1 agenda; you don't need fast advance if the Runner cannot legally run the server without dying.
+
+### Confidence
+high - Airtight winning line.
+
+---
+
+## Solution: scoring-002-corp
+
+### Answer
+**Q1 (Best Line):**
+- **Click 1:** Install [[Send a Message]] in Server 1.
+- **Click 2:** Install [[Manegarm Skunkworks]] in Server 1.
+- **Click 3:** Take 1 credit ($5 + 1 = 6$ credits).
+- **During Runner's Turn:** If Runner runs Server 1, rez Manegarm Skunkworks for 2 credits (4 credits remaining).
+  - Runner spends 2 clicks to break Brân, leaving them with insufficient clicks and credits to bypass Skunkworks' 5-credit/2-click tax after Cleaver break costs.
+- **Next Turn (Turn N+1):** (Start with 4 credits)
+  - **Click 1:** Play [[Seamless Launch]] targeting Send a Message (cost 1 credit, place 2 advancement counters).
+  - **Click 2:** Play [[Seamless Launch]] targeting Send a Message (cost 1 credit, place 2 advancement counters).
+  - **Click 3:** Advance Send a Message (cost 1 credit, place 1 advancement counter $\rightarrow$ 5 counters total).
+  - **Score Send a Message** for 3 points $\rightarrow$ **Corp reaches 7 points and wins the game!**
+
+**Q2 (If Runner holds Sure Gamble & Overclock):**
+- **YES**, it changes the evaluation.
+- With [[Overclock]], the Runner gains 5 temporary run credits. The Runner can spend 2 clicks on Brân, use Cleaver to break Palisade with Overclock funds, and still have enough combined credits (hosted + pool) to pay Skunkworks' 5-credit tax. Jamming Send a Message is no longer 100% secure against Overclock.
+
+### Reasoning
+Send a Message requires 5 advancements. Because double Seamless Launch provides 4 counters on a card not installed that turn, installing it now sets up a Turn N+1 win for 3 clicks and 3 credits. Installing Manegarm Skunkworks in the remote locks out standard click-through lines on Brân unless the Runner has burst run credits like Overclock.
+
+### If-Only-I'd-Known
+- Double Seamless Launch allows scoring a 5/3 agenda from 0 counters in a single turn if it was installed the previous turn.
+
+### Confidence
+high - Accurately models the interaction between Seamless Launch, Skunkworks, and Overclock.
+
+---
+
+## Solution: servers-001-runner
+
+### Answer
+**Q1 (Guaranteed Accesses - No Luck):**
+**4 total accesses** (2 from R&D, 2 from HQ).
+
+*Sequence:*
+- **Click 1:** Play [[Jailbreak]] on R&D (cost 0).
+  - *Encounter Whitespace:* Unity breaks sub 1 (1c) and sub 2 (1c) ($7 - 2 = 5$ credits).
+  - *Breach R&D:* Draw 1 card from Jailbreak; access **2 cards from R&D** (depth 0 and depth 1). (5 credits, 3 clicks remaining).
+- **Click 2:** Install [[Carmen]] for 3 credits (discounted by 2 credits due to successful run; $5 - 3 = 2$ credits, 2 clicks remaining).
+- **Click 3:** Run HQ (2 credits, 1 click remaining).
+  - *Encounter Tithe:* Carmen breaks sub 1 (1 credit $\rightarrow$ 1 credit remaining).
+  - *Breach HQ:* Access **1 card from HQ**.
+- **Click 4:** Run HQ (1 credit, 0 clicks remaining).
+  - *Encounter Tithe:* Carmen breaks sub 1 (1 credit $\rightarrow$ 0 credits remaining).
+  - *Breach HQ:* Access **1 card from HQ**.
+
+**Q2 (Maximum Accesses - Ideal Jailbreak Chaining):**
+**7 total accesses** (2 from R&D, 5 from HQ).
+
+*Sequence:*
+- **Click 1:** Play Jailbreak #1 on R&D $\rightarrow$ Unity breaks Whitespace (2c). Access **2 cards from R&D**. Draw Jailbreak #2! (5 credits, 3 clicks remaining).
+- **Click 2:** Play Jailbreak #2 on HQ $\rightarrow$ Let Tithe fire (take 1 net damage, discard Carmen; Corp gains 1c). Access **2 cards from HQ**. Draw Jailbreak #3! (5 credits, 2 clicks remaining).
+- **Click 3:** Play Jailbreak #3 on HQ $\rightarrow$ Let Tithe fire (take 1 net damage). Access **2 cards from HQ**. Draw 1 card from deck. (5 credits, 1 click remaining).
+- **Click 4:** Run HQ (basic run) $\rightarrow$ Let Tithe fire. Access **1 card from HQ**.
+
+### Reasoning
+In Q1, without draw luck, installing Carmen after an R&D Jailbreak guarantees clean runs on HQ without taking damage. In Q2, drawing successive Jailbreaks allows you to bypass Carmen entirely by taking Tithe's 1 net damage on each run, maximizing click-to-access conversion up to 7 cards.
+
+### If-Only-I'd-Known
+- When Sentries deal minimal non-lethal damage (like Tithe's 1 damage), tanking the damage allows you to spend all clicks running rather than spending clicks and credits installing a Killer.
+
+### Confidence
+high - Both guaranteed and theoretical maximum access lines are fully calculated.
+
+---
+
+## Solution: trace-001-corp
+
+### Answer
+**Q1:** If you do not boost the trace, trace strength is base 1. Runner has 0 link and 8 credits; Runner pays 1 credit to match/beat the trace (1 vs 1), trace fails, and Runner takes no damage and no tag.
+
+**Q2:** **NO.** A single Scorched Earth deals 4 meat damage, which Plascrete Carapace completely prevents using its 4 power counters.
+
+**Q3 (Winning Line):**
+1. **Boost Trace:** Boost the trace by **8 credits** (pay 8 credits $\rightarrow$ Corp has 3 credits remaining).
+   - Trace strength becomes $1 + 8 = 9$.
+   - Runner has only 8 credits and 0 link, so Runner cannot match strength 9.
+   - Trace succeeds: Runner receives 1 tag and takes 1 core damage (discards 1 card $\rightarrow$ grip reduced to 3 cards).
+2. **On Corp's Turn:**
+   - Mandatory draw.
+   - *Turn Begins:* Gain 3 credits from rezzed [[Adonis Campaign]] ($3 + 3 = 6$ credits).
+   - **Click 1:** Play [[Scorched Earth]] from HQ (cost 3 credits $\rightarrow$ 3 credits remaining). Deals 4 meat damage; Runner uses all 4 Plascrete Carapace counters to prevent it. Scorched Earth goes to Archives.
+   - **Click 2:** Play [[Archived Memories]] from HQ (cost 0 credits) targeting Scorched Earth in Archives $\rightarrow$ return Scorched Earth to HQ.
+   - **Click 3:** Play [[Scorched Earth]] from HQ (cost 3 credits $\rightarrow$ 0 credits remaining). Deals 4 meat damage. Plascrete has 0 counters. Runner has 3 cards in grip $\rightarrow$ **Runner flatlines and Corp wins the game!**
+
+### Reasoning
+Boosting the trace by 8 forces the tag because the Runner cannot match 9 with 8 credits. Adonis Campaign provides 3 credits at turn start, giving Corp exactly the 6 credits needed to play Scorched Earth, retrieve it with Archived Memories, and play it a second time to burn through Plascrete and flatline the Runner.
+
+### If-Only-I'd-Known
+- Calculate trace boosts to exact Runner credit total + 1 to force tags; use recursion operations like Archived Memories to double-cast kill events through Plascrete.
+
+### Confidence
+high - Classic Netrunner kill combo with exact credit and counter tracking.
+
+---
+
+## Solution: turn1-001-corp
+
+### Answer
+**Action Sequence:**
+1. **Click 1:** Play [[Hedge Fund]] (spend 5 credits, gain 9 credits $\rightarrow$ 9 credits remaining).
+2. **Click 2:** Install [[Palisade]] protecting R&D.
+3. **Click 3:** Install [[Whitespace]] protecting HQ.
+
+### Reasoning
+- **Click 1 Economy:** Playing Hedge Fund first establishes 9 credits, ensuring you have enough funds to rez both installed ICE when approached.
+- **Click 2 & 3 Central Protection:** R&D is the most vulnerable central to early runs; Palisade (Barrier, rez 3) stops early accesses cold. Whitespace (Code Gate, rez 2) on HQ taxes/stops HQ accesses. Diversifying ICE types across centrals forces the Runner to find multiple breaker types.
+
+### If-Only-I'd-Known
+- Turn 1 Corp: Play Hedge Fund first, then secure R&D and HQ with two distinct ICE types.
+
+### Confidence
+high - Standard optimal Corp opening.
+
+---
+
+## Solution: turn1-002-corp
+
+### Answer
+**Action Sequence:**
+1. **Click 1:** Install [[Diviner]] protecting R&D.
+2. **Click 2:** Install [[Karunā]] protecting HQ.
+3. **Click 3:** Take 1 credit (brings credit pool from 5 to 6 credits).
+
+### Reasoning
+- [[Government Subsidy]] requires 10 credits to play and is currently unusable at 5 credits.
+- [[Send a Message]] is a 3-point agenda in HQ, making HQ a high-value target.
+- Installing Diviner (rez 2) on R&D and Karunā (rez 4) on HQ covers both centrals with taxing AP ICE.
+- Clicking for 1 credit on Click 3 brings your pool to 6 credits, exactly enough to rez Diviner ($2) + Karunā ($4) if the Runner runs both centrals on Turn 1.
+
+### If-Only-I'd-Known
+- When opening without burst economy, install affordable taxing ICE on centrals and click to the exact credit total required to rez all installed defenses.
+
+### Confidence
+high - Optimal resource management based on rez costs.
+
+---
+
+## Solution: turn1-003-runner
+
+### Answer
+**Action Sequence:**
+1. **Click 1:** Play [[Sure Gamble]] (spend 5 credits, gain 9 credits $\rightarrow$ 9 credits remaining).
+2. **Click 2:** Install [[Smartware Distributor]] (cost 0 credits $\rightarrow$ 9 credits remaining).
+3. **Click 3:** Use Smartware Distributor ability (spend 1 click to place 3 credits on it).
+4. **Click 4:** Play [[VRcation]] (spend 1 credit $\rightarrow$ 8 credits remaining).
+   - Draw 4 cards. Because you have 0 clicks remaining, the "lose [click]" penalty has no effect!
+
+### Reasoning
+- Click 1 Sure Gamble funds the turn.
+- Installing and loading Smartware Distributor on Turn 1 ensures +1 credit/turn drip starting on Turn 2.
+- Playing VRcation on the 4th click draws 4 cards with zero penalty, refilling your grip to maximum hand size and giving you full visibility of your deck for Turn 2.
+
+### If-Only-I'd-Known
+- Play events that say "lose a click" on your final click of the turn to completely negate the drawback.
+
+### Confidence
+high - Maximizes economy, drip setup, and card draw efficiency.
+
+---
+
+## Solution: turn1-004-runner
+
+### Answer
+**Action Sequence:**
+1. **Click 1:** Play [[Sure Gamble]] (spend 5 credits, gain 9 credits $\rightarrow$ 9 credits remaining).
+2. **Click 2:** Run Server 1 (0 cost, no ICE).
+   - Access the facedown card: steal if agenda; trash if economy asset (Nico/Regolith); tank 2 net damage safely if unadvanced Urtica Cipher.
+3. **Click 3:** Run R&D (0 cost, no ICE) to access the top card of Corp deck for free.
+4. **Click 4:** Install [[Smartware Distributor]] (cost 0 credits) or Run HQ (free access).
+
+### Reasoning
+The Corp left the entire board un-iced with 7 credits. Playing Sure Gamble first puts you at 9 credits, easily affording any asset trash costs (2-3 credits). Checking Server 1 immediately punishes naked agendas or denies drip assets. Accessing R&D on Click 3 exploits the un-defended deck before the Corp can install ICE.
+
+### If-Only-I'd-Known
+- When Corp leaves all servers un-iced on Turn 1, play burst economy first to fund trash costs, then immediately check the remote and centrals.
+
+### Confidence
+high - Exploits un-defended board state while maintaining maximum economy.
+
+---
+
+## Solution: window-001-corp
+
+### Answer
+**Best Line for This Turn:**
+- **Click 1:** Play [[Hedge Fund]] (spend 5 credits, gain 9 credits $\rightarrow$ 15 credits remaining).
+- **Click 2:** Install [[Send a Message]] in Server 1 (behind rezzed Brân 1.0).
+- **Click 3:** Advance Send a Message (pay 1 credit $\rightarrow$ 14 credits remaining).
+
+**Strategic Analysis:**
+1. **Runner Contesting Server 1:** Runner has Cleaver and 7 credits + 2 on Pennyshaver. To break Brân with Cleaver costs 7 credits. If Runner spends 2 clicks to bypass Brân, it consumes 3 clicks total (run + 2 clicks), leaving Runner with 1 click and depleted tempo. Furthermore, Brân's sub 1 allows Corp to install another ICE directly inward.
+2. **HQ Risk:** HQ currently holds two agendas ([[Send a Message]] and [[Superconducting Hub]]) and is only protected by Palisade (strength 2 on HQ), which Cleaver breaks for 1 credit. HQ is under immense flood risk.
+3. **Install & Credit Impact:** Moving Send a Message out of HQ into Server 1 immediately reduces HQ agenda density by 3 points. Playing Hedge Fund ensures Corp has 14 credits, projecting massive threat and maintaining total economic dominance.
+
+### Reasoning
+HQ flood is the single biggest losing condition here. Installing Send a Message behind Brân removes the 3-point agenda from an easily accessible HQ while placing it behind your strongest rezzed ICE.
+
+### If-Only-I'd-Known
+- When HQ is lightly defended and flooded with multiple agendas, install the largest agenda into your fortified remote to simultaneously reduce HQ vulnerability and create scoring pressure.
+
+### Confidence
+high - Addresses HQ vulnerability while leveraging economic surplus and remote strength.
+
+---
+
+## Solution: yomi-001-corp
+
+### Answer
+**Q1 (Line that scores Offworld Office next turn):**
+- **Turn 3:**
+  - Click 1: Install [[Offworld Office]] in Server 1.
+  - Click 2: Advance Offworld Office (pay 1 credit $\rightarrow$ 2 credits remaining).
+  - Click 3: Take 1 credit $\rightarrow$ 3 credits remaining.
+- **Turn 4:**
+  - Click 1: Play [[Seamless Launch]] on Offworld Office (cost 1 credit, place 2 advancement counters $\rightarrow$ 3 counters, 2 credits remaining).
+  - Click 2: Advance Offworld Office (cost 1 credit $\rightarrow$ 4 counters, 1 credit remaining).
+  - Score Offworld Office $\rightarrow$ gain 7 credits (now 8 credits) and 2 agenda points!
+
+**Q2 (Installing Regolith Mining License instead):**
+- **Turn 3:**
+  - Click 1: Install [[Regolith Mining License]] in Server 1.
+  - Click 2: Rez Regolith Mining License (cost 2 credits, load 15 credits $\rightarrow$ 1 credit remaining).
+  - Click 3: Take 3 credits from Regolith Mining License $\rightarrow$ 4 credits remaining.
+- **Plan:** Use Regolith over subsequent turns to generate 12 more credits, propelling Corp to 15+ credits before jamming agendas.
+
+**Q3 (Runner's Response & Long-Term Comparison):**
+- If Runner runs Server 1 to trash Regolith: Runner must spend 2 clicks on Brân + 1 click to run + pay 3 credits trash cost. This destroys the Runner's early tempo while netting Corp +1 credit.
+- If Runner ignores Regolith: Corp gains 15 total credits, creating an overwhelming economic advantage.
+- **Why Q2 is superior:** At Turn 3, Corp has only 3 credits. Rushing Offworld leaves Corp with 1 credit before scoring. Setting up Regolith builds the economic engine required to rez future ICE, play operations, and protect 5/3 agendas without stalling.
+
+### Reasoning
+Regolith transforms an early Brân remote into a massive economic engine. Forcing the Runner to choose between conceding 15 credits to Corp or spending their entire turn and 3 credits trashing it is a win-win exchange for Corp.
+
+### If-Only-I'd-Known
+- Use early high-tax remotes to cash in high-yield assets like Regolith Mining License before scoring agendas; forcing the Runner to pay to trash your economy sets up easier scoring windows later.
+
+### Confidence
+high - Comprehensive analysis of both lines and their strategic implications.
+
+---
+
+# Proposed Playbook Additions
+
+### 1. Unified Run Economy (Click vs Credit Balancing)
+- When calculating breaches against taxing upgrades (e.g. Manegarm Skunkworks) or Bioroid ICE (e.g. Brân 1.0), evaluate your turn's total clicks and credits as an interchangeable pool.
+- Clicks spent during a run to break subroutines are deducted from your overall turn action pool; calculate total click requirements across the entire turn rather than viewing each ICE encounter in isolation.
+
+### 2. Sentry & Net Damage Threat Windows
+- A rez-ready Sentry dealing lethal net damage (e.g. Karunā) in front of an unrezzed remote creates an uncontestable scoring window against any Runner lacking an installed Killer, unless the Runner has a grip size exceeding total possible subroutine damage.
+- When Sentries deal non-lethal, low damage (like Tithe's 1 damage), tanking the damage is often significantly more efficient than paying the tempo cost to install and pump a Killer.
+
+### 3. Conditional Card Negation
+- Always look for sequencing that negates card drawbacks: play "lose a click" events (e.g. VRcation) on Click 4 to bypass the penalty entirely.
+- Order runs on open or un-iced centrals first to enable discounted install conditions (e.g. Carmen) before installing programs.
+
+### 4. Fast-Advance & 5/3 Agenda Scaling
+- Double [[Seamless Launch]] allows scoring a 5/3 agenda from 0 advancement counters in a single turn, provided the agenda was installed on a prior turn (Install $\rightarrow$ wait 1 turn $\rightarrow$ Seamless + Seamless + Advance $\rightarrow$ Score).
+
+### 5. HQ Flush Heuristics
+- When HQ is lightly defended and flooded with multiple agendas, install the largest agenda into your fortified remote to simultaneously reduce HQ vulnerability and create scoring pressure.
+
+### 6. Asset Threat vs Agenda Jamming
+- Use early high-tax remotes to cash in high-yield assets like Regolith Mining License before scoring agendas; forcing the Runner to pay to trash your economy sets up easier scoring windows later.

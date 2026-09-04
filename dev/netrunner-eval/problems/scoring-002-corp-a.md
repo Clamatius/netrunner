@@ -1,3 +1,70 @@
+# ⚠️ BUSTED (2026-09-03) — DO NOT SCORE THIS PROBLEM
+
+**The key below is wrong, and not in a way one cell can fix. Exclude scoring-002 from
+scoring; report totals out of 20 in-scope problems, not 21.**
+
+## The defect
+
+The Q2 table row
+
+| Penny c1, Overclock c2, 2 click-breaks + Cleaver $7 on Brân | 0 | < $0 (can't even afford Brân+Palisade: $9 vs $10+) | DEAD |
+
+charges Cleaver **$7** to break Brân's third subroutine. But Brân's sub 1 is
+*"You may install 1 piece of ice from HQ or Archives directly inward"* — and after the
+Corp's own Q1 line (install Send a Message + Manegarm Skunkworks into Server 1) **HQ holds
+Seamless Launch ×2 and Regolith Mining License. No ice.** Sub 1 is blank. The Runner does
+not break it at all: Brân costs **2 clicks and $0**, not $7. The row's "$9 vs $10+" collapses.
+
+## The line that wins (Runner: $2, Pennyshaver 2, grip Sure Gamble + Overclock)
+
+```
+c1  Pennyshaver: pay $1, take $3                  -> $4                    (Penny 0)
+c2  Overclock ($1)                                -> $3 pool + $5 hosted = $8 available
+    Tithe (outer): tank 1 net damage              -> grip 1 -> 0, SURVIVES (no ETR on Tithe)
+c3  click-break Brân ETR                          -> $0 credits
+c4  click-break Brân ETR                          -> sub 1 fires, blank (no ice in HQ)
+    Palisade (str 4): Cleaver +1 ($2) + break ($1) -> pool $0
+    Manegarm approach: 0 clicks, pay $5 from Overclock hosted  ("You can spend hosted
+                                                    credits during that run" — unrestricted)
+    Breach -> steal Send a Message -> Runner 4 + 3 = 7. RUNNER WINS.
+```
+
+Exactly $8 available against $8 of cost, and all 4 clicks spent.
+
+## Why this busts the whole problem, not just Q2
+
+- **Q2's stated answer ("No, the answer doesn't change") is wrong.** It changes: the server
+  loses to the exact grip the question stipulates.
+- **Q1 is also unsound.** Its thesis is that Brân and Skunkworks tax the same two currencies
+  so no 4-click line covers both. That thesis depends on Brân costing 3 clicks. It costs 2.
+  With the spare click on Pennyshaver, Overclock's 5 pays Manegarm exactly — so "install
+  Send a Message behind Skunkworks" loses to a card with **2 copies in the Runner's deck**,
+  which is precisely the worst case the key tells the Corp to respect. Q1 therefore has no
+  clean answer either; it is a judgment call between two risky lines (jam it, or hold it in
+  an HQ that Docklands Pass reads 2 cards deep).
+
+## How to repair it (not done — changes the board, invalidates prior runs)
+
+Put **one piece of ice in HQ** in the q-file board state. That makes sub 1 live and both
+branches fail again:
+
+- *Runner click-breaks all 3 subs:* no click left for Pennyshaver. Overclock c1 -> $1 pool
+  + $5 hosted = $6. Tank Tithe, 3 click-breaks, Palisade $3 -> $3 at the approach.
+  Manegarm wants $5. **DEAD.**
+- *Runner click-breaks only the 2 ETRs (keeping the Pennyshaver click):* sub 1 fires, Corp
+  installs that ice directly inward free and rezzes it (Corp has $4 after rezzing
+  Skunkworks, so a $2 ice is affordable — pick a cheap one). Runner now owes that ice +
+  Palisade $3 + Manegarm $5 against $8. **DEAD.**
+
+Caveat: the repair depends on the Corp being able to afford the rez, so choose the HQ ice
+with that in mind and re-validate before using this problem to grade anyone again.
+
+Found by: Opus 5 and (in one of two samples) Gemini 3.8 Flash both answered "yes, it
+changes" on Q2 in the 2026-09-03 run; Opus produced the winning line verbatim. Root cause
+identified by Michael: the row neglects that with no ice in HQ you can disregard that sub.
+
+---
+
 # Answer: scoring-002-corp
 
 ## Breaking Cost Analysis
