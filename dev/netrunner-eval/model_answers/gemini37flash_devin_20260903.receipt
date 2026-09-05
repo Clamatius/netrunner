@@ -1,0 +1,21 @@
+{
+  "seat": "gemini",
+  "backend": "devin",
+  "vendor": "google",
+  "model": "gemini-3-7-flash-high",
+  "ok": true,
+  "reason": "ok",
+  "exit": 0,
+  "bytes": 50588,
+  "elapsed_s": 360.4,
+  "ts": "2026-09-04T02:37:46Z",
+  "run_id": "nreval-20260903",
+  "provenance": "probed 2026-08-29",
+  "cmd": "devin --model gemini-3-7-flash-high --prompt-file /var/folders/2g/vj5mn3zn5rvd1j_pj6hwbz6w0000gn/T/askmodel-prompt-2n0ge2zn.md -p <prompt>",
+  "prompt_bytes": 103609,
+  "prompt_sha256": "6f446a505b9abd41554d7d66a2b125a170431a1c263d400d83c16a8ce4781077",
+  "token_source": "n/a",
+  "sandbox": "backend-default (no permission flag passed)",
+  "stderr_bytes": 0,
+  "output_sha256": "5cf17ca447b9f185ddb886346b3cb0c38bc3573e807bbcb78573e63f235212d3"
+}

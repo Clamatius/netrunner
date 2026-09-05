@@ -12,6 +12,16 @@ A benchmark for testing strategic reasoning in the asymmetric card game Android:
 > were scored against the 6-point set and are **not directly comparable** to runs on
 > the current set.
 
+> **⚠️ `scoring-002` is BUSTED as of 2026-09-03 — do not score it.** Its key asserts that
+> Manegarm Skunkworks + Brân 1.0 lock the remote because "no 4-click line covers both".
+> Brân's sub 1 installs ice *from HQ or Archives*, and on this board HQ holds no ice, so
+> that sub is blank and Brân costs 2 clicks, not 3. The freed click funds Pennyshaver and
+> Overclock's 5 run-credits pay Manegarm exactly — the Runner gets in and wins. This breaks
+> Q2's stated answer AND Q1's thesis. See the banner atop `problems/scoring-002-corp-a.md`
+> for the winning line and the proposed repair. **In-scope totals are out of 20, not 21**
+> (trace-001 remains tracked separately as before).
+
+
 ## What This Tests
 
 - **State comprehension** - Reading game state accurately
