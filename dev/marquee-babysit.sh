@@ -19,6 +19,21 @@
 #            pointing at the primary seat's log, from which the session id is
 #            read (`codex exec` prints `session id: <uuid>` in its header).
 #            MARQUEE_CODEX_EFFORT overrides reasoning effort (default xhigh).
+#   claude — `claude -p --resume <session-id>`. Resume is BY ID like codex, but
+#            the id is ASSIGNED by the launcher (`claude --session-id <uuid>`)
+#            rather than scraped back out of a log, so there is nothing to parse
+#            and nothing to get wrong. Requires MARQUEE_CLAUDE_SESSION=<uuid>
+#            (the same uuid the primary seat was launched with) and an OAuth
+#            token — a `claude -p` subshell does NOT inherit an interactive
+#            login, so this reads ~/claude_oauth.txt (override:
+#            MARQUEE_CLAUDE_TOKEN_FILE) and exports CLAUDE_CODE_OAUTH_TOKEN.
+#            MARQUEE_CLAUDE_EFFORT overrides reasoning effort (default xhigh).
+#
+# FAIRNESS NOTE: the *_EFFORT defaults are xhigh, which is DELIBERATELY not the
+# usual seat default. If a match is running both seats at a matched effort, pass
+# the match's level explicitly on BOTH babysitters — otherwise a seat that gets
+# nudged silently finishes the game at a different dial position than its
+# opponent, and the result stops being a fair comparison.
 set -u
 SIDE="${1:?usage: marquee-babysit.sh <corp|runner> <model> [log-tag] [primary-pid]}"
 MODEL="${2:?usage: marquee-babysit.sh <corp|runner> <model> [log-tag] [primary-pid]}"
@@ -27,6 +42,9 @@ PRIMARY_PID="${4:-}"
 BACKEND="${MARQUEE_BACKEND:-devin}"
 PRIMARY_LOG="${MARQUEE_PRIMARY_LOG:-}"
 CODEX_EFFORT="${MARQUEE_CODEX_EFFORT:-xhigh}"
+CLAUDE_EFFORT="${MARQUEE_CLAUDE_EFFORT:-xhigh}"
+CLAUDE_SESSION="${MARQUEE_CLAUDE_SESSION:-}"
+CLAUDE_TOKEN_FILE="${MARQUEE_CLAUDE_TOKEN_FILE:-$HOME/claude_oauth.txt}"
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs
 LOG="logs/marquee-${SIDE}-${MODEL}-${TAG}-chunks.log"
@@ -39,6 +57,19 @@ codex_session_id() {
 
 if [ "$BACKEND" = codex ]; then
   [ -n "$PRIMARY_LOG" ] || { echo "codex backend needs MARQUEE_PRIMARY_LOG=<primary seat log>"; exit 1; }
+fi
+
+if [ "$BACKEND" = claude ]; then
+  # Fail HERE, before the primary-pid wait, not at the first nudge: a babysitter
+  # that dies only once it is needed is a babysitter that was never armed. It
+  # would sit for an hour looking healthy and then evaporate at the one moment
+  # the game depended on it.
+  [ -n "$CLAUDE_SESSION" ] || { echo "claude backend needs MARQUEE_CLAUDE_SESSION=<uuid the primary seat was launched with>"; exit 1; }
+  [ -r "$CLAUDE_TOKEN_FILE" ] || { echo "claude backend needs a readable token file (MARQUEE_CLAUDE_TOKEN_FILE, default ~/claude_oauth.txt): $CLAUDE_TOKEN_FILE"; exit 1; }
+  CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CLAUDE_TOKEN_FILE")"
+  [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "token file $CLAUDE_TOKEN_FILE is empty"; exit 1; }
+  export CLAUDE_CODE_OAUTH_TOKEN
+  echo "claude backend: resuming session $CLAUDE_SESSION"
 fi
 
 if [ -n "$PRIMARY_PID" ]; then
@@ -75,6 +106,12 @@ while true; do
     # A resume may be recorded under a fresh id; chain onto whatever it used.
     newest="$(codex_session_id "$LOG")"
     [ -n "$newest" ] && SESSION="$newest"
+  elif [ "$BACKEND" = claude ]; then
+    # --resume keeps the SAME id, so the next chunk resumes the same conversation
+    # and there is no id to re-scrape (contrast the codex branch above).
+    printf '%s' "$NUDGE" | timeout 3600 claude --model "$MODEL" \
+      --effort "$CLAUDE_EFFORT" --resume "$CLAUDE_SESSION" \
+      --dangerously-skip-permissions -p >> "$LOG" 2>&1
   else
     DEVIN_PERMISSION_MODE=dangerous timeout 3600 devin -p -c --model "$MODEL" -- "$NUDGE" \
       >> "$LOG" 2>&1
