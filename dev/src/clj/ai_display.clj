@@ -1803,6 +1803,32 @@
                #{"movement" "approach-server"})
              run-phase))
 
+(defn both-pass-window-now?
+  "both-pass-window?, but answering about THIS BOARD rather than about a phase
+   string: false whenever an encounter is live, whatever [:run :phase] says.
+
+   The engine ranks the encounter above the phase — game.core.runs dispatches
+   `continue` on
+
+       (if (get-current-encounter state) :encounter-ice (:phase (:run @state)))
+
+   — so a forced encounter sitting inside a \"movement\" phase is an ENCOUNTER
+   window, and routing it to the movement both-pass hint told neither seat that an
+   encounter was happening at all (probed live).
+
+   It exists as its own predicate, rather than as `(and (both-pass-window? ...)
+   (not (live-encounter? ...)))` inlined at each caller, because that inlining is
+   the recurring defect in this pair of functions: #115 added approach-ice to
+   print-run-window-priority!'s copy of the membership set and left
+   diagnose-blocker's behind, and #195 found the same split again. Two callers,
+   one rule, and the next window added is added once.
+
+   `both-pass-window?` stays pure and phase-only: the run-state-machine doc and
+   its tests describe the PHASE membership, which has not changed."
+  [state run-phase my-side]
+  (and (both-pass-window? run-phase my-side)
+       (not (live-encounter? state))))
+
 (defn run-priority-hint-lines
   "Side-aware hint lines for a run priority window (movement / approach-server).
 
@@ -2272,17 +2298,10 @@
         ;; (#195). Computed once: it is both the cond test and the cond body.
         corp-encounter-lines (:lines (corp-encounter-guidance state run-phase my-side))]
     (cond
-      ;; `(not (live-encounter? ...))`: the ENGINE ranks a live encounter above the
-      ;; run phase — game.core.runs dispatches `continue` on
-      ;;   (if (get-current-encounter state) :encounter-ice (:phase (:run @state)))
-      ;; — and this cond did not. A forced encounter whose [:run :phase] still reads
-      ;; "movement" therefore took the movement both-pass branch and neither seat was
-      ;; told an encounter was happening at all (probed live: the Corp got
-      ;; "Runner has priority first here", with no mention of the ICE or its subs).
-      ;; Same #160 shape as every other gate written on the phase string; scoped so
-      ;; the only state whose output changes is the one with an encounter on the wire.
-      (and (both-pass-window? run-phase my-side)
-           (not (live-encounter? state)))
+      ;; -now?, not the phase-only predicate: a forced encounter whose [:run :phase]
+      ;; still reads "movement" is an ENCOUNTER window and took this branch, telling
+      ;; neither seat an encounter was happening (#195). See both-pass-window-now?.
+      (both-pass-window-now? state run-phase my-side)
       (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
 
@@ -3334,11 +3353,13 @@
         ;; here — once it has passed, "use continue" is a no-op loop (issue #31 / g3).
         ;; The Corp keeps the generic continue/monitor-run steer at initiation (it
         ;; may still want to rez/fire a paid ability there). Membership comes from
-        ;; both-pass-window?, shared with print-run-window-priority! — this copy of
-        ;; the set was the one left behind when approach-ice was added (#115), and
-        ;; `diagnose` is exactly the surface a stuck seat reaches for.
+        ;; both-pass-window-NOW?, shared with print-run-window-priority! — this copy
+        ;; of the set was the one left behind when approach-ice was added (#115), and
+        ;; `diagnose` is exactly the surface a stuck seat reaches for. It was left
+        ;; behind a second time in #195 (the live-encounter rank), which is why the
+        ;; rule now lives in one state-aware predicate rather than in each caller.
         (cond
-          (both-pass-window? run-phase my-side-lc)
+          (both-pass-window-now? cs run-phase my-side-lc)
           (do
             (println "   → Owner: this is a both-must-pass priority window, not a choose prompt.")
             (doseq [line (run-priority-hint-lines run my-side-lc)]

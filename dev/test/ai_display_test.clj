@@ -1864,7 +1864,27 @@
           (is (str/includes? out "FORCED ENCOUNTER"))
           (is (str/includes? out "tank \"Archangel\""))
           (is (not (str/includes? out "active player goes first"))
-              (str "same shadowing on the Runner side, got:\n" out))))))
+              (str "same shadowing on the Runner side, got:\n" out))))
+      (testing "diagnose-blocker carried the SAME unguarded copy — the third time
+                this pair of functions has split on one rule (#115, then #195
+                twice). It is now one state-aware predicate, not a guard per caller."
+        (with-mock-state (mock-client-state
+                          :side "corp"
+                          :game-state (assoc (:game-state st)
+                                             :active-player "runner" :turn 7
+                                             :corp {:click 0 :credit 5 :hand []
+                                                    :prompt-state {:msg "The Runner is running on HQ"
+                                                                   :prompt-type "run"}}
+                                             :runner {:click 0 :credit 5 :hand []}))
+          (let [out (with-out-str (display/show-blocker-diagnosis))]
+            (is (str/includes? out "Archangel")
+                (str "diagnose must name the live encounter, got:\n" out))
+            (is (not (str/includes? out "both-must-pass priority window"))
+                (str "the movement both-pass verdict must not shadow it, got:\n" out)))))
+      (testing "and the phase-only predicate still answers about the PHASE — the
+                run-state-machine doc describes that membership, and it is unchanged"
+        (is (true? (display/both-pass-window? "movement" "corp")))
+        (is (false? (display/both-pass-window-now? st "movement" "corp"))))))
   (testing "regression guard: a movement window with NO encounter is unchanged —
             the reorder must only affect boards that carry an encounter"
     (let [run {:phase "movement" :position 0 :server ["hq"] :no-action false}
