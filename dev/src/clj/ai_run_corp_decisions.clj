@@ -173,7 +173,15 @@
       :else (some-> phase keyword))))
 
 (defn- unbroken-unfired-subs [ice]
-  (filter #(and (not (:broken %)) (not (:fired %))) (:subroutines ice)))
+  ;; core/fireable-subs, not the two-clause filter: the engine's
+  ;; resolve-unbroken-subs! (game/core/ice.clj) skips `(= false (:resolve %))`,
+  ;; so counting those as pending makes the Corp believe subs are outstanding
+  ;; that firing can never resolve — it will not fire again (the fired-at latch)
+  ;; and will not pass (subs "unresolved"), while the tanked Runner waits on it.
+  ;; A deadlock, reproduced by a guest seat against Mass-Driver (guest panel
+  ;; CRITICAL, round 2). Not a gameplay change: it aligns the client with what
+  ;; the engine will actually resolve.
+  (core/fireable-subs ice))
 
 (defn- unrezzed-upgrade? [card]
   (and (= "Upgrade" (:type card))

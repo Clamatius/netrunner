@@ -12,7 +12,14 @@
             [ai-core :as core]
             [ai-state :as state]
             [ai-card-actions :as actions]
-            [ai-run-tactics :as tactics]))
+            [ai-run-tactics :as tactics]
+            ;; runner-signaled-let-fire? is the predicate the CORP reads to decide
+            ;; whether our tank authorises a fire. The Runner asks the same
+            ;; question of the same shared log to learn whether its signal actually
+            ;; LANDED — one definition, deliberately not a second scan (#127
+            ;; ratchet). It lives in the corp ns because the Corp was its first
+            ;; reader; no cycle, that ns requires only ai-core.
+            [ai-run-corp-decisions :as corp-decisions]))
 
 ;; ============================================================================
 ;; Shared Helpers
@@ -126,6 +133,56 @@
 ;; somewhere else entirely — usually 0 — so two forced encounters in one run
 ;; shared a key and the second was silently treated as already signalled (#160).
 (defonce signaled-fire-encounter (atom nil))
+
+(def ^:private max-signal-sends
+  "How many times we will re-send the tank signal for ONE encounter before giving
+   up and telling the seat to escalate. Bounded because the failure this exists
+   for is invisible: an accepted-but-undelivered send leaves no trace anywhere."
+  3)
+
+(defn- signal-tank-once!
+  "Send the tank signal for `ice-title` unless the shared LOG already carries it
+   for this encounter, up to a per-encounter budget. Returns true if a send was
+   attempted.
+
+   The latch has now been wrong three ways, each narrower than the last: set
+   BEFORE the send (so a refused send latched as sent), then set on socket
+   ACCEPTANCE (so an accepted-but-undelivered send latched as sent). Both are the
+   wrong authority — `ws/send-message!` returning true means the socket took the
+   message, not that the engine logged it (#150) — and the failure mode is a
+   signal the Corp never sees while the Runner's own `tank-authorized?` flag goes
+   on insisting the tank stands. That is marquee game B's evidence exactly.
+
+   So the authority is the artefact the CORP actually reads —
+   corp-decisions/runner-signaled-let-fire? over the shared log — and the latch
+   degrades to a re-send BUDGET. Cost of a spurious re-send is one duplicate log
+   line the Corp ignores; cost of not re-sending is the wedge (guest panel
+   CRITICAL, round 2)."
+  [state gameid ice-title enc-key]
+  ;; NOT destructured: a {:keys [enc-key ...]} here would shadow the enc-key
+  ;; PARAMETER with the map's absent value and reset the budget on every call.
+  (let [latched @signaled-fire-encounter
+        sends (if (= (:enc-key latched) enc-key) (:sends latched 0) 0)]
+    (cond
+      (corp-decisions/runner-signaled-let-fire? state ice-title)
+      false                                   ; the Corp can see it; nothing to do
+
+      (>= sends max-signal-sends)
+      (do (when (= sends max-signal-sends)
+            (reset! signaled-fire-encounter {:enc-key enc-key :sends (inc sends)})
+            (println (format "   ⚠️  Sent the tank signal for %s %d times and it has not appeared in the log."
+                             ice-title max-signal-sends))
+            (println "      The Corp cannot see it, so it will not fire. This is harness")
+            (println "      trouble, not a slow opponent — escalate rather than re-tanking:")
+            (println "      ./dev/umpire-ping runner \"tank signal is not reaching the log — am I wedged?\""))
+          false)
+
+      :else
+      (do (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)%s"
+                           ice-title (if (pos? sends) (format " [re-send %d]" sends) "")))
+          (let-subs-fire-signal! gameid ice-title)
+          (reset! signaled-fire-encounter {:enc-key enc-key :sends (inc sends)})
+          true))))
 
 ;; Track failed ability attempts per ENCOUNTERED CARD to detect unaffordable
 ;; abilities. Map of core/encounter-key -> count, cleared when the run ends.
@@ -384,13 +441,10 @@
                        ;; handle-runner-pass-broken-ice, which closes it.
                        (not (core/opponent-passed-encounter? state side)))
                 (do
-                  (when (not= @signaled-fire-encounter (core/encounter-key state))
-                    (println (format "📡 Signaling Corp: can't break %s, tank authorized - letting subs fire" ice-title))
-                    ;; Latch AFTER the send, and only on acceptance — see
-                    ;; let-subs-fire-signal!. Latching first turned a refused send
-                    ;; into a permanent silence.
-                    (when (let-subs-fire-signal! gameid ice-title)
-                      (reset! signaled-fire-encounter (core/encounter-key state))))
+                  ;; Same authority as the non-full-break path: the shared LOG,
+                  ;; with a re-send budget. This call site was left behind by the
+                  ;; first version of the latch fix (guest panel, round 2).
+                  (signal-tank-once! state gameid ice-title (core/encounter-key state))
                   {:status :waiting-for-corp-fire
                    :wake-reason :waiting-for-opponent
                    :message (format "Can't break %s - tank authorized, waiting for Corp to fire subs" ice-title)
@@ -501,7 +555,7 @@
               enc-key (core/encounter-key state)
               status-key [:waiting-for-corp-fire enc-key ice-title]
               already-printed? (= @last-waiting-status status-key)
-              already-signaled? (= @signaled-fire-encounter enc-key)]
+              ]
           (if (not authorized?)
             ;; NOT authorized - pause and ask Runner to decide
             (do
@@ -525,13 +579,7 @@
                :position position})
             ;; Authorized - send signal to Corp
             (do
-              (when-not already-signaled?
-                (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)" ice-title))
-                ;; Latch AFTER the send, and only on acceptance — see
-                ;; let-subs-fire-signal!. Latching first turned a refused send into
-                ;; a permanent silence, with the seat still told its tank stood.
-                (when (let-subs-fire-signal! gameid ice-title)
-                  (reset! signaled-fire-encounter enc-key)))
+              (signal-tank-once! state gameid ice-title enc-key)
               (when-not already-printed?
                 (reset! last-waiting-status status-key)
                 (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"

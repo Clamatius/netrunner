@@ -533,43 +533,73 @@
           (is (not-any? #(= "continue" (:command %)) @sent)
               "no continue may reach the engine while unbroken subs remain"))))))
 
-(deftest refused-tank-signal-is-not-latched-as-sent
-  ;; The one mechanism that produces BOTH halves of marquee game B's state: the
-  ;; Runner insisting "your tank stands; the Corp owes the subs" while the shared
-  ;; log holds no "indicates to fire" line and the Corp's --fire-unbroken
-  ;; correctly refuses to fire without one. The latch was set BEFORE the send and
-  ;; the send's return value was discarded, so a refused send latched as sent and
-  ;; the loop never tried again. Not the reproduced cause of that game — it is the
-  ;; candidate — but a latch-before-send is a bug on its own terms (#150,
-  ;; acceptance is not acknowledgement).
-  (testing "a REFUSED signal must not latch: the next tick has to try again"
+(defn- signal-log
+  "A log carrying the current-encounter marker for Whitespace, optionally followed
+   by the Runner's tank signal — which is what runner-signaled-let-fire? demands:
+   a signal MORE RECENT than this ice's encounter marker."
+  [signalled?]
+  (cond-> [{:text "ai-runner encounters Whitespace protecting R&D at position 1."}]
+    signalled? (conj {:text "ai-runner indicates to fire all unbroken subroutines on Whitespace."})))
+
+(deftest tank-signal-latch-defers-to-the-shared-log
+  ;; The latch has now been wrong three ways, each narrower: set BEFORE the send;
+  ;; then set on socket ACCEPTANCE. Both are the wrong authority — send-message!
+  ;; returning true means the socket took the message, not that the engine logged
+  ;; it — and the failure mode is a signal the Corp never sees while the Runner's
+  ;; own tank-authorized? flag insists the tank stands. That is marquee game B's
+  ;; evidence. The authority is now the artefact the CORP reads, and the latch is
+  ;; a re-send budget (guest panel CRITICAL, round 2).
+  (testing "a REFUSED send is retried on the next tick"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) false)]
         (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
-                                   [:game-state :runner :prompt-state]
-                                   {:msg "You are encountering Whitespace" :prompt-type "run"})
+                                   [:game-state :log] (signal-log false))
           (runner-handlers/reset-state!)
           (runs/set-strategy! {:tank #{"Whitespace"}})
           (let [out (with-out-str (ai/continue-run!))]
             (is (clojure.string/includes? out "REFUSED")
                 (str "a signal the socket would not take must be reported, got: " out)))
-          (is (= 1 (count (filter #(= "system-msg" (:command %)) @sent)))
-              "the first attempt is made")
-          ;; second tick: the latch must be clear, so it tries again
           (with-out-str (ai/continue-run!))
           (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
-              (str "a refused signal must be retried, not latched as sent, got: " @sent))
+              (str "a refused signal must be retried, got: " @sent))
           (runs/reset-strategy!)))))
-  (testing "an ACCEPTED signal still latches — the fix must not turn the latch off"
+  (testing "an ACCEPTED send that never reaches the log is ALSO retried — socket
+            acceptance is not delivery, and this is the case that wedged game B"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-        (with-mock-state (runner-encounter-ctx-state two-unbroken-subs nil)
+        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                   [:game-state :log] (signal-log false))
           (runner-handlers/reset-state!)
           (runs/set-strategy! {:tank #{"Whitespace"}})
-          (with-out-str (ai/continue-run!))
-          (with-out-str (ai/continue-run!))
-          (is (= 1 (count (filter #(= "system-msg" (:command %)) @sent)))
-              (str "one signal per encounter once it lands, got: " @sent))
+          (dotimes [_ 2] (with-out-str (ai/continue-run!)))
+          (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
+              (str "the log is the authority, not the socket's yes, got: " @sent))
+          (runs/reset-strategy!)))))
+  (testing "the re-send budget is BOUNDED, and exhausting it tells the seat to escalate
+            rather than spinning silently"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                   [:game-state :log] (signal-log false))
+          (runner-handlers/reset-state!)
+          (runs/set-strategy! {:tank #{"Whitespace"}})
+          (let [outs (doall (for [_ (range 6)] (with-out-str (ai/continue-run!))))]
+            (is (= 3 (count (filter #(= "system-msg" (:command %)) @sent)))
+                (str "capped at max-signal-sends, got: " @sent))
+            (is (some #(clojure.string/includes? % "umpire-ping") outs)
+                "and the seat is told to escalate once the budget is gone"))
+          (runs/reset-strategy!)))))
+  (testing "once the signal IS in the shared log, nothing is re-sent — the Corp can
+            see it, which is the whole question"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                   [:game-state :log] (signal-log true))
+          (runner-handlers/reset-state!)
+          (runs/set-strategy! {:tank #{"Whitespace"}})
+          (dotimes [_ 3] (with-out-str (ai/continue-run!)))
+          (is (empty? (filter #(= "system-msg" (:command %)) @sent))
+              (str "a landed signal must not be re-sent, got: " @sent))
           (runs/reset-strategy!))))))
 
 (deftest encounter-with-corp-as-passer-takes-the-free-exit

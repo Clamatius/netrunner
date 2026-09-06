@@ -1827,7 +1827,15 @@
    its tests describe the PHASE membership, which has not changed."
   [state run-phase my-side]
   (and (both-pass-window? run-phase my-side)
-       (not (live-encounter? state))))
+       ;; encounter-window?, NOT live-encounter?. The engine's precedence is
+       ;; `get-current-encounter`, and encounter-window? is its client mirror: the
+       ;; summary is emitted whenever an encounter exists and :ice is DROPPED when
+       ;; encounter-ice-summary cannot resolve the card, so the honest minimum for
+       ;; a live encounter is {:encounter-count 1}. Keying precedence on :ice
+       ;; therefore routed exactly the UNNAMEABLE encounter — the one a seat is
+       ;; least able to reason about — back to movement guidance (guest panel
+       ;; MAJOR, round 2).
+       (not (core/encounter-window? state))))
 
 (defn run-priority-hint-lines
   "Side-aware hint lines for a run priority window (movement / approach-server).
@@ -2101,8 +2109,14 @@
           [(format "    → Encounter on %s: %s. The Runner owns the break step here and has not answered yet."
                    ice-title subs)
            "      • `wait` (or `monitor-run`) — the normal move: let them break or `tank` first."
-           (format "      • fire-subs \"%s\"  — legal RIGHT NOW without their permission, and the STALL RECOVERY: use it once the Runner has gone quiet with no break or pass in the log."
-                   ice-title)
+           (format "      • fire-subs \"%s\"  — legal RIGHT NOW without their permission. The STALL RECOVERY, not a first move." ice-title)
+           ;; "once the Runner has gone quiet" was NOT an evaluable condition — a
+           ;; seat sees a cursor and a log, never elapsed opponent silence, and the
+           ;; operator rule for an unresponsive opponent is wait, ping the umpire,
+           ;; wait again. Naming a threshold the seat cannot measure invites it to
+           ;; invent one (guest panel MAJOR, round 2), so this points at the same
+           ;; sanctioned escalation as every other stuck window.
+           "      (Nothing moving? `peer-status` alive = keep waiting — that is a wait, not a stall. If it stays put, `umpire-ping`; do not rule 'stalled' yourself.)"
            "      (Rules order is 6.9.3b interface, THEN 6.9.3c the Corp resolves — see dev/instructions/extras/timing-reference.md. jinteki does not enforce it; firing early taxes subs they were going to break. Legal, but not the default.)"]))
 
       (= :runner-signaled authorization)
@@ -2390,6 +2404,18 @@
         (println "    → Other options: rez a card / fire a paid ability if useful.")
         (when (= run-phase "approach-ice")
           (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
+
+      ;; An encounter is live but the wire could not name its ICE
+      ;; (encounter-ice-summary dropped :ice, leaving {:encounter-count 1}).
+      ;; Precedence sent us past the movement hint, correctly — so say what IS
+      ;; true rather than falling through to a pass steer that may be refused.
+      (core/encounter-window? state)
+      (do
+        (println "    → An ENCOUNTER is live but the wire has not named its ICE, so the")
+        (println "      normal break/tank/fire menu cannot be built here.")
+        (println "    → `board` and `log` will say which card it is; `resync` if they")
+        (println "      disagree with this window. The encounter outranks the phase above.")
+        (println "    → Do NOT assume the phase line is the whole truth (#164)."))
 
       :else
       ;; Runner with all subs broken (or no rezzed ICE): `continue` DOES pass.
