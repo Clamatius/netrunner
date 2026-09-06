@@ -134,6 +134,15 @@
      3. Same-prefixed ice titles — 'Fairchild' vs 'Fairchild 3.0'. All matching is
         title-anchored (see on-ice-tail? / encounter-of-ice?), never bare substring.
 
+   Scans the WHOLE log, not a recent window. It used to take the last 20 lines,
+   which silently added a fourth staleness rule nobody wrote down: twenty ordinary
+   log lines during one open encounter — chat, paid abilities, another server's
+   traffic — and the Corp's authorization vanished with no state change on either
+   seat, which is the #195 wedge arriving by a different road (guest panel
+   CRITICAL, round 5). The three index comparisons below already ARE the recency
+   rule, and they do not need a window to be correct; they only need every line
+   they compare to still be there.
+
    A break line reads 'pays N … to break … subroutines on <ice>' and the signal line
    contains 'unbroken' (never the needle 'to break'), so those two predicates do not
    collide on the standard wording."
@@ -143,7 +152,6 @@
     (let [texts (->> (get-in state [:game-state :log])
                      (map #(str (:text %)))
                      (remove #(str/includes? % "has no further action"))
-                     (take-last 20)
                      vec)
           signal-idx    (last-index-where texts
                           #(and (str/includes? % "indicates to fire") (on-ice-tail? % ice-title)))
@@ -167,10 +175,11 @@
    for a send that vanished — a panel seat drove six accepted-and-lost sends
    through the resulting hole with no escalation ever printed.
 
-   Deliberately NOT windowed. Its sibling takes the last 20 lines because
-   recency IS its question; here a window is a second failure mode, since twenty
-   unrelated log lines would turn a delivered signal into a false report of
-   harness trouble (both panel seats, round 4). The engine only ever conj's to
+   Not windowed, and neither is its sibling any more — a window here turned a
+   delivered signal into a false report of harness trouble (both panel seats,
+   round 4), and a window there made the Corp's authorization expire after twenty
+   unrelated lines (round 5). The two predicates must lose a line at the same
+   moment or the seats disagree about whether the Corp was ever told. The engine only ever conj's to
    :log (game.core.say), and each side's view is a stable filter of it
    (diffs/pick-side-log), so an index means the same thing on every later tick —
    which is what makes `mark` sound at all. A resync REPLACES the log, and the

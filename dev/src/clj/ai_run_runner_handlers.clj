@@ -135,6 +135,11 @@
 ;; :cid alone, round 4 by title alone); see signal-tank-once!.
 (defonce signaled-fire-encounter (atom nil))
 
+;; [mark kind] of the last signal diagnosis printed, so a per-tick run loop
+;; reports a lost or unconfirmable signal ONCE per send rather than once per
+;; iteration. See report-once!.
+(defonce reported-signal-diagnosis (atom nil))
+
 ;; Track failed ability attempts per ENCOUNTERED CARD to detect unaffordable
 ;; abilities. Map of core/encounter-key -> count, cleared when the run ends.
 ;; Keyed by position until #160: two forced encounters both sit at :position 0,
@@ -157,8 +162,21 @@
   (reset! last-waiting-status nil)
   (reset! last-full-break-warning nil)
   (reset! signaled-fire-encounter nil)
+  (reset! reported-signal-diagnosis nil)
   (reset! failed-ability-attempts {})
   (reset! passed-ice-encounter nil))
+
+(defn- report-once!
+  "True the FIRST time a given diagnosis is reported for a given send, false
+   after. The run loop calls the tank handler on every iteration, so an
+   unguarded escalation notice prints for as long as the wedge lasts and buries
+   the state it is describing. Keyed on the send's log mark, so a NEW send (which
+   takes a new mark) gets to report again."
+  [mark kind]
+  (let [k [mark kind]]
+    (when-not (= @reported-signal-diagnosis k)
+      (reset! reported-signal-diagnosis k)
+      true)))
 
 (defn- signal-tank-once!
   "Send the tank signal for `ice-title` unless the shared LOG already carries it
@@ -217,14 +235,30 @@
       (corp-decisions/runner-signaled-let-fire? state ice-title)
       false                                   ; the Corp can see it; nothing to do
 
+      ;; Our mirror of the log is known-diverged: a diff did not apply, and
+      ;; state/update-game-state! HELD the old board rather than caching a bad one
+      ;; (#142). Every question below is asked of that stale log, so an absent
+      ;; signal here says nothing about what the Corp can see — the engine may
+      ;; have logged it and the diff carrying it may be the one we dropped. Wait
+      ;; for the resync the mismatch flag triggers instead of diagnosing from a
+      ;; mirror we already know is wrong (guest panel MAJOR, round 5).
+      (and mark (:diff-mismatch state))
+      (do (when (report-once! mark :stale-mirror)
+            (println (format "   ⏸️  Cannot confirm the tank signal for %s: our copy of the log" ice-title))
+            (println "      diverged from the server's and a resync is pending. Holding."))
+          false)
+
       (and mark (not landed?))
       ;; We sent, and our own line never appeared in the shared log. Say so —
-      ;; this is the state that wedged marquee game B in silence.
-      (do (println (format "   ⚠️  Your tank signal for %s has NOT appeared in the shared log." ice-title))
-          (println "      The Corp cannot see it, so it will not fire. This is harness trouble,")
-          (println "      not a slow opponent, and re-tanking will not re-send it: the client")
-          (println "      suppresses a signal it cannot confirm was lost. Escalate:")
-          (println "      ./dev/umpire-ping runner \"tank signal is not reaching the log — am I wedged?\"")
+      ;; this is the state that wedged marquee game B in silence. Once per send,
+      ;; not once per tick: the run loop calls this every iteration, and an
+      ;; escalation notice that repeats a hundred times reads as noise.
+      (do (when (report-once! mark :lost-signal)
+            (println (format "   ⚠️  Your tank signal for %s has NOT appeared in the shared log." ice-title))
+            (println "      The Corp cannot see it, so it will not fire. This is harness trouble,")
+            (println "      not a slow opponent, and re-tanking will not re-send it: the client")
+            (println "      suppresses a signal it cannot confirm was lost. Escalate:")
+            (println "      ./dev/umpire-ping runner \"tank signal is not reaching the log — am I wedged?\""))
           false)
 
       :else

@@ -153,6 +153,31 @@
                   {:game-state {:log log}} "Whitespace"))
           "the signal is the Runner's most recent action on this ice"))))
 
+(deftest signal-survives-twenty-unrelated-log-lines
+  ;; The predicate used to read only the last 20 log entries, which was a fourth
+  ;; staleness rule nobody wrote down: twenty ordinary lines during one open
+  ;; encounter — chat, paid abilities, another server's traffic — and the Corp's
+  ;; authorization silently expired with no state change on either seat. That is
+  ;; #195's wedge (Runner tanked, Corp never fired) arriving by a different road,
+  ;; and the Runner's own delivery check had already been unwindowed for it, so
+  ;; the two predicates disagreed about whether the Corp had ever been told
+  ;; (guest panel CRITICAL, round 5).
+  (testing "a signal stays live behind 25 unrelated lines — only a break or a new
+            encounter of this ice stales it"
+    (let [log (into [{:text "ai-runner encounters Whitespace protecting R&D at position 1."}
+                     {:text "ai-runner indicates to fire all unbroken subroutines on Whitespace"}]
+                    (for [i (range 25)] {:text (str "ai-corp says something " i)}))]
+      (is (true? (decisions/runner-signaled-let-fire?
+                  {:game-state {:log log}} "Whitespace"))
+          "line count is not a staleness rule")))
+  (testing "and the break rule still bites from beyond the old window"
+    (let [log (into [{:text "ai-runner indicates to fire all unbroken subroutines on Whitespace"}
+                     {:text "ai-runner pays 2 [Credits] to use Unity to break all 2 subroutines on Whitespace"}]
+                    (for [i (range 25)] {:text (str "ai-corp says something " i)}))]
+      (is (false? (decisions/runner-signaled-let-fire?
+                   {:game-state {:log log}} "Whitespace"))
+          "a break after the signal still un-says it, however long ago it was"))))
+
 (deftest signal-survives-a-break-on-a-DIFFERENT-ice
   (testing "a break on another ice does not stale the signal for this ice"
     (let [log [{:text "ai-runner indicates to fire all unbroken subroutines on Whitespace"}

@@ -680,6 +680,39 @@
               (is (not (clojure.string/includes? out "NOT appeared in the shared log"))
                   (str "a delivered signal is delivered however old it is, got: " out))))
           (runs/reset-strategy!))))
+    (testing "a delivered signal that is still CURRENT is not re-sent, however many
+              unrelated log lines have piled up behind it — the recency rule is the
+              break/encounter markers, never a line count"
+      (let [sent (atom [])
+            filler (vec (for [i (range 25)] {:text (str "ai-corp says something " i)}))]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-mock-state (ctx (into (signal-log true) filler))
+            (runner-handlers/reset-state!)
+            (runs/set-strategy! {:tank #{"Whitespace"}})
+            (let [out (with-out-str (ai/continue-run!))]
+              (is (zero? (sys-msgs @sent))
+                  (str "the Corp can still see the signal; nothing to send, got: " @sent))
+              (is (not (clojure.string/includes? out "re-signalling"))
+                  (str "and it is not stale, got: " out))))
+          (runs/reset-strategy!))))
+    (testing "a DIVERGED mirror is not evidence of a lost signal — a diff that did
+              not apply leaves our log behind the server's, and the entry we are
+              looking for may be in the diff we dropped"
+      (let [sent (atom [])]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-mock-state (ctx [enc-marker])
+            (runner-handlers/reset-state!)
+            (runs/set-strategy! {:tank #{"Whitespace"}})
+            (with-out-str (ai/continue-run!)))
+          (with-mock-state (assoc (ctx [enc-marker]) :diff-mismatch true)
+            (let [out (with-out-str (ai/continue-run!))]
+              (is (not (clojure.string/includes? out "NOT appeared in the shared log"))
+                  (str "a stale mirror cannot testify to what the Corp sees, got: " out))
+              (is (clojure.string/includes? out "resync is pending")
+                  (str "and the seat is told why we are holding, got: " out))
+              (is (= 1 (sys-msgs @sent))
+                  (str "and nothing is re-sent into it, got: " @sent))))
+          (runs/reset-strategy!))))
     (testing "an accepted send that is never delivered stops after ONE re-send
               attempt — a stale line from an earlier encounter must not license
               an unbounded retry loop"
@@ -694,8 +727,9 @@
             (let [outs (doall (for [_ (range 5)] (with-out-str (ai/continue-run!))))]
               (is (= 1 (sys-msgs @sent))
                   (str "exactly one re-send, not one per tick, got: " @sent))
-              (is (some #(clojure.string/includes? % "NOT appeared in the shared log") outs)
-                  "and the lost send is reported once it is known to be lost")))
+              (is (= 1 (count (filter #(clojure.string/includes? % "NOT appeared in the shared log") outs)))
+                  (str "reported ONCE per send, not once per loop tick, got: "
+                       (count (filter #(clojure.string/includes? % "NOT appeared") outs))))))
           (runs/reset-strategy!))))))
 
 (deftest encounter-with-corp-as-passer-takes-the-free-exit
