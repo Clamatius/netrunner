@@ -101,11 +101,10 @@
    (guest panel; same shape as #167's sent-latch finding).
 
    Acceptance is still not acknowledgement — a true here means the socket took
-   the message, not that the engine logged it (#150). The remaining gap, where
-   the send is accepted and the entry never appears, is filed: the fix is to let
-   the LOG overrule the latch via corp-decisions/runner-signaled-let-fire?, which
-   is the predicate the Corp reads, and it needs a re-send budget rather than a
-   check on every tick."
+   the message, not that the engine logged it (#150). That gap is covered by the
+   caller, not here: signal-tank-once! latches only on this true (a refused send
+   never left, so there is nothing to suppress) and asks the shared log whether
+   the send ever LANDED before it either re-signals or reports the wedge."
   [gameid ice-title]
   (let [sent? (boolean (ws/send-message! :game/action
                          {:gameid gameid
@@ -127,11 +126,16 @@
 ;; Track last --full-break warning to avoid repeating
 (defonce last-full-break-warning (atom nil))
 
-;; Track WHICH ENCOUNTER the Runner has signaled "let subs fire" on.
-;; Keyed by core/encounter-key (the encountered ICE's cid, position only as a
-;; fallback), not by :position: a FORCED encounter leaves :position pointing
-;; somewhere else entirely — usually 0 — so two forced encounters in one run
-;; shared a key and the second was silently treated as already signalled (#160).
+;; Track which ICE the Runner has sent a "let subs fire" signal for, so a send
+;; already on its way is not repeated every tick.
+;;
+;; Keyed by ICE TITLE — the grain of the log lines this is checked against —
+;; and NOT by core/encounter-key. That key is a card :cid, which its own
+;; docstring says is not an encounter identity: two encounters of one physical
+;; card share it, and keying the latch on it silently starved the second (#160
+;; had the same shape with :position, #195 round 3 with the :cid). Whether a
+;; signal is stale is a question for the LOG, not for this atom — see
+;; signal-tank-once!.
 (defonce signaled-fire-encounter (atom nil))
 
 ;; Track failed ability attempts per ENCOUNTERED CARD to detect unaffordable
@@ -163,48 +167,58 @@
    for this encounter. Returns true if a send was attempted.
 
    THE AUTOMATIC RE-SEND WAS DELETED, and that is the finding rather than an
-   omission. This latch has now been wrong four ways: set BEFORE the send (a
-   refused send latched as sent); set on socket ACCEPTANCE (an accepted-but-
-   undelivered send latched as sent); then a per-encounter re-send BUDGET — which
-   a third guest seat reproduced as a fresh wedge, because the budget was keyed on
-   `core/encounter-key`, and that is a card :cid which the codebase's own
-   docstring says is NOT an encounter identity. Two encounters of the same
-   physical card (Sisyphus Protocol) share it, so a first encounter that exhausted
-   the budget silently starved the second, which is the same class of wedge the
-   budget existed to prevent.
+   omission. This latch has been wrong four ways: set BEFORE the send (a refused
+   send latched as sent); set on socket ACCEPTANCE and treated as proof of
+   DELIVERY (an accepted-but-undelivered send latched as sent); then a
+   per-encounter re-send BUDGET, which a third guest seat reproduced as a fresh
+   wedge because the budget was keyed on `core/encounter-key` — a card :cid the
+   codebase's own docstring says is NOT an encounter identity. Two encounters of
+   the same physical card (Sisyphus Protocol) share it, so a first encounter that
+   exhausted the budget silently starved the second: the very wedge the budget
+   existed to prevent. Three rounds finding one mechanism wrong in three new ways
+   is the project's signal to delete it and file the missing primitive (#197), not
+   to design a fourth.
 
-   Three rounds finding one mechanism wrong in three new ways is the project's
-   signal to delete the mechanism and file the missing primitive, not to design a
-   fourth. The primitive is a real encounter identity: the wire carries none
-   (game.core.diffs/encounter-keys is [:encounter-count :ice :no-action] and the
-   engine's :eid is not serialized), so an honest retry needs a client-side
-   encounter-transition observer. Filed.
+   So this asks only what the LOG can answer, and it asks it in two parts, because
+   the fourth defect was asking ONE question with an identity we do not have:
 
-   What survives is the part that needed no identity: the LOG — the artefact the
-   Corp actually reads — decides whether we have signalled, so an
-   accepted-but-undelivered send is DETECTED and REPORTED to the seat instead of
-   latching as success. The seat can re-issue `tank` or escalate; it is a model,
-   not a daemon, and an honest report beats an automatic recovery that has been
-   wrong every time it has been written."
-  [state gameid ice-title enc-key]
-  (cond
-    (corp-decisions/runner-signaled-let-fire? state ice-title)
-    false                                   ; the Corp can see it; nothing to do
+     1. Is a CURRENT signal in the log? (corp-decisions/runner-signaled-let-fire?)
+        Then the Corp can see it and there is nothing to do.
+     2. Otherwise, have we sent for this ice, and did that send ever LAND?
+        (signal-for-ice-landed?) A signal that landed and merely went stale — a
+        second encounter of the same card, or a break line after it — proves the
+        channel works, so signal again; no identity needed to know that. A send
+        that never appeared at all is game B's harness fault: report it, name the
+        escalation, and do not flail.
 
-    (= @signaled-fire-encounter enc-key)
-    ;; We sent, and the shared log still does not show it. Say so — this is the
-    ;; state that wedged marquee game B in silence.
-    (do (println (format "   ⚠️  Your tank signal for %s has NOT appeared in the shared log." ice-title))
-        (println "      The Corp cannot see it, so it will not fire. This is harness trouble,")
-        (println "      not a slow opponent. Re-issue `tank` once; if it still does not appear:")
-        (println "      ./dev/umpire-ping runner \"tank signal is not reaching the log — am I wedged?\"")
-        false)
+   The latch is therefore keyed by ICE TITLE, the same grain as the log lines it
+   is compared against, and set only when the socket ACCEPTED the send — a
+   refused send never left, so suppressing the next one would be suppressing
+   nothing. Acceptance is still not delivery (#150); question 2 is what covers
+   that gap now."
+  [state gameid ice-title]
+  (let [sent-before? (= @signaled-fire-encounter ice-title)
+        ever-landed? (corp-decisions/signal-for-ice-landed? state ice-title)]
+    (cond
+      (corp-decisions/runner-signaled-let-fire? state ice-title)
+      false                                   ; the Corp can see it; nothing to do
 
-    :else
-    (do (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)" ice-title))
-        (let-subs-fire-signal! gameid ice-title)
-        (reset! signaled-fire-encounter enc-key)
-        true)))
+      (and sent-before? (not ever-landed?))
+      ;; We sent, and no signal for this ice has EVER reached the shared log. Say
+      ;; so — this is the state that wedged marquee game B in silence.
+      (do (println (format "   ⚠️  Your tank signal for %s has NOT appeared in the shared log." ice-title))
+          (println "      The Corp cannot see it, so it will not fire. This is harness trouble,")
+          (println "      not a slow opponent, and re-tanking sends the same message down the")
+          (println "      same channel. Escalate:")
+          (println "      ./dev/umpire-ping runner \"tank signal is not reaching the log — am I wedged?\"")
+          false)
+
+      :else
+      (do (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)%s"
+                           ice-title (if (and sent-before? ever-landed?) " [re-signalling: the last one is stale]" "")))
+          (when (let-subs-fire-signal! gameid ice-title)
+            (reset! signaled-fire-encounter ice-title))
+          true))))
 
 ;; ============================================================================
 ;; Auto-Select Single Card Prompts
@@ -444,7 +458,7 @@
                   ;; Same authority as the non-full-break path: the shared LOG,
                   ;; with a re-send budget. This call site was left behind by the
                   ;; first version of the latch fix (guest panel, round 2).
-                  (signal-tank-once! state gameid ice-title (core/encounter-key state))
+                  (signal-tank-once! state gameid ice-title)
                   {:status :waiting-for-corp-fire
                    :wake-reason :waiting-for-opponent
                    :message (format "Can't break %s - tank authorized, waiting for Corp to fire subs" ice-title)
@@ -522,8 +536,7 @@
     (let [run (get-in state [:game-state :run])
           position (:position run)
           current-ice (core/encountered-ice state)
-          subroutines (:subroutines current-ice)
-                    ;; core/fireable-subs: a :resolve false sub is not a decision the
+          ;; core/fireable-subs: a :resolve false sub is not a decision the
           ;; Runner owes — treating it as one makes a breaker spend credits on a
           ;; subroutine that cannot resolve, and leaves the encounter looking
           ;; unfinished to both seats (guest panel CRITICAL, round 3).
@@ -583,7 +596,7 @@
                :position position})
             ;; Authorized - send signal to Corp
             (do
-              (signal-tank-once! state gameid ice-title enc-key)
+              (signal-tank-once! state gameid ice-title)
               (when-not already-printed?
                 (reset! last-waiting-status status-key)
                 (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
@@ -637,7 +650,7 @@
              (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
-                    ;; core/fireable-subs — see handle-runner-encounter-ice.
+          ;; core/fireable-subs — see handle-runner-encounter-ice.
           actionable-subs (core/fireable-subs current-ice)
           ;; The Corp has passed this encounter, so our continue ENDS it and the
           ;; remaining subs never resolve (game.core.runs `continue

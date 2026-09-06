@@ -154,6 +154,32 @@
            (> signal-idx break-idx)      ; not superseded by a later break,
            (> signal-idx encounter-idx))))) ; and it belongs to the CURRENT encounter
 
+(defn signal-for-ice-landed?
+  "Has a tank signal for `ice-title` ever REACHED the shared log — regardless of
+   whether it is still CURRENT? runner-signaled-let-fire? answers the Corp's
+   question (\"may I fire now?\") and is deliberately staleness-sensitive; this
+   answers the Runner's narrower one: did our send get through at all?
+
+   The two states that predicate lumps together need opposite responses. A signal
+   that LANDED and then went stale — a new encounter of the same card (Sisyphus
+   Protocol), or the Runner breaking a sub after signalling — proves the send
+   channel works, so the Runner should signal again. A signal that never appears
+   at all is the harness fault that wedged marquee game B, where re-sending is
+   flailing and the seat should escalate instead.
+
+   Same 20-line window and the same 'has no further action' filter as its
+   sibling, deliberately: the window is what keeps a signal from three turns ago
+   out of a question about the encounter in front of us. Older than that and we
+   have no evidence about THIS send, which is the answer the caller wants."
+  [state ice-title]
+  (if (str/blank? ice-title)
+    false
+    (boolean (some #(and (str/includes? % "indicates to fire") (on-ice-tail? % ice-title))
+                   (->> (get-in state [:game-state :log])
+                        (map #(str (:text %)))
+                        (remove #(str/includes? % "has no further action"))
+                        (take-last 20))))))
+
 (defn- current-checkpoint [state]
   (let [run (get-in state [:game-state :run])
         phase (:phase run)
