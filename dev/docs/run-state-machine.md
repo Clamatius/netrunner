@@ -536,6 +536,14 @@ During encounter-ice, Runner and Corp need to coordinate:
 3. **Corp sees signal** and can fire subs or pass
 4. **Both pass** to move to next phase
 
+The signal is a COURTESY, not a gate. `fire-subs` is legal to the Corp at any
+encounter it holds priority in — `board.cljs` enables the button on the
+subroutines alone — and the AUTOMATION's refusal to fire without a signal (#169)
+is a policy choice, not a rule. Rules order is 6.9.3b (Runner interfaces) then
+6.9.3c (Corp resolves), so firing before the Runner has answered is out of order
+but not illegal; it is the documented stall recovery when the Runner has gone
+quiet (#195).
+
 ### Detection Functions
 
 ```clojure

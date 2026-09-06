@@ -2625,6 +2625,26 @@
   [state ice]
   (boolean (and ice (or (:rezzed ice) (live-encounter? state)))))
 
+(defn fireable-subs
+  "The subroutines on `ice` that `fire-subs` will actually resolve: unbroken,
+   unfired, AND `(:resolve sub true)`.
+
+   The third clause is the one every counting site in this codebase forgot.
+   `ai-card-actions/fire-unbroken-subs!` has it (it refuses with :nothing-to-fire
+   otherwise) and so does the human client — board.cljs enables \"Fire unbroken
+   subroutines\" only when some sub is unbroken, unfired and resolvable — but the
+   DISPLAY counted `(and (not :broken) (not :fired))` and therefore advertised a
+   fire the command would reject. Mass-Driver marks subs :resolve false, which is
+   exactly that state (guest panel CRITICAL, #195).
+
+   One definition because the two-clause version is currently hand-rolled at five
+   sites; the run HANDLERS still carry their own copies and changing what
+   --fire-unbroken fires is a behaviour change, so those are filed rather than
+   swept in here."
+  [ice]
+  (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
+          (:subroutines ice)))
+
 (defn encounter-key
   "Latch key for the encountered CARD — the encountered ICE's :cid, falling back
    to :position when the wire gives us no encounter. Used by the \"I already

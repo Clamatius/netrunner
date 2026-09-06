@@ -2082,31 +2082,62 @@
           ;; the ledger), so this seat is not out of moves.
           [(format "    → Encounter on %s: %s, and your pass is already recorded — `continue` is a no-op here."
                    ice-title subs)
-           (format "      • fire-subs \"%s\"  — still legal, and the only thing left that acts." ice-title)
-           "      • Otherwise the Runner owes the next move: use `wait`."]
-          [(format "    → Encounter on %s: %s. The Runner has not signalled yet — but you can act."
+           "      • The Runner owes the next move, and their `continue` now ENDS the encounter with the subs unresolved."
+           (format "      • fire-subs \"%s\"  — still legal, and the only thing left on your side that acts." ice-title)]
+          ;; ORDER IS THE POLICY on this surface — the printed guidance is the
+          ;; seat's only interface and it obeys the first imperative it reads.
+          ;; The first draft led with "fire-subs — resolve them now", and the
+          ;; guest panel was right that this is worse than the omission it fixed:
+          ;; the encounter step gives the RUNNER its break window first, and the
+          ;; Corp's monitor wakes in milliseconds while a model Runner takes
+          ;; minutes, so a Corp obeying bullet one fires before its opponent has
+          ;; read the prompt, on every ICE. jinteki does not enforce the ordering
+          ;; (the engine trusts the client), which is exactly why
+          ;; runner-signaled-let-fire?'s own docstring refuses to AUTO-fire
+          ;; without a signal: "a Runner who is merely breaking or pausing gets
+          ;; taxed for subs it was going to break." So the wait leads and the
+          ;; fire is named as the STALL RECOVERY — which is all #195 needed, and
+          ;; is the ordering dev/instructions/corp_play_structure.md already uses.
+          [(format "    → Encounter on %s: %s. The Runner owns the break step here and has not answered yet."
                    ice-title subs)
-           (format "      • fire-subs \"%s\"  — resolve them now. Legal at any encounter you hold priority in; you do not need the Runner's permission."
+           "      • `wait` (or `monitor-run`) — the normal move: let them break or `tank` first."
+           (format "      • fire-subs \"%s\"  — legal RIGHT NOW without their permission, and the STALL RECOVERY: use it once the Runner has gone quiet with no break or pass in the log."
                    ice-title)
-           "      • `continue` — pass priority and leave them unresolved (they may still be broken)."
-           "      (Waiting for the Runner is a fair choice, not an obligation. If nothing moves, fire.)"]))
+           "      (Rules order is 6.9.3b interface, THEN 6.9.3c the Corp resolves — see dev/instructions/extras/timing-reference.md. jinteki does not enforce it; firing early taxes subs they were going to break. Legal, but not the default.)"]))
 
       (= :runner-signaled authorization)
-      (into
-       [(format "    → The Runner has TANKED on %s — they declined to break and are waiting on YOU."
-                ice-title)]
-       (if (pos? unbroken)
-         [(format "      • fire-subs \"%s\"  — resolve the %s. This is the move; the encounter stays open afterwards."
-                  ice-title subs)
-          "      • `continue` DECLINES to fire — it records your pass, and the Runner then closes the encounter with the subs unresolved (a free pass for them)."
-          "      (Nothing is owed by the Runner here: waiting for them will not move this window.)"]
-         ["      • No unbroken subroutines remain — `continue` closes your half of the window."]))
+      (cond
+        (zero? unbroken)
+        [(format "    → The Runner has TANKED on %s — they declined to break and are waiting on YOU."
+                 ice-title)
+         "      • Nothing left that `fire-subs` can resolve — `continue` closes your half of the window."]
+
+        ;; Tank standing, but we have ALREADY passed this encounter. The window is
+        ;; no longer ours to hold: the Runner's next `continue` sees our side on
+        ;; the ledger and calls encounter-ends (game.core.runs), so "nothing they
+        ;; send moves it" — which this branch printed regardless — is false, and
+        ;; it is false in exactly the state a Corp that obeyed the OLD #195
+        ;; guidance lands in one command later (guest panel MAJOR).
+        already-passed?
+        [(format "    → The Runner has TANKED on %s — but your pass is already recorded, so their next `continue` ENDS the encounter and the %s never fire."
+                 ice-title subs)
+         (format "      • fire-subs \"%s\"  — resolve them before they close it. Still legal; the only thing left on your side that acts."
+                 ice-title)
+         "      (Your `continue` is spent — re-sending it changes nothing.)"]
+
+        :else
+        [(format "    → The Runner has TANKED on %s — they declined to break and are waiting on YOU."
+                 ice-title)
+         (format "      • fire-subs \"%s\"  — resolve the %s. This is the move; the encounter stays open afterwards unless a subroutine ends the run."
+                 ice-title subs)
+         "      • `continue` DECLINES to fire — it records your pass, and the Runner then closes the encounter with the subs unresolved (a free pass for them)."
+         "      (Nothing is owed by the Runner here: waiting for them will not move this window.)"])
       ;; :runner-passed — the ledger names them; our continue ends the encounter.
       :else
       (cond-> [(format "    → Runner has PASSED this encounter on %s — this window is yours to close."
                        ice-title)]
         (pos? unbroken)
-        (conj (format "    → %s: fire-subs \"%s\" resolves them (the encounter stays open)."
+        (conj (format "    → %s: fire-subs \"%s\" resolves them (the encounter stays open unless a subroutine ends the run)."
                       subs ice-title)
               ;; Named, because the automation deliberately does NOT take this fire
               ;; on a pass alone (#169): a pass is not a `tank`, and only
@@ -2142,14 +2173,22 @@
       (when (core/encounter-ice-active? state ice)
         (let [ice-title (:title ice "this ICE")]
           ;; nil is a THIRD answer here, not an absence: see corp-encounter-owed-lines.
-          (let [authorization (corp-decisions/fire-authorization state my-side ice-title)]
+          (let [authorization (corp-decisions/fire-authorization state my-side ice-title)
+                already-passed? (and (core/encounter-window? state)
+                                     (core/i-already-passed-run-window? state my-side))]
             (when-let [lines (seq (corp-encounter-owed-lines
                                    ice-title
-                                   (count (filter #(and (not (:broken %)) (not (:fired %)))
-                                                  (:subroutines ice)))
+                                   ;; core/fireable-subs, not a local two-clause
+                                   ;; filter: `fire-subs` refuses :resolve false
+                                   ;; subs with :nothing-to-fire, so counting them
+                                   ;; advertises a command that will bounce (guest
+                                   ;; panel CRITICAL).
+                                   (count (core/fireable-subs ice))
                                    authorization
-                                   (core/i-already-passed-run-window? state my-side)))]
-              {:authorization authorization :lines (vec lines)})))))))
+                                   already-passed?))]
+              {:authorization authorization
+               :already-passed? already-passed?
+               :lines (vec lines)})))))))
 
 (defn runner-encounter-decline-hint-lines
   "Guidance for a Runner at an encounter it owns with unbroken subroutines it is
@@ -3312,6 +3351,11 @@
         encounter? (live-encounter? cs)
         in-run-window? (or (:in-run? ts) encounter?)
         my-side-lc (when side (clojure.string/lower-case side))
+        ;; Bound at the TOP, not inside the run-window branch: two branches of the
+        ;; outer cond need it now (the prompted window and the promptless one), and
+        ;; a Corp encounter reaching the second was the guest panel's second
+        ;; CRITICAL. nil for the Runner and away from an encounter.
+        corp-encounter (corp-encounter-guidance cs run-phase my-side-lc)
         ;; A prompt is resolvable-via-choose only if it carries actual choices or
         ;; selectable cards. A passive run priority / paid-ability window has a
         ;; prompt object (sometimes a non-"waiting" :prompt-type) but NO options —
@@ -3343,9 +3387,7 @@
                                        (or (= run-phase "encounter-ice")
                                            encounter?))
                               (runner-encounter-unbroken-count cs))
-            ;; nil unless we are the Corp and the Runner has finished with this
-            ;; encounter (tank signal OR pass ledger) — see #195.
-            corp-encounter (corp-encounter-guidance cs run-phase my-side-lc)]
+]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
         ;; `initiation` is a both-must-pass window too (engine: continue :initiation
@@ -3399,12 +3441,21 @@
           ;; surfaces must not find them disagreeing.
           corp-encounter
           (do
-            (println (if (:authorization corp-encounter)
+            ;; Three owners, not two. The headline is a STRONGER claim than the
+            ;; body, so it keys on the same two reads the body does — a headline
+            ;; that says "nothing they send moves it" over a body that says "their
+            ;; continue ENDS the encounter" is the surface disagreeing with itself
+            ;; (guest panel MINOR, on top of the MAJOR that produced that state).
+            (println (cond
+                       (:already-passed? corp-encounter)
+                       "   → Owner: the RUNNER — your pass is recorded, so their continue closes this. You can still fire."
+                       (:authorization corp-encounter)
                        "   → Owner: YOU — the Runner is done with this encounter; nothing they send moves it."
+                       :else
                        ;; No authorization: the window really is shared, so do not
                        ;; claim otherwise — but it is still not a window the Corp
                        ;; has to sit out, which is what the old text implied.
-                       "   → Owner: SHARED — but you hold a move here the generic steer never named."))
+                       "   → Owner: SHARED — the Runner owns the break step, and you hold a fire the generic steer never named."))
             (doseq [line (:lines corp-encounter)]
               (println line)))
 
@@ -3423,6 +3474,20 @@
           (println "   → Use: wait --since <cursor>")))
 
       ;; Active run (or a run-less forced encounter), no prompt for us yet.
+      ;; Promptless, but the Corp owes (or can take) a move at a live encounter.
+      ;; This branch printed a flat "→ Use: continue", which is the #195 wedge text
+      ;; on a second path: a tanked encounter where the Corp's passive prompt has
+      ;; not arrived (or has been consumed) reaches HERE, not the run-window branch
+      ;; above (guest panel CRITICAL). Same helper, so the two paths cannot drift.
+      (and in-run-window? corp-encounter)
+      (do
+        (println (if (:in-run? ts)
+                   (format "🏃 A run is in progress on %s." (or (:run-server ts) "?"))
+                   (format "⚔️  You are in a forced encounter with %s — no run is in progress."
+                           (:title (encountered-ice cs) "an ICE"))))
+        (doseq [line (:lines corp-encounter)]
+          (println line)))
+
       in-run-window?
       (do
         (println (if (:in-run? ts)

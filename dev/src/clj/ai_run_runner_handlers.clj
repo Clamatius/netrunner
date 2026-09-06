@@ -78,13 +78,37 @@
   (remove #(clojure.string/includes? (str (:text %)) "has no further action") log-entries))
 
 (defn- let-subs-fire-signal!
-  "Send system message signaling Runner is done breaking subs on this ICE."
+  "Send the system message signaling the Runner is done breaking subs on this ICE.
+   Returns whether the socket ACCEPTED it.
+
+   The return value used to be discarded, and the \"already signalled here\" latch
+   was set BEFORE the call — so a send the socket refused latched as sent, the
+   loop never retried, and the Runner's `tank-authorized?` flag (a different flag,
+   set by `tank` itself) went on printing \"your tank stands; the Corp owes the
+   subs\" at a Corp that had never been told anything. That is exactly marquee
+   game B's evidence: the Runner insisting the tank stood while the shared log
+   held no \"indicates to fire\" line, and the Corp's --fire-unbroken correctly
+   refusing to fire without one. Not reproduced — the receipt for that game is a
+   summary, not a transcript — but it is the one mechanism that produces both
+   halves of the observed state, and it was a latch-before-send either way
+   (guest panel; same shape as #167's sent-latch finding).
+
+   Acceptance is still not acknowledgement — a true here means the socket took
+   the message, not that the engine logged it (#150). The remaining gap, where
+   the send is accepted and the entry never appears, is filed: the fix is to let
+   the LOG overrule the latch via corp-decisions/runner-signaled-let-fire?, which
+   is the predicate the Corp reads, and it needs a re-send budget rather than a
+   check on every tick."
   [gameid ice-title]
-  (ws/send-message! :game/action
-    {:gameid gameid
-     :command "system-msg"
-     :args {:msg (str "indicates to fire all unbroken subroutines on " ice-title)}})
-  (Thread/sleep 50))
+  (let [sent? (boolean (ws/send-message! :game/action
+                         {:gameid gameid
+                          :command "system-msg"
+                          :args {:msg (str "indicates to fire all unbroken subroutines on " ice-title)}}))]
+    (Thread/sleep 50)
+    (when-not sent?
+      (println "   ⚠️  That signal was REFUSED by the socket — the Corp has not been told.")
+      (println "      Not latching it, so the next tick retries. If it repeats, `connect` then re-`tank`."))
+    sent?))
 
 ;; ============================================================================
 ;; State Atoms
@@ -361,9 +385,12 @@
                        (not (core/opponent-passed-encounter? state side)))
                 (do
                   (when (not= @signaled-fire-encounter (core/encounter-key state))
-                    (reset! signaled-fire-encounter (core/encounter-key state))
                     (println (format "📡 Signaling Corp: can't break %s, tank authorized - letting subs fire" ice-title))
-                    (let-subs-fire-signal! gameid ice-title))
+                    ;; Latch AFTER the send, and only on acceptance — see
+                    ;; let-subs-fire-signal!. Latching first turned a refused send
+                    ;; into a permanent silence.
+                    (when (let-subs-fire-signal! gameid ice-title)
+                      (reset! signaled-fire-encounter (core/encounter-key state))))
                   {:status :waiting-for-corp-fire
                    :wake-reason :waiting-for-opponent
                    :message (format "Can't break %s - tank authorized, waiting for Corp to fire subs" ice-title)
@@ -499,9 +526,12 @@
             ;; Authorized - send signal to Corp
             (do
               (when-not already-signaled?
-                (reset! signaled-fire-encounter enc-key)
                 (println (format "📡 Signaling Corp: done breaking on %s (tank authorized)" ice-title))
-                (let-subs-fire-signal! gameid ice-title))
+                ;; Latch AFTER the send, and only on acceptance — see
+                ;; let-subs-fire-signal!. Latching first turned a refused send into
+                ;; a permanent silence, with the seat still told its tank stood.
+                (when (let-subs-fire-signal! gameid ice-title)
+                  (reset! signaled-fire-encounter enc-key)))
               (when-not already-printed?
                 (reset! last-waiting-status status-key)
                 (println (format "⏸️  Waiting for Corp fire decision: %s (%d unbroken sub%s)"
