@@ -342,7 +342,9 @@
           ;; this, a post-fire re-entry saw the fired sub as still fireable and
           ;; (when the fired-at latch was stale) re-sent the fire command, firing
           ;; the same sub twice. #71 (Diviner: 2 net damage from one subroutine).
-          unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ;; core/fireable-subs: :resolve false subs are not resolvable by a fire
+          ;; and counting them deadlocks the encounter (guest panel CRITICAL).
+          unbroken-subs (core/fireable-subs current-ice)
           ;; The pass LEDGER authorizes as well as the tank signal does (#169) —
           ;; a plain `continue` emits no signal, so this gate refused to fire at
           ;; a window the Runner had already left and the loop idle-polled for a
@@ -475,7 +477,8 @@
         (core/at-encounter? state run-phase)
         (let [ice-title (:title current-ice "ICE")
               subroutines (:subroutines current-ice)
-              unbroken-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+              ;; core/fireable-subs — see handle-corp-fire-if-asked.
+              unbroken-subs (core/fireable-subs current-ice)
               ;; Same two authorizations as --fire-unbroken above (#169), with
               ;; the same difference in what each one covers.
               authorization (decisions/fire-authorization state side ice-title)
@@ -607,7 +610,9 @@
              (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
     (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
-          actionable-subs (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+          ;; core/fireable-subs: a sub the engine will not resolve is not
+          ;; something this seat is still owed (guest panel CRITICAL).
+          actionable-subs (core/fireable-subs current-ice)
           pass-key [(core/encounter-key state) (:cid current-ice)]]
       ;; No (seq subroutines) — a zero-sub encounter is still a window we owe a
       ;; pass at (#167).
@@ -657,7 +662,7 @@
       ;; serialized subroutines are the authority on whether anything is left to
       ;; fire; the log only ever answered "did something fire recently".
       (when (and current-ice subs-resolved?
-                 (empty? (filter #(and (not (:broken %)) (not (:fired %)))
+                 (empty? (core/fireable-subs-of
                                  (:subroutines current-ice))))
         (let [runner-passed? (core/opponent-passed-encounter? state side)
               position (get-in state [:game-state :run :position])

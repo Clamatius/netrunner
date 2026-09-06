@@ -501,7 +501,14 @@ Flags can be passed to `run!`, `continue-run!`, or `monitor-run!` to automate de
 |------|-------------|
 | `--no-rez` | Auto-decline all rez opportunities |
 | `--rez <ice>` | Auto-rez the named ICE (can repeat). Any *other* unrezzed ICE PAUSES and hands back a rez decision — it is NOT silently declined. To decline the rest, send `--no-rez` (or re-enter `--rez "<that ICE>"`). |
-| `--fire-unbroken` | Auto-fire unbroken subs once the Runner is done with the encounter — a `tank` signal **or** a plain pass on the encounter ledger. The only mode that fires on a pass (#169) |
+| `--fire-unbroken` | Auto-fire FIREABLE subs once the Runner is done with the encounter — a `tank` signal **or** a plain pass on the encounter ledger. The only mode that fires on a pass (#169) |
+
+**"Fireable" is three conditions, not two:** unbroken, unfired, **and resolvable**
+(`(:resolve sub true)`). The engine's `resolve-unbroken-subs!` skips
+`(= false (:resolve %))` — Mass-Driver and friends set it — so a sub that is
+unbroken and unfired can still be something no fire will resolve. Counting those
+as pending made the Corp fire, resolve nothing, and then neither fire again nor
+pass: a deadlock (#195). `core/fireable-subs` is the shared predicate.
 | `--fire-if-asked` | Wait silently while Runner breaks, auto-fire on a `tank` **signal**, wake for rez. A Runner who merely **passes** surfaces as a fire-or-pass decision — a pass is not an ask (#169) |
 
 ### Both Sides
@@ -535,6 +542,14 @@ During encounter-ice, Runner and Corp need to coordinate:
    `"indicates to fire all unbroken subroutines on <ICE>"`
 3. **Corp sees signal** and can fire subs or pass
 4. **Both pass** to move to next phase
+
+The signal is a COURTESY, not a gate. `fire-subs` is legal to the Corp at any
+encounter it holds priority in — `board.cljs` enables the button on the
+subroutines alone — and the AUTOMATION's refusal to fire without a signal (#169)
+is a policy choice, not a rule. Rules order is 6.9.3b (Runner interfaces) then
+6.9.3c (Corp resolves), so firing before the Runner has answered is out of order
+but not illegal; it is the documented stall recovery when the Runner has gone
+quiet (#195).
 
 ### Detection Functions
 

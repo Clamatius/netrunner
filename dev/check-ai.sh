@@ -35,10 +35,12 @@ AI_NAMESPACES=(
     ai-debug
     ai-actions
     ai-stall
+    ai-loop-sync
     ai-goldfish-corp
     ai-goldfish-runner
     ai-heuristic-corp
     ai-heuristic-runner
+    ai-run-corp-decisions
     ai-run-runner-handlers
     ai-run-corp-handlers
     ai-run-tactics

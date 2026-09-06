@@ -134,6 +134,15 @@
      3. Same-prefixed ice titles — 'Fairchild' vs 'Fairchild 3.0'. All matching is
         title-anchored (see on-ice-tail? / encounter-of-ice?), never bare substring.
 
+   Scans the WHOLE log, not a recent window. It used to take the last 20 lines,
+   which silently added a fourth staleness rule nobody wrote down: twenty ordinary
+   log lines during one open encounter — chat, paid abilities, another server's
+   traffic — and the Corp's authorization vanished with no state change on either
+   seat, which is the #195 wedge arriving by a different road (guest panel
+   CRITICAL, round 5). The three index comparisons below already ARE the recency
+   rule, and they do not need a window to be correct; they only need every line
+   they compare to still be there.
+
    A break line reads 'pays N … to break … subroutines on <ice>' and the signal line
    contains 'unbroken' (never the needle 'to break'), so those two predicates do not
    collide on the standard wording."
@@ -143,7 +152,6 @@
     (let [texts (->> (get-in state [:game-state :log])
                      (map #(str (:text %)))
                      (remove #(str/includes? % "has no further action"))
-                     (take-last 20)
                      vec)
           signal-idx    (last-index-where texts
                           #(and (str/includes? % "indicates to fire") (on-ice-tail? % ice-title)))
@@ -153,6 +161,39 @@
       (and (>= signal-idx 0)             ; a signal for this ice exists,
            (> signal-idx break-idx)      ; not superseded by a later break,
            (> signal-idx encounter-idx))))) ; and it belongs to the CURRENT encounter
+
+(defn signal-for-ice-landed-since?
+  "Has a tank signal for `ice-title` reached the shared log AT OR AFTER log index
+   `mark`? runner-signaled-let-fire? answers the Corp's question (\"may I fire
+   NOW?\") and is staleness-sensitive; this answers the Runner's narrower one:
+   did the send I made at `mark` get through?
+
+   `mark` is the count of log entries at the moment the socket accepted our send,
+   so our own line, if it was ever delivered, sits at that index or later. Without
+   it this predicate cannot tell \"landed before my send\" from \"landed because of
+   my send\", and a signal from an EARLIER encounter of the same ice answers yes
+   for a send that vanished — a panel seat drove six accepted-and-lost sends
+   through the resulting hole with no escalation ever printed.
+
+   Not windowed, and neither is its sibling any more — a window here turned a
+   delivered signal into a false report of harness trouble (both panel seats,
+   round 4), and a window there made the Corp's authorization expire after twenty
+   unrelated lines (round 5). The two predicates must lose a line at the same
+   moment or the seats disagree about whether the Corp was ever told. The engine only ever conj's to
+   :log (game.core.say), and each side's view is a stable filter of it
+   (diffs/pick-side-log), so an index means the same thing on every later tick —
+   which is what makes `mark` sound at all. A resync REPLACES the log, and the
+   caller handles that by discarding a mark the log is now shorter than."
+  [state ice-title mark]
+  (if (or (str/blank? ice-title) (nil? mark))
+    false
+    (boolean (some (fn [[idx text]]
+                     (and (>= idx mark)
+                          (str/includes? text "indicates to fire")
+                          (on-ice-tail? text ice-title)))
+                   (map-indexed vector
+                                (map #(str (:text %))
+                                     (get-in state [:game-state :log])))))))
 
 (defn- current-checkpoint [state]
   (let [run (get-in state [:game-state :run])
@@ -173,7 +214,15 @@
       :else (some-> phase keyword))))
 
 (defn- unbroken-unfired-subs [ice]
-  (filter #(and (not (:broken %)) (not (:fired %))) (:subroutines ice)))
+  ;; core/fireable-subs, not the two-clause filter: the engine's
+  ;; resolve-unbroken-subs! (game/core/ice.clj) skips `(= false (:resolve %))`,
+  ;; so counting those as pending makes the Corp believe subs are outstanding
+  ;; that firing can never resolve — it will not fire again (the fired-at latch)
+  ;; and will not pass (subs "unresolved"), while the tanked Runner waits on it.
+  ;; A deadlock, reproduced by a guest seat against Mass-Driver (guest panel
+  ;; CRITICAL, round 2). Not a gameplay change: it aligns the client with what
+  ;; the engine will actually resolve.
+  (core/fireable-subs ice))
 
 (defn- unrezzed-upgrade? [card]
   (and (= "Upgrade" (:type card))

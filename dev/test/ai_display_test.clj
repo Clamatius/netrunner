@@ -161,7 +161,25 @@
   (testing "broken-only keeps its parenthetical too"
     (is (= "1 unbroken of 2 (1 broken)"
            (display/sub-count-summary [{:label "a" :broken true}
-                                       {:label "b"}])))))
+                                       {:label "b"}]))))
+  ;; A PREVENTED sub (:resolve false — Mass-Driver's) is unbroken and unfired but
+  ;; nothing a fire will resolve, and this one line is read by both seats. Round 3
+  ;; dropped them from the count, which told the Runner "0 unbroken of 2" while the
+  ;; engine's all-subs-broken? still said false and a full break was still
+  ;; available and still worth taking (guest panel CRITICAL, round 4). Counting
+  ;; them silently is the other half of the same lie: it advertises to the Corp a
+  ;; fire that fire-subs refuses (guest panel CRITICAL, round 2). Both, then.
+  (testing "prevented subs count as unbroken AND are named as unfireable"
+    (is (= "2 unbroken of 2 (2 prevented — a fire resolves nothing)"
+           (display/sub-count-summary [{:label "a" :resolve false}
+                                       {:label "b" :resolve false}])))
+    (is (= "2 unbroken of 3 (1 fired, 1 prevented — a fire resolves nothing)"
+           (display/sub-count-summary [{:label "a" :fired true}
+                                       {:label "b" :resolve false}
+                                       {:label "c"}]))))
+  (testing "a prevented sub that is already broken is just broken"
+    (is (= "0 unbroken of 1 (1 broken)"
+           (display/sub-count-summary [{:label "a" :broken true :resolve false}])))))
 
 (deftest test-game-over-status-decided
   (testing "decided game prints GAME-OVER with lowercased winner and turn"
@@ -1617,6 +1635,394 @@
             (str "all subs broken: continue is the correct pass, got: " out))
         (is (not (str/includes? out "tank"))
             (str "no decline decision remains when all subs are broken, got: " out))))))
+
+;; ============================================================================
+;; #195: the CORP half of "who owes this encounter".
+;;
+;; Marquee game B wedged for four minutes at an encounter-ice window after the
+;; Runner TANKED. The Runner's own surfaces were right ("the CORP — your tank
+;; stands; they owe the subs"); the Corp was told, by the surface a stuck seat
+;; reaches for, "this is a both-must-pass priority window ... Use: continue".
+;; corp-run-decision one namespace over was already returning
+;; {:kind :fire-unbroken, :authorization :runner-signaled}.
+;;
+;; Cause: both Corp display surfaces gated on `opponent-passed-encounter?` — the
+;; encounter LEDGER — while fire-authorization accepts TWO authorizations. A
+;; `tank` writes no ledger entry (it is a system-msg, not a pass), so the
+;; strongest possible "fire them" signal fell through to the generic Corp steer.
+;; diagnose-blocker had no Corp encounter branch at all.
+;;
+;; Every fixture here carries :log and :encounters, because that is where the
+;; authorization lives and a mock without them cannot see this bug at all.
+;; ============================================================================
+
+(def ^:private tithe-subs
+  [{:label "Do 1 net damage" :broken false :fired false}
+   {:label "Gain 1 [Credits]" :broken false :fired false}])
+
+(defn- corp-encounter-state
+  "Corp at a live encounter on Tithe. `ledger` is [:encounters :no-action]
+   (nil = nobody has passed); `signaled?` appends the Runner's tank system-msg
+   AFTER the encounter marker, which is what runner-signaled-let-fire? requires."
+  [{:keys [ledger signaled? subs]
+    :or {subs tithe-subs}}]
+  (mock-client-state
+   :side "corp"
+   :game-state (cond-> {:active-player "runner" :turn 7
+                        :run {:phase "encounter-ice" :position 1
+                              :server ["rd"] :no-action false}
+                        :encounters (cond-> {:encounter-count 1
+                                             :ice {:cid "tithe-1" :title "Tithe"
+                                                   :rezzed true :subroutines subs}}
+                                      ledger (assoc :no-action ledger))
+                        :log (cond-> [{:text "ai-runner spends [Click] to make a run on R&D."}
+                                      {:text "ai-corp pays 1 [Credits] to rez Tithe protecting R&D at position 0."}
+                                      {:text "ai-runner encounters Tithe protecting R&D at position 0."}]
+                               signaled?
+                               (conj {:text "ai-runner indicates to fire all unbroken subroutines on Tithe."}))
+                        :corp {:click 0 :credit 5 :hand []
+                               :prompt-state {:msg "The Runner is running on R&D"
+                                              :prompt-type "run"}
+                               :servers {:rd {:ices [{:cid "tithe-1" :title "Tithe"
+                                                      :rezzed true :subroutines subs}]}}}
+                        :runner {:click 0 :credit 5 :hand []}}
+                 true identity)))
+
+;; --- the pure renderer -------------------------------------------------------
+
+(deftest corp-encounter-owed-lines-distinguishes-tank-from-pass
+  (testing ":runner-signaled — a tank leaves the ledger EMPTY, so our continue is
+            the FIRST pass and does not end the encounter. Saying 'continue ENDS
+            the encounter' here would be a false claim about the engine."
+    (let [out (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 2 :runner-signaled))]
+      (is (str/includes? out "TANKED on Tithe")
+          (str "the seat must learn the Runner declined to break, got:\n" out))
+      (is (str/includes? out "fire-subs \"Tithe\"")
+          (str "and be given the command that actually moves it, got:\n" out))
+      (is (str/includes? out "2 unbroken subs")
+          (str "and how many subs are owed, got:\n" out))
+      (is (not (str/includes? out "ENDS the encounter"))
+          (str "a tank writes no ledger entry, so our continue is the FIRST pass, got:\n" out))
+      (is (not (re-find #"(?i)passes priority here" out))
+          (str "the generic Corp steer is exactly what wedged game B, got:\n" out))))
+  (testing ":runner-passed keeps its #169 wording — our continue IS the second pass"
+    (let [out (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 2 :runner-passed))]
+      (is (str/includes? out "PASSED this encounter on Tithe"))
+      (is (str/includes? out "fire-subs \"Tithe\""))
+      (is (str/includes? out "ENDS the encounter")
+          (str "the ledger names them, so continue is the second pass, got:\n" out))
+      (is (str/includes? out "--fire-unbroken fires it")
+          (str "#169: a pass is not an ask, and the seat must know it owns this, got:\n" out))))
+  (testing "no unbroken subs left: no form may advertise a fire"
+    (is (not (re-find #"fire-subs \"Tithe\"" (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 0 :runner-signaled))))
+        "the zero case may MENTION fire-subs as the thing that has nothing to do, but must not offer the command")
+    (is (not (str/includes? (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 0 :runner-passed))
+                            "fire-subs")))
+    (is (empty? (display/corp-encounter-owed-lines "Tithe" 0 nil))
+        "an unauthorized encounter with nothing to fire has nothing to add"))
+  (testing "NO authorization is a third answer, not an absence (#195, the half that
+            actually wedged game B). fire-subs is legal to the Corp at any
+            encounter — board.cljs gates the button on the subroutines alone, with
+            no reference to who has passed — and the Corp seat did not know it."
+    (let [out (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 2 nil))]
+      (is (str/includes? out "fire-subs \"Tithe\"")
+          (str "the recovery the umpire had to supply by hand, got:\n" out))
+      (is (str/includes? out "has not answered yet")
+          (str "and it must not claim an authorization it does not have, got:\n" out))
+      ;; ORDER IS THE POLICY (guest panel CRITICAL/MAJOR, both seats). The first
+      ;; draft led with "fire-subs — resolve them now"; a Corp whose monitor wakes
+      ;; in milliseconds would then fire before a model Runner had read its
+      ;; prompt, on every ICE. The wait must come FIRST and the fire must be
+      ;; framed as the stall recovery.
+      (is (< (.indexOf out "`wait`") (.indexOf out "fire-subs"))
+          (str "the wait must lead; the fire is the stall recovery, got:\n" out))
+      (is (str/includes? out "STALL RECOVERY")
+          (str "and be named as such, got:\n" out))
+      (is (str/includes? out "not the default")
+          (str "with the cost of firing early stated, got:\n" out))
+      (is (not (str/includes? out "TANKED"))
+          (str "nothing has been tanked, got:\n" out))
+      (is (not (str/includes? out "ENDS the encounter"))
+          (str "with an empty ledger our continue is the FIRST pass, got:\n" out))))
+  (testing "unauthorized AND we are the recorded passer: `continue` is a no-op, so
+            offering it is the #98/#115 lie — but the fire is still live"
+    (let [out (str/join "\n" (display/corp-encounter-owed-lines "Tithe" 2 nil true))]
+      (is (str/includes? out "already recorded"))
+      (is (str/includes? out "fire-subs \"Tithe\""))
+      (is (not (re-find #"• `continue` — pass priority" out))
+          (str "a pass we have already made must not be offered again, got:\n" out)))))
+
+;; --- the gate ---------------------------------------------------------------
+
+(deftest corp-encounter-hint-lines-follows-fire-authorization
+  (testing "a tank signal authorizes, and it is the case the ledger-only gate missed"
+    (with-mock-state (corp-encounter-state {:signaled? true})
+      (let [g (display/corp-encounter-guidance @ai-state/client-state "encounter-ice" "corp")]
+        (is (seq (:lines g)) "a standing tank must produce Corp guidance")
+        (is (= :runner-signaled (:authorization g))
+            "and report WHICH authorization, so the Owner headline can key on it")
+        (is (str/includes? (str/join "\n" (:lines g)) "TANKED on Tithe")))))
+  (testing "the ledger naming the Runner authorizes too (#169, unchanged)"
+    (with-mock-state (corp-encounter-state {:ledger "runner"})
+      (is (str/includes? (str/join "\n" (:lines (display/corp-encounter-guidance
+                                         @ai-state/client-state "encounter-ice" "corp")))
+                         "PASSED this encounter"))))
+  (testing "NO authorization still produces lines — it names the fire the Corp can
+            always take, without claiming the Runner is done (#195)"
+    (with-mock-state (corp-encounter-state {})
+      (let [out (str/join "\n" (:lines (display/corp-encounter-guidance
+                                       @ai-state/client-state "encounter-ice" "corp")))]
+        (is (str/includes? out "fire-subs \"Tithe\""))
+        (is (str/includes? out "has not answered yet")))))
+  (testing "the ledger naming US is not an authorization — and `continue` is spent"
+    (with-mock-state (corp-encounter-state {:ledger "corp"})
+      (let [out (str/join "\n" (:lines (display/corp-encounter-guidance
+                                       @ai-state/client-state "encounter-ice" "corp")))]
+        (is (str/includes? out "already recorded"))
+        (is (not (str/includes? out "PASSED this encounter"))
+            (str "our own pass is not the Runner's, got:\n" out)))))
+  (testing "an encounter with nothing left to fire and no authorization adds nothing —
+            the Corp keeps its ordinary rez/decline steer"
+    (with-mock-state (corp-encounter-state {:subs [{:label "Do 1 net damage" :broken true :fired false}]})
+      (is (nil? (display/corp-encounter-guidance @ai-state/client-state "encounter-ice" "corp")))))
+  (testing "and the Runner never takes this branch, whatever the authorization"
+    (with-mock-state (corp-encounter-state {:signaled? true})
+      (is (nil? (display/corp-encounter-guidance @ai-state/client-state "encounter-ice" "runner"))))))
+
+;; --- the two surfaces that lied ---------------------------------------------
+
+(deftest corp-prompt-window-names-the-tank-not-a-priority-pass
+  (testing "#195: print-run-window-priority! for a Corp facing a standing tank"
+    (with-mock-state (corp-encounter-state {:signaled? true})
+      (let [out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state
+                   (get-in @ai-state/client-state [:game-state :run])
+                   "encounter-ice" "corp"))]
+        (is (str/includes? out "TANKED on Tithe")
+            (str "expected the tank branch, got:\n" out))
+        (is (not (str/includes? out "passes priority here"))
+            (str "the generic Corp steer must not fire here, got:\n" out))
+        (is (not (str/includes? out "rez a card"))
+            (str "and it must not offer the rez menu of a window it no longer owns, got:\n" out)))))
+  (testing "an unauthorized encounter names the fire WITHOUT claiming the Runner is
+            done — this is the state marquee game B was actually in"
+    (with-mock-state (corp-encounter-state {})
+      (let [out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state
+                   (get-in @ai-state/client-state [:game-state :run])
+                   "encounter-ice" "corp"))]
+        (is (str/includes? out "fire-subs \"Tithe\"")
+            (str "the option the seat needed and was never shown, got:\n" out))
+        (is (not (str/includes? out "TANKED"))
+            (str "nothing has been tanked, got:\n" out)))))
+  (testing "regression guard: a non-encounter Corp window keeps the rez/decline steer —
+            the encounter branch must not swallow approach-ice"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 7
+                                   :run {:phase "approach-ice" :position 1
+                                         :server ["rd"] :no-action false}
+                                   :log []
+                                   :corp {:click 0 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str
+                  (display/print-run-window-priority!
+                   @ai-state/client-state
+                   (get-in @ai-state/client-state [:game-state :run])
+                   "approach-ice" "corp"))]
+        (is (str/includes? out "ICE rez window"))
+        (is (not (str/includes? out "fire-subs")))))))
+
+(deftest corp-diagnose-blocker-owns-the-tanked-encounter
+  (testing "#195: the surface the wedged seat actually ran. It said 'both-must-pass
+            priority window ... Use: continue' — an instruction that cannot move
+            this window, and that forfeits the subroutines if obeyed."
+    (with-mock-state (corp-encounter-state {:signaled? true})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "Owner: YOU")
+            (str "the Corp owes this window, got:\n" out))
+        (is (str/includes? out "fire-subs \"Tithe\"")
+            (str "and must be told the command that moves it, got:\n" out))
+        (is (not (str/includes? out "both-must-pass priority window"))
+            (str "the verbatim wedge text from #195 must be gone, got:\n" out))
+        (is (not (re-find #"(?i)→ Use: continue" out))
+            (str "steering to continue here forfeits the subs, got:\n" out)))))
+  (testing "and it agrees with `prompt` line-for-line — a stuck seat compares them"
+    (with-mock-state (corp-encounter-state {:signaled? true})
+      (let [diag (with-out-str (display/show-blocker-diagnosis))
+            prompt-out (with-out-str
+                         (display/print-run-window-priority!
+                          @ai-state/client-state
+                          (get-in @ai-state/client-state [:game-state :run])
+                          "encounter-ice" "corp"))]
+        (doseq [line (str/split-lines (str/trim prompt-out))]
+          (is (str/includes? diag line)
+              (str "diagnose-blocker must not diverge from prompt; missing:\n" line))))))
+  (testing "an unauthorized encounter reaches for the same helper: the Corp is told
+            it can fire, which is the sentence an umpire had to supply in game B"
+    (with-mock-state (corp-encounter-state {})
+      (let [out (with-out-str (display/show-blocker-diagnosis))]
+        (is (str/includes? out "fire-subs \"Tithe\"")
+            (str "expected the fire option, got:\n" out))
+        (is (not (str/includes? out "both-must-pass priority window"))
+            (str "the verbatim wedge text must not survive here either, got:\n" out))))))
+
+(deftest corp-states-the-first-fixture-matrix-could-not-reach
+  ;; Guest panel MAJOR: corp-encounter-state already ACCEPTED {:ledger "corp"
+  ;; :signaled? true} and no test used it, which is how the already-passed? gap
+  ;; shipped. These are the combinations that were missing.
+  (testing "tank standing AND our own pass recorded: the Runner's next `continue`
+            ENDS the encounter, so 'nothing they send moves it' is false — and this
+            is exactly the state a Corp that obeyed the OLD guidance lands in one
+            command later"
+    (with-mock-state (corp-encounter-state {:ledger "corp" :signaled? true})
+      (let [g (display/corp-encounter-guidance @ai-state/client-state "encounter-ice" "corp")
+            out (str/join "\n" (:lines g))
+            diag (with-out-str (display/show-blocker-diagnosis))]
+        (is (= :runner-signaled (:authorization g)) "the tank signal has not gone anywhere")
+        (is (true? (:already-passed? g)) "and our pass is on the encounter ledger")
+        (is (str/includes? out "ENDS the encounter")
+            (str "their continue closes this now, got:\n" out))
+        (is (str/includes? out "fire-subs \"Tithe\"")
+            (str "the fire is still live after our own pass, got:\n" out))
+        (is (not (str/includes? out "waiting on YOU"))
+            (str "we are not owed this window any more, got:\n" out))
+        (is (not (str/includes? out "records your pass"))
+            (str "the pass is already recorded; another continue is a no-op, got:\n" out))
+        (is (str/includes? diag "Owner: the RUNNER")
+            (str "and the headline must agree with the body, got:\n" diag)))))
+  (testing ":resolve false subs are not fireable — `fire-subs` refuses them with
+            :nothing-to-fire and board.cljs disables the button, so counting them
+            advertises a command that will bounce (Mass-Driver)"
+    (with-mock-state (corp-encounter-state
+                      {:signaled? true
+                       :subs [{:label "Do 1 net damage" :broken false :fired false :resolve false}
+                              {:label "Gain 1 [Credits]" :broken false :fired false :resolve false}]})
+      (let [out (str/join "\n" (:lines (display/corp-encounter-guidance
+                                        @ai-state/client-state "encounter-ice" "corp")))]
+        (is (not (re-find #"fire-subs \"Tithe\"" out))
+            (str "no fire may be offered when nothing is resolvable, got:\n" out))
+        (is (not (str/includes? out "2 unbroken"))
+            (str "and the count must not include them either, got:\n" out)))))
+  (testing "a mixed ICE counts only the resolvable ones"
+    (with-mock-state (corp-encounter-state
+                      {:signaled? true
+                       :subs [{:label "Do 1 net damage" :broken false :fired false :resolve false}
+                              {:label "Gain 1 [Credits]" :broken false :fired false}]})
+      (is (str/includes? (str/join "\n" (:lines (display/corp-encounter-guidance
+                                                 @ai-state/client-state "encounter-ice" "corp")))
+                         "1 unbroken sub"))))
+  (testing "core/fireable-subs is the shared predicate, and it is the one fire-subs uses"
+    (is (= 1 (count (core/fireable-subs
+                     {:subroutines [{:broken true} {:fired true}
+                                    {:resolve false} {:label "live"}]}))))))
+
+(deftest corp-promptless-encounter-is-not-told-to-continue
+  (testing "guest panel CRITICAL: a tanked encounter where the Corp holds NO
+            passive prompt does not reach the run-window branch at all — it falls
+            to the promptless in-run branch, which printed a flat
+            \"→ Use: continue\". That is the #195 wedge text on a second path."
+    (let [st (corp-encounter-state {:signaled? true})
+          promptless (update-in st [:game-state :corp] dissoc :prompt-state)]
+      (with-mock-state promptless
+        (let [out (with-out-str (display/show-blocker-diagnosis))]
+          (is (str/includes? out "fire-subs \"Tithe\"")
+              (str "the promptless path must reach the same helper, got:\n" out))
+          (is (not (re-find #"→ Use: continue" out))
+              (str "the flat continue steer forfeits the subs here, got:\n" out))))))
+  (testing "regression guard: a promptless run window with NO encounter keeps the
+            ordinary continue steer"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 7
+                                   :run {:phase "movement" :position 1 :server ["rd"] :no-action false}
+                                   :log []
+                                   :corp {:click 0 :credit 5 :hand []}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (is (str/includes? (with-out-str (display/show-blocker-diagnosis)) "Use: continue")))))
+
+(deftest live-encounter-outranks-the-run-phase-for-both-seats
+  (testing "#195 (found self-reviewing): game.core.runs dispatches `continue` on
+            (if (get-current-encounter state) :encounter-ice (:phase run)) — the
+            encounter outranks the phase in the ENGINE. This cond tested
+            both-pass-window? FIRST, so a forced encounter whose [:run :phase]
+            still reads \"movement\" took the movement branch and neither seat was
+            told an encounter was happening at all. Probed live before the fix:
+            the Corp got \"Runner (active player) has priority first here\"."
+    (let [forced {:phase "movement" :position 0 :server ["hq"] :no-action false}
+          st {:game-state {:run forced
+                           :encounters {:encounter-count 1
+                                        :ice {:cid "arch" :title "Archangel" :rezzed true
+                                              :subroutines [{:label "Trace" :broken false :fired false}]}}
+                           :log []}}]
+      (testing "Corp: the encounter, not the movement sub-step ladder"
+        (let [out (with-out-str (display/print-run-window-priority! st forced "movement" "corp"))]
+          (is (str/includes? out "Archangel"))
+          (is (not (str/includes? out "sub-step comes next"))
+              (str "the movement both-pass hint must not shadow a live encounter, got:\n" out))))
+      (testing "Runner: the forced-encounter advisory that was unreachable here"
+        (let [out (with-out-str (display/print-run-window-priority! st forced "movement" "runner"))]
+          (is (str/includes? out "FORCED ENCOUNTER"))
+          (is (str/includes? out "tank \"Archangel\""))
+          (is (not (str/includes? out "active player goes first"))
+              (str "same shadowing on the Runner side, got:\n" out))))
+      (testing "diagnose-blocker carried the SAME unguarded copy — the third time
+                this pair of functions has split on one rule (#115, then #195
+                twice). It is now one state-aware predicate, not a guard per caller."
+        (with-mock-state (mock-client-state
+                          :side "corp"
+                          :game-state (assoc (:game-state st)
+                                             :active-player "runner" :turn 7
+                                             :corp {:click 0 :credit 5 :hand []
+                                                    :prompt-state {:msg "The Runner is running on HQ"
+                                                                   :prompt-type "run"}}
+                                             :runner {:click 0 :credit 5 :hand []}))
+          (let [out (with-out-str (display/show-blocker-diagnosis))]
+            (is (str/includes? out "Archangel")
+                (str "diagnose must name the live encounter, got:\n" out))
+            (is (not (str/includes? out "both-must-pass priority window"))
+                (str "the movement both-pass verdict must not shadow it, got:\n" out)))))
+      (testing "and the phase-only predicate still answers about the PHASE — the
+                run-state-machine doc describes that membership, and it is unchanged"
+        (is (true? (display/both-pass-window? "movement" "corp")))
+        (is (false? (display/both-pass-window-now? st "movement" "corp"))))))
+  (testing "regression guard: a movement window with NO encounter is unchanged —
+            the reorder must only affect boards that carry an encounter"
+    (let [run {:phase "movement" :position 0 :server ["hq"] :no-action false}
+          st {:game-state {:run run :log []}}]
+      (is (str/includes? (with-out-str (display/print-run-window-priority! st run "movement" "corp"))
+                         "sub-step comes next"))
+      (is (str/includes? (with-out-str (display/print-run-window-priority! st run "movement" "runner"))
+                         "active player goes first")))))
+
+(deftest runner-diagnose-blocker-passes-corp-declined-through
+  (testing "#195 sibling: diagnose-blocker built its Runner decline hint with the
+            3-arity, so it never learned the Corp had passed — and told a Runner
+            holding a FREE exit that `continue` would not pass this window.
+            print-run-window-priority! has passed the 4th argument since #160."
+    (let [st (mock-client-state
+              :side "runner"
+              :game-state {:active-player "runner" :turn 7
+                           :run {:phase "encounter-ice" :position 1
+                                 :server ["rd"] :no-action false}
+                           :encounters {:encounter-count 1 :no-action "corp"
+                                        :ice {:cid "tithe-1" :title "Tithe"
+                                              :rezzed true :subroutines tithe-subs}}
+                           :log []
+                           :runner {:click 0 :credit 5 :hand []
+                                    :prompt-state {:msg "You are running on R&D"
+                                                   :prompt-type "run"}}
+                           :corp {:click 0 :credit 5 :hand []
+                                  :servers {:rd {:ices [{:cid "tithe-1" :title "Tithe"
+                                                         :rezzed true :subroutines tithe-subs}]}}}})]
+      (with-mock-state st
+        (let [out (with-out-str (display/show-blocker-diagnosis))]
+          (is (str/includes? out "has PASSED this encounter")
+              (str "the Corp is not going to fire; say so, got:\n" out))
+          (is (not (str/includes? out "will NOT pass this window"))
+              (str "that is the #92 rule, and it is false once the Corp has passed, got:\n" out)))))))
 
 ;; ============================================================================
 ;; #84: a decision the OPPONENT'S card handed you must say the choice is yours
