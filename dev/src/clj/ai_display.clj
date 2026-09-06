@@ -2008,6 +2008,123 @@
                      (:subroutines ice)))
       0)))
 
+(defn corp-encounter-owed-lines
+  "Guidance for a Corp at an encounter the RUNNER is done with — the window where
+   the Corp, and only the Corp, can still act. `authorization` is
+   corp-decisions/fire-authorization's verdict; pure, returns a vector of lines.
+
+   Two authorizations, two DIFFERENT engine outcomes for `continue`, and
+   collapsing them is how #195 shipped:
+
+     :runner-signaled — the Runner sent the `tank` system message. That is NOT a
+       pass, so the encounter ledger is still empty and our `continue` would be
+       the FIRST pass: it records us and leaves the encounter open for the Runner
+       to close (game.core.runs `continue :encounter-ice`).
+     :runner-passed   — the ledger names the Runner, so our `continue` is the
+       SECOND pass and ENDS the encounter on the spot.
+
+   Only the :runner-passed half existed, because the branch was gated on
+   `opponent-passed-encounter?` — the ledger and nothing else. So a TANK, the
+   strongest possible \"fire them\" signal, fell through to the generic Corp steer
+   (\"'continue' passes priority here (you DECLINE to act this window)\"). That is
+   the text the Corp seat read for four minutes in marquee game B while its own
+   `corp-run-decision` was already returning
+   {:kind :fire-unbroken, :authorization :runner-signaled}."
+  ([ice-title unbroken authorization]
+   (corp-encounter-owed-lines ice-title unbroken authorization false))
+  ([ice-title unbroken authorization already-passed?]
+  (let [subs (format "%d unbroken sub%s" unbroken (if (= unbroken 1) "" "s"))]
+    (cond
+      ;; No authorization yet: the Runner may still break. The Corp is NOT owed
+      ;; the window — but `fire-subs` is legal to it RIGHT NOW and always was.
+      ;; board.cljs enables "Fire unbroken subroutines" on
+      ;;   (= "encounter-ice" phase) or @encounters, plus any unbroken/unfired
+      ;;   resolvable sub
+      ;; with no reference whatever to who has passed (src/cljs/nr/gameboard/
+      ;; board.cljs). Our guidance offered only continue / monitor-run, so the
+      ;; marquee game-B Corp — which had no authorization, because the Runner's
+      ;; tank signal never reached the log — did not know the recovery its own
+      ;; harness supports, and it took an umpire to tell it. Naming the option is
+      ;; not the same as taking it: #169's rule that the AUTOMATION must not fire
+      ;; on anything less than a signal is unchanged.
+      (nil? authorization)
+      (when (pos? unbroken)
+        (if already-passed?
+          ;; Our pass is already on this encounter's ledger, so `continue` is the
+          ;; no-op the #98/#115 guards exist to stop us recommending — but the
+          ;; fire button is still live (board.cljs gates it on the subs, not on
+          ;; the ledger), so this seat is not out of moves.
+          [(format "    → Encounter on %s: %s, and your pass is already recorded — `continue` is a no-op here."
+                   ice-title subs)
+           (format "      • fire-subs \"%s\"  — still legal, and the only thing left that acts." ice-title)
+           "      • Otherwise the Runner owes the next move: use `wait`."]
+          [(format "    → Encounter on %s: %s. The Runner has not signalled yet — but you can act."
+                   ice-title subs)
+           (format "      • fire-subs \"%s\"  — resolve them now. Legal at any encounter you hold priority in; you do not need the Runner's permission."
+                   ice-title)
+           "      • `continue` — pass priority and leave them unresolved (they may still be broken)."
+           "      (Waiting for the Runner is a fair choice, not an obligation. If nothing moves, fire.)"]))
+
+      (= :runner-signaled authorization)
+      (into
+       [(format "    → The Runner has TANKED on %s — they declined to break and are waiting on YOU."
+                ice-title)]
+       (if (pos? unbroken)
+         [(format "      • fire-subs \"%s\"  — resolve the %s. This is the move; the encounter stays open afterwards."
+                  ice-title subs)
+          "      • `continue` DECLINES to fire — it records your pass, and the Runner then closes the encounter with the subs unresolved (a free pass for them)."
+          "      (Nothing is owed by the Runner here: waiting for them will not move this window.)"]
+         ["      • No unbroken subroutines remain — `continue` closes your half of the window."]))
+      ;; :runner-passed — the ledger names them; our continue ends the encounter.
+      :else
+      (cond-> [(format "    → Runner has PASSED this encounter on %s — this window is yours to close."
+                       ice-title)]
+        (pos? unbroken)
+        (conj (format "    → %s: fire-subs \"%s\" resolves them (the encounter stays open)."
+                      subs ice-title)
+              ;; Named, because the automation deliberately does NOT take this fire
+              ;; on a pass alone (#169): a pass is not a `tank`, and only
+              ;; --fire-unbroken opts into firing on it. A seat reading this should
+              ;; know the decision is genuinely theirs rather than something the
+              ;; loop is about to do for them.
+              "    → (a pass is not a 'let it fire' signal, so --fire-if-asked leaves this to you; --fire-unbroken fires it.)")
+        true
+        (conj "    → 'continue' ENDS the encounter (it is the second pass), not merely a priority pass."))))))
+
+(defn corp-encounter-guidance
+  "The Corp-at-encounter guidance for `state` as
+   {:authorization <verdict-or-nil> :lines [...]}, or nil when there is nothing to
+   say. ONE source for `print-run-window-priority!` and `diagnose-blocker`: #115 is
+   the precedent for inlining this rule twice, and the copy left behind was
+   `diagnose-blocker` — the surface a stuck seat actually reaches for, and the one
+   that told marquee game B to `continue`.
+
+   :authorization rides along because diagnose-blocker's Owner headline is a
+   STRONGER claim than the lines (\"nothing they send moves it\"), and it is only
+   true once the Runner is actually done. Handing back the verdict is how the
+   headline stays keyed to the same read as the body instead of re-deriving one.
+
+   Gated the way the fire HANDLERS gate themselves (core/at-encounter? plus
+   core/encounter-ice-active?), not on the phase string, so a forced encounter is
+   covered too (#160); and it asks corp-decisions/fire-authorization rather than
+   re-deriving the verdict from the ledger, which is the divergence #169 round 2
+   caught between this display and the automation."
+  [state run-phase my-side]
+  (when (and (= my-side "corp")
+             (core/at-encounter? state run-phase))
+    (let [ice (encountered-ice state)]
+      (when (core/encounter-ice-active? state ice)
+        (let [ice-title (:title ice "this ICE")]
+          ;; nil is a THIRD answer here, not an absence: see corp-encounter-owed-lines.
+          (let [authorization (corp-decisions/fire-authorization state my-side ice-title)]
+            (when-let [lines (seq (corp-encounter-owed-lines
+                                   ice-title
+                                   (count (filter #(and (not (:broken %)) (not (:fired %)))
+                                                  (:subroutines ice)))
+                                   authorization
+                                   (core/i-already-passed-run-window? state my-side)))]
+              {:authorization authorization :lines (vec lines)})))))))
+
 (defn runner-encounter-decline-hint-lines
   "Guidance for a Runner at an encounter it owns with unbroken subroutines it is
    NOT breaking. `continue` is REFUSED here — handle-runner-encounter-ice returns
@@ -2150,7 +2267,10 @@
                                   (= my-side (let [v (:no-action run)]
                                                (cond (keyword? v) (name v)
                                                      (string? v) v
-                                                     :else nil))))]
+                                                     :else nil))))
+        ;; nil unless the Runner is done with this encounter and the Corp owes it
+        ;; (#195). Computed once: it is both the cond test and the cond body.
+        corp-encounter-lines (:lines (corp-encounter-guidance state run-phase my-side))]
     (cond
       (both-pass-window? run-phase my-side)
       (doseq [line (run-priority-hint-lines run my-side)]
@@ -2180,42 +2300,21 @@
       (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
 
-      ;; Corp at an encounter the RUNNER has already passed: `continue` does not
-      ;; pass priority here, it ENDS the encounter (game.core.runs
-      ;; `continue :encounter-ice` — the opponent is already named, so our
-      ;; continue is the second pass). Telling the seat otherwise is the exact
-      ;; contradiction #169 is about, one surface further out: the classifier and
-      ;; the automation were fixed while `prompt` and `status` went on saying the
-      ;; window was a priority pass (guest panel CRITICAL).
-      (and (= my-side "corp")
-           (core/opponent-passed-encounter? state my-side))
-      (let [ice (encountered-ice state)
-            ice-title (:title ice "this ICE")
-            unbroken (count (filter #(and (not (:broken %)) (not (:fired %)))
-                                    (:subroutines ice)))
-            ;; Ask the GATE, do not re-derive it. In round 2's version of this
-            ;; fix, re-deriving from the ledger and a sub count made this branch
-            ;; advertise a fire the automation had just refused — two surfaces
-            ;; disagreeing about one window, which is the defect this whole issue
-            ;; is about, and it does not stop being one because the second
-            ;; surface is a print (guest panel MAJOR). That divergence cannot
-            ;; recur in the shipped rule, where the authorization is pure and
-            ;; never lapses; asking the gate is kept because the NEXT thing added
-            ;; here would re-derive it again.
-            authorization (corp-decisions/fire-authorization state my-side ice-title)]
-        (println (format "    → Runner has PASSED this encounter on %s — this window is yours to close."
-                         ice-title))
-        (when (pos? unbroken)
-          (println (format "    → %d unbroken sub%s: fire-subs \"%s\" resolves them (the encounter stays open)."
-                           unbroken (if (= unbroken 1) "" "s") ice-title))
-          ;; Named, because the automation deliberately does NOT take this fire
-          ;; on a pass alone (#169): a pass is not a `tank`, and only
-          ;; --fire-unbroken opts into firing on it. A seat reading this should
-          ;; know the decision is genuinely theirs rather than something the
-          ;; loop is about to do for them.
-          (when (= :runner-passed authorization)
-            (println "    → (a pass is not a 'let it fire' signal, so --fire-if-asked leaves this to you; --fire-unbroken fires it.)")))
-        (println "    → 'continue' ENDS the encounter (it is the second pass), not merely a priority pass."))
+      ;; Corp at an encounter the Runner is DONE with. `continue` is NOT a
+      ;; priority pass here — it either ends the encounter outright (the Runner
+      ;; passed) or forfeits the subs to the Runner's next continue (the Runner
+      ;; tanked). Telling the seat otherwise is the exact contradiction #169 is
+      ;; about, one surface further out: the classifier and the automation were
+      ;; fixed while `prompt` and `status` went on saying the window was a
+      ;; priority pass (guest panel CRITICAL).
+      ;;
+      ;; The gate was `opponent-passed-encounter?` — the encounter LEDGER, and
+      ;; nothing else — so it saw only half of what fire-authorization accepts and
+      ;; a `tank` fell through to the generic Corp steer below (#195). It now asks
+      ;; the same gate the fire handlers do, via corp-encounter-hint-lines.
+      corp-encounter-lines
+      (doseq [line corp-encounter-lines]
+        (println line))
 
       (= my-side "corp")
       (do
@@ -3214,7 +3313,10 @@
       (let [runner-unbroken (when (and (= my-side-lc "runner")
                                        (or (= run-phase "encounter-ice")
                                            encounter?))
-                              (runner-encounter-unbroken-count cs))]
+                              (runner-encounter-unbroken-count cs))
+            ;; nil unless we are the Corp and the Runner has finished with this
+            ;; encounter (tank signal OR pass ledger) — see #195.
+            corp-encounter (corp-encounter-guidance cs run-phase my-side-lc)]
         (println (format "⏸️  Run priority / paid-ability window%s: %s"
                          (if run-phase (str " (" run-phase ")") "") (:msg prompt)))
         ;; `initiation` is a both-must-pass window too (engine: continue :initiation
@@ -3237,16 +3339,42 @@
           ;; that agreed with the prompt display and deadlocked marquee G2.
           (and runner-unbroken (pos? runner-unbroken))
           (let [ice-title (:title (encountered-ice cs) "this ICE")
-                tanked? (state/tank-authorized? ice-title)]
+                tanked? (state/tank-authorized? ice-title)
+                ;; The FOURTH argument, which this copy did not pass (#195): once
+                ;; the Corp is the encounter's recorded passer our `continue` is a
+                ;; free exit, and the decline menu says the opposite without it.
+                ;; print-run-window-priority! has passed it since #160; this is the
+                ;; same copy-left-behind as #115's both-pass set, in the same fn.
+                corp-declined? (core/opponent-passed-encounter? cs my-side-lc)]
             ;; A tanked encounter is NOT still owed a decision by us — saying
             ;; "Owner: YOU" there is the same false failure `tank` itself used to
             ;; print (#151 item 2). diagnose-blocker is where a seat goes when it
             ;; already suspects it is stuck; it must not manufacture the suspicion.
-            (println (if tanked?
-                       "   → Owner: the CORP — your tank stands; they owe the subs."
-                       "   → Owner: YOU — a break/tank decision, not a both-pass window."))
+            (println (cond
+                       corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
+                       tanked? "   → Owner: the CORP — your tank stands; they owe the subs."
+                       :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
-                          ice-title runner-unbroken tanked?)]
+                          ice-title runner-unbroken tanked? corp-declined?)]
+              (println line)))
+
+          ;; Corp at an encounter the Runner is done with — the branch that did
+          ;; not exist, and the reason marquee game B wedged for four minutes
+          ;; (#195). The seat asked the surface built for exactly this question
+          ;; and was told "both-must-pass priority window ... use continue", while
+          ;; corp-run-decision one namespace over was returning
+          ;; {:kind :fire-unbroken :authorization :runner-signaled}. Same lines as
+          ;; `prompt`/`status`, from the same helper: a stuck seat comparing two
+          ;; surfaces must not find them disagreeing.
+          corp-encounter
+          (do
+            (println (if (:authorization corp-encounter)
+                       "   → Owner: YOU — the Runner is done with this encounter; nothing they send moves it."
+                       ;; No authorization: the window really is shared, so do not
+                       ;; claim otherwise — but it is still not a window the Corp
+                       ;; has to sit out, which is what the old text implied.
+                       "   → Owner: SHARED — but you hold a move here the generic steer never named."))
+            (doseq [line (:lines corp-encounter)]
               (println line)))
 
           :else
