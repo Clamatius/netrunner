@@ -154,31 +154,37 @@
            (> signal-idx break-idx)      ; not superseded by a later break,
            (> signal-idx encounter-idx))))) ; and it belongs to the CURRENT encounter
 
-(defn signal-for-ice-landed?
-  "Has a tank signal for `ice-title` ever REACHED the shared log — regardless of
-   whether it is still CURRENT? runner-signaled-let-fire? answers the Corp's
-   question (\"may I fire now?\") and is deliberately staleness-sensitive; this
-   answers the Runner's narrower one: did our send get through at all?
+(defn signal-for-ice-landed-since?
+  "Has a tank signal for `ice-title` reached the shared log AT OR AFTER log index
+   `mark`? runner-signaled-let-fire? answers the Corp's question (\"may I fire
+   NOW?\") and is staleness-sensitive; this answers the Runner's narrower one:
+   did the send I made at `mark` get through?
 
-   The two states that predicate lumps together need opposite responses. A signal
-   that LANDED and then went stale — a new encounter of the same card (Sisyphus
-   Protocol), or the Runner breaking a sub after signalling — proves the send
-   channel works, so the Runner should signal again. A signal that never appears
-   at all is the harness fault that wedged marquee game B, where re-sending is
-   flailing and the seat should escalate instead.
+   `mark` is the count of log entries at the moment the socket accepted our send,
+   so our own line, if it was ever delivered, sits at that index or later. Without
+   it this predicate cannot tell \"landed before my send\" from \"landed because of
+   my send\", and a signal from an EARLIER encounter of the same ice answers yes
+   for a send that vanished — a panel seat drove six accepted-and-lost sends
+   through the resulting hole with no escalation ever printed.
 
-   Same 20-line window and the same 'has no further action' filter as its
-   sibling, deliberately: the window is what keeps a signal from three turns ago
-   out of a question about the encounter in front of us. Older than that and we
-   have no evidence about THIS send, which is the answer the caller wants."
-  [state ice-title]
-  (if (str/blank? ice-title)
+   Deliberately NOT windowed. Its sibling takes the last 20 lines because
+   recency IS its question; here a window is a second failure mode, since twenty
+   unrelated log lines would turn a delivered signal into a false report of
+   harness trouble (both panel seats, round 4). The engine only ever conj's to
+   :log (game.core.say), and each side's view is a stable filter of it
+   (diffs/pick-side-log), so an index means the same thing on every later tick —
+   which is what makes `mark` sound at all. A resync REPLACES the log, and the
+   caller handles that by discarding a mark the log is now shorter than."
+  [state ice-title mark]
+  (if (or (str/blank? ice-title) (nil? mark))
     false
-    (boolean (some #(and (str/includes? % "indicates to fire") (on-ice-tail? % ice-title))
-                   (->> (get-in state [:game-state :log])
-                        (map #(str (:text %)))
-                        (remove #(str/includes? % "has no further action"))
-                        (take-last 20))))))
+    (boolean (some (fn [[idx text]]
+                     (and (>= idx mark)
+                          (str/includes? text "indicates to fire")
+                          (on-ice-tail? text ice-title)))
+                   (map-indexed vector
+                                (map #(str (:text %))
+                                     (get-in state [:game-state :log])))))))
 
 (defn- current-checkpoint [state]
   (let [run (get-in state [:game-state :run])

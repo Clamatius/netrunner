@@ -161,7 +161,25 @@
   (testing "broken-only keeps its parenthetical too"
     (is (= "1 unbroken of 2 (1 broken)"
            (display/sub-count-summary [{:label "a" :broken true}
-                                       {:label "b"}])))))
+                                       {:label "b"}]))))
+  ;; A PREVENTED sub (:resolve false — Mass-Driver's) is unbroken and unfired but
+  ;; nothing a fire will resolve, and this one line is read by both seats. Round 3
+  ;; dropped them from the count, which told the Runner "0 unbroken of 2" while the
+  ;; engine's all-subs-broken? still said false and a full break was still
+  ;; available and still worth taking (guest panel CRITICAL, round 4). Counting
+  ;; them silently is the other half of the same lie: it advertises to the Corp a
+  ;; fire that fire-subs refuses (guest panel CRITICAL, round 2). Both, then.
+  (testing "prevented subs count as unbroken AND are named as unfireable"
+    (is (= "2 unbroken of 2 (2 prevented — a fire resolves nothing)"
+           (display/sub-count-summary [{:label "a" :resolve false}
+                                       {:label "b" :resolve false}])))
+    (is (= "2 unbroken of 3 (1 fired, 1 prevented — a fire resolves nothing)"
+           (display/sub-count-summary [{:label "a" :fired true}
+                                       {:label "b" :resolve false}
+                                       {:label "c"}]))))
+  (testing "a prevented sub that is already broken is just broken"
+    (is (= "0 unbroken of 1 (1 broken)"
+           (display/sub-count-summary [{:label "a" :broken true :resolve false}])))))
 
 (deftest test-game-over-status-decided
   (testing "decided game prints GAME-OVER with lowercased winner and turn"

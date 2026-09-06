@@ -424,15 +424,28 @@
    nor :fired — matching the run handlers' own filter. Counting :fired subs as
    unbroken made a fully-resolved encounter read as still pending on BOTH seats
    (#99). Fired/broken totals get a parenthetical so the resolved state is
-   explicit, e.g. \"0 unbroken of 2 (2 fired)\"."
+   explicit, e.g. \"0 unbroken of 2 (2 fired)\".
+
+   PREVENTED subs (`:resolve false`, e.g. Mass-Driver's) are counted as unbroken
+   and named in the parenthetical, rather than being dropped from the count. Both
+   readings of them are wrong on their own and this line is read by both seats:
+   the Corp needs to know a fire will resolve nothing there (round 2 CRITICAL —
+   the display advertised a fire fire-subs would refuse), and the Runner needs to
+   know they are still unbroken, because the engine's all-subs-broken? still
+   demands them and breaking them can trigger the very card that prevented them
+   (round 4 CRITICAL). core/fireable-subs stays the authority for what a FIRE
+   resolves; this line reports the board."
   [subs]
   (let [total (count subs)
         fired (count (filter :fired subs))
         broken (count (filter #(and (:broken %) (not (:fired %))) subs))
-        actionable (count (core/fireable-subs-of subs))
+        unresolved (filter #(and (not (:broken %)) (not (:fired %))) subs)
+        actionable (count unresolved)
+        prevented (- actionable (count (core/fireable-subs-of unresolved)))
         detail (cond-> []
                  (pos? fired) (conj (str fired " fired"))
-                 (pos? broken) (conj (str broken " broken")))]
+                 (pos? broken) (conj (str broken " broken"))
+                 (pos? prevented) (conj (str prevented " prevented — a fire resolves nothing")))]
     (str actionable " unbroken of " total
          (when (seq detail) (str " (" (str/join ", " detail) ")")))))
 

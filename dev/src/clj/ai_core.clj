@@ -2025,7 +2025,10 @@
          (at-encounter? state (run-phase state))
          (let [current-ice (encountered-ice state)
                subs (:subroutines current-ice)
-               unbroken (fireable-subs-of subs)]
+               ;; Unbroken and unfired, not fireable-subs-of: this asks whether a
+               ;; BREAK/tank decision is pending, and a prevented (:resolve false)
+               ;; sub is still breakable — see ai-run-runner-handlers (round 4).
+               unbroken (filter #(and (not (:broken %)) (not (:fired %))) subs)]
            (and current-ice (encounter-ice-active? state current-ice)
                 (seq unbroken)
                 (not (i-already-passed-run-window? state side)))))))

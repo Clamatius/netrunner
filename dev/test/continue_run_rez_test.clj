@@ -494,7 +494,8 @@
    the ENCOUNTER-level passer ([:encounters :no-action]) — the field the engine
    actually tracks during an encounter (runs.clj:426). Run-level :no-action is
    held false, as the engine keeps it (set-phase resets it on phase entry)."
-  [subs encounter-passer]
+  ([subs encounter-passer] (runner-encounter-ctx-state subs encounter-passer 55))
+  ([subs encounter-passer cid]
   {:connected true
    :uid "test-user"
    :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
@@ -513,8 +514,8 @@
                          :prompt-state {:msg "You are encountering Whitespace"
                                         :prompt-type "run"}}
                 :corp {:credit 5
-                       :servers {:rd {:ices [{:cid 55 :title "Whitespace" :rezzed true
-                                              :subroutines subs}]}}}}})
+                       :servers {:rd {:ices [{:cid cid :title "Whitespace" :rezzed true
+                                              :subroutines subs}]}}}}}))
 
 (def ^:private two-unbroken-subs
   [{:label "Make the Runner lose 3 [Credits]" :broken false :fired false}
@@ -605,35 +606,32 @@
                 "and must not be warned about"))
           (runs/reset-strategy!))))))
 
-(deftest a-stale-signal-that-once-landed-is-sent-again
-  ;; The latch's remaining job is "do not spam a send that is already in the
-  ;; log". It was doing a second job it has no primitive for: deciding WHICH
-  ;; encounter we last signalled, keyed on core/encounter-key — a card :cid its
-  ;; own docstring says is not an encounter identity. So a second encounter of
-  ;; the same physical card (Sisyphus Protocol re-encounters one ICE inside a
-  ;; run) was suppressed, and REPORTED to the seat as harness trouble, when the
-  ;; truth was that we had never signalled this encounter at all.
-  ;;
-  ;; The log answers it without an identity: a signal line for this ice that
-  ;; LANDED and has merely gone stale proves the send channel works, so the move
-  ;; is to send again. A signal that never appears at all is game B's harness
-  ;; fault, and re-sending into that is flailing — that case still reports and
-  ;; escalates (pinned above).
+(deftest tank-signal-is-keyed-by-the-log-index-of-our-own-send
+  ;; The latch's job is "do not re-send a signal that is already on its way". It
+  ;; kept being asked a question no primitive here can answer — WHICH ENCOUNTER
+  ;; did I last signal? — and every key tried for it was wrong in a different
+  ;; state: :position collapsed two forced encounters (#160), the card :cid
+  ;; collapsed two encounters of one card (#195 round 3), the ice TITLE collapsed
+  ;; two different cards with the same name (round 4). The identity that exists is
+  ;; temporal: the log index our own line would occupy. These pin all four states.
   (let [enc-marker {:text "ai-runner encounters Whitespace protecting R&D at position 1."}
-        ctx #(assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
-                       [:game-state :log] %)]
-    (testing "a SECOND encounter of the same card gets its own signal"
+        break-line {:text "ai-runner pays 2 [Credits] to break 1 subroutine on Whitespace."}
+        ctx (fn ctx-fn
+              ([log] (ctx-fn log 55))
+              ([log cid] (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil cid)
+                                   [:game-state :log] log)))
+        sys-msgs #(count (filter (fn [m] (= "system-msg" (:command m))) %))]
+    (testing "a SECOND encounter of the SAME card gets its own signal — the enc-1
+              line landed at or after our mark, so the channel is proven working"
       (let [sent (atom [])]
         (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
           (with-mock-state (ctx [enc-marker])
             (runner-handlers/reset-state!)
             (runs/set-strategy! {:tank #{"Whitespace"}})
             (with-out-str (ai/continue-run!)))
-          ;; enc 1 signalled and landed; the engine then opens enc 2 of the SAME
-          ;; card, which makes that signal stale (runner-signaled-let-fire? trap 2).
           (with-mock-state (ctx (conj (signal-log true) enc-marker))
             (let [out (with-out-str (ai/continue-run!))]
-              (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
+              (is (= 2 (sys-msgs @sent))
                   (str "the second encounter needs its own signal, got: " @sent))
               (is (not (clojure.string/includes? out "NOT appeared in the shared log"))
                   (str "and must not be reported as harness trouble, got: " out))))
@@ -646,12 +644,60 @@
             (runner-handlers/reset-state!)
             (runs/set-strategy! {:tank #{"Whitespace"}})
             (with-out-str (ai/continue-run!)))
-          (with-mock-state (ctx (conj (signal-log true)
-                                      {:text "ai-runner pays 2 [Credits] to break 1 subroutine on Whitespace."}))
+          (with-mock-state (ctx (conj (signal-log true) break-line))
             (with-out-str (ai/continue-run!))
-            (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
+            (is (= 2 (sys-msgs @sent))
                 (str "a superseded signal must be re-sent, got: " @sent)))
+          (runs/reset-strategy!))))
+    (testing "a DIFFERENT card with the SAME title gets its own signal — a title
+              is not a card, and the second Whitespace was never signalled"
+      (let [sent (atom [])]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-mock-state (ctx [enc-marker] 55)
+            (runner-handlers/reset-state!)
+            (runs/set-strategy! {:tank #{"Whitespace"}})
+            (with-out-str (ai/continue-run!)))
+          ;; The outer copy's signal never landed; the inner copy is a different
+          ;; card and owes nothing to that.
+          (with-mock-state (ctx [enc-marker] 56)
+            (let [out (with-out-str (ai/continue-run!))]
+              (is (= 2 (sys-msgs @sent))
+                  (str "the second CARD needs its own signal, got: " @sent))
+              (is (not (clojure.string/includes? out "NOT appeared in the shared log"))
+                  (str "and is not evidence of harness trouble, got: " out))))
+          (runs/reset-strategy!))))
+    (testing "a landed signal pushed out of the recency window is still OUR send —
+              twenty unrelated log lines must not become a harness-trouble report"
+      (let [sent (atom [])
+            filler (vec (for [i (range 25)] {:text (str "ai-corp says something " i)}))]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-mock-state (ctx [enc-marker])
+            (runner-handlers/reset-state!)
+            (runs/set-strategy! {:tank #{"Whitespace"}})
+            (with-out-str (ai/continue-run!)))
+          (with-mock-state (ctx (into (conj (signal-log true) enc-marker) filler))
+            (let [out (with-out-str (ai/continue-run!))]
+              (is (not (clojure.string/includes? out "NOT appeared in the shared log"))
+                  (str "a delivered signal is delivered however old it is, got: " out))))
+          (runs/reset-strategy!))))
+    (testing "an accepted send that is never delivered stops after ONE re-send
+              attempt — a stale line from an earlier encounter must not license
+              an unbounded retry loop"
+      (let [sent (atom [])
+            ;; enc 1 signalled and landed, enc 2 opened: the re-send is licensed
+            ;; once. It never lands, so nothing licenses another.
+            log (conj (signal-log true) enc-marker)]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-mock-state (ctx log)
+            (runner-handlers/reset-state!)
+            (runs/set-strategy! {:tank #{"Whitespace"}})
+            (let [outs (doall (for [_ (range 5)] (with-out-str (ai/continue-run!))))]
+              (is (= 1 (sys-msgs @sent))
+                  (str "exactly one re-send, not one per tick, got: " @sent))
+              (is (some #(clojure.string/includes? % "NOT appeared in the shared log") outs)
+                  "and the lost send is reported once it is known to be lost")))
           (runs/reset-strategy!))))))
+
 (deftest encounter-with-corp-as-passer-takes-the-free-exit
   (testing "#160: with the Corp recorded as the encounter passer, our continue
             ENDS the encounter and the unbroken subs never fire (engine:
