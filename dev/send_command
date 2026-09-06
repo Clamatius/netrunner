@@ -480,7 +480,7 @@ ${GREEN}Card Actions:${NC}
   use-runner-ability <name> <N> - Bioroid click-to-break: use a Runner-usable ability printed on a Corp card (e.g. "Brân 1.0" during an encounter)
   trash <name>    - Trash installed card by name
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
-  fire-subs <name> - Fire unbroken ICE subroutines (Corp only, at any encounter you hold priority in — including a FORCED encounter with no run)
+  fire-subs <name> - Fire FIREABLE ICE subroutines: unbroken, unfired AND resolvable (Corp only, at any encounter you hold priority in — including a FORCED encounter with no run)
   auto-pass       - Toggle auto-pass priority during runs (Corp only)
   advance <name> [--overadvance]  - Advance installed card (Corp only)
   score <name>    - Score agenda with sufficient advancement counters

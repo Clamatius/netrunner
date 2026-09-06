@@ -429,7 +429,7 @@
   (let [total (count subs)
         fired (count (filter :fired subs))
         broken (count (filter #(and (:broken %) (not (:fired %))) subs))
-        actionable (count (filter #(and (not (:broken %)) (not (:fired %))) subs))
+        actionable (count (core/fireable-subs-of subs))
         detail (cond-> []
                  (pos? fired) (conj (str fired " fired"))
                  (pos? broken) (conj (str broken " broken")))]
@@ -2038,8 +2038,7 @@
   [state]
   (let [ice (encountered-ice state)]
     (if (core/encounter-ice-active? state ice)
-      (count (filter #(and (not (:broken %)) (not (:fired %)))
-                     (:subroutines ice)))
+      (count (core/fireable-subs ice))
       0)))
 
 (defn corp-encounter-owed-lines

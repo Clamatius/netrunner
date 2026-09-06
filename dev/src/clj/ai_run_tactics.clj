@@ -190,7 +190,10 @@
         subroutines (:subroutines ice)
         ;; :fired subs are resolved, not pending — same predicate as the run
         ;; handlers (#99: counting them as unbroken misreads a resolved encounter)
-        unbroken (filter #(and (not (:broken %)) (not (:fired %))) subroutines)
+        ;; core/fireable-subs-of — a :resolve false sub is not worth a breaker's
+        ;; credits, and counting it kept the tactic hunting for a break that buys
+        ;; nothing (guest panel CRITICAL, round 3).
+        unbroken (core/fireable-subs-of subroutines)
         breakers (list-available-breakers state)
         credits (get-in state [:game-state :runner :credit])]
     (println (format "⏸️  Tactics pause: %s" reason))

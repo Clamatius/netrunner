@@ -1961,6 +1961,37 @@
   (boolean (and (or (run-active? state) (encounter-window? state))
                 (= (some-> (run-window-owner state) name) (name (keyword side))))))
 
+(defn fireable-subs-of
+  "fireable-subs over a bare subroutine SEQ, for the callers that hold one
+   already. Same predicate, one definition — see fireable-subs."
+  [subroutines]
+  (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
+          subroutines))
+
+(defn fireable-subs
+  "The subroutines on `ice` that `fire-subs` will actually resolve: unbroken,
+   unfired, AND `(:resolve sub true)`.
+
+   The third clause is the one every counting site in this codebase forgot.
+   `ai-card-actions/fire-unbroken-subs!` has it (it refuses with :nothing-to-fire
+   otherwise) and so does the human client's ENCOUNTER control (board.cljs ~1603,
+   the one whose command we mirror). Its card-MENU sibling (~665) checks only
+   broken and fired, so \"the button requires resolvable\" is true of the encounter
+   control and not of every fire affordance — the unqualified claim was too broad
+   (guest panel, round 2). The DISPLAY counted `(and (not :broken) (not :fired))`
+   and therefore advertised a fire the command would reject. Mass-Driver marks
+   subs :resolve false, which is exactly that state (guest panel CRITICAL, #195).
+
+   The AUTOMATION counted them too, and that is worse than a bad sentence: the
+   engine's resolve-unbroken-subs! (game/core/ice.clj) skips
+   `(= false (:resolve %))`, so --fire-unbroken sends a fire that resolves
+   nothing, latches :fired-at-encounter, and then neither fires again nor passes,
+   while the tanked Runner waits on it. A deadlock, reproduced by a guest seat in
+   round 2 — which is why the corp decision classifier and both fire handlers now
+   use this rather than having it filed."
+  [ice]
+  (fireable-subs-of (:subroutines ice)))
+
 (defn- runner-encounter-decision-pending?
   "True when the Runner is stopped at an ICE encounter that needs a break /
    tank / jack-out decision from us, but which the engine did NOT surface as a
@@ -1994,7 +2025,7 @@
          (at-encounter? state (run-phase state))
          (let [current-ice (encountered-ice state)
                subs (:subroutines current-ice)
-               unbroken (filter #(and (not (:broken %)) (not (:fired %))) subs)]
+               unbroken (fireable-subs-of subs)]
            (and current-ice (encounter-ice-active? state current-ice)
                 (seq unbroken)
                 (not (i-already-passed-run-window? state side)))))))
@@ -2624,37 +2655,6 @@
    encounter on the wire to vouch for the card."
   [state ice]
   (boolean (and ice (or (:rezzed ice) (live-encounter? state)))))
-
-(defn fireable-subs-of
-  "fireable-subs over a bare subroutine SEQ, for the callers that hold one
-   already. Same predicate, one definition — see fireable-subs."
-  [subroutines]
-  (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
-          subroutines))
-
-(defn fireable-subs
-  "The subroutines on `ice` that `fire-subs` will actually resolve: unbroken,
-   unfired, AND `(:resolve sub true)`.
-
-   The third clause is the one every counting site in this codebase forgot.
-   `ai-card-actions/fire-unbroken-subs!` has it (it refuses with :nothing-to-fire
-   otherwise) and so does the human client's ENCOUNTER control (board.cljs ~1603,
-   the one whose command we mirror). Its card-MENU sibling (~665) checks only
-   broken and fired, so \"the button requires resolvable\" is true of the encounter
-   control and not of every fire affordance — the unqualified claim was too broad
-   (guest panel, round 2). The DISPLAY counted `(and (not :broken) (not :fired))`
-   and therefore advertised a fire the command would reject. Mass-Driver marks
-   subs :resolve false, which is exactly that state (guest panel CRITICAL, #195).
-
-   The AUTOMATION counted them too, and that is worse than a bad sentence: the
-   engine's resolve-unbroken-subs! (game/core/ice.clj) skips
-   `(= false (:resolve %))`, so --fire-unbroken sends a fire that resolves
-   nothing, latches :fired-at-encounter, and then neither fires again nor passes,
-   while the tanked Runner waits on it. A deadlock, reproduced by a guest seat in
-   round 2 — which is why the corp decision classifier and both fire handlers now
-   use this rather than having it filed."
-  [ice]
-  (fireable-subs-of (:subroutines ice)))
 
 (defn encounter-key
   "Latch key for the encountered CARD — the encountered ICE's :cid, falling back

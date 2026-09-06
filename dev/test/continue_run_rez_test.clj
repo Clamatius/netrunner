@@ -542,14 +542,22 @@
     signalled? (conj {:text "ai-runner indicates to fire all unbroken subroutines on Whitespace."})))
 
 (deftest tank-signal-latch-defers-to-the-shared-log
-  ;; The latch has now been wrong three ways, each narrower: set BEFORE the send;
-  ;; then set on socket ACCEPTANCE. Both are the wrong authority — send-message!
-  ;; returning true means the socket took the message, not that the engine logged
-  ;; it — and the failure mode is a signal the Corp never sees while the Runner's
-  ;; own tank-authorized? flag insists the tank stands. That is marquee game B's
-  ;; evidence. The authority is now the artefact the CORP reads, and the latch is
-  ;; a re-send budget (guest panel CRITICAL, round 2).
-  (testing "a REFUSED send is retried on the next tick"
+  ;; The AUTOMATIC re-send was DELETED, and these assertions changed with it —
+  ;; not to fit the code, but because a third review round found the mechanism
+  ;; unimplementable on the primitive available. The budget was keyed on
+  ;; core/encounter-key, which is a card :cid that its own docstring says is NOT
+  ;; an encounter identity: two encounters of the same physical card share it, so
+  ;; a first encounter that spent the budget starved the second — the very wedge
+  ;; the budget existed to prevent. Wrong four ways across three rounds (before
+  ;; the send, on socket acceptance, then this) is the project's signal to delete
+  ;; the mechanism and file the missing primitive.
+  ;;
+  ;; What survives needs no identity: the shared LOG — the artefact the Corp
+  ;; actually reads — decides whether we have signalled, so an undelivered signal
+  ;; is DETECTED and REPORTED instead of latching as success. The seat is a model
+  ;; and can re-issue `tank`; an honest report beats an automatic recovery that
+  ;; has been wrong every time it has been written.
+  (testing "a REFUSED send is reported as refused, and does not pass silently"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) false)]
         (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
@@ -559,47 +567,42 @@
           (let [out (with-out-str (ai/continue-run!))]
             (is (clojure.string/includes? out "REFUSED")
                 (str "a signal the socket would not take must be reported, got: " out)))
+          (is (= 1 (count (filter #(= "system-msg" (:command %)) @sent))))
+          (runs/reset-strategy!)))))
+  (testing "an ACCEPTED send that never reaches the log is CAUGHT on the next tick —
+            socket acceptance is not delivery, and this is game B's state. The seat
+            is told, and told what to do, rather than being left to wait forever."
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                   [:game-state :log] (signal-log false))
+          (runner-handlers/reset-state!)
+          (runs/set-strategy! {:tank #{"Whitespace"}})
           (with-out-str (ai/continue-run!))
-          (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
-              (str "a refused signal must be retried, got: " @sent))
+          (let [out (with-out-str (ai/continue-run!))]
+            (is (clojure.string/includes? out "NOT appeared in the shared log")
+                (str "the undelivered signal must be named, got: " out))
+            (is (clojure.string/includes? out "umpire-ping")
+                (str "and the seat given the sanctioned escalation, got: " out))
+            (is (clojure.string/includes? out "not a slow opponent")
+                (str "and told this is harness trouble — the distinction it could not"
+                     " make for itself in game B, got: " out)))
+          (is (= 1 (count (filter #(= "system-msg" (:command %)) @sent)))
+              (str "no automatic re-send: the mechanism was deleted, got: " @sent))
           (runs/reset-strategy!)))))
-  (testing "an ACCEPTED send that never reaches the log is ALSO retried — socket
-            acceptance is not delivery, and this is the case that wedged game B"
-    (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
-                                   [:game-state :log] (signal-log false))
-          (runner-handlers/reset-state!)
-          (runs/set-strategy! {:tank #{"Whitespace"}})
-          (dotimes [_ 2] (with-out-str (ai/continue-run!)))
-          (is (= 2 (count (filter #(= "system-msg" (:command %)) @sent)))
-              (str "the log is the authority, not the socket's yes, got: " @sent))
-          (runs/reset-strategy!)))))
-  (testing "the re-send budget is BOUNDED, and exhausting it tells the seat to escalate
-            rather than spinning silently"
-    (let [sent (atom [])]
-      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-        (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
-                                   [:game-state :log] (signal-log false))
-          (runner-handlers/reset-state!)
-          (runs/set-strategy! {:tank #{"Whitespace"}})
-          (let [outs (doall (for [_ (range 6)] (with-out-str (ai/continue-run!))))]
-            (is (= 3 (count (filter #(= "system-msg" (:command %)) @sent)))
-                (str "capped at max-signal-sends, got: " @sent))
-            (is (some #(clojure.string/includes? % "umpire-ping") outs)
-                "and the seat is told to escalate once the budget is gone"))
-          (runs/reset-strategy!)))))
-  (testing "once the signal IS in the shared log, nothing is re-sent — the Corp can
-            see it, which is the whole question"
+  (testing "once the signal IS in the shared log, nothing is sent and nothing is
+            warned about — the Corp can see it, which is the whole question"
     (let [sent (atom [])]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
                                    [:game-state :log] (signal-log true))
           (runner-handlers/reset-state!)
           (runs/set-strategy! {:tank #{"Whitespace"}})
-          (dotimes [_ 3] (with-out-str (ai/continue-run!)))
-          (is (empty? (filter #(= "system-msg" (:command %)) @sent))
-              (str "a landed signal must not be re-sent, got: " @sent))
+          (let [outs (doall (for [_ (range 3)] (with-out-str (ai/continue-run!))))]
+            (is (empty? (filter #(= "system-msg" (:command %)) @sent))
+                (str "a landed signal must not be re-sent, got: " @sent))
+            (is (not-any? #(clojure.string/includes? % "NOT appeared") outs)
+                "and must not be warned about"))
           (runs/reset-strategy!))))))
 
 (deftest encounter-with-corp-as-passer-takes-the-free-exit
