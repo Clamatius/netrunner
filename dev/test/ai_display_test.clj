@@ -1840,6 +1840,40 @@
         (is (not (str/includes? out "both-must-pass priority window"))
             (str "the verbatim wedge text must not survive here either, got:\n" out))))))
 
+(deftest live-encounter-outranks-the-run-phase-for-both-seats
+  (testing "#195 (found self-reviewing): game.core.runs dispatches `continue` on
+            (if (get-current-encounter state) :encounter-ice (:phase run)) — the
+            encounter outranks the phase in the ENGINE. This cond tested
+            both-pass-window? FIRST, so a forced encounter whose [:run :phase]
+            still reads \"movement\" took the movement branch and neither seat was
+            told an encounter was happening at all. Probed live before the fix:
+            the Corp got \"Runner (active player) has priority first here\"."
+    (let [forced {:phase "movement" :position 0 :server ["hq"] :no-action false}
+          st {:game-state {:run forced
+                           :encounters {:encounter-count 1
+                                        :ice {:cid "arch" :title "Archangel" :rezzed true
+                                              :subroutines [{:label "Trace" :broken false :fired false}]}}
+                           :log []}}]
+      (testing "Corp: the encounter, not the movement sub-step ladder"
+        (let [out (with-out-str (display/print-run-window-priority! st forced "movement" "corp"))]
+          (is (str/includes? out "Archangel"))
+          (is (not (str/includes? out "sub-step comes next"))
+              (str "the movement both-pass hint must not shadow a live encounter, got:\n" out))))
+      (testing "Runner: the forced-encounter advisory that was unreachable here"
+        (let [out (with-out-str (display/print-run-window-priority! st forced "movement" "runner"))]
+          (is (str/includes? out "FORCED ENCOUNTER"))
+          (is (str/includes? out "tank \"Archangel\""))
+          (is (not (str/includes? out "active player goes first"))
+              (str "same shadowing on the Runner side, got:\n" out))))))
+  (testing "regression guard: a movement window with NO encounter is unchanged —
+            the reorder must only affect boards that carry an encounter"
+    (let [run {:phase "movement" :position 0 :server ["hq"] :no-action false}
+          st {:game-state {:run run :log []}}]
+      (is (str/includes? (with-out-str (display/print-run-window-priority! st run "movement" "corp"))
+                         "sub-step comes next"))
+      (is (str/includes? (with-out-str (display/print-run-window-priority! st run "movement" "runner"))
+                         "active player goes first")))))
+
 (deftest runner-diagnose-blocker-passes-corp-declined-through
   (testing "#195 sibling: diagnose-blocker built its Runner decline hint with the
             3-arity, so it never learned the Corp had passed — and told a Runner

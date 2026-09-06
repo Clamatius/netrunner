@@ -2272,7 +2272,17 @@
         ;; (#195). Computed once: it is both the cond test and the cond body.
         corp-encounter-lines (:lines (corp-encounter-guidance state run-phase my-side))]
     (cond
-      (both-pass-window? run-phase my-side)
+      ;; `(not (live-encounter? ...))`: the ENGINE ranks a live encounter above the
+      ;; run phase — game.core.runs dispatches `continue` on
+      ;;   (if (get-current-encounter state) :encounter-ice (:phase (:run @state)))
+      ;; — and this cond did not. A forced encounter whose [:run :phase] still reads
+      ;; "movement" therefore took the movement both-pass branch and neither seat was
+      ;; told an encounter was happening at all (probed live: the Corp got
+      ;; "Runner has priority first here", with no mention of the ICE or its subs).
+      ;; Same #160 shape as every other gate written on the phase string; scoped so
+      ;; the only state whose output changes is the one with an encounter on the wire.
+      (and (both-pass-window? run-phase my-side)
+           (not (live-encounter? state)))
       (doseq [line (run-priority-hint-lines run my-side)]
         (println line))
 

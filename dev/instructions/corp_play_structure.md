@@ -240,7 +240,7 @@ Corp gets priority at specific timing windows:
 |-----------|---------|-------|
 | Pass priority (do nothing) | `continue` | Most common - just let the run proceed |
 | Rez ICE on approach | `continue --rez "ICE Name"` | **Critical**: Must rez during approach, not encounter. Equivalent while a monitor is running: `monitor-run --persistent --rez "ICE Name"` (rezzes AND keeps the monitor defending the rest of the run) |
-| Fire unbroken subs | `fire-subs` | After Runner declines to break |
+| Fire unbroken subs | `fire-subs` | Legal at **any** encounter you hold priority in — you do NOT need the Runner's permission. Conventionally you wait for them to break or `tank`; if the window stalls, fire anyway (#195) |
 | Rez upgrade (Manegarm etc.) | `continue --rez "Upgrade Name"` | On approach to server |
 | Auto-handle full run | `monitor-run` | Convenience command (see caveats below) |
 | Sleep until run ends | `monitor-run --fire-if-asked` | Auto-fire on a Runner `tank` signal, auto-continue, wake for rez — and wake for a fire-or-pass decision if the Runner simply passes (#169) |
@@ -330,6 +330,15 @@ If the run already ended, returns immediately instead of blocking.
 2. **Can't rez during encounter** - Once Runner is encountering ICE, it's too late to rez it. Plan ahead.
 
 3. **fire-subs only works if subs are unbroken** - Check status to see if Runner broke them first.
+
+3a. **You never have to wait for a `tank` signal to fire.** This table used to say
+   "after Runner declines to break", and a marquee Corp read that as a rule: it sat
+   at an encounter for four minutes waiting for a signal that never arrived, and an
+   umpire had to tell it `fire-subs` was available (#195). The human client's "Fire
+   unbroken subroutines" button is enabled on the subroutines alone
+   (`src/cljs/nr/gameboard/board.cljs`), with no reference to who has passed —
+   waiting is a play choice, not a legality constraint. `prompt`, `status` and
+   `diagnose-blocker` now say so at the window itself.
 
 4. **Upgrades rez on approach to server** - Manegarm Skunkworks must be rezzed as Runner approaches the server, not during ICE encounters.
 
