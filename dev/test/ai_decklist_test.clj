@@ -52,9 +52,22 @@
 
 (deftest opt-out-keeps-both
   (testing "the known-meta variant retains both lists"
-    (binding [state/*keep-open-decklists* true]
+    ;; An atom, not a binding: ingest is on the socket receive thread, where a
+    ;; thread-local binding never arrives (guest-panel MAJOR).
+    (try
+      (reset! state/keep-open-decklists true)
       (let [out (state/redact-opponent-decklist {:decklists both} :corp)]
-        (is (= both (:decklists out)))))))
+        (is (= both (:decklists out))))
+      (finally (reset! state/keep-open-decklists false)))))
+
+(deftest opt-out-survives-a-thread-hop
+  (testing "the opt-out reaches a DIFFERENT thread — a binding would not"
+    (try
+      (reset! state/keep-open-decklists true)
+      (is (= both (:decklists @(future (state/redact-opponent-decklist
+                                         {:decklists both} :corp))))
+          "ingest runs on the websocket receive thread, not the caller's")
+      (finally (reset! state/keep-open-decklists false)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Ingest — both write paths, because a seat reads :game-state and a diff
@@ -87,3 +100,41 @@
         (is (not (contains? (get-in cs [:last-state :decklists]) :runner)))
         (is (= corp-list (get-in cs [:game-state :decklists :corp]))
             "and our own list is not collateral damage")))))
+
+
+;; ---------------------------------------------------------------------------
+;; The other evaluator-reachable caches (guest-panel CRITICAL)
+;; ---------------------------------------------------------------------------
+
+(deftest messages-ring-drops-state-payloads
+  (testing ":game/start is retained WITHOUT its state — it carries both lists"
+    ;; The real payload is often a JSON string, so the check must not depend on
+    ;; the data being a map.
+    (let [raw "{:decklists {:corp [...] :runner [\"Sure Gamble\"]}}"
+          out (state/sanitize-cached-message {:type :game/start :data raw})]
+      (is (= :game/start (:type out)) "the type survives — it is a debug ring")
+      (is (not= raw (:data out)))
+      (is (not (clojure.string/includes? (str (:data out)) "Sure Gamble")))))
+
+  (testing ":game/diff and :game/resync are elided too"
+    (doseq [t [:game/diff :game/resync]]
+      (is (not= "payload" (:data (state/sanitize-cached-message {:type t :data "payload"})))
+          (str t " must not retain its payload"))))
+
+  (testing "messages that carry no state pass through untouched"
+    (let [msg {:type :lobby/notification :data "someone joined"}]
+      (is (= msg (state/sanitize-cached-message msg))))))
+
+(deftest replay-recorder-redacts-too
+  (testing "the replay recorder does not become the second copy of the leak"
+    ;; It is a SINK fix: the :game/start handler had the raw server state in
+    ;; hand and passed it straight in, so fixing the call site alone would have
+    ;; left the next caller free to reintroduce it.
+    (with-mock-state (mock-client-state :side "corp")
+      (swap! state/replay-recording assoc :enabled true)
+      (state/record-initial-state! (assoc (board-with-decklists "corp") :decklists both)
+                                   (java.util.UUID/randomUUID))
+      (let [recorded (first (:history @state/replay-recording))]
+        (is (= corp-list (get-in recorded [:decklists :corp])))
+        (is (not (contains? (:decklists recorded) :runner))
+            "the opponent's list must not survive into the replay atom")))))

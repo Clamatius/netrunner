@@ -48,7 +48,8 @@ Corp goes first in Netrunner and has already kept. Make your mulligan call:
 **Read `decklist` before you decide.** It prints every card in your 40-card
 deck grouped by type, with full card text — so a mulligan is a judgement about
 *this* deck rather than a guess. It is derived from the game state, not a
-document, so it cannot be out of date. You can re-read it at any point in the
+document, so the titles and counts cannot be out of date (the rules text
+comes from the card database, so that much is only as fresh as the card data). You can re-read it at any point in the
 game; do that rather than trying to hold 21 cards in your head. It tells you what is IN
 the deck, never the ORDER — your own R&D/stack order stays fog-of-war.
 

@@ -2908,6 +2908,40 @@
          (println (str "cursor=" (core/get-cursor)))
          nil)))))
 
+(defn- clean-card-text
+  "Strip the wire's markup so card text reads in a terminal."
+  [card]
+  (-> (or (:text card) "")
+      (clojure.string/replace #"\[Click\]" "[Click]")
+      (clojure.string/replace #"\[Credit\]" "[Credit]")
+      (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
+      (clojure.string/replace #"\[Trash\]" "[Trash]")
+      (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
+      (clojure.string/replace #"\[mu\]" "[MU]")
+      (clojure.string/replace #"<[^>]+>" "")))
+
+(defn- print-card-fields!
+  "The full field block, shared by `card-text` and `decklist`.
+
+   It is one function because the two drifted: the multi-card path printed only
+   type/cost/strength/trash, so a Corp decklist rendered `Offworld Office` with
+   neither its 2 agenda points nor its 4 advancement requirement, and a Runner
+   program with no memory cost — which is exactly the field #201 is filed about.
+   An agenda without its 4/2 is a name, not a card (guest-panel finding)."
+  [card]
+  (println "Type:" (str (:type card)
+                        (when (:subtype card) (str " - " (:subtype card)))))
+  (when (:faction card) (println "Faction:" (:faction card)))
+  (when-let [cost (:cost card)] (println "Cost:" cost))
+  (when-let [adv (:advancementcost card)] (println "Advancement Requirement:" adv))
+  (when-let [pts (:agendapoints card)] (println "Agenda Points:" pts))
+  (when-let [strength (:strength card)] (println "Strength:" strength))
+  (when-let [mu (:memoryunits card)] (println "Memory:" mu))
+  (when-let [trash (:trash card)] (println "Trash Cost:" trash))
+  (let [txt (clean-card-text card)]
+    (when (not-empty txt)
+      (println "Text:" txt))))
+
 (defn show-card-text
   "Display full card information including text, cost, and abilities
    Usage: (show-card-text \"Sure Gamble\")
@@ -2921,39 +2955,12 @@
       (println "❌ Failed to load card database")
       (println "   Make sure the game server is running on localhost:1042"))
     (if-let [card (get @all-cards card-name)]
-      (let [text (or (:text card) "")
-            ;; Strip formatting markup for readability
-            clean-text (-> text
-                          (clojure.string/replace #"\[Click\]" "[Click]")
-                          (clojure.string/replace #"\[Credit\]" "[Credit]")
-                          (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
-                          (clojure.string/replace #"\[Trash\]" "[Trash]")
-                          (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
-                          (clojure.string/replace #"\[mu\]" "[MU]")
-                          (clojure.string/replace #"<[^>]+>" ""))] ;; Remove HTML-like tags
+      (do
         (println "\n" (clojure.string/join "" (repeat 70 "=")))
         (println "📄" (:title card))
         (println (clojure.string/join "" (repeat 70 "=")))
-        (println "Type:" (str (:type card)
-                              (when (:subtype card) (str " - " (:subtype card)))))
         (println "Side:" (:side card))
-        (when (:faction card)
-          (println "Faction:" (:faction card)))
-        (when-let [cost (:cost card)]
-          (println "Cost:" cost))
-        (when-let [strength (:strength card)]
-          (println "Strength:" strength))
-        (when-let [trash (:trash card)]
-          (println "Trash Cost:" trash))
-        (when-let [mu (:memoryunits card)]
-          (println "Memory:" mu))
-        (when-let [agenda-points (:agendapoints card)]
-          (println "Agenda Points:" agenda-points))
-        (when-let [adv-cost (:advancementcost card)]
-          (println "Advancement Requirement:" adv-cost))
-        (when (not-empty clean-text)
-          (println "\nText:")
-          (println clean-text))
+        (print-card-fields! card)
         (println (clojure.string/join "" (repeat 70 "="))))
       (println "❌ Card not found:" card-name))))
 
@@ -2977,24 +2984,10 @@
        (doseq [card-name card-names]
          (if-let [card (get @all-cards card-name)]
            (if full?
-             ;; Full format - same as show-card-text
-             (let [text (or (:text card) "")
-                   clean-text (-> text
-                                 (clojure.string/replace #"\[Click\]" "[Click]")
-                                 (clojure.string/replace #"\[Credit\]" "[Credit]")
-                                 (clojure.string/replace #"\[Subroutine\]" "[Subroutine]")
-                                 (clojure.string/replace #"\[Trash\]" "[Trash]")
-                                 (clojure.string/replace #"\[Recurring Credits\]" "[Recurring Credits]")
-                                 (clojure.string/replace #"\[mu\]" "[MU]")
-                                 (clojure.string/replace #"<[^>]+>" ""))]
+             ;; Full format — the SAME field block as card-text, via one renderer.
+             (do
                (println (str "\n📄 " (:title card)))
-               (println "Type:" (str (:type card)
-                                     (when (:subtype card) (str " - " (:subtype card)))))
-               (when-let [cost (:cost card)] (println "Cost:" cost))
-               (when-let [strength (:strength card)] (println "Strength:" strength))
-               (when-let [trash (:trash card)] (println "Trash Cost:" trash))
-               (when (not-empty clean-text)
-                 (println "Text:" clean-text)))
+               (print-card-fields! card))
 
              ;; Compact format - one line per card
              (let [type-str (:type card)
@@ -3018,26 +3011,60 @@
 (defn show-decklist
   "Show MY decklist for this game: grouped counts, then full card text.
 
-   The list comes from the engine's `:decklists`, so it cannot drift from the
-   deck actually being played — unlike a hand-maintained doc, which is how the
-   annotated tutorial decklists sat in `dev/instructions/` for three months
-   without a single marquee seat ever reading one.
+   The list comes from the engine's `:decklists`, so the titles and counts
+   cannot drift from the deck actually being played — unlike a hand-maintained
+   doc, which is how the annotated tutorial decklists sat in `dev/instructions/`
+   for three months without a single marquee seat reading one. (The rules TEXT
+   is a separate once-loaded card-API cache, so that much is only as fresh as
+   the card database.)
 
    Only ever our own side: `ai-state/redact-opponent-decklist` drops the
-   opponent's at ingest, so there is nothing here to leak even by accident."
+   opponent's at ingest, and the `:messages` ring and replay recorder are
+   sanitized too. That is a wall against accident and casual reach, NOT a
+   security boundary — a seat that wants to cheat has other routes, and the
+   durable answer is auditing that seats go through `send_command` at all."
   ([] (show-decklist @state/client-state))
   ([cs]
-   (let [side (state/my-side-kw cs)]
-     (if-not (and side (map? (:game-state cs)))
+   (let [side (state/my-side-kw cs)
+         board? (map? (:game-state cs))]
+     (cond
+       ;; A spectator has a board and no side. Fail-closed dropped BOTH lists on
+       ;; ingest, so say that plainly instead of implying the game published none
+       ;; (guest-panel MAJOR — the previous text was a false claim about state).
+       (and board? (not side) (:spectator cs))
+       (do
+         (println "👁️  Spectating — decklists are withheld from sideless clients.")
+         (println "   Open decklists ARE public information in this game; they are")
+         (println "   dropped here because a client with no side cannot be attributed,")
+         (println "   and leaking a seat's list is not recoverable.")
+         (println "   A trusted observer can re-enable both with")
+         (println "   `(reset! ai-state/keep-open-decklists true)` then `resync`.")
+         (println "   (It is an atom, not a dynamic var: ingest runs on the socket")
+         (println "    receive thread, so a `binding` would never reach it.)"))
+
+       (not (and side board?))
        (no-side-here! cs "the decklist")
-       (let [entries (get-in cs [:game-state :decklists side])]
-         (if (empty? entries)
+
+       :else
+       (let [decklists (get-in cs [:game-state :decklists])
+             entries (get decklists side)]
+         (cond
+           ;; Two different states, and they used to share one (wrong) sentence.
+           (not (contains? decklists side))
            (do
              (println "📋 No decklist is published for this game.")
              (println "   Decklists reach the client only when the lobby was created with open")
              (println "   decklists — gateway and precon games turn that on automatically.")
              (println "   If the game has not started, they arrive with the first full state;")
              (println "   `resync` if you believe one should be here."))
+
+           (empty? entries)
+           (do
+             (println "📋 A decklist was published for you, but it is EMPTY.")
+             (println "   That is not a normal state — the game published the key and no cards.")
+             (println "   `resync`, and report it if it persists."))
+
+           :else
            (let [cards (remove #(= "divider" (second %)) entries)
                  total (reduce + 0 (map second cards))]
              (println (str "\n📋 " (clojure.string/capitalize (name side))
@@ -3050,7 +3077,7 @@
                  (println (str "  " n "x " label))))
              (println)
              (println "🔒 Your own list only. You do NOT get to see the opponent's deck —")
-             (println "   work out what they are playing from what you encounter and access.")
+             (println "   work out what they are playing from what they install, play and spend.")
              (println (clojure.string/join "" (repeat 70 "=")))
              (show-cards (mapv first cards) true))))))))
 

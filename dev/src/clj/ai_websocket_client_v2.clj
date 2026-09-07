@@ -119,7 +119,8 @@
 
   ;; Record all messages (except pings)
   (when (not= type :chsk/ws-ping)
-    (swap! state/client-state update :messages (fn [msgs] (conj (vec msgs) msg))))
+    (swap! state/client-state update :messages
+           (fn [msgs] (conj (vec msgs) (state/sanitize-cached-message msg)))))
 
   (case type
     :chsk/handshake

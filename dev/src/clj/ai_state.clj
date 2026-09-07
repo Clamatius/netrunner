@@ -163,14 +163,41 @@
 
 (declare my-side-kw)
 
-(def ^:dynamic *keep-open-decklists*
-  "Retain BOTH decklists instead of redacting the opponent's.
+(defonce ^{:doc "Retain BOTH decklists instead of redacting the opponent's.
 
    Open decklists are a legitimate variant — that is exactly what the human UI's
-   Show/Hide decklists button is for. Bind this to true for a deliberate
-   known-meta experiment. The default is the tournament-fidelity behaviour,
-   where you have to work out what the opponent is up to."
-  false)
+   Show/Hide decklists button is for. The default is the tournament-fidelity
+   behaviour, where you have to work out what the opponent is up to.
+
+   An ATOM, not a `^:dynamic` var, and that is the whole point: ingest runs on
+   the websocket RECEIVE thread (the gniazdo callback), so a `binding` from a
+   REPL or `eval` thread is thread-local and never reaches it. The first cut was
+   a dynamic var and the docstring told operators to `binding` it — an opt-out
+   that silently did nothing (guest-panel MAJOR). `(reset! ai-state/keep-open-decklists true)`
+   then `resync` to re-acquire both lists."}
+  keep-open-decklists
+  (atom false))
+
+(def state-bearing-message-types
+  "Message types whose `:data` is, or contains, a full game state."
+  #{:game/start :game/diff :game/resync})
+
+(defn sanitize-cached-message
+  "Strip the payload from a state-bearing message before it enters the
+   `:messages` debug ring.
+
+   `:game/start` arrives as the RAW server state — commonly a JSON *string*, so
+   it is not a map anyone would think to redact — and it carries BOTH decklists.
+   Retaining it verbatim re-opened the very leak `redact-opponent-decklist`
+   closes in :game-state/:last-state (guest-panel CRITICAL).
+
+   Nothing in the production client reads this ring (the full-game and test
+   harnesses keep their own atoms), so the type and shape are all it needs to
+   keep. The real state is in :game-state, redacted."
+  [{:keys [type] :as msg}]
+  (if (contains? state-bearing-message-types type)
+    (assoc msg :data (str "<" (name type) " payload elided — carried full game state>"))
+    msg))
 
 (defn redact-opponent-decklist
   "Drop the opponent's decklist from a game state.
@@ -188,10 +215,13 @@
    durable answer is auditing that seats actually go through `send_command`.
 
    A nil `side-kw` FAILS CLOSED and drops both lists. We cannot attribute the
-   state; our own list comes back with the next state once the side is known,
-   whereas a leaked opponent list is not recoverable at all."
+   state, and a leaked opponent list is not recoverable at all — whereas ours is
+   re-acquired by the next FULL state. Nothing schedules that automatically, so
+   say `resync`, not \"it comes back\" (guest-panel MINOR: the first wording
+   over-promised). In practice the only sideless client with a board is a
+   spectator; side detection is preserved across resync for a seated client."
   [state side-kw]
-  (if (or *keep-open-decklists*
+  (if (or @keep-open-decklists
           (not (map? (:decklists state))))
     state
     (if side-kw
@@ -1340,8 +1370,13 @@
    State should be the full game state, not a diff."
   [state gameid]
   (when (:enabled @replay-recording)
+    ;; Redact HERE, not at the call site. The :game/start handler had the RAW
+    ;; server state in hand and passed it straight in, which put the opponent's
+    ;; full decklist in a second, evaluator-reachable atom while :game-state and
+    ;; :last-state were properly redacted (guest-panel CRITICAL). A sink cannot
+    ;; be forgotten by a future caller; a call site can.
     (swap! replay-recording assoc
-           :history [state]
+           :history [(redact-opponent-decklist state (my-side-kw))]
            :gameid gameid)
     (println "🎬 Initial state recorded for gameid:" gameid)))
 
