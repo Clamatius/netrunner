@@ -3015,6 +3015,45 @@
 
        (println (clojure.string/join "" (repeat 70 "─")))))))
 
+(defn show-decklist
+  "Show MY decklist for this game: grouped counts, then full card text.
+
+   The list comes from the engine's `:decklists`, so it cannot drift from the
+   deck actually being played — unlike a hand-maintained doc, which is how the
+   annotated tutorial decklists sat in `dev/instructions/` for three months
+   without a single marquee seat ever reading one.
+
+   Only ever our own side: `ai-state/redact-opponent-decklist` drops the
+   opponent's at ingest, so there is nothing here to leak even by accident."
+  ([] (show-decklist @state/client-state))
+  ([cs]
+   (let [side (state/my-side-kw cs)]
+     (if-not (and side (map? (:game-state cs)))
+       (no-side-here! cs "the decklist")
+       (let [entries (get-in cs [:game-state :decklists side])]
+         (if (empty? entries)
+           (do
+             (println "📋 No decklist is published for this game.")
+             (println "   Decklists reach the client only when the lobby was created with open")
+             (println "   decklists — gateway and precon games turn that on automatically.")
+             (println "   If the game has not started, they arrive with the first full state;")
+             (println "   `resync` if you believe one should be here."))
+           (let [cards (remove #(= "divider" (second %)) entries)
+                 total (reduce + 0 (map second cards))]
+             (println (str "\n📋 " (clojure.string/capitalize (name side))
+                           " decklist — " total " cards, "
+                           (count cards) " distinct"))
+             (println (clojure.string/join "" (repeat 70 "=")))
+             (doseq [[label n] entries]
+               (if (= "divider" n)
+                 (println (str "\n" label ":"))
+                 (println (str "  " n "x " label))))
+             (println)
+             (println "🔒 Your own list only. You do NOT get to see the opponent's deck —")
+             (println "   work out what they are playing from what you encounter and access.")
+             (println (clojure.string/join "" (repeat 70 "=")))
+             (show-cards (mapv first cards) true))))))))
+
 (defn show-hand-cards
   "Display information for all cards currently in hand
    Usage: (show-hand-cards)

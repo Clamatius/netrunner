@@ -329,7 +329,7 @@ declare -a FAST=(
     board-compact bot-loop bot-loop-status bot-loop-stop bot-status card-text
     change chat choose choose-card choose-value clear-heartbeats clicks concede
     connect continue-run create-game credits dashboard dashboard-compact
-    debug-chat diagnose-blocker discard discard-card end-phase-12
+    debug-chat decklist diagnose-blocker discard discard-card end-phase-12
     end-post-discard end-turn eval fire-subs fix-credits game-over? game-over-status
     get-cursor hand
     hand-text heap indicate-action install install-index jack-out join keep-hand

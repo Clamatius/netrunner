@@ -161,6 +161,43 @@
     ;; like hand: [0 {:playable true} 1 {:playable true} ...]
     (differ/patch old-state diff)))
 
+(declare my-side-kw)
+
+(def ^:dynamic *keep-open-decklists*
+  "Retain BOTH decklists instead of redacting the opponent's.
+
+   Open decklists are a legitimate variant — that is exactly what the human UI's
+   Show/Hide decklists button is for. Bind this to true for a deliberate
+   known-meta experiment. The default is the tournament-fidelity behaviour,
+   where you have to work out what the opponent is up to."
+  false)
+
+(defn redact-opponent-decklist
+  "Drop the opponent's decklist from a game state.
+
+   `:decklists` is a TOP-LEVEL key in the engine's `state-keys`
+   (src/clj/game/core/diffs.clj) holding `{:corp [...] :runner [...]}`, and
+   `public-states` filters only the per-side `:corp`/`:runner` player maps. So
+   BOTH seats receive BOTH lists — and gateway/precon games switch open-decklists
+   on automatically (`web/lobby.clj:135`), which is why this has been true of
+   every marquee game we have run.
+
+   Redacting at INGEST rather than at display is the whole point: a seat can
+   `eval` the client cache, so a display-side filter would be honour rather than
+   enforcement. It is still only a wall against accident and casual reach — the
+   durable answer is auditing that seats actually go through `send_command`.
+
+   A nil `side-kw` FAILS CLOSED and drops both lists. We cannot attribute the
+   state; our own list comes back with the next state once the side is known,
+   whereas a leaked opponent list is not recoverable at all."
+  [state side-kw]
+  (if (or *keep-open-decklists*
+          (not (map? (:decklists state))))
+    state
+    (if side-kw
+      (update state :decklists select-keys [side-kw])
+      (dissoc state :decklists))))
+
 (defn- unappliable!
   "A diff did not apply. Say which of the two situations that is, and return
    false either way so the caller skips its success bookkeeping.
@@ -204,7 +241,11 @@
           _ (println "   BEFORE - Runner hand size:" (count (get-in old-state [:runner :hand])))
           ;; Apply diff directly using differ/patch
           ;; Diff format from server is [alterations removals]
-          new-state (apply-diff old-state diff)
+          ;; Redact on EVERY write, not once at game start: a resync or a
+          ;; rewind resends state, and a differ alteration can create a key
+          ;; we removed.
+          new-state (redact-opponent-decklist (apply-diff old-state diff)
+                                              (my-side-kw))
           ;; Log state AFTER applying diff
           _ (println "   AFTER  - Runner credits:" (get-in new-state [:runner :credit]))
           _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
@@ -260,10 +301,16 @@
         detected-side (or existing-side (detect-side state our-uid))
         ;; Normalize to lowercase to match game state keys (:runner, :corp)
         side (some-> detected-side clojure.string/lower-case)]
-    (swap! client-state assoc
-           :game-state state
-           :last-state state
-           :side side)
+    ;; #127/#129: route the keyword derivation through my-side-kw rather than
+    ;; hand-rolling it — `side` is not in client-state yet, so hand it the
+    ;; captured map the 1-arity is for. Redact ONCE: :game-state and :last-state
+    ;; hold the same value, and a seat reads the first while diffs patch the
+    ;; second, so both have to be the redacted one.
+    (let [redacted (redact-opponent-decklist state (my-side-kw {:side side}))]
+      (swap! client-state assoc
+             :game-state redacted
+             :last-state redacted
+             :side side))
     ;; Clear lobby-state when game state is set (game has started). A full
     ;; state also proves the server still hosts our game, so any lobby-gone
     ;; verdict from a previous teardown is stale — drop it (#93).

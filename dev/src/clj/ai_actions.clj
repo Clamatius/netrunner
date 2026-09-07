@@ -88,6 +88,7 @@
 (def show-card-text display/show-card-text)
 (def show-cards display/show-cards)
 (def show-hand-cards display/show-hand-cards)
+(def show-decklist display/show-decklist)
 (def show-card-abilities display/show-card-abilities)
 (def simple-corp-turn display/simple-corp-turn)
 (def simple-runner-turn display/simple-runner-turn)

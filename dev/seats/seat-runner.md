@@ -39,10 +39,23 @@ what you can legitimately see. That's the whole point.
 Corp goes first in Netrunner and has already kept. Make your mulligan call:
 
 ```
+./dev/send_command runner decklist       # READ THIS FIRST — your whole deck, with card text
 ./dev/send_command runner status      # see the game / your opening hand
 ./dev/send_command runner hand
 ./dev/send_command runner keep-hand   # or:  ./dev/send_command runner mulligan
 ```
+
+**Read `decklist` before you decide.** It prints every card in your 40-card
+deck grouped by type, with full card text — so a mulligan is a judgement about
+*this* deck rather than a guess. It is derived from the game state, not a
+document, so it cannot be out of date. You can re-read it at any point in the
+game; do that rather than trying to hold 21 cards in your head. It tells you what is IN
+the deck, never the ORDER — your own R&D/stack order stays fog-of-war.
+
+**You do NOT get your opponent's decklist.** That is deliberate — the same as a
+tournament. Work out what they are playing from the ICE you encounter, the cards
+you access, and what they spend. An HQ access is worth more than the card it
+shows you, because it also tells you what they are holding.
 
 ## Each of your turns
 

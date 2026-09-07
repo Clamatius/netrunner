@@ -43,6 +43,7 @@ test:
 	  ai-actions-test \
 	  ai-basic-actions-test \
 	  ai-connection-test \
+	  ai-decklist-test \
 	  ai-display-test \
 	  ai-forced-encounter-test \
 	  ai-heuristic-corp-test \
