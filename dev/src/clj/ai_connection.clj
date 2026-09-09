@@ -202,10 +202,19 @@
                       (cond-> {:gameid uuid-gameid}
                         perspective (assoc :request-side perspective)
                         password (assoc :password password)))
+    ;; A spectator has NO side, and the board we may still be caching belongs to
+    ;; the game we just LEFT (`leave-game!` nils :gameid/:side but deliberately
+    ;; keeps :game-state for post-game inspection). Until this game's first full
+    ;; state arrives, every board-reading display would otherwise describe the
+    ;; previous game as if it were this one — `decklist` in particular would
+    ;; classify the old redacted list as "both lists retained" (round-3 guest
+    ;; MAJOR). Mark the watch, then clear; clear-game-state! preserves these keys.
     (swap! state/client-state assoc
            :gameid uuid-gameid
+           :side nil
            :spectator true
            :spectator-perspective perspective)
+    (state/clear-game-state!)
     (println "👁️  Spectating game" uuid-gameid
              (if perspective (str "(" perspective " perspective)") "(neutral view)"))))
 

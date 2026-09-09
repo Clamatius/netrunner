@@ -3029,7 +3029,9 @@
     (show-cards (mapv first cards) true)))
 
 (defn show-decklist
-  "Show MY decklist for this game: grouped counts, then full card text.
+  "Show MY decklist for this game: grouped counts, then full card text. (A
+   sideless spectator whose operator has set `keep-open-decklists` sees BOTH —
+   the one deliberate exception, and it needs a REPL to reach.)
 
    The list comes from the engine's `:decklists`, so the titles and counts
    cannot drift from the deck actually being played — unlike a hand-maintained
@@ -3038,9 +3040,9 @@
    is a separate once-loaded card-API cache, so that much is only as fresh as
    the card database.)
 
-   Only ever our own side: `ai-state/redact-opponent-decklist` drops the
-   opponent's at ingest, and the `:messages` ring and replay recorder are
-   sanitized too. That is a wall against accident and casual reach, NOT a
+   A SEATED client only ever has its own side: `ai-state/redact-opponent-decklist`
+   drops the opponent's at ingest, and the `:messages` ring and replay recorder
+   are sanitized too. That is a wall against accident and casual reach, NOT a
    security boundary — a seat that wants to cheat has other routes, and the
    durable answer is auditing that seats go through `send_command` at all.
 

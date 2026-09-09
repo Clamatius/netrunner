@@ -11,6 +11,8 @@
   (:require [clojure.test :refer :all]
             [ai-state :as state]
             [ai-display :as display]
+            [ai-connection :as conn]
+            [ai-websocket-client-v2 :as ws]
             [jinteki.cards :refer [all-cards]]
             [test-helpers :refer [mock-client-state with-mock-state]]))
 
@@ -240,7 +242,10 @@
 
     (testing "own side present but empty — the abnormal state"
       (let [out (decklist-output corp {:corp []})]
-        (is (clojure.string/includes? out "EMPTY"))))
+        (is (clojure.string/includes? out "published for you, but it is EMPTY")
+            "framing: OUR list, published, empty — not the opponent's, not unpublished")
+        (is (clojure.string/includes? out "not a normal state"))
+        (is (clojure.string/includes? out "resync"))))
 
     (testing "the real thing: own list, own side only, full card fields"
       (let [out (decklist-output corp {:corp corp-list})]
@@ -249,5 +254,29 @@
         (is (clojure.string/includes? out "Your own list only"))
         (is (clojure.string/includes? out "Agenda Points: 2") "a la card-text, not names")
         (is (clojure.string/includes? out "Advancement Requirement: 4"))
+        (is (clojure.string/includes? out "Text: When you score this agenda, gain 7[Credit].")
+            "the RULES TEXT is the requirement — fields alone are not 'a la card-text'")
         (is (not (clojure.string/includes? out "Runner decklist")))
         (is (not (clojure.string/includes? out "Sure Gamble")))))))
+
+(deftest watching-a-new-game-forgets-the-old-board
+  (testing "leave a seated game, watch another: the OLD board must not be read as the new one's"
+    ;; `leave-game!` nils :gameid/:side but keeps :game-state for post-game
+    ;; inspection. Before this game's first full state arrives, `decklist` on
+    ;; the spectator would classify the OLD redacted list as "both lists
+    ;; retained" and print it (round-3 guest MAJOR). watch-game! must clear.
+    (with-mock-state (-> (mock-client-state :side "corp")
+                         (assoc-in [:game-state :decklists] {:corp corp-list})
+                         (assoc-in [:last-state :decklists] {:corp corp-list})
+                         (assoc :gameid nil :side nil))
+      (with-redefs [ws/send-message! (fn [& _] true)]
+        (with-out-str (conn/watch-game! {:gameid (str (java.util.UUID/randomUUID))})))
+      (let [cs @state/client-state
+            out (with-out-str (display/show-decklist cs))]
+        (is (true? (:spectator cs)))
+        (is (nil? (:side cs)) "a spectator has no side")
+        (is (not (map? (:game-state cs))) "the previous game's board is gone")
+        (is (not (map? (:last-state cs))) "and so is its diff baseline")
+        (is (not (clojure.string/includes? out "both lists retained")))
+        (is (not (clojure.string/includes? out "Corp decklist"))
+            "the old list must not be shown as this game's")))))
