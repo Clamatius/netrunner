@@ -121,7 +121,8 @@ The Corp has already kept. Make your mulligan call:
 ```
 Read `decklist` before you decide — a mulligan is a judgement about *this* deck.
 It shows what is IN your stack, never the order. You do NOT get the Corp's list;
-work theirs out from what they install, rez and spend.
+work theirs out from what they install, rez and spend. An HQ access is worth more
+than the card it shows you, because it also tells you what they are holding.
 
 ### Each of your turns
 You have 4 clicks. A turn auto-ends when clicks hit 0. A rough loop:

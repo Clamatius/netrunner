@@ -1512,7 +1512,7 @@
    TRUE, which means not collapsing three different states into one sentence —
    `:side` is nil in all of them and they need opposite advice:
 
-     spectator     `watch-game!` sets :gameid/:spectator and never sets :side,
+     spectator     `watch-game!` sets :gameid/:spectator and :side nil,
                    and `detect-side` cannot match a spectator's uid, so a client
                    happily watching a live game has a full board and no side.
                    Telling it 'not in a game → reset.sh' would be a lie that
