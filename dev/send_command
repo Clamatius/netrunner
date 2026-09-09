@@ -51,7 +51,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|decklist|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -113,7 +113,7 @@ did_you_mean() {
             echo -e "${YELLOW}💡 Did you mean: take-credit  (gain 1 [Credit]) — or credits  (show credit pools)${NC}" >&2; return;;
     esac
     # Fallback: substring match against the player-facing commands.
-    local known="status board hand prompt credits clicks archives heap log card-text abilities list-playables diagnose-blocker start-turn end-phase-12 end-post-discard end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
+    local known="status board hand prompt credits clicks archives heap log card-text decklist abilities list-playables diagnose-blocker start-turn end-phase-12 end-post-discard end-turn smart-end-turn draw take-credit play install advance score rez run continue jack-out tank choose choose-card choose-value multi-choose wait get-cursor ping peer-status keep-hand mulligan discard remove-tag game-over-status"
     local hits
     # `|| true`: grep exits non-zero on no match, which under `set -euo pipefail`
     # would abort the whole script *here* — silently swallowing both this hint and
@@ -371,6 +371,7 @@ ${GREEN}Essential Commands:${NC}
 
 ${GREEN}Inspect (read-only — use these to decide):${NC}
   card-text <name>   Look up ANY card's type, cost, and full text
+  decklist           YOUR decklist for this game, with full card text
   abilities <name>   Show an installed card's abilities (for use-ability)
   list-playables     List everything you can play/use right now
   diagnose-blocker   Explain why you can/can't act and the one next command to run
@@ -447,6 +448,7 @@ ${GREEN}Status Commands:${NC}
   heap            - Show Runner's Heap (discard pile)
   log [N]         - Show last N game log entries (default: 20)
   card-text <name>   - Look up card information (type, cost, text)
+  decklist        - Your own decklist for this game (opponent's is hidden)
   abilities <name>   - Show abilities for installed card
   list-playables  - List all currently playable actions (cards, abilities)
   diagnose-blocker - Explain why you can/can't act + the single next command
@@ -1040,6 +1042,11 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
         execute "(ai-actions/show-card-text \"$CARD_NAME\")"
+        ;;
+
+    decklist)
+        info "Reading your decklist from the game state..."
+        execute "(ai-actions/show-decklist)"
         ;;
 
     hand-text)
@@ -1792,7 +1799,7 @@ case "$COMMAND" in
                                         :api-access false
                                         :password \"\"
                                         :singleton false
-                                        :open-decklists false
+                                        :open-decklists true
                                         :turmoil false
                                         :timer nil})
                    nil)"

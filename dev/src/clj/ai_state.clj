@@ -161,6 +161,76 @@
     ;; like hand: [0 {:playable true} 1 {:playable true} ...]
     (differ/patch old-state diff)))
 
+(declare my-side-kw)
+
+(defonce ^{:doc "Retain BOTH decklists instead of redacting the opponent's.
+
+   Open decklists are a legitimate variant — that is exactly what the human UI's
+   Show/Hide decklists button is for. The default is the tournament-fidelity
+   behaviour, where you have to work out what the opponent is up to.
+
+   An ATOM, not a `^:dynamic` var, and that is the whole point: ingest runs on
+   the websocket RECEIVE thread (the gniazdo callback), so a `binding` from a
+   REPL or `eval` thread is thread-local and never reaches it. The first cut was
+   a dynamic var and the docstring told operators to `binding` it — an opt-out
+   that silently did nothing (guest-panel MAJOR). `(reset! ai-state/keep-open-decklists true)`
+   then `resync` to re-acquire both lists."}
+  keep-open-decklists
+  (atom false))
+
+(def state-bearing-message-types
+  "Message types whose `:data` is, or contains, a full game state."
+  #{:game/start :game/diff :game/resync})
+
+(defn sanitize-cached-message
+  "Strip the payload from a state-bearing message before it enters the
+   `:messages` debug ring.
+
+   `:game/start` arrives as the RAW server state — commonly a JSON *string*, so
+   it is not a map anyone would think to redact — and it carries BOTH decklists.
+   Retaining it verbatim re-opened the very leak `redact-opponent-decklist`
+   closes in :game-state/:last-state (guest-panel CRITICAL).
+
+   Nothing in the production client reads this ring (the full-game and test
+   harnesses keep their own atoms), so the type and shape are all it needs to
+   keep. The real state is in :game-state, redacted."
+  [{:keys [type] :as msg}]
+  (if (contains? state-bearing-message-types type)
+    (assoc msg :data (str "<" (name type) " payload elided — carried full game state>"))
+    msg))
+
+(defn redact-opponent-decklist
+  "Drop the opponent's decklist from a game state.
+
+   `:decklists` is a TOP-LEVEL key in the engine's `state-keys`
+   (src/clj/game/core/diffs.clj) holding `{:corp [...] :runner [...]}`, and
+   `public-states` filters only the per-side `:corp`/`:runner` player maps. So
+   BOTH seats receive BOTH lists — and gateway/precon games switch open-decklists
+   on automatically (`web/lobby.clj:135`), which is why this has been true of
+   every marquee game we have run.
+
+   Redacting at INGEST rather than at display is the whole point: a seat can
+   `eval` the client cache, so a display-side filter would be honour rather than
+   enforcement. It is still only a wall against accident and casual reach — the
+   durable answer is auditing that seats actually go through `send_command`.
+
+   A nil `side-kw` FAILS CLOSED and drops both lists. We cannot attribute the
+   state, and a leaked opponent list is not recoverable at all — whereas ours is
+   re-acquired by the next FULL state. Nothing schedules that automatically, so
+   say `resync`, not \"it comes back\" (guest-panel MINOR: the first wording
+   over-promised). In practice the only sideless client with a board is a
+   spectator; side detection is preserved across resync for a seated client."
+  [state side-kw]
+  (if (or @keep-open-decklists
+          (not (map? (:decklists state))))
+    state
+    (if side-kw
+      (update state :decklists select-keys [side-kw])
+      ;; An EMPTY map, not a dissoc: "published but withheld" must stay
+      ;; distinguishable from "this lobby never published any" at display
+      ;; time, or the spectator text has to guess (round-2 guest MINOR).
+      (assoc state :decklists {}))))
+
 (defn- unappliable!
   "A diff did not apply. Say which of the two situations that is, and return
    false either way so the caller skips its success bookkeeping.
@@ -204,7 +274,11 @@
           _ (println "   BEFORE - Runner hand size:" (count (get-in old-state [:runner :hand])))
           ;; Apply diff directly using differ/patch
           ;; Diff format from server is [alterations removals]
-          new-state (apply-diff old-state diff)
+          ;; Redact on EVERY write, not once at game start: a resync or a
+          ;; rewind resends state, and a differ alteration can create a key
+          ;; we removed.
+          new-state (redact-opponent-decklist (apply-diff old-state diff)
+                                              (my-side-kw))
           ;; Log state AFTER applying diff
           _ (println "   AFTER  - Runner credits:" (get-in new-state [:runner :credit]))
           _ (println "   AFTER  - Runner clicks:" (get-in new-state [:runner :click]))
@@ -260,10 +334,16 @@
         detected-side (or existing-side (detect-side state our-uid))
         ;; Normalize to lowercase to match game state keys (:runner, :corp)
         side (some-> detected-side clojure.string/lower-case)]
-    (swap! client-state assoc
-           :game-state state
-           :last-state state
-           :side side)
+    ;; #127/#129: route the keyword derivation through my-side-kw rather than
+    ;; hand-rolling it — `side` is not in client-state yet, so hand it the
+    ;; captured map the 1-arity is for. Redact ONCE: :game-state and :last-state
+    ;; hold the same value, and a seat reads the first while diffs patch the
+    ;; second, so both have to be the redacted one.
+    (let [redacted (redact-opponent-decklist state (my-side-kw {:side side}))]
+      (swap! client-state assoc
+             :game-state redacted
+             :last-state redacted
+             :side side))
     ;; Clear lobby-state when game state is set (game has started). A full
     ;; state also proves the server still hosts our game, so any lobby-gone
     ;; verdict from a previous teardown is stale — drop it (#93).
@@ -1293,8 +1373,13 @@
    State should be the full game state, not a diff."
   [state gameid]
   (when (:enabled @replay-recording)
+    ;; Redact HERE, not at the call site. The :game/start handler had the RAW
+    ;; server state in hand and passed it straight in, which put the opponent's
+    ;; full decklist in a second, evaluator-reachable atom while :game-state and
+    ;; :last-state were properly redacted (guest-panel CRITICAL). A sink cannot
+    ;; be forgotten by a future caller; a call site can.
     (swap! replay-recording assoc
-           :history [state]
+           :history [(redact-opponent-decklist state (my-side-kw))]
            :gameid gameid)
     (println "🎬 Initial state recorded for gameid:" gameid)))
 

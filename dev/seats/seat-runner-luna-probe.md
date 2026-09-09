@@ -68,7 +68,9 @@ You have 4 clicks per turn; the turn auto-ends when clicks hit 0.
    discard-to-hand-size).
 
 Start with the mulligan: `./dev/send_command runner hand`, then
-`./dev/send_command runner keep-hand` (or `mulligan`).
+`./dev/send_command runner decklist` (your own 40-card deck with full card text —
+judge the hand against *this* deck), then `./dev/send_command runner keep-hand`
+(or `mulligan`).
 
 ## REPORT (the point of this probe)
 

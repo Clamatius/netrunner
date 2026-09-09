@@ -198,14 +198,26 @@
    With a perspective, you see that side's hidden information."
   [{:keys [gameid perspective password]}]
   (let [uuid-gameid (state/normalize-gameid gameid)]
+    ;; A spectator has NO side, and the board we may still be caching belongs to
+    ;; the game we just LEFT (`leave-game!` nils :gameid/:side but deliberately
+    ;; keeps :game-state for post-game inspection). Until this game's first full
+    ;; state arrives, every board-reading display would otherwise describe the
+    ;; previous game as if it were this one — `decklist` in particular would
+    ;; classify the old redacted list as "both lists retained" (round-3 guest
+    ;; MAJOR). Mark the watch and clear BEFORE sending, as `resync-game!` does:
+    ;; the reply lands on the socket receive thread, and a clear that runs after
+    ;; the send can wipe the very state the reply delivered (round-3b MINOR).
+    ;; clear-game-state! preserves the spectator keys.
+    (swap! state/client-state assoc
+           :gameid uuid-gameid
+           :side nil
+           :spectator true
+           :spectator-perspective perspective)
+    (state/clear-game-state!)
     (ws/send-message! :lobby/watch
                       (cond-> {:gameid uuid-gameid}
                         perspective (assoc :request-side perspective)
                         password (assoc :password password)))
-    (swap! state/client-state assoc
-           :gameid uuid-gameid
-           :spectator true
-           :spectator-perspective perspective)
     (println "👁️  Spectating game" uuid-gameid
              (if perspective (str "(" perspective " perspective)") "(neutral view)"))))
 

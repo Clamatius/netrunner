@@ -39,10 +39,28 @@ If you ever feel the urge to "just peek" — don't. That's the whole point.
 Corp mulligans before the Runner. Make your call, then the Runner will mulligan:
 
 ```
+./dev/send_command corp decklist       # READ THIS FIRST — your whole deck, with card text
 ./dev/send_command corp status      # see the game / your opening hand
 ./dev/send_command corp hand
 ./dev/send_command corp keep-hand    # or:  ./dev/send_command corp mulligan
 ```
+
+**Read `decklist` before you decide.** It prints every card in your 44-card
+deck grouped by type, with full card text — so a mulligan is a judgement about
+*this* deck rather than a guess. It is derived from the game state, not a
+document, so the titles and counts cannot be out of date (the rules text
+comes from the card database, so that much is only as fresh as the card data). You can re-read it at any point in the
+game; do that rather than trying to hold 22 cards in your head. It tells you what is IN
+the deck, never the ORDER — your own R&D/stack order stays fog-of-war.
+
+**You do NOT get the Runner's decklist.** That is deliberate — the same as a
+tournament. Work out what they are playing from what they install, which
+breakers show up at your ICE (and which ICE they decline to face), the events
+they play, and what they spend. Treat spending as WEAK evidence, not proof:
+a Runner can pass Tithe by simply taking the net damage, break any ICE type
+with Mayfly, or click through Brân while holding Cleaver just to save credits.
+Infer the rig from the breakers you SEE installed; hold everything else as a
+hypothesis, and let the next rez test it.
 
 **Mulligan heuristic — ICE first, economy second.** The single most important
 property of an opening hand is **ICE**. A hand with **zero ICE should almost
