@@ -10,6 +10,8 @@
    the cache, so display-side hiding would be honour rather than enforcement."
   (:require [clojure.test :refer :all]
             [ai-state :as state]
+            [ai-display :as display]
+            [jinteki.cards :refer [all-cards]]
             [test-helpers :refer [mock-client-state with-mock-state]]))
 
 (def corp-list [["Agenda" "divider"] ["Offworld Office" 3] ["Palisade" 3]])
@@ -39,7 +41,12 @@
     ;; Fail closed: our own list is recoverable on the next state once the side
     ;; is known; a leaked opponent list is not recoverable at all.
     (let [out (state/redact-opponent-decklist {:decklists both} nil)]
-      (is (not (contains? out :decklists))))))
+      (is (not (contains? (:decklists out) :corp)))
+      (is (not (contains? (:decklists out) :runner)))
+      ;; An EMPTY map, not a missing key: the display layer must be able to tell
+      ;; "published but withheld" from "this lobby never published any"
+      ;; (round-2 guest MINOR — the spectator text was guessing).
+      (is (= {} (:decklists out))))))
 
 (deftest leaves-non-open-decklist-games-alone
   (testing "no :decklists key (open-decklists off) passes through untouched"
@@ -60,12 +67,37 @@
         (is (= both (:decklists out))))
       (finally (reset! state/keep-open-decklists false)))))
 
+(def ^:dynamic *binding-probe*
+  "Only here to prove the thread harness below does NOT convey bindings."
+  false)
+
+(defn- on-a-raw-thread
+  "Run f on a bare java.lang.Thread and return its value.
+
+   NOT `future`: futures (and agents, pmap) CONVEY dynamic bindings, so a
+   future-based hop would have passed with the old `^:dynamic` var too and
+   proved nothing (round-2 guest finding). The websocket receive thread is a
+   bare thread — this is its shape."
+  [f]
+  (let [p (promise)
+        t (Thread. (fn [] (deliver p (try (f) (catch Throwable e e)))))]
+    (.start t)
+    (let [v (deref p 5000 ::timeout)]
+      (when (instance? Throwable v) (throw v))
+      v)))
+
 (deftest opt-out-survives-a-thread-hop
-  (testing "the opt-out reaches a DIFFERENT thread — a binding would not"
+  (testing "the harness really is a hop: a dynamic binding does NOT arrive"
+    (binding [*binding-probe* true]
+      (is (true? *binding-probe*) "sanity: bound on the caller's thread")
+      (is (false? (on-a-raw-thread (fn [] *binding-probe*)))
+          "if this is true the harness conveys bindings and the next test is void")))
+
+  (testing "the atom DOES reach the raw thread — a binding would not have"
     (try
       (reset! state/keep-open-decklists true)
-      (is (= both (:decklists @(future (state/redact-opponent-decklist
-                                         {:decklists both} :corp))))
+      (is (= both (:decklists (on-a-raw-thread
+                                #(state/redact-opponent-decklist {:decklists both} :corp))))
           "ingest runs on the websocket receive thread, not the caller's")
       (finally (reset! state/keep-open-decklists false)))))
 
@@ -138,3 +170,84 @@
         (is (= corp-list (get-in recorded [:decklists :corp])))
         (is (not (contains? (:decklists recorded) :runner))
             "the opponent's list must not survive into the replay atom")))))
+
+
+;; ---------------------------------------------------------------------------
+;; Display — every sentence is a claim about state, and each state gets its own
+;; (round-2 guest MINOR: the spectator text asserted publication and withholding
+;; without reading either from state)
+;; ---------------------------------------------------------------------------
+
+(def ^:private fake-cards
+  "Enough of a card db that `show-cards` does not reach for the HTTP API."
+  {"Offworld Office" {:title "Offworld Office" :type "Agenda" :advancementcost 4
+                      :agendapoints 2 :text "When you score this agenda, gain 7[Credit]."}
+   "Palisade" {:title "Palisade" :type "ICE" :subtype "Barrier" :cost 3 :strength 2
+               :text "[Subroutine] End the run."}
+   "Sure Gamble" {:title "Sure Gamble" :type "Event" :cost 5 :text "Gain 9[Credit]."}
+   "Cleaver" {:title "Cleaver" :type "Program" :subtype "Icebreaker - Fracter"
+              :cost 3 :strength 3 :memoryunits 1 :text "1[Credit]: Break up to 2 barrier subroutines."}})
+
+(defn- decklist-output
+  "Render `show-decklist` for a client state with the given :decklists value
+   (::absent = no key at all), against the fake card db."
+  [cs decklists]
+  (let [cs (if (= ::absent decklists)
+             (update cs :game-state dissoc :decklists)
+             (assoc-in cs [:game-state :decklists] decklists))
+        saved @all-cards]
+    (try
+      (reset! all-cards fake-cards)
+      (with-out-str (display/show-decklist cs))
+      (finally (reset! all-cards saved)))))
+
+(defn- spectator-state []
+  (-> (mock-client-state :side "runner") (assoc :side nil :spectator true)))
+
+(deftest spectator-text-reads-state-not-assumptions
+  (testing "no :decklists key — this lobby never published any"
+    (let [out (decklist-output (spectator-state) ::absent)]
+      (is (clojure.string/includes? out "publishes no decklists"))
+      (is (not (clojure.string/includes? out "withheld")) "must not claim a drop that never happened")
+      (is (not (clojure.string/includes? out "keep-open-decklists")) "nothing to re-enable")))
+
+  (testing "empty map — published, dropped at ingest by fail-closed"
+    (let [out (decklist-output (spectator-state) {})]
+      (is (clojure.string/includes? out "withheld"))
+      (is (clojure.string/includes? out "DOES publish"))
+      (is (clojure.string/includes? out "keep-open-decklists") "and says how to retain them")
+      (is (not (clojure.string/includes? out "publishes no decklists")))))
+
+  (testing "both retained (opt-out on) — show both, no 'your own list only' footer"
+    (let [out (decklist-output (spectator-state) both)]
+      (is (clojure.string/includes? out "both lists retained"))
+      (is (clojure.string/includes? out "Corp decklist"))
+      (is (clojure.string/includes? out "Runner decklist"))
+      (is (not (clojure.string/includes? out "Your own list only"))))))
+
+(deftest seated-text-splits-the-three-states
+  (let [corp (mock-client-state :side "corp")]
+    (testing "no key — not published"
+      (let [out (decklist-output corp ::absent)]
+        (is (clojure.string/includes? out "No decklist is published"))
+        (is (not (clojure.string/includes? out "knew its side")))))
+
+    (testing "empty map — ingested before the side was known; resync"
+      (let [out (decklist-output corp {})]
+        (is (clojure.string/includes? out "knew its side"))
+        (is (clojure.string/includes? out "resync"))
+        (is (not (clojure.string/includes? out "No decklist is published")))))
+
+    (testing "own side present but empty — the abnormal state"
+      (let [out (decklist-output corp {:corp []})]
+        (is (clojure.string/includes? out "EMPTY"))))
+
+    (testing "the real thing: own list, own side only, full card fields"
+      (let [out (decklist-output corp {:corp corp-list})]
+        (is (clojure.string/includes? out "Corp decklist — 6 cards, 2 distinct"))
+        (is (clojure.string/includes? out "3x Offworld Office"))
+        (is (clojure.string/includes? out "Your own list only"))
+        (is (clojure.string/includes? out "Agenda Points: 2") "a la card-text, not names")
+        (is (clojure.string/includes? out "Advancement Requirement: 4"))
+        (is (not (clojure.string/includes? out "Runner decklist")))
+        (is (not (clojure.string/includes? out "Sure Gamble")))))))

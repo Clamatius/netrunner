@@ -56,8 +56,11 @@ the deck, never the ORDER — your own R&D/stack order stays fog-of-war.
 **You do NOT get the Runner's decklist.** That is deliberate — the same as a
 tournament. Work out what they are playing from what they install, which
 breakers show up at your ICE (and which ICE they decline to face), the events
-they play, and what they spend. A Runner who passes a sentry cheaply has a
-killer; one who keeps clicking through a bioroid does not have the fracter.
+they play, and what they spend. Treat spending as WEAK evidence, not proof:
+a Runner can pass Tithe by simply taking the net damage, break any ICE type
+with Mayfly, or click through Brân while holding Cleaver just to save credits.
+Infer the rig from the breakers you SEE installed; hold everything else as a
+hypothesis, and let the next rez test it.
 
 **Mulligan heuristic — ICE first, economy second.** The single most important
 property of an opening hand is **ICE**. A hand with **zero ICE should almost

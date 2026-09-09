@@ -3008,6 +3008,26 @@
 
        (println (clojure.string/join "" (repeat 70 "─")))))))
 
+(defn- print-side-decklist!
+  "One side's list: header, grouped counts, an optional footer, then the full
+   card text of every distinct title through the same renderer `card-text` uses."
+  [side entries footer-lines]
+  (let [cards (remove #(= "divider" (second %)) entries)
+        total (reduce + 0 (map second cards))]
+    (println (str "\n📋 " (clojure.string/capitalize (name side))
+                  " decklist — " total " cards, "
+                  (count cards) " distinct"))
+    (println (clojure.string/join "" (repeat 70 "=")))
+    (doseq [[label n] entries]
+      (if (= "divider" n)
+        (println (str "\n" label ":"))
+        (println (str "  " n "x " label))))
+    (when (seq footer-lines)
+      (println)
+      (doseq [l footer-lines] (println l)))
+    (println (clojure.string/join "" (repeat 70 "=")))
+    (show-cards (mapv first cards) true)))
+
 (defn show-decklist
   "Show MY decklist for this game: grouped counts, then full card text.
 
@@ -3022,64 +3042,73 @@
    opponent's at ingest, and the `:messages` ring and replay recorder are
    sanitized too. That is a wall against accident and casual reach, NOT a
    security boundary — a seat that wants to cheat has other routes, and the
-   durable answer is auditing that seats go through `send_command` at all."
+   durable answer is auditing that seats go through `send_command` at all.
+
+   Three facts decide the text, and each is read from state rather than
+   assumed (round-2 guest MINOR: the first spectator text asserted publication
+   and withholding without checking either): is there a `:decklists` map at all
+   (nil = this lobby never published any), is it empty (published, dropped at
+   ingest by fail-closed), and does it hold our side."
   ([] (show-decklist @state/client-state))
   ([cs]
    (let [side (state/my-side-kw cs)
-         board? (map? (:game-state cs))]
+         board? (map? (:game-state cs))
+         decklists (get-in cs [:game-state :decklists])]
      (cond
-       ;; A spectator has a board and no side. Fail-closed dropped BOTH lists on
-       ;; ingest, so say that plainly instead of implying the game published none
-       ;; (guest-panel MAJOR — the previous text was a false claim about state).
+       ;; A spectator has a board and no side.
        (and board? (not side) (:spectator cs))
-       (do
-         (println "👁️  Spectating — decklists are withheld from sideless clients.")
-         (println "   Open decklists ARE public information in this game; they are")
-         (println "   dropped here because a client with no side cannot be attributed,")
-         (println "   and leaking a seat's list is not recoverable.")
-         (println "   A trusted observer can re-enable both with")
-         (println "   `(reset! ai-state/keep-open-decklists true)` then `resync`.")
-         (println "   (It is an atom, not a dynamic var: ingest runs on the socket")
-         (println "    receive thread, so a `binding` would never reach it.)"))
+       (cond
+         (not (map? decklists))
+         (do
+           (println "👁️  Spectating — this game publishes no decklists.")
+           (println "   Decklists reach any client only when the lobby was created with open")
+           (println "   decklists; this one was not, so there is nothing to withhold or show."))
+
+         (empty? decklists)
+         (do
+           (println "👁️  Spectating — decklists are withheld from sideless clients.")
+           (println "   This game DOES publish them; they were dropped at ingest because a")
+           (println "   client with no side cannot be attributed, and leaking a seat's list")
+           (println "   is not recoverable. A trusted observer can retain both with")
+           (println "   `(reset! ai-state/keep-open-decklists true)` then `resync`.")
+           (println "   (It is an atom, not a dynamic var: ingest runs on the socket")
+           (println "    receive thread, so a `binding` would never reach it.)"))
+
+         :else
+         (do
+           (println "👁️  Spectating with keep-open-decklists ON — both lists retained.")
+           (doseq [s [:corp :runner] :when (contains? decklists s)]
+             (print-side-decklist! s (get decklists s) nil))))
 
        (not (and side board?))
        (no-side-here! cs "the decklist")
 
+       ;; Seated. Three states that used to share one (wrong) sentence.
+       (not (map? decklists))
+       (do
+         (println "📋 No decklist is published for this game.")
+         (println "   Decklists reach the client only when the lobby was created with open")
+         (println "   decklists — gateway and precon games turn that on automatically.")
+         (println "   If the game has not started, they arrive with the first full state;")
+         (println "   `resync` if you believe one should be here."))
+
+       (not (contains? decklists side))
+       (do
+         (println "📋 Your decklist was published, but this client ingested the state before")
+         (println "   it knew its side, so fail-closed dropped both lists.")
+         (println "   `resync` re-acquires yours with the next full state."))
+
+       (empty? (get decklists side))
+       (do
+         (println "📋 A decklist was published for you, but it is EMPTY.")
+         (println "   That is not a normal state — the game published the key and no cards.")
+         (println "   `resync`, and report it if it persists."))
+
        :else
-       (let [decklists (get-in cs [:game-state :decklists])
-             entries (get decklists side)]
-         (cond
-           ;; Two different states, and they used to share one (wrong) sentence.
-           (not (contains? decklists side))
-           (do
-             (println "📋 No decklist is published for this game.")
-             (println "   Decklists reach the client only when the lobby was created with open")
-             (println "   decklists — gateway and precon games turn that on automatically.")
-             (println "   If the game has not started, they arrive with the first full state;")
-             (println "   `resync` if you believe one should be here."))
-
-           (empty? entries)
-           (do
-             (println "📋 A decklist was published for you, but it is EMPTY.")
-             (println "   That is not a normal state — the game published the key and no cards.")
-             (println "   `resync`, and report it if it persists."))
-
-           :else
-           (let [cards (remove #(= "divider" (second %)) entries)
-                 total (reduce + 0 (map second cards))]
-             (println (str "\n📋 " (clojure.string/capitalize (name side))
-                           " decklist — " total " cards, "
-                           (count cards) " distinct"))
-             (println (clojure.string/join "" (repeat 70 "=")))
-             (doseq [[label n] entries]
-               (if (= "divider" n)
-                 (println (str "\n" label ":"))
-                 (println (str "  " n "x " label))))
-             (println)
-             (println "🔒 Your own list only. You do NOT get to see the opponent's deck —")
-             (println "   work out what they are playing from what they install, play and spend.")
-             (println (clojure.string/join "" (repeat 70 "=")))
-             (show-cards (mapv first cards) true))))))))
+       (print-side-decklist!
+        side (get decklists side)
+        ["🔒 Your own list only. You do NOT get to see the opponent's deck —"
+         "   work out what they are playing from what they install, play and spend."])))))
 
 (defn show-hand-cards
   "Display information for all cards currently in hand

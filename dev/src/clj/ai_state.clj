@@ -226,7 +226,10 @@
     state
     (if side-kw
       (update state :decklists select-keys [side-kw])
-      (dissoc state :decklists))))
+      ;; An EMPTY map, not a dissoc: "published but withheld" must stay
+      ;; distinguishable from "this lobby never published any" at display
+      ;; time, or the spectator text has to guess (round-2 guest MINOR).
+      (assoc state :decklists {}))))
 
 (defn- unappliable!
   "A diff did not apply. Say which of the two situations that is, and return
