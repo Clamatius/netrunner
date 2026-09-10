@@ -722,3 +722,29 @@
           (is (some? cmd) "the encountered copy must be fired")
           (is (= 77 (get-in cmd [:args :card :cid]))
               (str "must send the ENCOUNTERED copy (cid 77), not the installed one (cid 11), sent: " cmd)))))))
+
+;; ============================================================================
+;; #151 item 21: `install <agenda> remote1 --overwrite` labelled the trash
+;; confirmation as "waiting for server selection". The server was on the
+;; command line; the pending choice was an OK. The label must name the
+;; decision that is actually pending.
+;; ============================================================================
+
+(deftest install-with-a-server-does-not-call-its-confirmation-a-server-selection
+  (let [sent (atom [])
+        ok-prompt {:eid 9 :prompt-type "other"
+                   :msg "The Regolith Mining License in Server 1 will now be trashed."
+                   :choices [{:value "OK"}]}]
+    (with-mock-state
+      (mock-client-state :side "corp" :clicks 3 :credits 5
+                         :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
+                         :servers {:remote1 {:content [{:cid 2 :title "Regolith Mining License"
+                                                        :type "Asset" :rezzed true}]
+                                             :ices []}})
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                    ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt ok-prompt})
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
+          (is (some #(= "play" (get-in % [:data :command])) @sent) "the install must still be sent")
+          (is (not (re-find #"server selection" out)) out)
+          (is (re-find #"OK" out) (str "must name the pending OK confirmation:\n" out)))))))

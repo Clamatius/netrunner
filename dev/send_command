@@ -509,6 +509,7 @@ ${GREEN}Running:${NC}
   ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE
     --rez <name>     Corp: auto-rez ICE matching <name>; pause on other unrezzed ICE
+                     (repeatable: --rez Diviner --rez Palisade pre-commits both)
     --fire-unbroken  Corp: auto-fire unbroken subroutines once the Runner is
                      done with the encounter (tank signal OR a plain pass)
     --full-break     Runner: auto-break all ICE with available breakers

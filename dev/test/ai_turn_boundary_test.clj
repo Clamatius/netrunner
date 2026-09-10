@@ -394,3 +394,18 @@
       (let [out (with-out-str (display/show-blocker-diagnosis))]
         (is (not (str/includes? out "end-turn")))
         (is (str/includes? out "corp's turn, not yours"))))))
+
+;; ---------------------------------------------------------------------------
+;; #151 N1 (second surface): out of clicks WITH my own prompt open.
+;; ---------------------------------------------------------------------------
+;; The orphaned-turn text says "— end it". With a discard prompt (or any prompt
+;; my last action opened) still on me, the next move is to answer the prompt,
+;; and an end-turn sent over a discard prompt is the duplicate the briefs forbid.
+
+(deftest orphaned-turn-with-my-own-prompt-says-resolve-it-first
+  (let [discard {:eid 7 :msg "Choose a card to discard" :prompt-type "select"
+                 :selectable [{:cid 1 :title "Hedge Fund"}]}
+        cs (with-side (assoc orphaned-turn :corp (assoc seated-corp :prompt-state discard)) "corp")
+        text (:status-text (state/get-turn-status cs))]
+    (is (not (re-find #"end it" text)) text)
+    (is (re-find #"(?i)resolve" text) text)))

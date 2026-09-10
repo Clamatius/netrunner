@@ -975,6 +975,20 @@
           (waiting-prompt-type? prompt-type)
           ["⏳" (or (:msg prompt) "Waiting...") false]
 
+          ;; My turn, out of clicks, not ended, and a REAL prompt of mine is
+          ;; open (#151 N1's second surface). my-turn-orphaned? deliberately
+          ;; excludes this shape — its docstring says the honest answer is
+          ;; 'resolve your prompt' and that a branch reports it — but no branch
+          ;; did: it fell through to '✅ Your turn to act - 0 clicks remaining'.
+          ;; The next move is the prompt (typically the end-of-turn discard the
+          ;; end-turn itself opened), and an end-turn sent over a discard
+          ;; prompt is the duplicate the briefs forbid. Not during a run: the
+          ;; run prompt is its own thing and the indicator says 'In run'.
+          (and my-turn prompt (not run-state)
+               (not (:end-turn gs))
+               (= 0 (get-in gs [(my-side-kw state) :click] 0)))
+          ["🔔" "Your turn is out of clicks — resolve your open prompt first (often the end-of-turn discard); the turn ends after it" false]
+
           ;; My turn, out of clicks, not ended, nothing pending (#117). Nobody is
           ;; owed a start-turn and my-turn-to-act? is false for BOTH sides, so
           ;; this must not be dressed up as a boundary — the turn is still mine

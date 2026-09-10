@@ -179,9 +179,19 @@
      :data {:card-title card-title :server normalized-server}}))
 
 (defn- handle-install-waiting!
-  "Handle install waiting for input (e.g., server selection prompt)."
-  [card-title prompt]
-  (println (str "⏸️  Installed: " card-title " - waiting for server selection"))
+  "Handle install waiting for input. Name the decision that is actually pending
+   (#151 item 21): with no server given the engine asks where; with one given,
+   the pending prompt is something else — for --overwrite it is the OK
+   confirmation of the trash — and calling that 'server selection' names a
+   decision the seat already made. Nor is the card 'Installed:' yet."
+  [card-title normalized-server prompt]
+  (let [choices (map #(if (map? %) (:value %) %) (:choices prompt))
+        sole-choice (when (= 1 (count choices)) (first choices))]
+    (println (str "⏸️  Install of " card-title " pending - "
+                  (cond
+                    sole-choice (str "waiting for your confirmation → choose-value \"" sole-choice "\"")
+                    normalized-server "waiting for you to answer a prompt"
+                    :else "waiting for server selection"))))
   (println (str "   Prompt: " (:msg prompt)))
   (core/show-turn-indicator)
   (flush)
@@ -230,7 +240,7 @@
                                              :pre-prompt pre-prompt})]
       (case (:status result)
         :success      (handle-install-success! card-title card-type normalized-server before-clicks before-credits card-cost side overwrite?)
-        :waiting-input (handle-install-waiting! card-title (:prompt result))
+        :waiting-input (handle-install-waiting! card-title normalized-server (:prompt result))
         :error        (handle-install-error! card-title result)))))
 
 (defn install-card!
