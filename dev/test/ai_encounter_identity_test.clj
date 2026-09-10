@@ -163,7 +163,9 @@
   ;; fire through for an ICE nobody was encountering (plan-review MAJOR).
   (let [sent (atom [])
         unbroken [{:label "Do 2 net damage." :broken false :fired false}]]
-    (with-mock-state (encounter-state (karuna unbroken) unnameable :side "corp")
+    ;; The Runner has passed, so the Corp OWNS the window — the variant of the
+    ;; text that carries the executable resync (a non-owner is told to wait).
+    (with-mock-state (encounter-state (karuna unbroken) (assoc unnameable :no-action "runner") :side "corp")
       (with-redefs [ws/send-message! (fn [t d] (swap! sent conj {:type t :data d}) true)]
         (let [out (with-out-str (card-actions/fire-unbroken-subs! "Karunā"))]
           (is (empty? @sent)
@@ -203,7 +205,12 @@
               (str side ": the positional card must not be named, got:\n" out))
           (is (not (re-find #"(?i)use 'continue' to pass priority|fire-subs <|tank \"" out))
               (str side ": no card-specific or pass steer, got:\n" out))
-          (is (re-find #"resync 0000" out) (str side ": executable resync, got:\n" out))
+          ;; Detection is side-neutral; the RECOVERY is the owner's (r3 review).
+          ;; Nobody has passed, so the Runner owns the window.
+          (if (= side "runner")
+            (is (re-find #"resync 0000" out) (str side ": owner gets the executable resync, got:\n" out))
+            (is (and (re-find #"OPPONENT owes this window" out) (not (re-find #"resync 0000" out)))
+                (str side ": non-owner is told to wait, not promised a resync that will not happen, got:\n" out)))
           (is (re-find (re-pattern (str "umpire-ping " side)) out)
               (str side ": escalation names the side, got:\n" out)))))
     (testing (str side ": diagnose-blocker, WITH a run")
@@ -220,6 +227,12 @@
               (str side ": the runless gate used to need :ice (live-encounter?), got:\n" out))
           (is (not (re-find #"(?i)use: continue|Use: wait" out))
               (str side ": no generic steer, got:\n" out)))))))
+
+(deftest the-corp-gets-the-recovery-once-it-owns-the-window
+  (with-mock-state (encounter-state (karuna one-unbroken) (assoc unnameable :no-action "runner") :side "corp")
+    (let [out (priority-block "corp")]
+      (is (re-find #"resync 0000" out) (str "Runner passed → Corp owns → Corp is told the resync, got:\n" out))
+      (is (not (re-find #"OPPONENT owes" out)) (str "got:\n" out)))))
 
 (deftest a-runner-who-already-passed-a-broken-encounter-is-told-to-wait
   ;; Plan-review MINOR: round 1's `:else` said "continue passes" to a seat whose

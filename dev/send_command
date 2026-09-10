@@ -552,9 +552,9 @@ ${GREEN}Waiting / Synchronization:${NC}
                               a prompt for us (decision required)
                               run started (even mid 'wait my turn')
                               run ended
-                              an encounter the wire cannot name (#198: follow the
-                                printed recovery; the ICE at the run position is
-                                NOT the one being encountered)
+                              an encounter the wire cannot name, when YOU own the
+                                window (#198: follow the printed recovery; the ICE
+                                at the run position is NOT the one being encountered)
                               our turn to act
                               game over (match ended — stop, don't hang)
                               timeout (default 300s)

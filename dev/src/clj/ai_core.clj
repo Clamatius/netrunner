@@ -1682,6 +1682,8 @@
   (boolean (and (encounter-window? state)
                 (nil? (get-in state [:game-state :encounters :ice])))))
 
+(declare owns-run-window?)   ; defined below, with run-window-owner
+
 (defn unnameable-encounter-lines
   "What to tell a seat at an unnameable encounter — the ONE text, printed by
    `prompt`/`status` (print-run-window-priority!), `diagnose-blocker`, `wait`'s
@@ -1707,7 +1709,12 @@
         ;; another resync is the repeat the PM ruled out, and plain `continue` is
         ;; REFUSED here on purpose (the guard precedes every handler) — only the
         ;; explicit override passes the empty window.
-        resynced? @state/unnameable-resync-spent]
+        resynced? @state/unnameable-resync-spent
+        ;; Detection is side-neutral; the RECOVERY is the owner's. The handler
+        ;; idles the non-owner (:waiting-for-opponent) before its resync branch,
+        ;; so telling that seat "continue will resync for you" promised a
+        ;; recovery that does not happen (code review r3, MAJOR).
+        owner? (owns-run-window? state (state/my-side-kw state))]
     (into
      ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
       "   Do NOT break, tank or fire-subs on a guess: the ICE at the run position is NOT the one being"
@@ -1718,11 +1725,19 @@
      ;; mode re-sends every tick until stuck detection trips — five continues
      ;; and a "Stuck" diagnosis naming the positional card (code review r2,
      ;; REPL). --single sends exactly one.
-     (if resynced?
+     (cond
+       (not owner?)
+       ["   → The OPPONENT owes this window (they have not passed it). `continue` / `monitor-run` will wait;"
+        "     there is nothing for you to recover yet. If the log stays put for a long while,"
+        (str "     `./dev/umpire-ping " side " \"opponent parked at an encounter with no ICE on the wire?\"`.")]
+
+       resynced?
        [(str "   → The one automatic `resync` has already been tried for this encounter. `board` and `log`:")
         "     if the log shows the encountered ICE was TRASHED or moved during this encounter, the window"
         "     is empty and `continue --single --force` passes it (one send; both sides must pass)."
         (str "   → Otherwise `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]
+
+       :else
        [(str "   → `continue` / `monitor-run` will `resync " gameid "` ONCE for you and re-read the board;")
         "     run one of them. (Hand-driving without them: run that resync yourself, once.)"
         "   → If it is STILL unnamed afterwards: `board` and `log` — an ICE TRASHED or moved during this"
