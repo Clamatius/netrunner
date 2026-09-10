@@ -1030,16 +1030,32 @@
    and in that case says so, never a verdict read off stale state."
   [pre-state]
   (let [pre-prompt (state/get-prompt pre-state)
+        my-side (state/my-side-kw pre-state)
         prompt-changed? (fn [s] (not= pre-prompt (state/get-prompt s)))
+        ;; A held post-discard window is the engine's OTHER way of not
+        ;; finishing an end-turn: with a force-post-discard flag set,
+        ;; game.core.turns/end-turn opens the window and returns without
+        ;; end-turn-continue — no :end-turn flip, no 'is ending' line, and
+        ;; possibly no prompt. Reading that as 'unconfirmed' would tell the seat
+        ;; to `wait` when the move is end-post-discard (#152's own guard text).
+        post-discard-held? (fn [_] (= my-side (:owner (open-phase-window :post-discard))))
         acked? (fn [s] (or (get-in s [:game-state :end-turn])
                            (already-ended-this-turn? s)
-                           (prompt-changed? s)))]
+                           (prompt-changed? s)
+                           (post-discard-held? s)))]
     (if-let [s (wait-for-state! acked? core/action-timeout)]
       (let [p (state/get-prompt s)]
-        (if (and p (prompt-changed? s) (not (state/waiting-prompt-type? (:prompt-type p))))
+        (cond
           ;; The end-turn is IN PROGRESS: the engine is holding it on a prompt
           ;; of ours (the discard). Not ended, not orphaned — answer the prompt.
+          (and p (prompt-changed? s) (not (state/waiting-prompt-type? (:prompt-type p))))
           (println (str "⏸️  Your turn is ending — resolve this first: " (:msg p)))
+
+          (and (not (get-in s [:game-state :end-turn])) (post-discard-held? s))
+          (do (println "⏸️  Your turn is ending — paused in the end-of-turn (post-discard) window a card holds open.")
+              (println "   Use 'end-post-discard' to finish it (or 'wait' if the opponent still has to pass)."))
+
+          :else
           (core/show-turn-indicator))
         true)
       (do

@@ -1602,6 +1602,20 @@
             (is (re-find #"(?i)not (yet )?confirmed" out) out)
             (is (re-find #"(?i)do NOT re-send" out) out)))))))
 
+(deftest test-end-turn-held-in-post-discard-is-acknowledged-not-unconfirmed
+  (testing "N1: a force-post-discard card opens the window WITHOUT flipping :end-turn or logging —
+            that is the engine's answer, and the move is end-post-discard, not 'wait'"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (delayed-send sent 300
+                                         #(assoc-in % [:game-state :corp-post-discard]
+                                                    {:active true :requires-consent true}))]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not (re-find #"(?i)not (yet )?confirmed" out)) out)
+            (is (not (re-find #"has NOT ended yet" out)) out)
+            (is (re-find #"end-post-discard" out) out)
+            (settle!)))))))
+
 (def ^:private runner-owed-start
   "Corp ended turn 3; the Runner is owed the start-turn."
   {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
