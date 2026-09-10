@@ -1660,6 +1660,24 @@
   [state]
   (encounter-window-gs? (:game-state state)))
 
+(defn unnameable-encounter?
+  "True when an encounter is live but the wire could not name its ICE: the
+   summary is present (encounter-window?) and has no :ice, i.e. the payload
+   game.core.diffs/encounter-ice-summary leaves when get-card cannot resolve
+   the encountered card — {:encounter-count 1}, plus :no-action once somebody
+   passes.
+
+   This is a real state, distinct from BOTH 'no encounter' and 'encounter with
+   this card', and it is the ONE predicate every surface asks (#198). Two
+   things went wrong without it: the display's 'wire has not named its ICE'
+   branch tested encounter-window? alone, so it fired at every fully-broken
+   Runner encounter whose ICE was right there on the wire (marquee game A,
+   2026-09-06); and encountered-ice fell back to the position-derived card,
+   which at a forced encounter is a DIFFERENT card."
+  [state]
+  (boolean (and (encounter-window? state)
+                (nil? (get-in state [:game-state :encounters :ice])))))
+
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
    the phase string does not name. The gate every encounter handler should use

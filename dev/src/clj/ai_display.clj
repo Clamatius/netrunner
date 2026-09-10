@@ -2421,7 +2421,13 @@
       ;; (encounter-ice-summary dropped :ice, leaving {:encounter-count 1}).
       ;; Precedence sent us past the movement hint, correctly — so say what IS
       ;; true rather than falling through to a pass steer that may be refused.
-      (core/encounter-window? state)
+      ;;
+      ;; UNNAMEABLE, not merely encounter-window?: the wire carries the summary
+      ;; at EVERY encounter, so the looser test sent a Runner who had broken
+      ;; every sub — zero unbroken, so it skipped its own branch above — here
+      ;; instead of to the plain pass below, and the seat was told the wire had
+      ;; not named an ICE it had just named (#198, marquee game A).
+      (core/unnameable-encounter? state)
       (do
         (println "    → An ENCOUNTER is live but the wire has not named its ICE, so the")
         (println "      normal break/tank/fire menu cannot be built here.")
