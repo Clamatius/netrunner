@@ -408,4 +408,10 @@
         cs (with-side (assoc orphaned-turn :corp (assoc seated-corp :prompt-state discard)) "corp")
         text (:status-text (state/get-turn-status cs))]
     (is (not (re-find #"end it" text)) text)
-    (is (re-find #"(?i)resolve" text) text)))
+    (is (re-find #"(?i)resolve" text) text)
+    ;; Framing, not a token (round-3 seat): any end-turn steer in this branch
+    ;; must be CONDITIONAL — a discard prompt is the end-turn already running,
+    ;; and an unconditional "then end the turn" is the duplicate.
+    (when (re-find #"(?i)end the turn|end-turn|end it" text)
+      (is (re-find #"(?i)only if" text)
+          (str "an end-turn steer here must be qualified:\n" text)))))

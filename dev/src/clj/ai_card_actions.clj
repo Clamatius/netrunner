@@ -197,7 +197,7 @@
                     ;; OPPONENT's decision (guest panel).
                     (state/waiting-prompt-type? (:prompt-type prompt)) "waiting for the opponent"
                     sole-choice (str "waiting for your confirmation → choose-value \"" sole-choice "\"")
-                    normalized-server "waiting for you to answer a prompt"
+                    normalized-server "waiting for you to answer a prompt → run 'prompt', then choose-card <N> / choose-value \"<text>\""
                     :else "waiting for server selection"))))
   (println (str "   Prompt: " (:msg prompt)))
   (core/show-turn-indicator)

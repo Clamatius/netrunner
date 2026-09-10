@@ -569,12 +569,7 @@
            (false? (get-in client-state [:game-state :end-turn])))
       (let [gs (:game-state client-state)
             my-prompt (state/get-prompt client-state)
-            active-me? (= (str/lower-case (or (:active-player gs) "")) (name my-side))
-            window-hint (fn [kind cmd]
-                          (when-let [w (open-phase-window kind)]
-                            (if (= (:owner w) my-side)
-                              (format "   Your end/start-of-turn window is open — use '%s'." cmd)
-                              "   The opponent is holding a phase window — use 'wait'.")))]
+            active-me? (= (str/lower-case (or (:active-player gs) "")) (name my-side))]
         (println "⛔ Refusing start-turn: no turn boundary — a turn is still in progress (the engine's :end-turn is not set).")
         ;; The recovery line must respect PROMPT OWNERSHIP before it reads the
         ;; active player (fresh-seat delta review, MAJOR): a Corp holding
@@ -588,12 +583,11 @@
                    my-prompt
                    "   You are waiting on the opponent's decision — use 'wait'."
 
-                   (window-hint :post-discard "end-post-discard")
-                   (window-hint :post-discard "end-post-discard")
-
-                   (window-hint :phase-12 "end-phase-12")
-                   (window-hint :phase-12 "end-phase-12")
-
+                   ;; No phase-window arms here: a post-discard window is refused
+                   ;; by the post-discard-active? arm above, and phase 1.2 opens
+                   ;; only after the clicks are granted (turns.clj), so its owner
+                   ;; hits the clicks guard and the other seat the opp-clicks
+                   ;; guard — both earlier (round-3 seat: unreachable).
                    active-me?
                    "   It is YOUR turn, out of clicks and not ended — use 'end-turn' (or 'smart-end-turn')."
 

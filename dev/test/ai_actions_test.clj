@@ -747,7 +747,7 @@
         (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
           (is (some #(= "play" (get-in % [:data :command])) @sent) "the install must still be sent")
           (is (not (re-find #"server selection" out)) out)
-          (is (re-find #"OK" out) (str "must name the pending OK confirmation:\n" out)))))))
+          (is (re-find #"choose-value \"OK\"" out) (str "must name the pending OK confirmation and its command:\n" out)))))))
 
 (deftest install-waiting-hint-never-prints-a-card-map
   (testing "guest panel: a single CARD-valued choice is a {:cid :title} map on the wire —
@@ -769,7 +769,8 @@
           (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
             (is (re-find #"pending" out) "must have reached the waiting-input path")
             (is (not (re-find #":cid" out)) out)
-            (is (not (re-find #"choose-value" out)) "no hint for a card choice — the prompt block shows the cards")))))))
+            (is (not (re-find #"choose-value \"[^<]" out))
+                (str "no CONCRETE value hint for a card choice (the generic 'run prompt' steer is fine):\n" out))))))))
 
 (deftest install-waiting-on-the-opponent-says-so
   (testing "guest panel: with a server given, a passive waiting prompt is the OPPONENT's, not 'yours to answer'"
