@@ -1414,21 +1414,21 @@
 
                       ;; 3. If opponent turn, watch for runs. Capture the run status so
                       ;; the stall tracker can tell if we're wedged waiting on the Runner.
-                      (let [run-status (when (and (not my-turn?) (has-active-run?))
-                                         (let [r (respond-to-run!)]
-                                           ;; #198: monitor-run! parked at an encounter the wire
-                                           ;; cannot name, after its one resync. There is no
-                                           ;; prompt to answer and re-entering would re-derive
-                                           ;; the park every tick (the stall tracker only watches
-                                           ;; opponent waits). Take the manual override: a forced
-                                           ;; pass — legal, and there is nothing to fire on a card
-                                           ;; nobody can name.
-                                           (when (runs/unnameable-encounter-result? r)
-                                             (log-message "HEURISTIC CORP - Unnameable encounter after resync; forcing the pass (#198)")
-                                             (runs/continue-run! "--force"))
-                                           (Thread/sleep 500)
-                                           (:status r)))]
-                        {:continue? true :run-status run-status}))))
+                      (let [r (when (and (not my-turn?) (has-active-run?))
+                                (let [r (respond-to-run!)]
+                                  (Thread/sleep 500)
+                                  r))]
+                        ;; #198: monitor-run! parked at an encounter the wire cannot
+                        ;; name, after its one resync. There is no prompt to answer and
+                        ;; re-entering would re-derive the park every tick (the stall
+                        ;; tracker only watches opponent waits). Requirement 3: stop and
+                        ;; escalate — the park printed the recovery; this loop ends. A
+                        ;; forced pass was tried and rejected in review (it passed a live
+                        ;; "End the run" when the board landed between park and send).
+                        (if (runs/unnameable-encounter-result? r)
+                          (do (log-message "HEURISTIC CORP - Unnameable encounter after resync; stopping the loop for a human (#198)")
+                              {:continue? false :run-status (:status r)})
+                          {:continue? true :run-status (:status r)})))))
             ;; bot-loop-stop stops us with future-cancel, i.e. an interrupt.
             ;; Swallowing it here would keep a cancelled loop running, and a
             ;; later bot-loop would put TWO loops on one seat (guest 2nd pass).

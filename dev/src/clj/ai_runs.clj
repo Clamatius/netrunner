@@ -69,20 +69,15 @@
                               :command "say"
                               :args {:user "AI-debug" :msg full-msg}})))))))
 
-;; #198: has this run's one permitted resync at an unnameable encounter been
-;; spent? Per-RUN lifetime (reset here with the other per-run atoms, and at run
-;; end), NOT "reset whenever the board is not an unnameable encounter":
-;; resync-game! clears the board, so that rule reset the latch on the empty
-;; window the resync itself created and resynced again when the same payload
-;; came back (plan review, CRITICAL).
-(defonce unnameable-resync-spent (atom false))
-
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
   []
   (reset! run-strategy {})
   (reset! last-waiting-status nil)
-  (reset! unnameable-resync-spent false)   ; #198: one resync per RUN
+  ;; NB: NOT state/unnameable-resync-spent. This fn runs at every monitor-run!
+  ;; entry — including a CLI `continue` re-entering the SAME live run — so a
+  ;; reset here re-armed the one-resync latch mid-encounter (code review, both
+  ;; seats, REPL-confirmed). rearm-unnameable-resync! owns that latch.
   (corp-handlers/reset-state!)
   (runner-handlers/reset-state!))
 
@@ -1092,6 +1087,20 @@
   [result]
   (= :unnameable-encounter (:wake-reason result)))
 
+(defn rearm-unnameable-resync!
+  "Priority 0.4, never matches: re-arms the one-resync latch (#198) on a tick
+   whose board is PRESENT and shows no encounter window at all — the encounter
+   the resync was spent on is over. Two rules that looked simpler were both
+   wrong: 'reset when not unnameable' re-armed on the EMPTY window the resync
+   itself creates (plan review), and 'reset at monitor-run! entry' re-armed on
+   every CLI `continue` re-entering the same live run (code review). Returns nil
+   so the chain continues."
+  [{:keys [state]}]
+  (when (and (state/board? (:game-state state))
+             (not (core/encounter-window? state)))
+    (reset! state/unnameable-resync-spent false))
+  nil)
+
 (defn handle-unnameable-encounter
   "Priority 0.5 (after --force, before everything that reads the card): an
    encounter is live but the wire has not named its ICE (#198).
@@ -1103,9 +1112,11 @@
      * the seat that does NOT own the window (core/owns-run-window?) idles as an
        opponent wait, exactly as at any window it does not own — it must not
        leave its post (the nobody-home wedge, #31);
-     * the OWNER resyncs ONCE per run (connection/resync-and-wait!, a waited
-       resync with a verdict) and, if a board landed, returns :action-taken so
-       the next tick re-reads it — a diverged client is repaired this way;
+     * the OWNER resyncs ONCE per encounter (connection/resync-and-wait!, a
+       waited resync with a verdict; the latch is state/unnameable-resync-spent,
+       re-armed by rearm-unnameable-resync! when the encounter is over) and, if
+       a board landed, returns :action-taken so the next tick re-reads it — a
+       diverged client is repaired this way;
      * if the resync did not land, or the board came back still unnameable, the
        owner PARKS: :decision-required (terminal in both loop modes) with the
        one shared text (core/unnameable-encounter-lines), which names `continue`
@@ -1131,9 +1142,9 @@
          :wake-reason :unnameable-encounter-opponent
          :message "Unnameable encounter; the opponent owes the window"})
 
-      (not @unnameable-resync-spent)
+      (not @state/unnameable-resync-spent)
       (do
-        (reset! unnameable-resync-spent true)
+        (reset! state/unnameable-resync-spent true)
         (println "🔄 An encounter is live but the wire has not named its ICE — resyncing ONCE to rule out a diverged client (#198)...")
         (if (= :synced (connection/resync-and-wait! gameid))
           {:status :action-taken
@@ -1707,6 +1718,7 @@
         handlers [handle-force-mode
                   ;; #198: before EVERY card-reading handler, and before the
                   ;; opponent-wait handler that can otherwise starve it.
+                  rearm-unnameable-resync!
                   handle-unnameable-encounter
                   handle-opponent-wait
                   (fn [ctx]  ; Wrapper: mark a rez attempt so a failed (unaffordable) rez isn't retried forever
@@ -1975,8 +1987,8 @@
                 ;; (passed-encounter-key, #150) has the same per-run lifetime.
                 (runner-handlers/reset-state!)
                 (corp-handlers/reset-state!)
-                ;; #198: the one-resync latch is per run too.
-                (reset! unnameable-resync-spent false)
+                ;; #198: a run that ended has no encounter; re-arm the one resync.
+                (reset! state/unnameable-resync-spent false)
                 ;; Same third-path hazard for the self-advance grace timer: a
                 ;; stale [phase position no-action] key (these collide readily)
                 ;; would make a card-initiated run's first window look instantly

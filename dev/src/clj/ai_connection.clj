@@ -516,6 +516,13 @@
   []
   (if (state/game-over?) :game-over :game-gone))
 
+(defonce ^{:doc "True while resync-and-wait! has cleared the board and is waiting
+   for the replacement (#198). sync-verdict!'s boardless branch reads it: the
+   empty window is intentional and already being repaired, so a concurrent
+   command waits for THIS resync instead of starting a rejoin-plus-resync that
+   would clear the board the first one just landed."}
+  resync-in-flight? (atom false))
+
 (defn resync-and-wait!
   "ONE resync of the seated game, waited for: `resync-game!` (which CLEARS the
    cached board before asking for a fresh one) followed by the same board wait
@@ -532,15 +539,24 @@
    Exists so the run automation's one-shot recovery at an unnameable encounter
    (#198) does not re-implement this sequence with a shorter wait and no verdict.
    The rejoin half of `do-rejoin-resync!` is deliberately not here: the seat IS
-   seated (the board it holds is live, just missing a card), and a rejoin would
-   unseat it (#76)."
+   seated (the board it holds is live, just missing a card). A rejoin does NOT
+   unseat an already-seated player (code review drove web.lobby/handle-join-lobby
+   to check); the hazard is OVERLAPPING recovery — a second resync clearing the
+   board the first one just landed, so both report :resync-failed over a board
+   that arrived. Hence `resync-in-flight?`, which `sync-verdict!` honours: a
+   concurrent command on this seat during the wait joins this resync's outcome
+   instead of starting a rejoin-plus-resync of its own."
   [gameid]
-  (resync-game! gameid)
-  (if (wait-for-condition has-game-state? 8000 "state resync")
-    (do (state/clear-stale-flag!)
-        :synced)
-    (do (println "❌ Resync sent but state did not arrive in time")
-        :resync-failed)))
+  (reset! resync-in-flight? true)
+  (try
+    (resync-game! gameid)
+    (if (wait-for-condition has-game-state? 8000 "state resync")
+      (do (state/clear-stale-flag!)
+          :synced)
+      (do (println "❌ Resync sent but state did not arrive in time")
+          :resync-failed))
+    (finally
+      (reset! resync-in-flight? false))))
 
 (defn- do-rejoin-resync!
   "Internal: Perform the rejoin and resync sequence.
@@ -634,6 +650,20 @@
     ;; This catches "kicked from game" scenarios
     (:gameid @state/client-state)
     (cond
+      ;; A resync-and-wait! is already clearing-and-refilling the board (#198).
+      ;; Join its outcome rather than stacking a rejoin+resync on top: the
+      ;; second recovery cleared the board the first had just landed and both
+      ;; reported :resync-failed over a board that arrived (code review, REPL).
+      ;; FIRST, ahead of the kicked check: the seat was on a live board a moment
+      ;; ago, and a lobby-list round trip that fails transiently while the
+      ;; resync is in flight must not turn into a rejoin either.
+      @resync-in-flight?
+      (do
+        (println "⏳ A resync is already in flight on this seat — waiting for it rather than starting another...")
+        (if (wait-for-condition has-game-state? 8000 "in-flight resync")
+          :synced
+          :resync-failed))
+
       (not (verify-in-game!))
       (do
         (println "⚠️  Kicked from game detected - auto-resyncing...")

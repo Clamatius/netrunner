@@ -321,7 +321,7 @@ If the run already ended, returns immediately instead of blocking.
 **Caveats:**
 - Uses stuck-state detection instead of iteration limits (500 max as safety net)
 - Always wakes for rez decisions. `--rez "X"` auto-rezzes X but still wakes on *other* unrezzed ICE; only `--no-rez` declines everything silently
-- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails
+- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails — EXCEPT at an encounter the wire cannot name (the "has not named its ICE" text): there `fire-subs` is refused and plain `continue` parks again on purpose; follow the printed recovery (`board`/`log`, then `continue --force` only if the log shows the ICE was trashed or moved, else umpire-ping)
 
 ### Gotchas
 

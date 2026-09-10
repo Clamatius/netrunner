@@ -1701,15 +1701,27 @@
   [state]
   (let [gameid (or (:gameid state) "<game-id>")
         ;; state/my-side-kw, the one sanctioned side derivation (#127 ratchet).
-        side   (or (some-> (state/my-side-kw state) name) "<side>")]
-    ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
-     "   Do NOT break, tank, fire-subs or continue on a guess: the ICE at the run position is NOT"
-     "   the one being encountered, and the normal break/tank/fire menu cannot be built here."
-     "   → `board` and `log`. If the log shows the encountered ICE was TRASHED or moved during this"
-     "     encounter, the window is empty and `continue` passes it (both sides must pass)."
-     (str "   → Otherwise `resync " gameid "` ONCE and look again; if it is STILL unnamed,")
-     (str "     `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")
-     "   (`continue --force` is the manual override. The run automation stops here on purpose, #198.)"]))
+        side   (or (some-> (state/my-side-kw state) name) "<side>")
+        ;; Two moments, two texts (code review, GPT-6 Astra): before the automatic
+        ;; resync the steer is "resync once"; after it has been spent, asking for
+        ;; another resync is the repeat the PM ruled out, and plain `continue` is
+        ;; REFUSED here on purpose (the guard precedes every handler) — only the
+        ;; explicit override passes the empty window.
+        resynced? @state/unnameable-resync-spent]
+    (into
+     ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
+      "   Do NOT break, tank or fire-subs on a guess: the ICE at the run position is NOT the one being"
+      "   encountered, and the normal break/tank/fire menu cannot be built here. Plain `continue` and"
+      "   monitor-run stop at this window on purpose (#198)."]
+     (if resynced?
+       [(str "   → The one automatic `resync` has already been tried for this encounter. `board` and `log`:")
+        "     if the log shows the encountered ICE was TRASHED or moved during this encounter, the window"
+        "     is empty and `continue --force` passes it (both sides must pass)."
+        (str "   → Otherwise `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]
+       [(str "   → `resync " gameid "` ONCE and look again (monitor-run / continue do this for you).")
+        "   → If it is STILL unnamed afterwards: `board` and `log` — an ICE TRASHED or moved during this"
+        "     encounter leaves an empty window that `continue --force` passes (both sides must pass);"
+        (str "     anything else, `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]))))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one

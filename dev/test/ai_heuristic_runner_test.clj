@@ -17,9 +17,10 @@
   ;; #198: the park is :decision-required with NO prompt; :handle-prompt would be
   ;; a no-op tick and the loop would re-derive the park forever (plan review,
   ;; CRITICAL from both seats). The bot takes the manual override instead.
-  (testing ":decision-required + :wake-reason :unnameable-encounter -> :force-continue"
-    (is (= :force-continue (h/run-result->next-action
-                             {:status :decision-required :wake-reason :unnameable-encounter}))))
+  (testing ":decision-required + :wake-reason :unnameable-encounter -> :stop (requirement 3: stop and escalate;
+            a forced pass was rejected in code review — it passed a live sub when the board landed mid-tick)"
+    (is (= :stop (h/run-result->next-action
+                   {:status :decision-required :wake-reason :unnameable-encounter}))))
   (testing "an ordinary :decision-required is untouched"
     (is (= :handle-prompt (h/run-result->next-action
                             {:status :decision-required :wake-reason :decision-required})))))

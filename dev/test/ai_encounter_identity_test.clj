@@ -269,7 +269,8 @@
 (defn- with-fresh-run-state [f]
   (runs/reset-strategy!)
   (reset! runs/last-waiting-status nil)
-  (try (f) (finally (runs/reset-strategy!))))
+  (reset! ai-state/unnameable-resync-spent false)
+  (try (f) (finally (runs/reset-strategy!) (reset! ai-state/unnameable-resync-spent false))))
 
 (deftest the-guard-is-silent-at-a-named-encounter-and-off-a-board
   (with-fresh-run-state
@@ -290,7 +291,7 @@
             (let [r (runs/handle-unnameable-encounter (handler-ctx "corp"))]
               (is (= :waiting-for-opponent (:status r)) (str "got: " r))
               (is (zero? @resyncs) "the non-owner does not spend the resync")
-              (is (false? @runs/unnameable-resync-spent)))))))))
+              (is (false? @ai-state/unnameable-resync-spent)))))))))
 
 (deftest the-owner-resyncs-once-then-parks
   (with-fresh-run-state
@@ -306,6 +307,8 @@
               (is (= :decision-required (:status (:result r2))) (str "second tick parks, got: " r2))
               (is (= :unnameable-encounter (:wake-reason (:result r2))))
               (is (re-find #"has not named its ICE" (:out r2)) (str "the park prints the recovery, got:\n" (:out r2)))
+              (is (re-find #"already been tried" (:out r2))
+                  (str "the park prints the POST-resync text (no second resync asked for), got:\n" (:out r2)))
               (is (= 1 @resyncs) "ONE resync per run — the second tick did not resync again")
               (is (= :decision-required (:status (:result r3))))
               (is (not (re-find #"has not named its ICE" (:out r3)))
@@ -326,12 +329,67 @@
             (is (not= :action-taken (:status result)))
             (is (re-find #"has not named its ICE" out) (str "got:\n" out))))))))
 
-(deftest the-latch-is-per-run
+(deftest the-latch-outlives-monitor-re-entry-and-re-arms-when-the-encounter-ends
+  ;; Code review (both seats, REPL-confirmed): reset-strategy! runs at EVERY
+  ;; monitor-run! entry — a CLI `continue` re-enters the same live run — so a
+  ;; reset there re-armed the one resync mid-encounter. The latch now survives
+  ;; that, and re-arms only on a tick whose board is present and shows no
+  ;; encounter window (the encounter ended); never on the cleared board.
   (with-fresh-run-state
     (fn []
-      (reset! runs/unnameable-resync-spent true)
+      (reset! ai-state/unnameable-resync-spent true)
       (runs/reset-strategy!)
-      (is (false? @runs/unnameable-resync-spent) "reset-strategy! (run start / run end) re-arms the one resync"))))
+      (is (true? @ai-state/unnameable-resync-spent) "monitor-run!/continue re-entry must NOT re-arm it")
+      ;; The empty window the resync itself creates: not a re-arm.
+      (is (nil? (runs/rearm-unnameable-resync! {:state {:game-state nil}})))
+      (is (true? @ai-state/unnameable-resync-spent) "a cleared board is not 'the encounter ended'")
+      ;; Still the same unnameable encounter: not a re-arm.
+      (with-mock-state (encounter-state (karuna one-unbroken) unnameable)
+        (runs/rearm-unnameable-resync! {:state @ai-state/client-state}))
+      (is (true? @ai-state/unnameable-resync-spent))
+      ;; The encounter is over (board present, no summary): re-armed.
+      (with-mock-state (encounter-state (karuna one-unbroken) nil)
+        (runs/rearm-unnameable-resync! {:state @ai-state/client-state}))
+      (is (false? @ai-state/unnameable-resync-spent) "a board with no encounter window re-arms the one resync"))))
+
+(deftest the-text-changes-once-the-automatic-resync-is-spent
+  ;; Code review (GPT-6 Astra): after the park, the text still said "resync ONCE"
+  ;; and that plain `continue` closes the window — but the guard refuses plain
+  ;; continue and the resync has already happened.
+  (with-fresh-run-state
+    (fn []
+      (with-mock-state (encounter-state (karuna one-unbroken) unnameable :side "runner")
+        (let [before (str/join "\n" (core/unnameable-encounter-lines @ai-state/client-state))
+              _ (reset! ai-state/unnameable-resync-spent true)
+              after (str/join "\n" (core/unnameable-encounter-lines @ai-state/client-state))]
+          (is (re-find #"resync 0000" before) (str "before: executable resync, got:\n" before))
+          (is (not (re-find #"resync 0000" after)) (str "after: no second resync is asked for, got:\n" after))
+          (is (re-find #"already been tried" after) (str "after: says the attempt happened, got:\n" after))
+          (is (re-find #"continue --force" after) (str "after: the only continue that passes is the override, got:\n" after))
+          (is (not (re-find #"and `continue` passes" (str before after)))
+              "neither text may claim plain continue passes — the guard refuses it"))))))
+
+(deftest a-concurrent-command-joins-the-in-flight-resync-instead-of-rejoining
+  ;; Code review (Terra + Astra, REPL-confirmed): during resync-and-wait!'s 8s
+  ;; window the seat is a boardless started game, and sync-verdict! used to
+  ;; start a rejoin+resync of its own — clearing the board the first resync had
+  ;; just landed, so both reported :resync-failed over a board that arrived.
+  (let [sent (atom [])
+        boardless (assoc (mock-client-state :side "corp" :game-state nil)
+                         :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+                         :lobby-state nil)]
+    (with-mock-state boardless
+      (reset! connection/resync-in-flight? true)
+      (try
+        (with-redefs [ws/send-message! (fn [t d] (swap! sent conj {:type t :data d}) true)
+                      connection/has-game-state? (fn [] true)]
+          (let [v (with-out-str-and-result connection/sync-verdict!)]
+            (is (= :synced (:result v)) (str "joins the in-flight outcome, got: " v))
+            (is (not-any? #(= :lobby/join (:type %)) @sent)
+                (str "no rejoin may be started over an in-flight resync, sent: " @sent))
+            (is (not-any? #(= :game/resync (:type %)) @sent)
+                (str "no second resync either, sent: " @sent))))
+        (finally (reset! connection/resync-in-flight? false))))))
 
 (deftest the-chain-terminates-instead-of-declaring-the-run-complete
   ;; Through the REAL handler chain: two ticks on the unnameable board, resync
