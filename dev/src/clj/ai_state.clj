@@ -60,6 +60,19 @@
 
 (defonce run-strategy (atom {}))
 
+(defonce ^{:doc "#198: has the ONE automatic resync at an unnameable encounter been
+   spent for the encounter currently on the board? Set by
+   ai-runs/handle-unnameable-encounter when it resyncs; re-armed by the run
+   handler chain on the first tick whose board is PRESENT (state/board?) and
+   shows NO encounter window at all — i.e. the encounter ended. Not on run
+   start/re-entry: monitor-run! re-enters the same live run on every CLI
+   `continue`, so a start-of-monitor reset re-armed it mid-encounter (code
+   review, two seats). Not on 'board is not unnameable': the resync itself
+   clears the board, and an empty window is 'not unnameable' too (plan review).
+   Lives in ai-state, not ai-runs, so the recovery TEXT (ai-core) can say
+   whether the automatic attempt has already happened."}
+  unnameable-resync-spent (atom false))
+
 (defn expire-run-strategy!
   "Clear the run strategy when a run we were holding flags for has ENDED.
    `old-state` / `new-state` are the boards either side of an applied diff; the

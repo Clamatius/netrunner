@@ -621,13 +621,25 @@
                  ;; mirror — fall through (idle), don't re-send/re-print.
                  (not (passed-encounter-recently? pass-key)))
         (let [ice-title (:title current-ice "ICE")
-              all-broken? (every? :broken subroutines)]
+              all-broken? (every? :broken subroutines)
+              all-fired? (every? :fired subroutines)]
           ;; (every? :broken []) is true, so the old single format would have
           ;; announced "All subs broken" about an ICE that never had one (#167).
-          (println (if (empty? subroutines)
+          ;; Mixed broken+fired is neither "broken" nor "resolved" — the Runner
+          ;; sibling misreported Brân 1.0 that way to a marquee seat (#198);
+          ;; name both, with counts.
+          (println (cond
+                     (empty? subroutines)
                      (format "   %s has no subroutines, Corp continuing" ice-title)
-                     (format "   All subs %s on %s, Corp continuing"
-                             (if all-broken? "broken" "resolved") ice-title)))
+                     all-broken?
+                     (format "   All subs broken on %s, Corp continuing" ice-title)
+                     all-fired?
+                     (format "   All subs resolved on %s, Corp continuing" ice-title)
+                     :else
+                     (format "   All subs broken or fired on %s (%d broken, %d fired), Corp continuing"
+                             ice-title
+                             (count (filter :broken subroutines))
+                             (count (filter :fired subroutines)))))
           (let [r (send-continue! gameid)]
             (when (= :action-taken (:status r))
               (latch-encounter-pass! pass-key (:sent r)))

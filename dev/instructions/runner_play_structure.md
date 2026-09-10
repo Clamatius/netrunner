@@ -277,6 +277,15 @@ When you only want to break some subroutines:
 
 ### If a run seems stuck at "priority / paid-ability window"
 
+**One special case first:** if `prompt`/`status` say *"An ENCOUNTER is live but the wire
+has not named its ICE"*, you are at an encounter whose card the server could not
+serialize (usually an ICE trashed or moved mid-encounter). There is no break/tank menu
+to build, the ICE shown at the run position is NOT the one being encountered, and
+`continue`/`monitor-run` stop here on purpose after one automatic resync — a
+`decision-required` with no prompt behind it. Follow the printed recovery: `board` and
+`log`; `continue --single --force` (one send) only if the log shows the ICE was trashed
+or moved; otherwise `./dev/umpire-ping runner "..."`.
+
 Run **initiation**, **movement**, and **approach-server** are *both-must-pass*
 windows: the run only advances after **both** players pass priority. Once you've
 sent `continue` there, `prompt` / `diagnose-blocker` will say *"You have already

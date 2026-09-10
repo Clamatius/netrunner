@@ -45,6 +45,7 @@ test:
 	  ai-connection-test \
 	  ai-decklist-test \
 	  ai-display-test \
+	  ai-encounter-identity-test \
 	  ai-forced-encounter-test \
 	  ai-heuristic-corp-test \
 	  ai-heuristic-runner-test \

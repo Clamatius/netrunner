@@ -187,14 +187,27 @@
 ;; requiring break/tank/jack-out) that is NOT modelled as a server prompt.
 ;; ---------------------------------------------------------------------------
 
+(def ^:private tithe-unbroken
+  {:title "Tithe" :rezzed true
+   :subroutines [{:broken false :fired false}
+                 {:broken false :fired false}]})
+
+(def ^:private tithe-fired
+  (assoc tithe-unbroken :subroutines [{:broken false :fired true} {:broken false :fired true}]))
+
 (def ^:private encounter-game-state
+  ;; The wire ALWAYS carries the encounter summary with :ice for an installed,
+  ;; rezzed card (game.core.diffs/encounters-summary drops :ice only when the
+  ;; card cannot be resolved). This fixture used to omit the summary and reach
+  ;; Tithe through core/encountered-ice's positional fallback; #198 made the
+  ;; summary-without-:ice payload a distinct "unnameable" state, so a named
+  ;; encounter must be written the way the engine writes it.
   {:active-player "runner" :turn 3
    :runner {:click 0}
    :run {:phase "encounter-ice" :position 1 :server ["remote1"]}
+   :encounters {:encounter-count 1 :ice tithe-unbroken}
    :corp {:click 0
-          :servers {:remote1 {:ices [{:title "Tithe" :rezzed true
-                                      :subroutines [{:broken false :fired false}
-                                                    {:broken false :fired false}]}]}}}})
+          :servers {:remote1 {:ices [tithe-unbroken]}}}})
 
 (deftest test-wait-wakes-on-runner-encounter-decision
   ;; Repro for #47: Runner at encounter-ice with a rezzed ICE that still has
@@ -219,7 +232,7 @@
   (testing "Runner already passed the encounter -> no wake, times out"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
-                          (assoc encounter-game-state :encounters {:no-action "runner"}))
+                          (assoc-in encounter-game-state [:encounters :no-action] "runner"))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :timeout (:status result))
               (str "runner-passed encounter must not wake, got: " result)))))))
@@ -232,7 +245,7 @@
   (testing "Corp passed, Runner has not -> still wakes :encounter-decision"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
-                          (assoc encounter-game-state :encounters {:no-action "corp"}))
+                          (assoc-in encounter-game-state [:encounters :no-action] "corp"))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :encounter-decision (:reason result))
               (str "corp-passed (runner active) must still wake, got: " result)))))))
@@ -248,9 +261,14 @@
   (testing "all subs broken -> not :encounter-decision; the owed close wakes as :my-run-window (#102)"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
-                          (assoc-in encounter-game-state
-                                    [:corp :servers :remote1 :ices 0 :subroutines]
-                                    [{:broken true :fired false} {:broken true :fired false}]))
+                          ;; Both copies of the card: the installed one AND the
+                          ;; wire's encounter summary, which is what the client
+                          ;; reads (#198) — the summary carries :subroutines too.
+                          (let [tithe-broken (assoc tithe-unbroken :subroutines
+                                                    [{:broken true :fired false} {:broken true :fired false}])]
+                            (-> encounter-game-state
+                                (assoc-in [:corp :servers :remote1 :ices 0] tithe-broken)
+                                (assoc-in [:encounters :ice] tithe-broken))))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (not= :encounter-decision (:reason result))
               (str "nothing to authorize — must not be :encounter-decision, got: " result))
@@ -274,9 +292,8 @@
   "Runner tanked Tithe; the Corp fired both subs and then passed the encounter.
    0 clicks (the run was the last click) — no :my-turn to fall back on."
   (-> encounter-game-state
-      (assoc-in [:corp :servers :remote1 :ices 0 :subroutines]
-                [{:broken false :fired true} {:broken false :fired true}])
-      (assoc :encounters {:no-action "corp" :encounter-count 1})))
+      (assoc-in [:corp :servers :remote1 :ices 0] tithe-fired)
+      (assoc :encounters {:no-action "corp" :encounter-count 1 :ice tithe-fired})))
 
 (deftest test-wait-runner-owes-encounter-close-after-subs-fired
   (testing "#102 item 4: subs fired, Corp passed the encounter -> Runner owes the close, wakes :my-run-window"
@@ -300,7 +317,7 @@
   (testing "#102 non-interference: subs fired and the RUNNER passed -> the Corp owes the close; no wake"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
-                          (assoc fired-encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+                          (assoc-in fired-encounter-game-state [:encounters :no-action] "runner"))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :timeout (:status result))
               (str "Runner already passed; waiting on the Corp — must not wake, got: " result)))))))
@@ -315,7 +332,7 @@
   (testing "Corp: Runner passed the encounter, subs unresolved -> Corp owes fire/pass, wakes :my-run-window"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "corp"
-                          (assoc encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+                          (assoc-in encounter-game-state [:encounters :no-action] "runner"))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :my-run-window (:reason result))
               (str "Corp owes the encounter window, got: " result))))))
@@ -330,7 +347,7 @@
   (testing "a Corp woken at an owed encounter window is pointed at fire-subs/continue, not only at the approach-ice rez hint"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "corp"
-                          (assoc encounter-game-state :encounters {:no-action "runner" :encounter-count 1}))
+                          (assoc-in encounter-game-state [:encounters :no-action] "runner"))
         (let [out (with-out-str (core/wait-for-relevant-diff {:timeout 0 :verbose true}))]
           (is (str/includes? out "my-run-window")
               (str "fixture sanity: this is the my-run-window wake, got:\n" out))

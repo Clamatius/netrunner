@@ -771,14 +771,30 @@
             ;; forced encounter — Ganked!, Archangel on access — has it with the run
             ;; at position 0 / success / absent; guest-panel CRITICAL), then the
             ;; position-derived ICE at encounter-ice. Same authority as #100.
-            enc-ice (or (get-in client-state [:game-state :encounters :ice])
-                        (when (= "encounter-ice" (get-in client-state [:game-state :run :phase]))
-                          (core/current-run-ice client-state)))
+            ;;
+            ;; core/encountered-ice, not a local copy of it (#198): the copy fell
+            ;; back to the position-derived card whenever the summary lacked
+            ;; :ice, so at an UNNAMEABLE encounter (summary present, card
+            ;; unresolvable) `fire-subs <outer ice>` passed this cid gate and put
+            ;; unbroken-subroutines on the wire for a card nobody was
+            ;; encountering. The engine trusts the client here.
+            enc-ice (when (or (core/encounter-window? client-state)
+                              (= "encounter-ice" (get-in client-state [:game-state :run :phase])))
+                      (core/encountered-ice client-state))
+            unnameable? (core/unnameable-encounter? client-state)
             encountering-this? (and card enc-ice (= (:cid card) (:cid enc-ice)))
             fireable (when card
                        (filter #(and (not (:broken %)) (not (:fired %)) (:resolve % true))
                                (:subroutines card)))]
         (cond
+          ;; Before the not-found arm: at an unnameable encounter the named card
+          ;; may well be found installed, and it is still not the one being
+          ;; encountered. Refuse on the state, not on the lookup.
+          unnameable?
+          (do (doseq [l (core/unnameable-encounter-lines client-state)]
+                (println l))
+              (core/with-cursor {:status :error :reason :unnameable-encounter}))
+
           (not card)
           (do (println (str "❌ ICE not found installed: " ice-name))
               (core/with-cursor {:status :error :reason "ICE not found"}))

@@ -1098,8 +1098,12 @@
 (deftest test-run-status-headline-encounter-runner-passed-is-corp-move
   (testing "Encounter-ice, Runner passed the encounter -> it's the Corp's move,
             read from [:encounters :no-action] not the stale run-level field"
+    ;; :ice on the summary — the engine always emits it for a resolvable card;
+    ;; without it the board is an UNNAMEABLE encounter (#198) and the headline
+    ;; rightly says something else.
     (let [gs {:run {:server ["rd"] :phase "encounter-ice" :position 1 :no-action false}
-              :encounters {:no-action "runner"}}]
+              :encounters {:no-action "runner" :encounter-count 1
+                           :ice {:cid 7 :title "Whitespace" :rezzed true :subroutines []}}}]
       (is (str/includes? (display/run-status-headline gs "corp") "Your move")
           "Corp: Runner has passed the encounter, Corp acts")
       (let [runner-line (display/run-status-headline gs "runner")]
@@ -1110,7 +1114,8 @@
   (testing "Encounter-ice, nobody passed yet: Runner (active) resolves the
             encounter first; the Corp waits"
     (let [gs {:run {:server ["rd"] :phase "encounter-ice" :position 1 :no-action false}
-              :encounters {:no-action nil}}]
+              :encounters {:encounter-count 1
+                           :ice {:cid 7 :title "Whitespace" :rezzed true :subroutines []}}}]
       (is (str/includes? (display/run-status-headline gs "runner") "Your move"))
       (is (str/includes? (display/run-status-headline gs "corp") "Waiting on Runner")))))
 

@@ -149,6 +149,7 @@ The `--since` flag makes `wait` return immediately if the game state already adv
 - A prompt for us (decision required — encounter, rez window, access, etc.)
 - A run starting (even if you were just waiting for your turn — Corp must participate)
 - A run ending
+- An encounter the wire cannot name (`unnameable-encounter`), when YOU own the window — the encounter summary carries no ICE, so no break/tank/fire menu can be built. `continue`/`monitor-run` resync once automatically and then park with recovery text; follow it (`board`/`log`; `continue --single --force` only if the log shows the ICE was trashed or moved; else umpire-ping). Do NOT act on the ICE at the run position — it is not the one being encountered. This is a `decision-required` park with NO prompt behind it
 - It becomes your turn to act
 - The game ends (match over) — `wait` wakes immediately on game-over instead of hanging the full timeout; stop acting, run `game-over-status`, tear down
 - The server closes the lobby without a result (`game-over-status` → `GAME-GONE`) — treat exactly like GAME-OVER: the game no longer exists, stop acting and report
@@ -160,7 +161,7 @@ It is silent on opponent economy/draws/installs — those don't require you to a
 - LLM opponent turns are SLOW — a single Opus turn can run several minutes. Default timeout is 300s and that is usually the right value. Do not lower it.
 - A timeout expiring is NOT proof the opponent is stuck. Before concluding deadlock: send `chat "ping"`, then re-issue `wait --since $CURSOR`. Only after a second full timeout with no log activity should you assume something is actually broken.
 - During a run you initiated, the Corp gets paid-ability windows for rez/fire-subs decisions — these can take a while. Stay patient; do not jack out preemptively just because waiting is slow.
-- During the opponent's run against you (Corp side), use `monitor-run` to participate — it auto-handles priority windows and surfaces real decisions. `wait` alone is NOT enough during runs against you. For an autonomous Corp seat, prefer `monitor-run --persistent`: it owns the whole run with one command, sleeping through empty priority windows and waking only for a real rez/fire/access decision or run end (so you don't re-issue `monitor-run` through every symmetric pass-priority window).
+- During the opponent's run against you (Corp side), use `monitor-run` to participate — it auto-handles priority windows and surfaces real decisions. `wait` alone is NOT enough during runs against you. For an autonomous Corp seat, prefer `monitor-run --persistent`: it owns the whole run with one command, sleeping through empty priority windows and waking only for a real rez/fire/access decision, run end, or an encounter the wire cannot name (it resyncs once, then parks with recovery text — do not fire or continue on a guess) (so you don't re-issue `monitor-run` through every symmetric pass-priority window).
 - Humans use the Jinteki web UI, not send_command
 - For AI-vs-AI, both sides should use cursor pattern
 

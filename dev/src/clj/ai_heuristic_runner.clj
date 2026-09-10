@@ -353,11 +353,22 @@
    tracking). A #160 remediation mapped a new decision status here and would have
    spun exactly that way; the addition was removed instead."
   [result]
-  (case (:status result)
-    :decision-required      :handle-prompt
-    :paused-cannot-break    :tank
-    :fire-decision-required :tank
-    :continue))
+  (cond
+    ;; #198: the unnameable-encounter park is :decision-required with NO prompt
+    ;; behind it, so :handle-prompt would be a no-op tick and the loop would
+    ;; re-derive the park forever — the exact shape the NB above warns about.
+    ;; The bot STOPS instead (requirement 3: stop automation and escalate). A
+    ;; forced pass was tried and rejected in review: the park is derived from
+    ;; the board of THAT tick, and a board that lands between the park and the
+    ;; forced send made the Corp bot pass a live "End the run" (GPT-6 Astra,
+    ;; engine-driven).
+    (runs/unnameable-encounter-result? result) :stop
+    :else
+    (case (:status result)
+      :decision-required      :handle-prompt
+      :paused-cannot-break    :tank
+      :fire-decision-required :tank
+      :continue)))
 
 (defn- player-names
   "[my-name opp-name] from the game-state user maps (for stall nudges)."
@@ -436,6 +447,14 @@
                                            (update (runs/get-strategy) :tank (fnil conj #{}) ice))
                                          (runs/continue-run!))
 
+                                       ;; #198: parked at an encounter the wire cannot name, after
+                                       ;; the one resync. Requirement 3: stop and escalate — the
+                                       ;; park printed the recovery text; this loop ends.
+                                       :stop
+                                       (do
+                                         (println "🏃 HEURISTIC RUNNER - Unnameable encounter after resync; stopping the loop for a human (#198)")
+                                         {:stop true})
+
                                        ;; :continue - nothing special this tick
                                        nil)]
                             (Thread/sleep 500)
@@ -444,7 +463,9 @@
                             ;; `post` holds the follow-up continue-run! result (its
                             ;; :waiting-for-corp-fire), so the stall clock starts on the
                             ;; tick that signalled - not one poll later.
-                            {:continue? true :run-status (:status (if (map? post) post result))}))
+                            (if (:stop post)
+                              {:continue? false :run-status (:status result)}
+                              {:continue? true :run-status (:status (if (map? post) post result))})))
 
                         ;; Priority 2: Handle non-run prompts
                         (do

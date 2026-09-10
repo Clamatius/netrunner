@@ -306,7 +306,7 @@ Corp gets priority at specific timing windows:
 # Sleep until run ends - handles rez (if --rez specified), fire, and empty windows
 ./dev/send_command corp monitor-run --fire-if-asked --rez "Whitespace"
 ```
-This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes. Ideal for AI-vs-AI play.
+This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes — or at an encounter the wire cannot name (#198: one automatic resync, then it parks with recovery text instead of firing on a guess). Ideal for AI-vs-AI play.
 
 **Fast-return (--since):**
 ```bash
@@ -321,7 +321,7 @@ If the run already ended, returns immediately instead of blocking.
 **Caveats:**
 - Uses stuck-state detection instead of iteration limits (500 max as safety net)
 - Always wakes for rez decisions. `--rez "X"` auto-rezzes X but still wakes on *other* unrezzed ICE; only `--no-rez` declines everything silently
-- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails
+- Fallback: Use manual `continue` + `fire-subs` sequence if automation fails — EXCEPT at an encounter the wire cannot name (the "has not named its ICE" text): there `fire-subs` is refused and plain `continue` parks again on purpose; follow the printed recovery (`board`/`log`, then `continue --single --force` — one send — only if the log shows the ICE was trashed or moved, else umpire-ping)
 
 ### Gotchas
 

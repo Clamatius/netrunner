@@ -1648,8 +1648,12 @@
    live encounter nobody has passed yet is exactly {:encounter-count 1}, and two
    narrower drafts of this predicate each missed a real board:
 
-     * keying on :ice alone handed the recorded #150 boards
-       ({:encounters {:no-action \"corp\"}}, no :ice) back to the run ledger;
+     * keying on :ice alone handed the #150 test boards
+       ({:encounters {:no-action \"corp\"}}, no :ice) back to the run ledger —
+       those fixtures were simplifications, not wire captures (the engine emits
+       :ice whenever the card resolves; game.ai-forced-encounter-wire-test
+       asserts it), but the rule they taught is right: presence of the summary
+       is the signal;
      * adding :no-action still missed {:encounter-count 1}, which is the state a
        forced encounter is in for its whole first half (guest panel, 2nd pass).
 
@@ -1659,6 +1663,86 @@
    re-learning."
   [state]
   (encounter-window-gs? (:game-state state)))
+
+(defn unnameable-encounter?
+  "True when an encounter is live but the wire could not name its ICE: the
+   summary is present (encounter-window?) and has no :ice, i.e. the payload
+   game.core.diffs/encounter-ice-summary leaves when get-card cannot resolve
+   the encountered card — {:encounter-count 1}, plus :no-action once somebody
+   passes.
+
+   This is a real state, distinct from BOTH 'no encounter' and 'encounter with
+   this card', and it is the ONE predicate every surface asks (#198). Two
+   things went wrong without it: the display's 'wire has not named its ICE'
+   branch tested encounter-window? alone, so it fired at every fully-broken
+   Runner encounter whose ICE was right there on the wire (marquee game A,
+   2026-09-06); and encountered-ice fell back to the position-derived card,
+   which at a forced encounter is a DIFFERENT card."
+  [state]
+  (boolean (and (encounter-window? state)
+                (nil? (get-in state [:game-state :encounters :ice])))))
+
+(declare owns-run-window?)   ; defined below, with run-window-owner
+
+(defn unnameable-encounter-lines
+  "What to tell a seat at an unnameable encounter — the ONE text, printed by
+   `prompt`/`status` (print-run-window-priority!), `diagnose-blocker`, `wait`'s
+   wake guidance, the manual `fire-subs` refusal and the run automation's park
+   (#198). One definition because the last time this text existed in one
+   surface only, the other surfaces went on offering a card-specific menu for
+   the wrong card. Pure; `state` is the full client-state (reads :gameid and
+   :side for the commands, which must be executable as printed: `resync` takes
+   a game id — dev/send_command errors on a bare one).
+
+   The steer names `continue` for the one engine-side cause we know of: the
+   summary loses :ice when get-card cannot resolve the card, i.e. the ICE was
+   trashed or moved mid-encounter, and game.core.runs `continue :encounter-ice`
+   is a pure both-must-pass ledger (it never re-checks the card), so the window
+   still closes with a pass from each side. A resync helps the OTHER cause — a
+   client whose diffs diverged — and is asked for once, not repeatedly."
+  [state]
+  (let [gameid (or (:gameid state) "<game-id>")
+        ;; state/my-side-kw, the one sanctioned side derivation (#127 ratchet).
+        side   (or (some-> (state/my-side-kw state) name) "<side>")
+        ;; Two moments, two texts (code review, GPT-6 Astra): before the automatic
+        ;; resync the steer is "resync once"; after it has been spent, asking for
+        ;; another resync is the repeat the PM ruled out, and plain `continue` is
+        ;; REFUSED here on purpose (the guard precedes every handler) — only the
+        ;; explicit override passes the empty window.
+        resynced? @state/unnameable-resync-spent
+        ;; Detection is side-neutral; the RECOVERY is the owner's. The handler
+        ;; idles the non-owner (:waiting-for-opponent) before its resync branch,
+        ;; so telling that seat "continue will resync for you" promised a
+        ;; recovery that does not happen (code review r3, MAJOR).
+        owner? (owns-run-window? state (state/my-side-kw state))]
+    (into
+     ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
+      "   Do NOT break, tank or fire-subs on a guess: the ICE at the run position is NOT the one being"
+      "   encountered, and the normal break/tank/fire menu cannot be built here. Plain `continue` and"
+      "   monitor-run stop at this window on purpose (#198)."]
+     ;; `continue --single --force`, never `continue --force`: dev/send_command
+     ;; routes bare `continue <flags>` to monitor-run! (LOOP mode), and force
+     ;; mode re-sends every tick until stuck detection trips — five continues
+     ;; and a "Stuck" diagnosis naming the positional card (code review r2,
+     ;; REPL). --single sends exactly one.
+     (cond
+       (not owner?)
+       ["   → The OPPONENT owes this window (they have not passed it). `continue` / `monitor-run` will wait;"
+        "     there is nothing for you to recover yet. If the log stays put for a long while,"
+        (str "     `./dev/umpire-ping " side " \"opponent parked at an encounter with no ICE on the wire?\"`.")]
+
+       resynced?
+       [(str "   → The one automatic `resync` has already been tried for this encounter. `board` and `log`:")
+        "     if the log shows the encountered ICE was TRASHED or moved during this encounter, the window"
+        "     is empty and `continue --single --force` passes it (one send; both sides must pass)."
+        (str "   → Otherwise `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]
+
+       :else
+       [(str "   → `continue` / `monitor-run` will `resync " gameid "` ONCE for you and re-read the board;")
+        "     run one of them. (Hand-driving without them: run that resync yourself, once.)"
+        "   → If it is STILL unnamed afterwards: `board` and `log` — an ICE TRASHED or moved during this"
+        "     encounter leaves an empty window that `continue --single --force` passes (one send; both"
+        (str "     sides must pass); anything else, `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]))))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
@@ -1947,6 +2031,20 @@
                            (get-in state [:game-state :encounters :no-action]))
                 (not (i-already-passed-run-window? state side)))))
 
+(defn owns-run-window?
+  "True when `side` owns the un-passed pass at the current run/encounter
+   window — run-window-owner's answer, side-normalised. Public because the run
+   automation's unnameable-encounter guard (#198) scopes its one resync and its
+   park to the OWNER: the other seat idles as an opponent wait, exactly as it
+   does at any window it does not own, instead of leaving its post (the
+   nobody-home wedge #31 exists to kill)."
+  [state side]
+  (boolean (when-let [owner (run-window-owner state)]
+             ;; side= is the case-insensitive comparison; `side` arrives as
+             ;; "runner"/"Corp"/:corp from different callers (#127 ratchet:
+             ;; no new hand-rolled derivation here).
+             (and side (side= (name owner) (name side))))))
+
 (defn- my-run-window?
   "True when THIS side currently owns the un-passed pass at an active run window.
    Waking on this is safe from the old :run-active spin (see relevance-reason): a
@@ -2137,6 +2235,18 @@
        (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
        nil
 
+       ;; An encounter is live but the wire has not named its ICE (#198). Ranked
+       ;; above every encounter/ownership reason below: :my-run-window's guidance
+       ;; would tell the Corp `fire-subs <ice>` for a card it cannot name, and
+       ;; :encounter-decision cannot fire at all (nil ICE). The OWNER wakes; the
+       ;; other seat sleeps exactly as it does at any window it does not own —
+       ;; waking it too made a `wait --since` loop spin at zero cost with text
+       ;; telling it to act (code review r2, MAJOR). When ownership flips (the
+       ;; owner passes), the new owner wakes here. Below the waiting-prompt
+       ;; guard on purpose: a seat blocked on its opponent's choice cannot act.
+       (and (unnameable-encounter? state) (owns-run-window? state side))
+       :unnameable-encounter
+
        ;; Runner is at an ICE encounter with unbroken subs that needs our
        ;; break/tank/jack-out decision, but which the engine did NOT model as a
        ;; server :prompt. `has-prompt?` misses it, so wait would otherwise sleep
@@ -2301,6 +2411,10 @@
     ;; = run-window-owner names us at approach-ice / movement). The run cannot
     ;; advance until we send it, so another `wait` returns here unchanged — the
     ;; precise trap this guidance exists to break.
+    ;; #198: the same text every other surface prints for this state.
+    :unnameable-encounter
+    (unnameable-encounter-lines state)
+
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
      "      Act — `prompt` shows the window; the verb is usually `continue`"
@@ -2634,10 +2748,20 @@
    so position is not the authority — the rule the card resolvers had to learn
    twice (#100, #152) and the run handlers a third time (#160). The summary is a
    full card-summary (game.core.diffs/encounter-ice-summary), so it carries :cid,
-   :rezzed and :subroutines just like the installed card."
+   :rezzed and :subroutines just like the installed card.
+
+   The positional fallback is for a wire with NO encounter summary at all (an
+   older serialization, a diff not yet landed). When the summary is present but
+   has no :ice — encounter-ice-summary dropped it because get-card could not
+   resolve the card, typically an ICE trashed or moved mid-encounter — the
+   answer is nil: \"an encounter nobody can name\" is a real state
+   (unnameable-encounter?), and the old `or` swapped it for whatever card the
+   SUSPENDED run position pointed at, so every surface named, and offered
+   fire-subs on, a card that was not being encountered (#198)."
   [state]
-  (or (get-in state [:game-state :encounters :ice])
-      (current-run-ice state)))
+  (if (encounter-window? state)
+    (get-in state [:game-state :encounters :ice])
+    (current-run-ice state)))
 
 (defn encounter-ice-active?
   "True when `ice` is one whose subroutines this seat may act on — the client
@@ -2678,11 +2802,19 @@
    observer. Tracked separately; see the follow-up issue linked from #160. The
    Corp's fire latch is partly covered already, because
    runner-signaled-let-fire? independently requires a signal NEWER than this
-   ice's most recent encounter marker in the log."
+   ice's most recent encounter marker in the log.
+
+   nil at an UNNAMEABLE encounter (#198): the position belongs to a different
+   card, and :encounter-count is stack depth, not identity (two consecutive
+   encounters are both 1). Nothing acts at such an encounter — the guard in the
+   handler chain precedes every latch consumer — so no key is needed, and nil
+   cannot collide with a real cid."
   [state]
   (let [ice (encountered-ice state)]
-    (or (:cid ice)
-        (get-in state [:game-state :run :position]))))
+    (cond
+      (:cid ice) (:cid ice)
+      (unnameable-encounter? state) nil
+      :else (get-in state [:game-state :run :position]))))
 
 ;; ============================================================================
 ;; First-Seen Card Display
