@@ -149,7 +149,7 @@ The `--since` flag makes `wait` return immediately if the game state already adv
 - A prompt for us (decision required — encounter, rez window, access, etc.)
 - A run starting (even if you were just waiting for your turn — Corp must participate)
 - A run ending
-- An encounter the wire cannot name (`unnameable-encounter`) — the encounter summary carries no ICE, so no break/tank/fire menu can be built; follow the printed recovery (`board`/`log`, one `resync <game-id>`, then umpire-ping) rather than acting on the ICE at the run position, which is NOT the one being encountered
+- An encounter the wire cannot name (`unnameable-encounter`), when YOU own the window — the encounter summary carries no ICE, so no break/tank/fire menu can be built. `continue`/`monitor-run` resync once automatically and then park with recovery text; follow it (`board`/`log`; `continue --single --force` only if the log shows the ICE was trashed or moved; else umpire-ping). Do NOT act on the ICE at the run position — it is not the one being encountered. This is a `decision-required` park with NO prompt behind it
 - It becomes your turn to act
 - The game ends (match over) — `wait` wakes immediately on game-over instead of hanging the full timeout; stop acting, run `game-over-status`, tear down
 - The server closes the lobby without a result (`game-over-status` → `GAME-GONE`) — treat exactly like GAME-OVER: the game no longer exists, stop acting and report

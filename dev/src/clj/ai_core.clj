@@ -1713,15 +1713,21 @@
       "   Do NOT break, tank or fire-subs on a guess: the ICE at the run position is NOT the one being"
       "   encountered, and the normal break/tank/fire menu cannot be built here. Plain `continue` and"
       "   monitor-run stop at this window on purpose (#198)."]
+     ;; `continue --single --force`, never `continue --force`: dev/send_command
+     ;; routes bare `continue <flags>` to monitor-run! (LOOP mode), and force
+     ;; mode re-sends every tick until stuck detection trips — five continues
+     ;; and a "Stuck" diagnosis naming the positional card (code review r2,
+     ;; REPL). --single sends exactly one.
      (if resynced?
        [(str "   → The one automatic `resync` has already been tried for this encounter. `board` and `log`:")
         "     if the log shows the encountered ICE was TRASHED or moved during this encounter, the window"
-        "     is empty and `continue --force` passes it (both sides must pass)."
+        "     is empty and `continue --single --force` passes it (one send; both sides must pass)."
         (str "   → Otherwise `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]
-       [(str "   → `resync " gameid "` ONCE and look again (monitor-run / continue do this for you).")
+       [(str "   → `continue` / `monitor-run` will `resync " gameid "` ONCE for you and re-read the board;")
+        "     run one of them. (Hand-driving without them: run that resync yourself, once.)"
         "   → If it is STILL unnamed afterwards: `board` and `log` — an ICE TRASHED or moved during this"
-        "     encounter leaves an empty window that `continue --force` passes (both sides must pass);"
-        (str "     anything else, `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]))))
+        "     encounter leaves an empty window that `continue --single --force` passes (one send; both"
+        (str "     sides must pass); anything else, `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")]))))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
@@ -2217,11 +2223,13 @@
        ;; An encounter is live but the wire has not named its ICE (#198). Ranked
        ;; above every encounter/ownership reason below: :my-run-window's guidance
        ;; would tell the Corp `fire-subs <ice>` for a card it cannot name, and
-       ;; :encounter-decision cannot fire at all (nil ICE). Both seats wake — the
-       ;; owner has a recovery to run, the other seat has a state to know about.
-       ;; Below the waiting-prompt guard on purpose: a seat blocked on its
-       ;; opponent's choice cannot act on this either.
-       (unnameable-encounter? state)
+       ;; :encounter-decision cannot fire at all (nil ICE). The OWNER wakes; the
+       ;; other seat sleeps exactly as it does at any window it does not own —
+       ;; waking it too made a `wait --since` loop spin at zero cost with text
+       ;; telling it to act (code review r2, MAJOR). When ownership flips (the
+       ;; owner passes), the new owner wakes here. Below the waiting-prompt
+       ;; guard on purpose: a seat blocked on its opponent's choice cannot act.
+       (and (unnameable-encounter? state) (owns-run-window? state side))
        :unnameable-encounter
 
        ;; Runner is at an ICE encounter with unbroken subs that needs our

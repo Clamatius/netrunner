@@ -2015,6 +2015,11 @@
   (let [na  (effective-window-passer gs)
         opp (if (= my-side "runner") "Corp" "Runner")]
     (cond
+      ;; #198: the guidance below is the unnameable-encounter recovery; a
+      ;; headline saying "act on the run window" over it contradicts it.
+      (core/unnameable-encounter? {:game-state gs})
+      "⚠️  Encounter live but its ICE is UNNAMED on the wire — see the recovery below."
+
       ;; I have already passed this window — waiting on the opponent to pass.
       (= na my-side)
       (str "⏳ Waiting on " opp " — you've passed this run window ('wait').")

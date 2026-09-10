@@ -246,16 +246,35 @@
 ;; wait: a distinct wake reason, ranked above ownership
 ;; ============================================================================
 
-(deftest wait-wakes-both-seats-with-the-unnameable-reason
-  (doseq [side ["runner" "corp"]]
-    (with-redefs [ai-state/get-cursor (fn [] 10)]
-      (with-mock-state (encounter-state (karuna one-unbroken) unnameable :side side)
+(deftest wait-wakes-the-window-owner-with-the-unnameable-reason
+  ;; Round-2 code review (Fable): waking BOTH seats made the non-owner's
+  ;; `wait --since` loop return instantly, every time, with text telling it to
+  ;; act at a window it does not own. The owner wakes; the other seat sleeps,
+  ;; as at any unowned window; when ownership flips, the new owner wakes.
+  (with-redefs [ai-state/get-cursor (fn [] 10)]
+    (testing "nobody has passed: the Runner owns it and wakes; the Corp sleeps"
+      (with-mock-state (encounter-state (karuna one-unbroken) unnameable :side "runner")
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (= :unnameable-encounter (:reason result))
-              (str side ": :my-run-window would say `fire-subs <ice>` for a card nobody can name, got: " result)))
+              (str ":my-run-window would say `fire-subs <ice>` for a card nobody can name, got: " result)))
         (let [out (with-out-str (core/wait-for-relevant-diff {:timeout 0 :verbose true}))]
-          (is (re-find #"has not named its ICE" out)
-              (str side ": the wake must be decoded, got:\n" out)))))))
+          (is (re-find #"has not named its ICE" out) (str "the wake must be decoded, got:\n" out))
+          (is (re-find #"continue --single --force" out)
+              (str "the override named must be the ONE-send form, never loop-mode `continue --force`, got:\n" out))))
+      (with-mock-state (encounter-state (karuna one-unbroken) unnameable :side "corp")
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :timeout (:status result))
+              (str "the Corp does not own this window; it must not spin awake, got: " result)))))
+    (testing "the Runner passed: the Corp now owns it and wakes"
+      (with-mock-state (encounter-state (karuna one-unbroken) (assoc unnameable :no-action "runner") :side "corp")
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :unnameable-encounter (:reason result)) (str "got: " result)))))))
+
+(deftest the-status-headline-does-not-speak-over-the-guard
+  (with-mock-state (encounter-state (karuna one-unbroken) unnameable :side "runner")
+    (let [line (display/run-status-headline (:game-state @ai-state/client-state) "runner")]
+      (is (re-find #"UNNAMED" line) (str "got: " line))
+      (is (not (re-find #"act on the run window" line)) (str "got: " line)))))
 
 ;; ============================================================================
 ;; The run automation: one resync for the owner, a park after it, an idle for
@@ -365,7 +384,9 @@
           (is (re-find #"resync 0000" before) (str "before: executable resync, got:\n" before))
           (is (not (re-find #"resync 0000" after)) (str "after: no second resync is asked for, got:\n" after))
           (is (re-find #"already been tried" after) (str "after: says the attempt happened, got:\n" after))
-          (is (re-find #"continue --force" after) (str "after: the only continue that passes is the override, got:\n" after))
+          (is (re-find #"continue --single --force" after) (str "after: the only continue that passes is the ONE-send override, got:\n" after))
+          (is (not (re-find #"`continue --force`" (str before after)))
+              "loop-mode `continue --force` must never be prescribed (five sends + a Stuck naming the positional card)")
           (is (not (re-find #"and `continue` passes" (str before after)))
               "neither text may claim plain continue passes — the guard refuses it"))))))
 
