@@ -753,9 +753,12 @@
   (testing "guest panel: a single CARD-valued choice is a {:cid :title} map on the wire —
             the hint must not print raw EDN"
     (let [sent (atom [])
+          ;; the wire shape (diffs.clj prompt-summary): a card choice is WRAPPED,
+          ;; {:value {:cid :title}} — the unwrapped fixture let the old code pass
+          ;; (fresh-seat delta review)
           card-prompt {:eid 9 :prompt-type "select"
                        :msg "Choose a card to host"
-                       :choices [{:cid 12 :title "Hedge Fund" :printed-title "Hedge Fund"}]}]
+                       :choices [{:uuid "u-1" :value {:cid 12 :title "Hedge Fund" :printed-title "Hedge Fund"}}]}]
       (with-mock-state
         (mock-client-state :side "corp" :clicks 3 :credits 5
                            :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
@@ -764,6 +767,7 @@
                       ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt card-prompt})
                       ai-core/show-turn-indicator (fn [& _] nil)]
           (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
+            (is (re-find #"pending" out) "must have reached the waiting-input path")
             (is (not (re-find #":cid" out)) out)
             (is (not (re-find #"choose-value" out)) "no hint for a card choice — the prompt block shows the cards")))))))
 

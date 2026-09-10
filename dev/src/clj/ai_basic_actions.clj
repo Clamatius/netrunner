@@ -567,10 +567,37 @@
       ;; arm above; a state without the key (older fixtures) is not refused.
       (and (pos? turn-number)
            (false? (get-in client-state [:game-state :end-turn])))
-      (do
+      (let [gs (:game-state client-state)
+            my-prompt (state/get-prompt client-state)
+            active-me? (= (str/lower-case (or (:active-player gs) "")) (name my-side))
+            window-hint (fn [kind cmd]
+                          (when-let [w (open-phase-window kind)]
+                            (if (= (:owner w) my-side)
+                              (format "   Your end/start-of-turn window is open — use '%s'." cmd)
+                              "   The opponent is holding a phase window — use 'wait'.")))]
         (println "⛔ Refusing start-turn: no turn boundary — a turn is still in progress (the engine's :end-turn is not set).")
-        (println (if (= (str/lower-case (or (get-in client-state [:game-state :active-player]) "")) (name my-side))
+        ;; The recovery line must respect PROMPT OWNERSHIP before it reads the
+        ;; active player (fresh-seat delta review, MAJOR): a Corp holding
+        ;; Lightning Laboratory's derez choice inside the Runner's turn-end was
+        ;; told to 'wait' for a resolution that waits on it, and an active
+        ;; Corp with a waiting prompt was told to end a turn already ending.
+        (println (cond
+                   (and my-prompt (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+                   (str "   A prompt is on YOU — resolve it first (see 'prompt'): " (:msg my-prompt))
+
+                   my-prompt
+                   "   You are waiting on the opponent's decision — use 'wait'."
+
+                   (window-hint :post-discard "end-post-discard")
+                   (window-hint :post-discard "end-post-discard")
+
+                   (window-hint :phase-12 "end-phase-12")
+                   (window-hint :phase-12 "end-phase-12")
+
+                   active-me?
                    "   It is YOUR turn, out of clicks and not ended — use 'end-turn' (or 'smart-end-turn')."
+
+                   :else
                    "   The opponent's turn has not ended — use 'wait'."))
         (core/with-cursor {:status :error :reason :no-turn-boundary :turn turn-number}))
 

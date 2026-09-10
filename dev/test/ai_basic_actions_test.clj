@@ -1633,6 +1633,39 @@
             (is (re-find #"(?i)refusing start-turn" out) out)
             (is (re-find #"end-turn" out) "must name the move that actually resolves the state")))))))
 
+(deftest test-start-turn-refusal-names-my-own-prompt-before-telling-me-to-wait
+  (testing "fresh-seat delta MAJOR: Corp holds Lightning Laboratory's derez choice inside the
+            Runner's turn-end (both 0 clicks, :end-turn false) — the resolution waits on ME"
+    (let [sent (atom [])
+          gs {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}
+                     :prompt-state {:eid 5 :prompt-type "select" :msg "Choose a piece of ice to derez"
+                                    :selectable [{:cid 3 :title "Palisade"}]}}
+              :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+              :turn 8 :active-player "runner" :end-turn false
+              :log [{:user "__system__" :text "ai-runner is ending their turn 8 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent))
+            (is (re-find #"(?i)resolve it first" out) out)
+            (is (not (re-find #"use 'wait'" out)) out)))))))
+
+(deftest test-start-turn-refusal-does-not-tell-an-ending-turn-to-end
+  (testing "fresh-seat delta MAJOR: active Corp, 0 clicks, a WAITING prompt (its own end-turn is
+            resolving on the Runner) — 'use end-turn' would be the duplicate"
+    (let [sent (atom [])
+          gs {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}
+                     :prompt-state {:eid 6 :prompt-type "waiting" :msg "Waiting for Runner to make a decision"}}
+              :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+              :turn 8 :active-player "corp" :end-turn false
+              :log [{:user "__system__" :text "ai-runner is ending their turn 7 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent))
+            (is (re-find #"use 'wait'" out) out)
+            (is (not (re-find #"use 'end-turn'" out)) out)))))))
+
 (def ^:private runner-owed-start
   "Corp ended turn 3; the Runner is owed the start-turn."
   {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}

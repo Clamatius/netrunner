@@ -987,7 +987,7 @@
           (and my-turn prompt (not run-state)
                (not (:end-turn gs))
                (= 0 (get-in gs [(my-side-kw state) :click] 0)))
-          ["🔔" "Your turn is out of clicks — resolve your open prompt first (often the end-of-turn discard), then end the turn (the client usually auto-ends for you)" false]
+          ["🔔" "Your turn is out of clicks — resolve your open prompt first, then check status; end the turn only if it still says NOT ended (a discard prompt is the end-turn already running)" false]
 
           ;; My turn, out of clicks, not ended, nothing pending (#117). Nobody is
           ;; owed a start-turn and my-turn-to-act? is false for BOTH sides, so

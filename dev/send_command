@@ -592,7 +592,9 @@ ${YELLOW}Turn Timing Quick Reference:${NC}
   ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter → movement → access
 
   ${BLUE}Common Stuck States:${NC}
-    • Both at 0 clicks, no prompts → Use 'start-turn'
+    • Both at 0 clicks, no prompts → 'status': "awaiting-start" means the incoming
+                                     player runs 'start-turn'; "NOT ended" means the
+                                     active player must 'end-turn' (start-turn refuses)
     • Run stopped → Check 'prompt' for decision needed
     • Turn won't end → Check 'prompt' for blocking prompts
 

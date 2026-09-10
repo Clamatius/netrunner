@@ -142,7 +142,7 @@
 
 **Solutions:**
 - If opponent has blocking prompt → resolve their prompt first
-- If both at 0 clicks and no prompts → `start-turn`
+- If both at 0 clicks and no prompts → check `status`: awaiting-start → incoming player `start-turn`; own turn NOT ended → `end-turn`
 
 **Symptom:** Run command doesn't work
 **Diagnose:**
