@@ -7,6 +7,7 @@
             [test-helpers :refer :all]
             [ai-runs :as runs]
             [ai-core :as ai-core]
+            [ai-state :as ai-state]
             [ai-basic-actions :as ai-basic-actions]
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
@@ -1653,3 +1654,25 @@
           (is (not= :ability-used (:status r))
               "an opponent-owned ability after the run is not a Corp decision")
           (is (contains? #{:no-run :run-complete} (:status r)) (str r)))))))
+
+(deftest test-auto-continue-loop-catches-a-win-that-lands-during-continue-run
+  (testing "guest panel TOCTOU: the winning diff (winner + leftover prompt) arrives DURING
+            continue-run!, which returns a live :decision-required — the loop must still say game-over"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:turn 17 :active-player "corp"
+                    :corp {:click 0} :runner {:click 0} :log []}}
+      (with-redefs [runs/continue-run! (fn [& _]
+                                         (swap! ai-state/client-state
+                                                #(-> % (assoc-in [:game-state :winner] :corp)
+                                                       (assoc-in [:game-state :corp :prompt-state]
+                                                                 {:eid 3 :msg "Choose a target for Send a Message"
+                                                                  :prompt-type "select" :choices [{:value "Done"}]})))
+                                         {:status :decision-required})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :persistent true :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000)]
+          (is (= :game-over (:status r)) (str r)))))))

@@ -748,3 +748,36 @@
           (is (some #(= "play" (get-in % [:data :command])) @sent) "the install must still be sent")
           (is (not (re-find #"server selection" out)) out)
           (is (re-find #"OK" out) (str "must name the pending OK confirmation:\n" out)))))))
+
+(deftest install-waiting-hint-never-prints-a-card-map
+  (testing "guest panel: a single CARD-valued choice is a {:cid :title} map on the wire —
+            the hint must not print raw EDN"
+    (let [sent (atom [])
+          card-prompt {:eid 9 :prompt-type "select"
+                       :msg "Choose a card to host"
+                       :choices [{:cid 12 :title "Hedge Fund" :printed-title "Hedge Fund"}]}]
+      (with-mock-state
+        (mock-client-state :side "corp" :clicks 3 :credits 5
+                           :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
+                           :servers {:remote1 {:content [] :ices []}})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt card-prompt})
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
+            (is (not (re-find #":cid" out)) out)
+            (is (not (re-find #"choose-value" out)) "no hint for a card choice — the prompt block shows the cards")))))))
+
+(deftest install-waiting-on-the-opponent-says-so
+  (testing "guest panel: with a server given, a passive waiting prompt is the OPPONENT's, not 'yours to answer'"
+    (let [sent (atom [])
+          waiting {:eid 9 :prompt-type "waiting" :msg "Waiting for Runner to make a decision"}]
+      (with-mock-state
+        (mock-client-state :side "corp" :clicks 3 :credits 5
+                           :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
+                           :servers {:remote1 {:content [] :ices []}})
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt waiting})
+                      ai-core/show-turn-indicator (fn [& _] nil)]
+          (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1"))]
+            (is (re-find #"(?i)waiting for the opponent" out) out)
+            (is (not (re-find #"answer a prompt|your confirmation" out)) out)))))))

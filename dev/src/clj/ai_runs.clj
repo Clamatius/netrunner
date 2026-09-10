@@ -1970,9 +1970,23 @@
                            (assoc raw :status :run-complete :absorbed-event (:status raw)))
                        raw)
               status (:status result)
+              ;; The top-of-loop check read the state BEFORE continue-run!; the
+              ;; winning diff can land during it and come back as a live
+              ;; :decision-required (guest panel, TOCTOU). Re-read now.
+              over-now? (state/game-over? (get-in @state/client-state [:game-state]))
               current-state-key (get-run-state-key)
               new-history (cons current-state-key (take (dec stuck-threshold) state-history))]
           (cond
+            over-now?
+            (do
+              (when persistent
+                (print-while-you-slept! start-log-count))
+              (println "🏁 Game over — leaving the run loop (see game-over-status)")
+              {:status :game-over
+               :wake-reason :game-over
+               :iterations (inc iteration)
+               :elapsed-ms (- (System/currentTimeMillis) start-time)})
+
             ;; Persistent mode: a notable-but-routine event the loop produced
             ;; itself (its own ICE rez, an ability/subs firing, tag/damage
             ;; dealt) is NOT a decision — the seat delegated the whole run.

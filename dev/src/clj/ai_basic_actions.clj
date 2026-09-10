@@ -226,10 +226,22 @@
         (println "")
         (println "💡 Auto-starting turn (opponent has ended, you haven't started yet)")
         (let [result (start-turn!)]
-          (if (= (:status result) :success)
+          (cond
+            ;; Sent but not acknowledged (report-start-turn-sent!): the clicks
+            ;; are not there yet, so the action this auto-start was for cannot
+            ;; go out. Saying "started successfully" here and sending anyway
+            ;; was the contradiction the guest panel caught (MAJOR).
+            (and (= (:status result) :success) (false? (:confirmed result)))
+            (do
+              (println "⏳ Start pending — your action was NOT sent. Retry it in a moment (do not re-send start-turn).")
+              false)
+
+            (= (:status result) :success)
             (do
               (println "✅ Turn started successfully")
               true)
+
+            :else
             (do
               (println "❌ Auto-start failed")
               false))))
@@ -543,6 +555,24 @@
         (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
         (println "   Wait for opponent to complete their turn")
         (core/with-cursor {:status :error :reason :opponent-not-ended}))
+
+      ;; NO BOUNDARY (guest panel, #151 round 4). board.cljs renders Start Turn
+      ;; only while the engine's :end-turn is TRUE; it is false for the whole of
+      ;; a turn in progress and only flips at end-turn-continue. The #117
+      ;; orphaned shape — my turn, 0 clicks, not ended — passed every check
+      ;; above (the opponent's "is ending" line is still in the log window), so
+      ;; the send went out, the engine no-op'd it (:turn-started is set), and
+      ;; the acknowledgement wait was satisfied by the PRE-send state. Refuse
+      ;; before the send, and say what the state is. Turn 0 is the is-first-turn?
+      ;; arm above; a state without the key (older fixtures) is not refused.
+      (and (pos? turn-number)
+           (false? (get-in client-state [:game-state :end-turn])))
+      (do
+        (println "⛔ Refusing start-turn: no turn boundary — a turn is still in progress (the engine's :end-turn is not set).")
+        (println (if (= (str/lower-case (or (get-in client-state [:game-state :active-player]) "")) (name my-side))
+                   "   It is YOUR turn, out of clicks and not ended — use 'end-turn' (or 'smart-end-turn')."
+                   "   The opponent's turn has not ended — use 'wait'."))
+        (core/with-cursor {:status :error :reason :no-turn-boundary :turn turn-number}))
 
       ;; OK: All validations passed
       ;; Note: We don't check active-player because it doesn't switch until start-turn succeeds.
@@ -1044,19 +1074,38 @@
                            (prompt-changed? s)
                            (post-discard-held? s)))]
     (if-let [s (wait-for-state! acked? core/action-timeout)]
-      (let [p (state/get-prompt s)]
+      (let [p (state/get-prompt s)
+            ended? (boolean (get-in s [:game-state :end-turn]))
+            new-prompt? (and p (prompt-changed? s))]
         (cond
-          ;; The end-turn is IN PROGRESS: the engine is holding it on a prompt
-          ;; of ours (the discard). Not ended, not orphaned — answer the prompt.
-          (and p (prompt-changed? s) (not (state/waiting-prompt-type? (:prompt-type p))))
-          (println (str "⏸️  Your turn is ending — resolve this first: " (:msg p)))
+          ;; A prompt of ours arrived (the discard, or a trigger). Whatever its
+          ;; origin, answering it is the next move. Say whether the turn is
+          ;; over or still ending — the verb was wrong for a trigger prompt
+          ;; landing in the same diff as the flag (guest panel).
+          (and new-prompt? (not (state/waiting-prompt-type? (:prompt-type p))))
+          (println (str (if ended?
+                          "⏸️  Your turn has ended — a trigger prompt is waiting for you: "
+                          "⏸️  Your turn is ending — a prompt is on you; resolve it first: ")
+                        (:msg p)))
 
-          (and (not (get-in s [:game-state :end-turn])) (post-discard-held? s))
+          (and (not ended?) (post-discard-held? s))
           (do (println "⏸️  Your turn is ending — paused in the end-of-turn (post-discard) window a card holds open.")
               (println "   Use 'end-post-discard' to finish it (or 'wait' if the opponent still has to pass)."))
 
+          ;; The flag is authoritative; a waiting prompt of ours is the
+          ;; opponent's end-of-turn trigger, which the indicator names.
+          (or ended? new-prompt?)
+          (core/show-turn-indicator)
+
+          ;; Only our own "is ending" line has arrived. The engine writes it
+          ;; BEFORE the end-of-turn triggers resolve and before :end-turn flips
+          ;; (turn-message precedes the wait-for in end-turn-continue), and this
+          ;; file already records that the line can be rolled back. Reading the
+          ;; indicator here re-derives "out of clicks, NOT ended — end it" from
+          ;; the pre-flip state: N1 by another door (guest panel, MAJOR).
           :else
-          (core/show-turn-indicator))
+          (do (println "⏳ Turn end in progress — the engine has logged your turn ending and is resolving end-of-turn triggers.")
+              (println "   Do NOT re-send end-turn. Use 'wait' — it wakes when the turn is over.")))
         true)
       (do
         (println (format "⏳ end-turn sent, but the engine has not confirmed it yet (no turn-end in the state after %ds)."

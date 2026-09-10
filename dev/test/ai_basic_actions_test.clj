@@ -1616,12 +1616,56 @@
             (is (re-find #"end-post-discard" out) out)
             (settle!)))))))
 
+(deftest test-start-turn-refuses-when-no-turn-boundary
+  (testing "guest panel: the #117 orphaned shape passed every start-turn guard and the send
+            went out; the engine no-ops it and the pre-send state then satisfied the
+            acknowledgement — a false :confirmed. board.cljs shows Start Turn only while
+            :end-turn is true; mirror it."
+    (let [sent (atom [])
+          orphaned {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+                    :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+                    :turn 8 :active-player "corp" :end-turn false
+                    :log [{:user "__system__" :text "ai-runner is ending their turn 7 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state orphaned)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent) (str "must not send over a turn in progress:\n" out))
+            (is (re-find #"(?i)refusing start-turn" out) out)
+            (is (re-find #"end-turn" out) "must name the move that actually resolves the state")))))))
+
 (def ^:private runner-owed-start
   "Corp ended turn 3; the Runner is owed the start-turn."
   {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
    :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
    :turn 3 :active-player "corp" :end-turn true
    :log [{:user "__system__" :text "ai-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."}]})
+
+(deftest test-end-turn-log-line-alone-is-in-progress-not-ended
+  (testing "guest panel MAJOR: the engine logs 'is ending' BEFORE end-of-turn triggers resolve and
+            before :end-turn flips; reading the indicator off that state re-derives 'NOT ended — end it'"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (delayed-send sent 300
+                                         #(update-in % [:game-state :log] conj
+                                                     {:user "__system__" :text "ai-corp is ending their turn 8 with 5 [Credit] and 3 cards in HQ."}))
+                      basic/get-my-username (constantly "ai-corp")]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not (re-find #"has NOT ended yet" out)) out)
+            (is (re-find #"(?i)in progress" out) out)
+            (is (re-find #"(?i)do NOT re-send" out) out)
+            (settle!)))))))
+
+(deftest test-ensure-turn-started-does-not-proceed-on-an-unconfirmed-start
+  (testing "guest panel MAJOR: an unconfirmed auto-start must not print 'started successfully'
+            and let the click action go out"
+    (with-mock-state (mock-client-state :side "runner" :game-state runner-owed-start)
+      (with-redefs [basic/can-start-turn? (fn [& _] {:can-start true})
+                    basic/start-turn! (fn [& _] {:status :success :confirmed false})]
+        (let [out (java.io.StringWriter.)
+              ok? (binding [*out* out] (basic/ensure-turn-started!))]
+          (is (false? ok?) "must not proceed")
+          (is (not (re-find #"started successfully" (str out))) (str out))
+          (is (re-find #"(?i)pending" (str out)) (str out)))))))
 
 (deftest test-start-turn-waits-for-the-clicks-before-reporting-them
   (testing "N2: the clicks land late — report 4, not the pre-send 0"
@@ -1632,10 +1676,17 @@
                                               (assoc-in [:game-state :end-turn] false)
                                               (assoc-in [:game-state :active-player] "runner")
                                               (assoc-in [:game-state :runner :click] 4)))]
-          (let [out (with-out-str (basic/start-turn!))]
+          (let [t0 (System/currentTimeMillis)
+                out (with-out-str (basic/start-turn!))
+                elapsed (- (System/currentTimeMillis) t0)]
             (is (some #(= "start-turn" (get-in % [:data :command])) @sent))
             (is (not (re-find #"0 clicks remaining" out)) out)
             (is (re-find #"4 clicks remaining" out) out)
+            ;; Pins the POLL, not just the wait: the diff lands at 1.3s and the
+            ;; timeout is 3s, so returning promptly after the diff is the
+            ;; behaviour — a fixed sleep past the diff would also print the
+            ;; right numbers, and it is what this replaces.
+            (is (< elapsed 2500) (str "must return when the state moves, not at the timeout; took " elapsed "ms"))
             (settle!)))))))
 
 (deftest test-start-turn-unconfirmed-does-not-claim-readiness

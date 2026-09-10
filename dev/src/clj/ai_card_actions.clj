@@ -185,10 +185,17 @@
    confirmation of the trash — and calling that 'server selection' names a
    decision the seat already made. Nor is the card 'Installed:' yet."
   [card-title normalized-server prompt]
-  (let [choices (map #(if (map? %) (:value %) %) (:choices prompt))
-        sole-choice (when (= 1 (count choices)) (first choices))]
+  (let [;; diffs.clj serializes card-valued choices as {:cid :title ...} maps;
+        ;; a hint must never print raw EDN (guest panel), so only a plain
+        ;; string value earns the choose-value line.
+        choices (map #(cond (string? %) % (map? %) (:value %) :else nil) (:choices prompt))
+        sole-choice (when (and (= 1 (count choices)) (string? (first choices)))
+                      (first choices))]
     (println (str "⏸️  Install of " card-title " pending - "
                   (cond
+                    ;; Ownership first: a passive waiting prompt is the
+                    ;; OPPONENT's decision (guest panel).
+                    (state/waiting-prompt-type? (:prompt-type prompt)) "waiting for the opponent"
                     sole-choice (str "waiting for your confirmation → choose-value \"" sole-choice "\"")
                     normalized-server "waiting for you to answer a prompt"
                     :else "waiting for server selection"))))
