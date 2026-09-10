@@ -10,7 +10,8 @@
             [ai-run-tactics :as tactics]
             [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
-            [ai-run-runner-handlers :as runner-handlers]))
+            [ai-run-runner-handlers :as runner-handlers]
+            [ai-connection :as connection]))
 
 ;; ============================================================================
 ;; Run Strategy State
@@ -68,11 +69,20 @@
                               :command "say"
                               :args {:user "AI-debug" :msg full-msg}})))))))
 
+;; #198: has this run's one permitted resync at an unnameable encounter been
+;; spent? Per-RUN lifetime (reset here with the other per-run atoms, and at run
+;; end), NOT "reset whenever the board is not an unnameable encounter":
+;; resync-game! clears the board, so that rule reset the latch on the empty
+;; window the resync itself created and resynced again when the same payload
+;; came back (plan review, CRITICAL).
+(defonce unnameable-resync-spent (atom false))
+
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
   []
   (reset! run-strategy {})
   (reset! last-waiting-status nil)
+  (reset! unnameable-resync-spent false)   ; #198: one resync per RUN
   (corp-handlers/reset-state!)
   (runner-handlers/reset-state!))
 
@@ -1074,6 +1084,76 @@
            :action :forced-continue
            :wake-reason :forced})))))
 
+(defn unnameable-encounter-result?
+  "True when a continue-run!/monitor-run! result is the unnameable-encounter
+   park (#198). The autonomous bot loops ask this before their status switch:
+   the park is :decision-required with NO prompt behind it, and a loop that maps
+   every :decision-required to 'handle the prompt' re-derives it forever."
+  [result]
+  (= :unnameable-encounter (:wake-reason result)))
+
+(defn handle-unnameable-encounter
+  "Priority 0.5 (after --force, before everything that reads the card): an
+   encounter is live but the wire has not named its ICE (#198).
+
+   The card at the run position is NOT the one being encountered, so no rez /
+   fire / break / pass handler below may run — each would act on, or wait for,
+   the wrong card. What happens instead, by seat:
+
+     * the seat that does NOT own the window (core/owns-run-window?) idles as an
+       opponent wait, exactly as at any window it does not own — it must not
+       leave its post (the nobody-home wedge, #31);
+     * the OWNER resyncs ONCE per run (connection/resync-and-wait!, a waited
+       resync with a verdict) and, if a board landed, returns :action-taken so
+       the next tick re-reads it — a diverged client is repaired this way;
+     * if the resync did not land, or the board came back still unnameable, the
+       owner PARKS: :decision-required (terminal in both loop modes) with the
+       one shared text (core/unnameable-encounter-lines), which names `continue`
+       for the case the engine actually produces — the encountered ICE trashed
+       or moved mid-encounter, where the window is empty and a pass from each
+       side closes it — and umpire-ping otherwise.
+
+   Why not just continue: the automation is not allowed to guess at a window it
+   cannot describe; `continue --force` remains the seat's manual override and
+   sits ahead of this handler on purpose. Why before handle-opponent-wait: that
+   handler wins every tick while an indicate-action sits in the last five log
+   lines, and waiting adds no log lines, so it could starve the resync forever."
+  [{:keys [state side gameid]}]
+  (when (core/unnameable-encounter? state)
+    (cond
+      (not (core/owns-run-window? state side))
+      (let [status-key [:unnameable-encounter-opponent side]]
+        (when-not (= @last-waiting-status status-key)
+          (reset! last-waiting-status status-key)
+          (println "⏳ An encounter is live but the wire has not named its ICE, and the opponent owes this window.")
+          (println "   Waiting on them — see `diagnose-blocker` for what this state is (#198)."))
+        {:status :waiting-for-opponent
+         :wake-reason :unnameable-encounter-opponent
+         :message "Unnameable encounter; the opponent owes the window"})
+
+      (not @unnameable-resync-spent)
+      (do
+        (reset! unnameable-resync-spent true)
+        (println "🔄 An encounter is live but the wire has not named its ICE — resyncing ONCE to rule out a diverged client (#198)...")
+        (if (= :synced (connection/resync-and-wait! gameid))
+          {:status :action-taken
+           :action :resync
+           :wake-reason :unnameable-encounter-resync}
+          (do
+            (doseq [l (core/unnameable-encounter-lines state)] (println l))
+            {:status :decision-required
+             :wake-reason :unnameable-encounter
+             :message "Unnameable encounter; the resync did not land"})))
+
+      :else
+      (let [status-key [:unnameable-encounter side]]
+        (when-not (= @last-waiting-status status-key)
+          (reset! last-waiting-status status-key)
+          (doseq [l (core/unnameable-encounter-lines state)] (println l)))
+        {:status :decision-required
+         :wake-reason :unnameable-encounter
+         :message "Unnameable encounter after the one resync; escalate"}))))
+
 (defn handle-opponent-wait
   "Priority 1: Opponent pressed WAIT button (indicate-action)"
   [{:keys [state side opp-side]}]
@@ -1093,19 +1173,20 @@
    passed by 2.6 / 1.74 and the chain never reaches this handler while that
    window is live.
 
-   What is left unowned is narrower: an encounter whose summary carries no
-   resolvable `:ice` at all (the tolerated `{:encounter-count 1}` payload), where
-   `encounter-ice-active?` correctly refuses to vouch for a card nobody can name.
-   There this handler is still the only thing that TERMINATES the loop, and
-   \"✅ Run complete\" is still a lie there.
+   The case that WAS left unowned — an encounter whose summary carries no
+   resolvable `:ice` (the `{:encounter-count 1}` payload), where
+   `encounter-ice-active?` correctly refuses to vouch for a card nobody can
+   name — has an owner since #198: handle-unnameable-encounter, at the head of
+   the chain, resyncs once and then parks with :decision-required, so the chain
+   never reaches this handler while that window is live and \"✅ Run complete\"
+   is no longer printed over it.
 
    Adding `(not (core/encounter-window? state))` here — which is where the #164
    rule points — was tried and REVERTED (guest panel, 2nd pass): with no handler
    left to match, the chain falls to handle-unexpected-state and the loop never
-   terminates at all. That objection now applies ONLY to the unresolvable-summary
-   case above, which is exactly the case a guard here would strand. So the guard
-   still waits — not on #167 any more, but on the client being able to own an
-   encounter it cannot name."
+   terminates at all. With the unnameable case owned above, nothing reaches
+   here with a live encounter and a nil run, so the guard is not needed rather
+   than still waiting."
   [{:keys [state my-prompt]}]
   (let [run (get-in state [:game-state :run])]
     (when (nil? run)
@@ -1624,6 +1705,9 @@
 
         ;; Handler chain in priority order
         handlers [handle-force-mode
+                  ;; #198: before EVERY card-reading handler, and before the
+                  ;; opponent-wait handler that can otherwise starve it.
+                  handle-unnameable-encounter
                   handle-opponent-wait
                   (fn [ctx]  ; Wrapper: mark a rez attempt so a failed (unaffordable) rez isn't retried forever
                     (when-let [result (corp-handlers/handle-corp-rez-strategy ctx)]
@@ -1891,6 +1975,8 @@
                 ;; (passed-encounter-key, #150) has the same per-run lifetime.
                 (runner-handlers/reset-state!)
                 (corp-handlers/reset-state!)
+                ;; #198: the one-resync latch is per run too.
+                (reset! unnameable-resync-spent false)
                 ;; Same third-path hazard for the self-advance grace timer: a
                 ;; stale [phase position no-action] key (these collide readily)
                 ;; would make a card-initiated run's first window look instantly
@@ -2266,8 +2352,11 @@
      --persistent        Stay in the loop across empty opponent-priority windows
                          (sleep & recheck instead of exiting on :waiting-for-opponent).
                          For autonomous Corp seats — one monitor-run owns the whole
-                         Runner run; wakes only for a real rez/fire/access decision
-                         or run end. Eliminates re-issuing through symmetric passes.
+                         Runner run; wakes only for a real rez/fire/access decision,
+                         run end, or an UNNAMEABLE encounter (#198: the wire carries
+                         an encounter with no ICE; after one resync the seat is
+                         parked with recovery text rather than acting on a guess).
+                         Eliminates re-issuing through symmetric passes.
      --since <cursor>    Fast-return: immediately return if run ended/started since cursor
 
    Usage:

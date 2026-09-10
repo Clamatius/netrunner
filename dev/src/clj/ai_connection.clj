@@ -516,6 +516,32 @@
   []
   (if (state/game-over?) :game-over :game-gone))
 
+(defn resync-and-wait!
+  "ONE resync of the seated game, waited for: `resync-game!` (which CLEARS the
+   cached board before asking for a fresh one) followed by the same board wait
+   `do-rejoin-resync!` uses, and the stale flag cleared on success. Returns a
+   verdict, never a boolean:
+
+     :synced        - a board landed; the caller may read it
+     :resync-failed - the board did not arrive in time. The client is EMPTY now
+                      (that is what resync-game! does), so the caller must not
+                      take another board-reading step on this tick — a run loop
+                      that did so read the empty window as 'run complete' (#198
+                      plan review, two seats independently).
+
+   Exists so the run automation's one-shot recovery at an unnameable encounter
+   (#198) does not re-implement this sequence with a shorter wait and no verdict.
+   The rejoin half of `do-rejoin-resync!` is deliberately not here: the seat IS
+   seated (the board it holds is live, just missing a card), and a rejoin would
+   unseat it (#76)."
+  [gameid]
+  (resync-game! gameid)
+  (if (wait-for-condition has-game-state? 8000 "state resync")
+    (do (state/clear-stale-flag!)
+        :synced)
+    (do (println "❌ Resync sent but state did not arrive in time")
+        :resync-failed)))
+
 (defn- do-rejoin-resync!
   "Internal: Perform the rejoin and resync sequence.
    Returns a verdict keyword (see `sync-verdict!`), not a boolean — callers need

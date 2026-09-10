@@ -353,11 +353,21 @@
    tracking). A #160 remediation mapped a new decision status here and would have
    spun exactly that way; the addition was removed instead."
   [result]
-  (case (:status result)
-    :decision-required      :handle-prompt
-    :paused-cannot-break    :tank
-    :fire-decision-required :tank
-    :continue))
+  (cond
+    ;; #198: the unnameable-encounter park is :decision-required with NO prompt
+    ;; behind it, so :handle-prompt would be a no-op tick and the loop would
+    ;; re-derive the park forever — the exact shape the NB above warns about.
+    ;; A `continue` is legal and harmless there (the engine's encounter continue
+    ;; is a pure both-pass ledger; there is nothing to break or fire on a card
+    ;; the wire cannot name), so the bot takes the manual override a human
+    ;; would: force the pass.
+    (runs/unnameable-encounter-result? result) :force-continue
+    :else
+    (case (:status result)
+      :decision-required      :handle-prompt
+      :paused-cannot-break    :tank
+      :fire-decision-required :tank
+      :continue)))
 
 (defn- player-names
   "[my-name opp-name] from the game-state user maps (for stall nudges)."
@@ -435,6 +445,14 @@
                                          (runs/set-strategy!
                                            (update (runs/get-strategy) :tank (fnil conj #{}) ice))
                                          (runs/continue-run!))
+
+                                       ;; #198: parked at an encounter the wire cannot name, after
+                                       ;; the one resync. No human to read the board; take the
+                                       ;; manual override (a forced pass — legal, nothing to act on).
+                                       :force-continue
+                                       (do
+                                         (println "🏃 HEURISTIC RUNNER - Unnameable encounter after resync; forcing the pass (#198)")
+                                         (runs/continue-run! "--force"))
 
                                        ;; :continue - nothing special this tick
                                        nil)]

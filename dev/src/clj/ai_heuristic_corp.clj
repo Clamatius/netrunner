@@ -1416,6 +1416,16 @@
                       ;; the stall tracker can tell if we're wedged waiting on the Runner.
                       (let [run-status (when (and (not my-turn?) (has-active-run?))
                                          (let [r (respond-to-run!)]
+                                           ;; #198: monitor-run! parked at an encounter the wire
+                                           ;; cannot name, after its one resync. There is no
+                                           ;; prompt to answer and re-entering would re-derive
+                                           ;; the park every tick (the stall tracker only watches
+                                           ;; opponent waits). Take the manual override: a forced
+                                           ;; pass — legal, and there is nothing to fire on a card
+                                           ;; nobody can name.
+                                           (when (runs/unnameable-encounter-result? r)
+                                             (log-message "HEURISTIC CORP - Unnameable encounter after resync; forcing the pass (#198)")
+                                             (runs/continue-run! "--force"))
                                            (Thread/sleep 500)
                                            (:status r)))]
                         {:continue? true :run-status run-status}))))

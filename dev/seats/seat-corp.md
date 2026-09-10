@@ -140,8 +140,11 @@ Runner approaches one of your ICE, or an unbroken-subroutine **fire** decision.
 **Always use `--persistent`, and issue it immediately after ending your turn.**
 `--persistent` now **parks**: with no run yet active it waits at the post, and it
 **owns the Runner's whole turn** — across every run they make — returning only for
-a real rez/fire decision, when the Runner's turn ends (`my-turn`), or on game
-over. You no longer re-arm it per run.
+a real rez/fire decision, when the Runner's turn ends (`my-turn`), on game
+over, or at an encounter the wire cannot name (it has already resynced once;
+read the printed recovery — `board`/`log`, then umpire-ping — and do NOT
+`fire-subs` the ICE at the run position, which is not the one being
+encountered). You no longer re-arm it per run.
 
 This matters more than it looks. A rez window is a *both-must-pass* window: if you
 are not at your post when the Runner arrives at your ICE, the run **stalls with

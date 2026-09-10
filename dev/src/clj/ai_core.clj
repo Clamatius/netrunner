@@ -1700,7 +1700,8 @@
    client whose diffs diverged — and is asked for once, not repeatedly."
   [state]
   (let [gameid (or (:gameid state) "<game-id>")
-        side   (or (some-> (:side state) name str/lower-case) "<side>")]
+        ;; state/my-side-kw, the one sanctioned side derivation (#127 ratchet).
+        side   (or (some-> (state/my-side-kw state) name) "<side>")]
     ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
      "   Do NOT break, tank, fire-subs or continue on a guess: the ICE at the run position is NOT"
      "   the one being encountered, and the normal break/tank/fire menu cannot be built here."
@@ -1997,6 +1998,20 @@
                            (get-in state [:game-state :encounters :no-action]))
                 (not (i-already-passed-run-window? state side)))))
 
+(defn owns-run-window?
+  "True when `side` owns the un-passed pass at the current run/encounter
+   window — run-window-owner's answer, side-normalised. Public because the run
+   automation's unnameable-encounter guard (#198) scopes its one resync and its
+   park to the OWNER: the other seat idles as an opponent wait, exactly as it
+   does at any window it does not own, instead of leaving its post (the
+   nobody-home wedge #31 exists to kill)."
+  [state side]
+  (boolean (when-let [owner (run-window-owner state)]
+             ;; side= is the case-insensitive comparison; `side` arrives as
+             ;; "runner"/"Corp"/:corp from different callers (#127 ratchet:
+             ;; no new hand-rolled derivation here).
+             (and side (side= (name owner) (name side))))))
+
 (defn- my-run-window?
   "True when THIS side currently owns the un-passed pass at an active run window.
    Waking on this is safe from the old :run-active spin (see relevance-reason): a
@@ -2187,6 +2202,16 @@
        (state/waiting-prompt-type? (:prompt-type (own-prompt state side)))
        nil
 
+       ;; An encounter is live but the wire has not named its ICE (#198). Ranked
+       ;; above every encounter/ownership reason below: :my-run-window's guidance
+       ;; would tell the Corp `fire-subs <ice>` for a card it cannot name, and
+       ;; :encounter-decision cannot fire at all (nil ICE). Both seats wake — the
+       ;; owner has a recovery to run, the other seat has a state to know about.
+       ;; Below the waiting-prompt guard on purpose: a seat blocked on its
+       ;; opponent's choice cannot act on this either.
+       (unnameable-encounter? state)
+       :unnameable-encounter
+
        ;; Runner is at an ICE encounter with unbroken subs that needs our
        ;; break/tank/jack-out decision, but which the engine did NOT model as a
        ;; server :prompt. `has-prompt?` misses it, so wait would otherwise sleep
@@ -2351,6 +2376,10 @@
     ;; = run-window-owner names us at approach-ice / movement). The run cannot
     ;; advance until we send it, so another `wait` returns here unchanged — the
     ;; precise trap this guidance exists to break.
+    ;; #198: the same text every other surface prints for this state.
+    :unnameable-encounter
+    (unnameable-encounter-lines state)
+
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
      "      Act — `prompt` shows the window; the verb is usually `continue`"

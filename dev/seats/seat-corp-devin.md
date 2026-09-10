@@ -94,7 +94,9 @@ it. The rule:
 - **Always `--persistent`. It PARKS.** With no run active it waits at the post, and
   it **owns the Runner's entire turn** — every run they make — returning only for a
   real **rez**, **fire**, attacked-server **upgrade**, unsupported prompt, the
-  Runner's turn ending (`my-turn`), or game over. **You do not re-arm it per run.**
+  Runner's turn ending (`my-turn`), game over, or an encounter the wire cannot
+  name (it has already resynced once — follow the printed recovery, do not
+  `fire-subs` the ICE at the run position). **You do not re-arm it per run.**
 - **Why this is the whole ballgame.** A rez window is a *both-must-pass* window. If
   you are not at your post when the Runner reaches your ICE, the run stalls with
   **nobody home** — and the Runner cannot pass your priority for you. In marquee

@@ -520,7 +520,9 @@ ${GREEN}Running:${NC}
                      for rez/upgrade — a plain Runner pass wakes you to decide
     --persistent     Own the WHOLE Runner run with one command: sleep through
                      empty priority windows instead of exiting, wake only for a
-                     real rez/fire/upgrade/access decision or run end. Use this for
+                     real rez/fire/upgrade/access decision, run end, or an
+                     UNNAMEABLE encounter (the wire carries an encounter with no
+                     ICE: one resync, then it parks with recovery text). Use this for
                      autonomous Corp seats so you don't re-issue monitor-run
                      through every symmetric 'pass priority' window.
 

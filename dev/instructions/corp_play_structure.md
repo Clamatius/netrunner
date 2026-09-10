@@ -306,7 +306,7 @@ Corp gets priority at specific timing windows:
 # Sleep until run ends - handles rez (if --rez specified), fire, and empty windows
 ./dev/send_command corp monitor-run --fire-if-asked --rez "Whitespace"
 ```
-This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes. Ideal for AI-vs-AI play.
+This combination pre-specifies the rez decision, auto-fires when Runner signals, and only wakes up when the run completes — or at an encounter the wire cannot name (#198: one automatic resync, then it parks with recovery text instead of firing on a guess). Ideal for AI-vs-AI play.
 
 **Fast-return (--since):**
 ```bash

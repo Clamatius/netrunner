@@ -806,12 +806,15 @@
                          ;; Two broken plus one fired is neither: "All subs
                          ;; broken" about a sub that FIRED misreported Brân 1.0
                          ;; to a marquee seat (#198 comment).
+                         all-fired?
+                         (format "   → All subs resolved on %s, Runner passing ICE" ice-title)
+                         (every? :broken subroutines)
+                         (format "   → All subs broken on %s, Runner passing ICE" ice-title)
                          :else
-                         (format "   → All subs %s on %s, Runner passing ICE"
-                                 (cond all-fired? "resolved"
-                                       (every? :broken subroutines) "broken"
-                                       :else "broken or resolved")
-                                 ice-title)))
+                         (format "   → All subs broken or fired on %s (%d broken, %d fired), Runner passing ICE"
+                                 ice-title
+                                 (count (filter :broken subroutines))
+                                 (count (filter :fired subroutines)))))
               ;; Latch AFTER the send, on a send that actually happened. The
               ;; latch used to be set first, so a continue suppressed by
               ;; send-continue!'s own chokepoints — or lost to an exhausted

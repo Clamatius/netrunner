@@ -680,7 +680,11 @@
             ;; The same block for an encounter with NO run behind it (#164). Kept
             ;; separate rather than folded into the run section above, which prints
             ;; a server, a phase ladder and a position — none of which exist here.
-            (when (and (not run-state) (live-encounter? @state/client-state))
+            ;; Routed on the SUMMARY (encounter-window?), not on its :ice
+            ;; (live-encounter?): a runless encounter whose card the wire could
+            ;; not name never reached this block, so `status` showed an idle
+            ;; board at a live window (#198). The card details stay when-let.
+            (when (and (not run-state) (core/encounter-window? @state/client-state))
               (println "\n⚔️  FORCED ENCOUNTER (no run in progress):")
               (when-let [current-ice (encountered-ice @state/client-state)]
                 (println (format "  🧊 ICE: %s" (:title current-ice "ICE")))
@@ -1327,8 +1331,10 @@
                         run-state (format "Run:%s" (run-server-display (last (:server run-state))))
                         ;; #164: no run, but an encounter — the polled one-liner
                         ;; must not read as an idle board at a window we own.
-                        (live-encounter? state)
-                        (format "Enc:%s" (:title (encountered-ice state) "ICE"))
+                        ;; encounter-window?, not live-encounter?, so an encounter
+                        ;; the wire could not name still reads as a window (#198).
+                        (core/encounter-window? state)
+                        (format "Enc:%s" (:title (encountered-ice state) "unnamed-ICE"))
                         waiting-start? "awaiting-start"
                         prompt (let [msg (:msg prompt)]
                                 (if (> (count msg) 30)
@@ -2363,6 +2369,14 @@
         ;; (#195). Computed once: it is both the cond test and the cond body.
         corp-encounter-lines (:lines (corp-encounter-guidance state run-phase my-side))]
     (cond
+      ;; FIRST, and side-neutral (#198): an encounter is live but the wire has
+      ;; not named its ICE. Every branch below either names the card or steers
+      ;; to an action on it, and the card at the run position is not the one
+      ;; being encountered. The Corp branch used to shadow this state entirely.
+      (core/unnameable-encounter? state)
+      (doseq [line (core/unnameable-encounter-lines state)]
+        (println line))
+
       ;; -now?, not the phase-only predicate: a forced encounter whose [:run :phase]
       ;; still reads "movement" is an ENCOUNTER window and took this branch, telling
       ;; neither seat an encounter was happening (#195). See both-pass-window-now?.
@@ -2417,23 +2431,19 @@
         (when (= run-phase "approach-ice")
           (println "    → This is the ICE rez window: continue --rez <ice> to rez, or --no-rez to decline.")))
 
-      ;; An encounter is live but the wire could not name its ICE
-      ;; (encounter-ice-summary dropped :ice, leaving {:encounter-count 1}).
-      ;; Precedence sent us past the movement hint, correctly — so say what IS
-      ;; true rather than falling through to a pass steer that may be refused.
-      ;;
-      ;; UNNAMEABLE, not merely encounter-window?: the wire carries the summary
-      ;; at EVERY encounter, so the looser test sent a Runner who had broken
-      ;; every sub — zero unbroken, so it skipped its own branch above — here
-      ;; instead of to the plain pass below, and the seat was told the wire had
-      ;; not named an ICE it had just named (#198, marquee game A).
-      (core/unnameable-encounter? state)
+      ;; (The unnameable-encounter state is handled FIRST in this cond — see the
+      ;; top. It used to sit here, gated on encounter-window? alone, and so fired
+      ;; at every fully-broken Runner encounter whose ICE was on the wire —
+      ;; #198, marquee game A. The Corp branch above also shadowed it.)
+
+      ;; Runner who has ALREADY passed a fully-broken encounter: the ledger names
+      ;; us, `continue` is refused by the send guard (#98), and the Corp owes the
+      ;; closing pass. Telling this seat to continue is the same no-op loop the
+      ;; both-pass windows fixed in #115 (plan review, #198).
+      (core/i-already-passed-run-window? state my-side)
       (do
-        (println "    → An ENCOUNTER is live but the wire has not named its ICE, so the")
-        (println "      normal break/tank/fire menu cannot be built here.")
-        (println "    → `board` and `log` will say which card it is; `resync` if they")
-        (println "      disagree with this window. The encounter outranks the phase above.")
-        (println "    → Do NOT assume the phase line is the whole truth (#164)."))
+        (println "    → You have already passed this window; the opponent owes the closing pass.")
+        (println "      `wait` for it — do not re-send continue."))
 
       :else
       ;; Runner with all subs broken (or no rezzed ICE): `continue` DOES pass.
@@ -2730,7 +2740,10 @@
             ;; "'continue' is run-only here — take your next action, or 'wait'":
             ;; the precise opposite of the truth at a window whose ONLY exit is
             ;; `continue`, printed by the command a stuck seat runs first.
-            (if (or run-phase (live-encounter? state))
+            ;; encounter-window?, not live-encounter?: an encounter the wire
+            ;; could not name (#198) is still the window, and the run-only
+            ;; branch below would tell the seat `continue` is unavailable at it.
+            (if (or run-phase (core/encounter-window? state))
               ;; Show run phase context
               (do
                 ;; Explicit YOU-ARE-HERE ladder (forum [099]); falls back to the
@@ -3488,8 +3501,9 @@
         ;; :in-run?, so the one command a stuck seat reaches for fell through to
         ;; the turn-boundary branches and told it to `wait` on a window it owned
         ;; (#164). The encounter is the window; the run is just the usual way of
-        ;; being in one.
-        encounter? (live-encounter? cs)
+        ;; being in one. Routed on the summary's PRESENCE (#198): an encounter
+        ;; the wire could not name is still the window.
+        encounter? (core/encounter-window? cs)
         in-run-window? (or (:in-run? ts) encounter?)
         my-side-lc (when side (clojure.string/lower-case side))
         ;; Bound at the TOP, not inside the run-window branch: two branches of the
@@ -3509,6 +3523,15 @@
     (cond
       (:game-over? ts)
       (println (format "🏁 Game over — %s. Nothing to do." (:status-text ts)))
+
+      ;; #198, side-neutral and ahead of every prompted AND promptless run arm:
+      ;; an encounter is live but the wire has not named its ICE. Both the
+      ;; prompted arm (which names the card) and the promptless arms (which
+      ;; print "forced encounter with <card> → continue") would describe the
+      ;; card at the run position, which is not the one being encountered.
+      (core/unnameable-encounter? cs)
+      (doseq [line (core/unnameable-encounter-lines cs)]
+        (println line))
 
       ;; Actionable prompt with real options owned by us — resolve via choose.
       (and prompt (not waiting?) has-options?)
