@@ -509,6 +509,7 @@ ${GREEN}Running:${NC}
   ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE
     --rez <name>     Corp: auto-rez ICE matching <name>; pause on other unrezzed ICE
+                     (repeatable: --rez Diviner --rez Palisade pre-commits both)
     --fire-unbroken  Corp: auto-fire unbroken subroutines once the Runner is
                      done with the encounter (tank signal OR a plain pass)
     --full-break     Runner: auto-break all ICE with available breakers
@@ -591,7 +592,9 @@ ${YELLOW}Turn Timing Quick Reference:${NC}
   ${BLUE}Run Sequence:${NC} initiation → approach ice → encounter → movement → access
 
   ${BLUE}Common Stuck States:${NC}
-    • Both at 0 clicks, no prompts → Use 'start-turn'
+    • Both at 0 clicks, no prompts → read 'status': "Ready to start your turn" →
+                                     'start-turn'; "has NOT ended yet" → 'end-turn'
+                                     (start-turn refuses over a turn in progress)
     • Run stopped → Check 'prompt' for decision needed
     • Turn won't end → Check 'prompt' for blocking prompts
 

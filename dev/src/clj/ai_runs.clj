@@ -1908,6 +1908,22 @@
     (loop [iteration 0
            state-history []]   ; Track [phase position ice] for stuck detection
       (cond
+        ;; #151 item 19: a finished game is finished. The engine leaves the
+        ;; winning agenda's trigger prompt (Send a Message) open after it has
+        ;; declared the winner, and the opponent-wait branch below read it as
+        ;; "🛑 You have a pending decision to resolve" — a seat that obeys is
+        ;; acting in a game that is over. First, as park-wake-reason already
+        ;; does for the parked half of the loop.
+        (state/game-over? (get-in @state/client-state [:game-state]))
+        (do
+          (when persistent
+            (print-while-you-slept! start-log-count))
+          (println "🏁 Game over — leaving the run loop (see game-over-status)")
+          {:status :game-over
+           :wake-reason :game-over
+           :iterations iteration
+           :elapsed-ms (- (System/currentTimeMillis) start-time)})
+
         ;; Safety: max iterations (should rarely trigger with stuck-detection)
         (>= iteration max-iterations)
         (do
@@ -1931,11 +1947,46 @@
            :elapsed-ms (- (System/currentTimeMillis) start-time)})
 
         :else
-        (let [result (continue-run!)
+        (let [raw (continue-run!)
+              ;; "Is there still a window here?" — the #164 rule (run OR a
+              ;; run-less encounter), read once for both persistent branches.
+              window-open? (let [s @state/client-state]
+                             (or (some? (get-in s [:game-state :run]))
+                                 (core/encounter-window? s)))
+              ;; #151 item 7: under --persistent a notable event is never a
+              ;; decision (the #36 ride-through below), but that ride-through
+              ;; was gated on the run object — and the events the Corp seats
+              ;; kept being woken by ("ai-runner uses Red Team to gain 3
+              ;; [Credits]", Leech counters) resolve at run SUCCESS, when the
+              ;; run is already torn down. So the same trigger was absorbed
+              ;; mid-run and terminal after it, which is the "inconsistent, not
+              ;; merely noisy" the reports describe. With no window left the
+              ;; event is the run's closing effect: report run-complete and let
+              ;; the park loop take the seat back to its post.
+              result (if (and persistent
+                              (should-pause-for-event? (:status raw))
+                              (not window-open?))
+                       (do (println "ℹ️  That resolved after the run ended — not your decision, the run is over.")
+                           (assoc raw :status :run-complete :absorbed-event (:status raw)))
+                       raw)
               status (:status result)
+              ;; The top-of-loop check read the state BEFORE continue-run!; the
+              ;; winning diff can land during it and come back as a live
+              ;; :decision-required (guest panel, TOCTOU). Re-read now.
+              over-now? (state/game-over? (get-in @state/client-state [:game-state]))
               current-state-key (get-run-state-key)
               new-history (cons current-state-key (take (dec stuck-threshold) state-history))]
           (cond
+            over-now?
+            (do
+              (when persistent
+                (print-while-you-slept! start-log-count))
+              (println "🏁 Game over — leaving the run loop (see game-over-status)")
+              {:status :game-over
+               :wake-reason :game-over
+               :iterations (inc iteration)
+               :elapsed-ms (- (System/currentTimeMillis) start-time)})
+
             ;; Persistent mode: a notable-but-routine event the loop produced
             ;; itself (its own ICE rez, an ability/subs firing, tag/damage
             ;; dealt) is NOT a decision — the seat delegated the whole run.
@@ -1960,7 +2011,7 @@
             ;; re-fired event.
             (and persistent
                  (should-pause-for-event? status)
-                 (some? (get-in @state/client-state [:game-state :run])))
+                 window-open?)
             (do
               (Thread/sleep core/quick-delay)
               (recur (inc iteration) state-history))  ; Keep OLD history; event isn't run-phase progress

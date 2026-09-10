@@ -226,10 +226,22 @@
         (println "")
         (println "💡 Auto-starting turn (opponent has ended, you haven't started yet)")
         (let [result (start-turn!)]
-          (if (= (:status result) :success)
+          (cond
+            ;; Sent but not acknowledged (report-start-turn-sent!): the clicks
+            ;; are not there yet, so the action this auto-start was for cannot
+            ;; go out. Saying "started successfully" here and sending anyway
+            ;; was the contradiction the guest panel caught (MAJOR).
+            (and (= (:status result) :success) (false? (:confirmed result)))
+            (do
+              (println "⏳ Start pending — your action was NOT sent. Retry it in a moment (do not re-send start-turn).")
+              false)
+
+            (= (:status result) :success)
             (do
               (println "✅ Turn started successfully")
               true)
+
+            :else
             (do
               (println "❌ Auto-start failed")
               false))))
@@ -317,6 +329,71 @@
           :else
           false)))))
 
+
+(defn- wait-for-state!
+  "Poll the client state until `pred` holds or `timeout-ms` expires. Returns the
+   state that satisfied `pred`, or nil on timeout.
+
+   The general form of wait-for-vitals-change!, for the same reason it exists:
+   a truthy send means the socket TOOK the message, and only a state that has
+   MOVED means the engine ran it. Three commands here used to sleep a fixed
+   delay and then read whatever was cached (#151 N1/N2/N3): end-turn printed
+   '⏳ … has NOT ended yet — end it' after the turn had ended, start-turn said
+   '0 clicks remaining' after granting 4, remove-tag said '1 → 1 tags' after
+   removing one. Every one of those was the PRE-action board narrated in the
+   past tense, because a diff that has not landed leaves every field at its old
+   value — indistinguishable from a refusal by inspection."
+  [pred timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (let [s @state/client-state]
+        (cond
+          (pred s) s
+          (>= (System/currentTimeMillis) deadline) nil
+          :else (do (Thread/sleep 50) (recur)))))))
+
+(defn- report-start-turn-sent!
+  "After a start-turn has been SENT: wait for the engine to grant the clicks
+   before describing the turn, then report the mandatory draw and any open
+   phase-1.2 window. Both start-turn! arms used to carry a copy of this block,
+   each sleeping one second and then reading the cached state — which on a
+   slow diff printed '🟢 Ready to start your turn - 0 clicks remaining' for a
+   turn that HAD started (#151 N2). When nothing moves, say so; never read the
+   pre-send board as the verdict."
+  [my-side before-hand]
+  (let [started? (fn [s]
+                   (let [gs (:game-state s)]
+                     (or (pos? (get-in gs [my-side :click] 0))
+                         (false? (:end-turn gs))
+                         ;; A phase-1.2 window held open FOR ME only exists
+                         ;; because my turn started (the engine opens it from
+                         ;; start-turn); it is an acknowledgement in its own
+                         ;; right, whatever the click count reads.
+                         (= my-side (:owner (open-phase-window :phase-12))))))]
+    (if (wait-for-state! started? core/action-timeout)
+      (do
+        (core/show-turn-indicator)
+        ;; For Corp, show what was drawn (mandatory draw) with card text
+        (when (= my-side :corp)
+          (let [after-state @state/client-state
+                hand (get-in after-state [:game-state :corp :hand])
+                after-hand (count hand)
+                new-card (last hand)
+                card-title (get new-card :title "Unknown")]
+            (when (> after-hand before-hand)
+              (println (str "🃏 Drew: " card-title))
+              (core/show-card-on-first-sight! card-title))))
+        (when-let [w (open-phase-window :phase-12)]
+          (when (= (:owner w) my-side)
+            (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
+            (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
+            (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
+        (core/with-cursor {:status :success :confirmed true}))
+      (do
+        (println (format "⏳ start-turn sent, but the engine has not confirmed it yet (no clicks granted after %ds)."
+                         (quot core/action-timeout 1000)))
+        (println "   Do NOT re-send. Use 'status' (or 'wait') in a moment — the turn is either starting or was refused.")
+        (core/with-cursor {:status :success :confirmed false})))))
 
 (defn start-turn!
   "Start your turn (gains clicks, Corp draws mandatory card).
@@ -455,25 +532,7 @@
             (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
             (println "   Check the game server is running, then retry")
             (core/with-cursor {:status :error :reason :send-failed}))
-          (do
-            (Thread/sleep core/standard-delay)
-            (core/show-turn-indicator)
-            ;; For Corp, show what was drawn (mandatory draw) with card text
-            (when (= my-side :corp)
-              (let [after-state @state/client-state
-                    hand (get-in after-state [:game-state :corp :hand])
-                    after-hand (count hand)
-                    new-card (last hand)
-                    card-title (get new-card :title "Unknown")]
-                (when (> after-hand before-hand)
-                  (println (str "🃏 Drew: " card-title))
-                  (core/show-card-on-first-sight! card-title))))
-            (when-let [w (open-phase-window :phase-12)]
-              (when (= (:owner w) my-side)
-                (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
-                (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
-                (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
-            (core/with-cursor {:status :success}))))
+          (report-start-turn-sent! my-side before-hand)))
 
       ;; ERROR: Already have clicks (turn already started)
       (> my-clicks 0)
@@ -497,6 +556,45 @@
         (println "   Wait for opponent to complete their turn")
         (core/with-cursor {:status :error :reason :opponent-not-ended}))
 
+      ;; NO BOUNDARY (guest panel, #151 round 4). board.cljs renders Start Turn
+      ;; only while the engine's :end-turn is TRUE; it is false for the whole of
+      ;; a turn in progress and only flips at end-turn-continue. The #117
+      ;; orphaned shape — my turn, 0 clicks, not ended — passed every check
+      ;; above (the opponent's "is ending" line is still in the log window), so
+      ;; the send went out, the engine no-op'd it (:turn-started is set), and
+      ;; the acknowledgement wait was satisfied by the PRE-send state. Refuse
+      ;; before the send, and say what the state is. Turn 0 is the is-first-turn?
+      ;; arm above; a state without the key (older fixtures) is not refused.
+      (and (pos? turn-number)
+           (false? (get-in client-state [:game-state :end-turn])))
+      (let [gs (:game-state client-state)
+            my-prompt (state/get-prompt client-state)
+            active-me? (= (str/lower-case (or (:active-player gs) "")) (name my-side))]
+        (println "⛔ Refusing start-turn: no turn boundary — a turn is still in progress (the engine's :end-turn is not set).")
+        ;; The recovery line must respect PROMPT OWNERSHIP before it reads the
+        ;; active player (fresh-seat delta review, MAJOR): a Corp holding
+        ;; Lightning Laboratory's derez choice inside the Runner's turn-end was
+        ;; told to 'wait' for a resolution that waits on it, and an active
+        ;; Corp with a waiting prompt was told to end a turn already ending.
+        (println (cond
+                   (and my-prompt (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+                   (str "   A prompt is on YOU — resolve it first (see 'prompt'): " (:msg my-prompt))
+
+                   my-prompt
+                   "   You are waiting on the opponent's decision — use 'wait'."
+
+                   ;; No phase-window arms here: a post-discard window is refused
+                   ;; by the post-discard-active? arm above, and phase 1.2 opens
+                   ;; only after the clicks are granted (turns.clj), so its owner
+                   ;; hits the clicks guard and the other seat the opp-clicks
+                   ;; guard — both earlier (round-3 seat: unreachable).
+                   active-me?
+                   "   It is YOUR turn, out of clicks and not ended — use 'end-turn' (or 'smart-end-turn')."
+
+                   :else
+                   "   The opponent's turn has not ended — use 'wait'."))
+        (core/with-cursor {:status :error :reason :no-turn-boundary :turn turn-number}))
+
       ;; OK: All validations passed
       ;; Note: We don't check active-player because it doesn't switch until start-turn succeeds.
       ;; After opponent's end-turn, active-player is still opponent (Netrunner priority system).
@@ -514,25 +612,7 @@
             (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
             (println "   Check the game server is running, then retry")
             (core/with-cursor {:status :error :reason :send-failed}))
-          (do
-            (Thread/sleep core/standard-delay)
-            (core/show-turn-indicator)
-            ;; For Corp, show what was drawn (mandatory draw) with card text
-            (when (= my-side :corp)
-              (let [after-state @state/client-state
-                    hand (get-in after-state [:game-state :corp :hand])
-                    after-hand (count hand)
-                    new-card (last hand)
-                    card-title (get new-card :title "Unknown")]
-                (when (> after-hand before-hand)
-                  (println (str "🃏 Drew: " card-title))
-                  (core/show-card-on-first-sight! card-title))))
-            (when-let [w (open-phase-window :phase-12)]
-              (when (= (:owner w) my-side)
-                (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
-                (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
-                (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
-            (core/with-cursor {:status :success})))))))))
+          (report-start-turn-sent! my-side before-hand))))))))
 
 ;; ============================================================================
 ;; Phase windows (start-of-turn 1.2, and the forced post-discard pause)
@@ -985,6 +1065,76 @@
      :turn-advanced? (boolean (and entry-turn
                                    (> (get-in cs [:game-state :turn] 0) entry-turn)))}))
 
+(defn- report-end-turn-sent!
+  "After an end-turn has been SENT: wait for the engine to acknowledge it
+   before describing the board (#151 N1).
+
+   The acknowledgement is any of: the engine's :end-turn flag flipping, our own
+   'is ending their turn' log line, or a prompt of ours the end-turn opened
+   (the hand-size discard). Until one of those lands the cached state is the
+   PRE-send board — my turn, 0 clicks, not ended — and show-turn-indicator
+   read it as '⏳ Your turn is out of clicks but has NOT ended yet — end it'.
+   Every seat brief carries a hard rule against re-sending end-turn (an
+   off-turn duplicate ends the OPPONENT's turn and has never been recovered
+   from), and that line told the seat to do exactly that. Returns true when
+   the engine acknowledged, false when it did not within core/action-timeout —
+   and in that case says so, never a verdict read off stale state."
+  [pre-state]
+  (let [pre-prompt (state/get-prompt pre-state)
+        my-side (state/my-side-kw pre-state)
+        prompt-changed? (fn [s] (not= pre-prompt (state/get-prompt s)))
+        ;; A held post-discard window is the engine's OTHER way of not
+        ;; finishing an end-turn: with a force-post-discard flag set,
+        ;; game.core.turns/end-turn opens the window and returns without
+        ;; end-turn-continue — no :end-turn flip, no 'is ending' line, and
+        ;; possibly no prompt. Reading that as 'unconfirmed' would tell the seat
+        ;; to `wait` when the move is end-post-discard (#152's own guard text).
+        post-discard-held? (fn [_] (= my-side (:owner (open-phase-window :post-discard))))
+        acked? (fn [s] (or (get-in s [:game-state :end-turn])
+                           (already-ended-this-turn? s)
+                           (prompt-changed? s)
+                           (post-discard-held? s)))]
+    (if-let [s (wait-for-state! acked? core/action-timeout)]
+      (let [p (state/get-prompt s)
+            ended? (boolean (get-in s [:game-state :end-turn]))
+            new-prompt? (and p (prompt-changed? s))]
+        (cond
+          ;; A prompt of ours arrived (the discard, or a trigger). Whatever its
+          ;; origin, answering it is the next move. Say whether the turn is
+          ;; over or still ending — the verb was wrong for a trigger prompt
+          ;; landing in the same diff as the flag (guest panel).
+          (and new-prompt? (not (state/waiting-prompt-type? (:prompt-type p))))
+          (println (str (if ended?
+                          "⏸️  Your turn has ended — a trigger prompt is waiting for you: "
+                          "⏸️  Your turn is ending — a prompt is on you; resolve it first: ")
+                        (:msg p)))
+
+          (and (not ended?) (post-discard-held? s))
+          (do (println "⏸️  Your turn is ending — paused in the end-of-turn (post-discard) window a card holds open.")
+              (println "   Use 'end-post-discard' to finish it (or 'wait' if the opponent still has to pass)."))
+
+          ;; The flag is authoritative; a waiting prompt of ours is the
+          ;; opponent's end-of-turn trigger, which the indicator names.
+          (or ended? new-prompt?)
+          (core/show-turn-indicator)
+
+          ;; Only our own "is ending" line has arrived. The engine writes it
+          ;; BEFORE the end-of-turn triggers resolve and before :end-turn flips
+          ;; (turn-message precedes the wait-for in end-turn-continue), and this
+          ;; file already records that the line can be rolled back. Reading the
+          ;; indicator here re-derives "out of clicks, NOT ended — end it" from
+          ;; the pre-flip state: N1 by another door (guest panel, MAJOR).
+          :else
+          (do (println "⏳ Turn end in progress — the engine has logged your turn ending and is resolving end-of-turn triggers.")
+              (println "   Do NOT re-send end-turn. Use 'wait' — it wakes when the turn is over.")))
+        true)
+      (do
+        (println (format "⏳ end-turn sent, but the engine has not confirmed it yet (no turn-end in the state after %ds)."
+                         (quot core/action-timeout 1000)))
+        (println "   Do NOT re-send end-turn — a duplicate that lands off-turn ends the OPPONENT's turn and is unrecoverable.")
+        (println "   Use 'wait' (or 'status') and look for your own 'is ending their turn' line.")
+        false))))
+
 (defn end-turn!
   "End turn (validates all clicks used unless forced).
    The game engine handles oversized hand by prompting for discard during end-turn.
@@ -1158,9 +1308,8 @@
                             {:gameid gameid
                              :command "end-turn"
                              :args nil})
-          (Thread/sleep core/standard-delay)
-          (core/show-turn-indicator)
-          (core/with-cursor {:status :success :clicks-burned clicks})))
+          (let [confirmed? (report-end-turn-sent! client-state)]
+            (core/with-cursor {:status :success :clicks-burned clicks :confirmed confirmed?}))))
 
       ;; OK: all clicks used
       :else
@@ -1171,9 +1320,8 @@
                           {:gameid gameid
                            :command "end-turn"
                            :args nil})
-        (Thread/sleep core/standard-delay)
-        (core/show-turn-indicator)
-        (core/with-cursor {:status :success})))))
+        (let [confirmed? (report-end-turn-sent! client-state)]
+          (core/with-cursor {:status :success :confirmed confirmed?}))))))
 
 (defn- arm-for
   "Build a deferred auto-end arm for CLIENT-STATE.
@@ -1670,18 +1818,27 @@
               (core/with-cursor {:status :error :reason "Need 1 click to remove tag"}))
 
             :else
-            (let [gameid (:gameid client-state)]
+            (let [gameid (:gameid client-state)
+                  vitals-before (my-vitals)]
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "remove-tag"
                                  :args nil})
-              (Thread/sleep core/medium-delay)
-              (let [new-state @state/client-state
-                    new-tags (get-in new-state [:game-state :runner :tag :base] 0)
-                    new-credits (get-in new-state [:game-state :runner :credit] 0)]
-                (println (str "🏷️  Removed tag: " tags " → " new-tags " tags ($" credits " → $" new-credits ")"))
-                (check-auto-end-turn!)
-                (core/with-cursor {:status :success :tags-before tags :tags-after new-tags})))))))
+              ;; Wait for the state to MOVE before reporting it. A fixed sleep
+              ;; then a read printed "Removed tag: 1 → 1 tags ($10 → $10)" —
+              ;; the pre-action numbers under a past-tense verb (#151 N3).
+              (if (wait-for-vitals-change! vitals-before core/action-timeout)
+                (let [new-state @state/client-state
+                      new-tags (get-in new-state [:game-state :runner :tag :base] 0)
+                      new-credits (get-in new-state [:game-state :runner :credit] 0)]
+                  (println (str "🏷️  Removed tag: " tags " → " new-tags " tags ($" credits " → $" new-credits ")"))
+                  (check-auto-end-turn!)
+                  (core/with-cursor {:status :success :tags-before tags :tags-after new-tags}))
+                (do
+                  (println (format "⏳ remove-tag sent, but the engine has not confirmed it yet (tags/credits/clicks unchanged after %ds)."
+                                   (quot core/action-timeout 1000)))
+                  (println "   Check 'status' before re-sending.")
+                  (core/with-cursor {:status :error :reason :unconfirmed :tags-before tags}))))))))
     (core/with-cursor {:status :error :reason "Failed to start turn"})))
 
 (defn purge-viruses!

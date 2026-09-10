@@ -10,6 +10,7 @@
             [test-helpers :refer :all]
             [ai-basic-actions :as basic]
             [ai-state :as state]
+            [ai-core :as core]
             [ai-websocket-client-v2 :as ws]))
 
 (deftest test-start-turn-blocks-on-corp-post-discard
@@ -1537,3 +1538,228 @@
               (str "end-turn inside the post-discard window must not be sent, sent: " @sent))
           (is (re-find #"end-post-discard" out)
               (str "must name the command that finishes the turn, got:\n" out)))))))
+
+;; ============================================================================
+;; #151 N1 / N2 / N3: a fixed sleep and then a read reports the PRE-action
+;; board in the past tense.
+;; ============================================================================
+;; Marquee d5a000ab / a6eb39ae (Astra + Fable seats, both sides): end-turn
+;; printed "⏳ Your turn is out of clicks but has NOT ended yet — end it" after
+;; the turn HAD ended (and every seat brief carries a hard rule against
+;; re-sending end-turn); start-turn said "0 clicks remaining" after granting 4;
+;; remove-tag said "1 → 1 tags ($10 → $10)" after removing one for 2¢. One
+;; cause: the send is ACCEPTED, the diff has not landed, and the command reads
+;; the old state as though it were the result. A command that changes state
+;; must wait for the state to move before describing it — and when it does not
+;; move, say "sent, not confirmed, do not re-send" rather than read stale state
+;; as a verdict.
+
+(def ^:private in-flight-diff
+  "The future a delayed-send spawned, so a test can `settle!` before its
+   with-mock-state restores the real client state — otherwise a diff landing
+   after the test body has returned mutates the NEXT test's state."
+  (atom nil))
+
+(defn- delayed-send
+  "A mock send that records the message and applies `mutate` to the client
+   state after `delay-ms` — the wire shape: acceptance now, the diff later."
+  [sent delay-ms mutate]
+  (fn [event-type data]
+    (swap! sent conj {:type event-type :data data})
+    (reset! in-flight-diff (future (Thread/sleep delay-ms) (swap! state/client-state mutate)))
+    true))
+
+(defn- settle! [] (some-> @in-flight-diff deref) (reset! in-flight-diff nil))
+
+(def ^:private corp-last-click
+  "Corp, own turn, last click just spent, nothing pending, turn not ended."
+  {:corp {:click 0 :credit 5 :hand [] :hand-count 3 :hand-size {:total 5}
+          :prompt-state nil :user {:username "ai-corp"}}
+   :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+   :turn 8 :active-player "corp" :end-turn false :log []})
+
+(deftest test-end-turn-waits-for-the-engine-before-describing-the-board
+  (testing "N1: the diff lands late — describe the ENDED turn, not the pre-send one"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (delayed-send sent 1300 #(assoc-in % [:game-state :end-turn] true))]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (some #(= "end-turn" (get-in % [:data :command])) @sent))
+            (is (not (re-find #"has NOT ended yet" out))
+                (str "must not tell the seat to end a turn it just ended:\n" out))
+            (is (re-find #"Waiting for runner to start" out)
+                (str "must describe the boundary the end-turn produced:\n" out))
+            (settle!)))))))
+
+(deftest test-end-turn-unconfirmed-says-so-and-forbids-a-resend
+  (testing "N1: no diff at all — say the send is unconfirmed, never read stale state as a verdict"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 200]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not (re-find #"has NOT ended yet" out)) out)
+            (is (re-find #"(?i)not (yet )?confirmed" out) out)
+            (is (re-find #"(?i)do NOT re-send" out) out)))))))
+
+(deftest test-end-turn-held-in-post-discard-is-acknowledged-not-unconfirmed
+  (testing "N1: a force-post-discard card opens the window WITHOUT flipping :end-turn or logging —
+            that is the engine's answer, and the move is end-post-discard, not 'wait'"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (delayed-send sent 300
+                                         #(assoc-in % [:game-state :corp-post-discard]
+                                                    {:active true :requires-consent true}))]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not (re-find #"(?i)not (yet )?confirmed" out)) out)
+            (is (not (re-find #"has NOT ended yet" out)) out)
+            (is (re-find #"end-post-discard" out) out)
+            (settle!)))))))
+
+(deftest test-start-turn-refuses-when-no-turn-boundary
+  (testing "guest panel: the #117 orphaned shape passed every start-turn guard and the send
+            went out; the engine no-ops it and the pre-send state then satisfied the
+            acknowledgement — a false :confirmed. board.cljs shows Start Turn only while
+            :end-turn is true; mirror it."
+    (let [sent (atom [])
+          orphaned {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+                    :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+                    :turn 8 :active-player "corp" :end-turn false
+                    :log [{:user "__system__" :text "ai-runner is ending their turn 7 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state orphaned)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent) (str "must not send over a turn in progress:\n" out))
+            (is (re-find #"(?i)refusing start-turn" out) out)
+            (is (re-find #"end-turn" out) "must name the move that actually resolves the state")))))))
+
+(deftest test-start-turn-refusal-names-my-own-prompt-before-telling-me-to-wait
+  (testing "fresh-seat delta MAJOR: Corp holds Lightning Laboratory's derez choice inside the
+            Runner's turn-end (both 0 clicks, :end-turn false) — the resolution waits on ME"
+    (let [sent (atom [])
+          gs {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}
+                     :prompt-state {:eid 5 :prompt-type "select" :msg "Choose a piece of ice to derez"
+                                    :selectable [{:cid 3 :title "Palisade"}]}}
+              :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+              :turn 8 :active-player "runner" :end-turn false
+              :log [{:user "__system__" :text "ai-runner is ending their turn 8 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent))
+            (is (re-find #"(?i)resolve it first" out) out)
+            (is (not (re-find #"use 'wait'" out)) out)))))))
+
+(deftest test-start-turn-refusal-does-not-tell-an-ending-turn-to-end
+  (testing "fresh-seat delta MAJOR: active Corp, 0 clicks, a WAITING prompt (its own end-turn is
+            resolving on the Runner) — 'use end-turn' would be the duplicate"
+    (let [sent (atom [])
+          gs {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}
+                     :prompt-state {:eid 6 :prompt-type "waiting" :msg "Waiting for Runner to make a decision"}}
+              :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+              :turn 8 :active-player "corp" :end-turn false
+              :log [{:user "__system__" :text "ai-runner is ending their turn 7 with 5 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (empty? @sent))
+            (is (re-find #"use 'wait'" out) out)
+            (is (not (re-find #"use 'end-turn'" out)) out)))))))
+
+(def ^:private runner-owed-start
+  "Corp ended turn 3; the Runner is owed the start-turn."
+  {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+   :runner {:click 0 :credit 5 :hand [] :user {:username "ai-runner"}}
+   :turn 3 :active-player "corp" :end-turn true
+   :log [{:user "__system__" :text "ai-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."}]})
+
+(deftest test-end-turn-log-line-alone-is-in-progress-not-ended
+  (testing "guest panel MAJOR: the engine logs 'is ending' BEFORE end-of-turn triggers resolve and
+            before :end-turn flips; reading the indicator off that state re-derives 'NOT ended — end it'"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp" :game-state corp-last-click)
+        (with-redefs [ws/send-message! (delayed-send sent 300
+                                         #(update-in % [:game-state :log] conj
+                                                     {:user "__system__" :text "ai-corp is ending their turn 8 with 5 [Credit] and 3 cards in HQ."}))
+                      basic/get-my-username (constantly "ai-corp")]
+          (let [out (with-out-str (basic/end-turn!))]
+            (is (not (re-find #"has NOT ended yet" out)) out)
+            (is (re-find #"(?i)in progress" out) out)
+            (is (re-find #"(?i)do NOT re-send" out) out)
+            (settle!)))))))
+
+(deftest test-ensure-turn-started-does-not-proceed-on-an-unconfirmed-start
+  (testing "guest panel MAJOR: an unconfirmed auto-start must not print 'started successfully'
+            and let the click action go out"
+    (with-mock-state (mock-client-state :side "runner" :game-state runner-owed-start)
+      (with-redefs [basic/can-start-turn? (fn [& _] {:can-start true})
+                    basic/start-turn! (fn [& _] {:status :success :confirmed false})]
+        (let [out (java.io.StringWriter.)
+              ok? (binding [*out* out] (basic/ensure-turn-started!))]
+          (is (false? ok?) "must not proceed")
+          (is (not (re-find #"started successfully" (str out))) (str out))
+          (is (re-find #"(?i)pending" (str out)) (str out)))))))
+
+(deftest test-start-turn-waits-for-the-clicks-before-reporting-them
+  (testing "N2: the clicks land late — report 4, not the pre-send 0"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :game-state runner-owed-start)
+        (with-redefs [ws/send-message! (delayed-send sent 1300
+                                         #(-> %
+                                              (assoc-in [:game-state :end-turn] false)
+                                              (assoc-in [:game-state :active-player] "runner")
+                                              (assoc-in [:game-state :runner :click] 4)))]
+          (let [t0 (System/currentTimeMillis)
+                out (with-out-str (basic/start-turn!))
+                elapsed (- (System/currentTimeMillis) t0)]
+            (is (some #(= "start-turn" (get-in % [:data :command])) @sent))
+            (is (not (re-find #"0 clicks remaining" out)) out)
+            (is (re-find #"4 clicks remaining" out) out)
+            ;; Pins the POLL, not just the wait: the diff lands at 1.3s and the
+            ;; timeout is 3s, so returning promptly after the diff is the
+            ;; behaviour — a fixed sleep past the diff would also print the
+            ;; right numbers, and it is what this replaces.
+            (is (< elapsed 2500) (str "must return when the state moves, not at the timeout; took " elapsed "ms"))
+            (settle!)))))))
+
+(deftest test-start-turn-unconfirmed-does-not-claim-readiness
+  (testing "N2: no diff — say unconfirmed rather than 'Ready to start your turn' over a sent start"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :game-state runner-owed-start)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 200]
+          (let [out (with-out-str (basic/start-turn!))]
+            (is (some #(= "start-turn" (get-in % [:data :command])) @sent))
+            (is (not (re-find #"Ready to start your turn" out)) out)
+            (is (re-find #"(?i)not (yet )?confirmed" out) out)))))))
+
+(def ^:private tagged-runner
+  {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+   :runner {:click 2 :credit 10 :hand [] :tag {:base 1} :user {:username "ai-runner"}}
+   :turn 6 :active-player "runner" :end-turn false :log []})
+
+(deftest test-remove-tag-reports-the-post-action-numbers
+  (testing "N3: the summary must carry the numbers the action PRODUCED"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :game-state tagged-runner)
+        (with-redefs [ws/send-message! (delayed-send sent 1300
+                                         #(-> %
+                                              (assoc-in [:game-state :runner :tag :base] 0)
+                                              (assoc-in [:game-state :runner :credit] 8)
+                                              (assoc-in [:game-state :runner :click] 1)))
+                      basic/check-auto-end-turn! (fn [& _] nil)]
+          (let [out (with-out-str (basic/remove-tag!))]
+            (is (re-find #"1 → 0 tags" out) out)
+            (is (re-find #"\$10 → \$8" out) out)
+            (settle!)))))))
+
+(deftest test-remove-tag-unconfirmed-does-not-claim-removal
+  (testing "N3: no diff — no past-tense 'Removed tag' over unchanged numbers"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :game-state tagged-runner)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 200
+                      basic/check-auto-end-turn! (fn [& _] nil)]
+          (let [out (with-out-str (basic/remove-tag!))]
+            (is (not (re-find #"Removed tag" out)) out)
+            (is (re-find #"(?i)not (yet )?confirmed" out) out)))))))

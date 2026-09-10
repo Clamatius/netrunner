@@ -7,6 +7,7 @@
             [test-helpers :refer :all]
             [ai-runs :as runs]
             [ai-core :as ai-core]
+            [ai-state :as ai-state]
             [ai-basic-actions :as ai-basic-actions]
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
@@ -1592,3 +1593,86 @@
           "substring: the OPPONENT's line matches us")
       (is (not (clojure.string/starts-with? opponent-line (str mine " ")))
           "prefix: it does not, because system-msg puts the username FIRST"))))
+
+;; ============================================================================
+;; #151 item 19 / N5: the run loop must stop at GAME-OVER, not surface a
+;; leftover trigger prompt as "🛑 You have a pending decision to resolve".
+;; ============================================================================
+
+(deftest test-auto-continue-loop-stops-at-game-over-before-surfacing-a-leftover-prompt
+  (with-mock-state
+    {:connected true
+     :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+     :side "corp"
+     :game-state {:winner :corp :reason "Agenda" :turn 17 :active-player "corp"
+                  :corp {:click 0
+                         :prompt-state {:eid 3 :msg "Choose a target for Send a Message"
+                                        :prompt-type "select" :choices [{:value "Done"}]
+                                        :card {:title "Send a Message" :side "Corp"}}}
+                  :runner {:click 0}
+                  :log []}}
+    (with-redefs [runs/continue-run! (fn [& _] {:status :waiting-for-opponent})
+                  ws/send-message! (fn [& _] nil)
+                  ai-core/show-turn-indicator (fn [& _] nil)]
+      (let [out (java.io.StringWriter.)
+            r (binding [*out* out]
+                (runs/auto-continue-loop! :persistent true :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000))]
+        (is (= :game-over (:status r)) (str r))
+        (is (not (re-find #"pending decision" (str out))) (str out))))))
+
+;; ============================================================================
+;; #151 item 7: a persistent Corp monitor returned on OPPONENT-owned abilities
+;; ("ai-runner uses Red Team to gain 3 [Credits]", Leech counters) — and only
+;; SOMETIMES. The #36 ride-through is gated on [:run] being non-nil, and these
+;; abilities resolve at run success, when the run object is already gone: the
+;; event then fell through to the terminal branch as :ability-used. Under
+;; --persistent a notable event is never a Corp decision; with no window left
+;; it is the run's END, and the loop should say so and go back to its post.
+;; ============================================================================
+
+(deftest test-persistent-monitor-absorbs-an-opponent-ability-after-the-run-ended
+  (with-mock-state
+    {:connected true
+     :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+     :side "corp"
+     :game-state {:corp {:click 0} :runner {:click 2}
+                  :active-player "runner" :turn 7 :log []}}   ;; no :run, no encounter
+    (let [calls (atom 0)]
+      (with-redefs [runs/continue-run! (fn [& _]
+                                         (if (= 1 (swap! calls inc))
+                                           {:status :ability-used
+                                            :event {:text "ai-runner uses Red Team to gain 3 [Credits]"}}
+                                           {:status :no-run}))
+                    ai-basic-actions/check-auto-end-turn! (fn [& _] nil)
+                    runner-handlers/reset-state! (fn [& _] nil)
+                    corp-handlers/reset-state! (fn [& _] nil)
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :persistent true :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000)]
+          (is (not= :ability-used (:status r))
+              "an opponent-owned ability after the run is not a Corp decision")
+          (is (contains? #{:no-run :run-complete} (:status r)) (str r)))))))
+
+(deftest test-auto-continue-loop-catches-a-win-that-lands-during-continue-run
+  (testing "guest panel TOCTOU: the winning diff (winner + leftover prompt) arrives DURING
+            continue-run!, which returns a live :decision-required — the loop must still say game-over"
+    (with-mock-state
+      {:connected true
+       :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+       :side "corp"
+       :game-state {:turn 17 :active-player "corp"
+                    :corp {:click 0} :runner {:click 0} :log []}}
+      (with-redefs [runs/continue-run! (fn [& _]
+                                         (swap! ai-state/client-state
+                                                #(-> % (assoc-in [:game-state :winner] :corp)
+                                                       (assoc-in [:game-state :corp :prompt-state]
+                                                                 {:eid 3 :msg "Choose a target for Send a Message"
+                                                                  :prompt-type "select" :choices [{:value "Done"}]})))
+                                         {:status :decision-required})
+                    ws/send-message! (fn [& _] nil)
+                    ai-core/show-turn-indicator (fn [& _] nil)]
+        (let [r (runs/auto-continue-loop! :persistent true :persistent-wait-delay-ms 1
+                                          :max-iterations 50 :timeout-ms 3000)]
+          (is (= :game-over (:status r)) (str r)))))))

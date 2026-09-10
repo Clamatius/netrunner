@@ -2614,6 +2614,15 @@
              opp card-title)]
     [(format "  Action: Waiting on %s — no action required from you." opp)]))
 
+(defn- post-game-prompt-banner!
+  "#151 item 19 / N5: the engine leaves the winning agenda's trigger prompt
+   (Send a Message: 'Choose a target', only 'Done') open after it has declared
+   the winner, and both the post-action hook and `prompt` rendered it as a live
+   decision. A seat that resolves it is acting in a finished game. Label it."
+  [state]
+  (when (state/game-over? (:game-state state))
+    (println "🏁 Game over — this prompt is a leftover from the final trigger. Nothing to resolve; the result stands (see game-over-status).")))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices.
    1-arity: render from an already-captured state (snapshot, #139 guest panel —
@@ -2636,6 +2645,7 @@
         (println (if already-shown?
                    "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
                    "\n🔔 Current Prompt:"))
+        (post-game-prompt-banner! state)
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
         (when-let [card (:card prompt)]
@@ -2884,7 +2894,9 @@
   []
   (when-let [prompt (state/get-prompt)]
     (if (state/waiting-prompt-type? (:prompt-type prompt))
-      (println (format "\n⏳ %s" (or (:msg prompt) "Waiting for opponent")))
+      (do
+        (println (format "\n⏳ %s" (or (:msg prompt) "Waiting for opponent")))
+        (post-game-prompt-banner! @state/client-state))
       (show-prompt-detailed))))
 
 (defn show-snapshot

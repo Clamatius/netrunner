@@ -3698,3 +3698,34 @@
       (ai-state/expire-run-strategy-on-snapshot! {:run {:position 1}})
       (is (= #{"Tithe"} (:tank @ai-state/run-strategy)))
       (finally (reset! ai-state/run-strategy {})))))
+
+;; ============================================================================
+;; #151 item 19 / N5: a prompt left over after GAME-OVER is not a decision
+;; ============================================================================
+;; Astra (Corp), both rounds: `score "Send a Message"` printed the winning
+;; score AND a "Choose a target for Send a Message" prompt; game-over-status
+;; already said GAME-OVER. A seat that resolves it is acting in a finished game.
+
+(def ^:private post-game-prompt
+  {:eid 3 :msg "Choose a target for Send a Message" :prompt-type "select"
+   :choices [{:value "Done"}] :selectable []})
+
+(defn- finished-game-state []
+  (mock-client-state :side "corp"
+                     :game-state {:winner :corp :reason "Agenda" :turn 17
+                                  :active-player "corp"
+                                  :corp {:click 0 :prompt-state post-game-prompt}
+                                  :runner {:click 0}
+                                  :log []}))
+
+(deftest post-game-prompt-is-labelled-as-nothing-to-resolve
+  (testing "show-prompt-if-any (the post-action hook) says the game is over"
+    (with-mock-state (finished-game-state)
+      (let [out (with-out-str (display/show-prompt-if-any))]
+        (is (re-find #"(?i)game over" out) out)
+        (is (re-find #"(?i)nothing to resolve" out) out))))
+  (testing "show-prompt-detailed (the `prompt` command) says the same"
+    (with-mock-state (finished-game-state)
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (re-find #"(?i)game over" out) out)
+        (is (re-find #"(?i)nothing to resolve" out) out)))))
