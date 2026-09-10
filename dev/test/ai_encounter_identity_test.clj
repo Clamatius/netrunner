@@ -21,6 +21,7 @@
             [ai-core :as core]
             [ai-display :as display]
             [ai-run-runner-handlers :as runner-handlers]
+            [ai-card-actions :as card-actions]
             [ai-websocket-client-v2 :as ws]))
 
 ;; ============================================================================
@@ -114,3 +115,55 @@
                 (str "one sub FIRED; 'all broken' is a false claim, got:\n" out))
             (is (re-find #"(?i)broken or resolved" out)
                 (str "the mixed case should name both, got:\n" out))))))))
+
+;; ============================================================================
+;; #198 proper: the authority does not substitute a card
+;; ============================================================================
+
+(def unnameable
+  "The honest minimum payload for a live encounter whose card the engine could
+   not resolve: encounters-summary always stamps :encounter-count, and
+   select-non-nil-keys drops the nil :ice."
+  {:encounter-count 1})
+
+(deftest encountered-ice-answers-nil-not-the-positional-card
+  (testing "summary present, no :ice, position pointing at a rezzed ICE → nil"
+    (with-mock-state (encounter-state (karuna two-broken) unnameable)
+      (let [st @ai-state/client-state]
+        (is (nil? (core/encountered-ice st))
+            "the position's Karunā is NOT the card being encountered")
+        (is (false? (core/encounter-ice-active? st (core/encountered-ice st))))
+        (is (true? (core/unnameable-encounter? st)))
+        (is (nil? (core/encounter-key st))
+            "no key: the position belongs to a different card and :encounter-count is depth, not identity"))))
+  (testing "no summary at all → the positional card (older serializations)"
+    (with-mock-state (encounter-state (karuna two-broken) nil)
+      (let [st @ai-state/client-state]
+        (is (= karuna-cid (:cid (core/encountered-ice st))))
+        (is (false? (core/unnameable-encounter? st)))
+        (is (= karuna-cid (core/encounter-key st))))))
+  (testing "summary with :ice → the summary's card, whatever the position says"
+    (let [forced {:cid "archangel-9" :title "Archangel" :zone ["hand"] :subroutines []}]
+      (with-mock-state (encounter-state (karuna two-broken) {:ice forced :encounter-count 1})
+        (let [st @ai-state/client-state]
+          (is (= "archangel-9" (:cid (core/encountered-ice st))))
+          (is (false? (core/unnameable-encounter? st)))
+          (is (= "archangel-9" (core/encounter-key st))))))))
+
+(deftest manual-fire-subs-refuses-at-an-unnameable-encounter
+  ;; ai-card-actions/fire-unbroken-subs! kept its own copy of the fallback, so
+  ;; the cid gate compared the named card against the POSITIONAL card and let a
+  ;; fire through for an ICE nobody was encountering (plan-review MAJOR).
+  (let [sent (atom [])
+        unbroken [{:label "Do 2 net damage." :broken false :fired false}]]
+    (with-mock-state (encounter-state (karuna unbroken) unnameable :side "corp")
+      (with-redefs [ws/send-message! (fn [t d] (swap! sent conj {:type t :data d}) true)]
+        (let [out (with-out-str (card-actions/fire-unbroken-subs! "Karunā"))]
+          (is (empty? @sent)
+              (str "nothing may go on the wire for a card nobody can name, sent: " @sent))
+          (is (re-find #"has not named its ICE" out)
+              (str "the refusal names the state, got:\n" out))
+          (is (re-find #"resync 0000" out)
+              (str "the recovery command is executable as printed (has the game id), got:\n" out))
+          (is (re-find #"umpire-ping corp" out)
+              (str "the escalation names the side, got:\n" out)))))))

@@ -1648,8 +1648,12 @@
    live encounter nobody has passed yet is exactly {:encounter-count 1}, and two
    narrower drafts of this predicate each missed a real board:
 
-     * keying on :ice alone handed the recorded #150 boards
-       ({:encounters {:no-action \"corp\"}}, no :ice) back to the run ledger;
+     * keying on :ice alone handed the #150 test boards
+       ({:encounters {:no-action \"corp\"}}, no :ice) back to the run ledger —
+       those fixtures were simplifications, not wire captures (the engine emits
+       :ice whenever the card resolves; game.ai-forced-encounter-wire-test
+       asserts it), but the rule they taught is right: presence of the summary
+       is the signal;
      * adding :no-action still missed {:encounter-count 1}, which is the state a
        forced encounter is in for its whole first half (guest panel, 2nd pass).
 
@@ -1677,6 +1681,34 @@
   [state]
   (boolean (and (encounter-window? state)
                 (nil? (get-in state [:game-state :encounters :ice])))))
+
+(defn unnameable-encounter-lines
+  "What to tell a seat at an unnameable encounter — the ONE text, printed by
+   `prompt`/`status` (print-run-window-priority!), `diagnose-blocker`, `wait`'s
+   wake guidance, the manual `fire-subs` refusal and the run automation's park
+   (#198). One definition because the last time this text existed in one
+   surface only, the other surfaces went on offering a card-specific menu for
+   the wrong card. Pure; `state` is the full client-state (reads :gameid and
+   :side for the commands, which must be executable as printed: `resync` takes
+   a game id — dev/send_command errors on a bare one).
+
+   The steer names `continue` for the one engine-side cause we know of: the
+   summary loses :ice when get-card cannot resolve the card, i.e. the ICE was
+   trashed or moved mid-encounter, and game.core.runs `continue :encounter-ice`
+   is a pure both-must-pass ledger (it never re-checks the card), so the window
+   still closes with a pass from each side. A resync helps the OTHER cause — a
+   client whose diffs diverged — and is asked for once, not repeatedly."
+  [state]
+  (let [gameid (or (:gameid state) "<game-id>")
+        side   (or (some-> (:side state) name str/lower-case) "<side>")]
+    ["⚠️  An ENCOUNTER is live but the wire has not named its ICE (the encounter summary carries no card)."
+     "   Do NOT break, tank, fire-subs or continue on a guess: the ICE at the run position is NOT"
+     "   the one being encountered, and the normal break/tank/fire menu cannot be built here."
+     "   → `board` and `log`. If the log shows the encountered ICE was TRASHED or moved during this"
+     "     encounter, the window is empty and `continue` passes it (both sides must pass)."
+     (str "   → Otherwise `resync " gameid "` ONCE and look again; if it is STILL unnamed,")
+     (str "     `./dev/umpire-ping " side " \"encounter with no ICE on the wire — am I wedged?\"`.")
+     "   (`continue --force` is the manual override. The run automation stops here on purpose, #198.)"]))
 
 (defn at-encounter?
   "True at any ICE encounter — the normal :encounter-ice phase OR a forced one
@@ -2652,10 +2684,20 @@
    so position is not the authority — the rule the card resolvers had to learn
    twice (#100, #152) and the run handlers a third time (#160). The summary is a
    full card-summary (game.core.diffs/encounter-ice-summary), so it carries :cid,
-   :rezzed and :subroutines just like the installed card."
+   :rezzed and :subroutines just like the installed card.
+
+   The positional fallback is for a wire with NO encounter summary at all (an
+   older serialization, a diff not yet landed). When the summary is present but
+   has no :ice — encounter-ice-summary dropped it because get-card could not
+   resolve the card, typically an ICE trashed or moved mid-encounter — the
+   answer is nil: \"an encounter nobody can name\" is a real state
+   (unnameable-encounter?), and the old `or` swapped it for whatever card the
+   SUSPENDED run position pointed at, so every surface named, and offered
+   fire-subs on, a card that was not being encountered (#198)."
   [state]
-  (or (get-in state [:game-state :encounters :ice])
-      (current-run-ice state)))
+  (if (encounter-window? state)
+    (get-in state [:game-state :encounters :ice])
+    (current-run-ice state)))
 
 (defn encounter-ice-active?
   "True when `ice` is one whose subroutines this seat may act on — the client
@@ -2696,11 +2738,19 @@
    observer. Tracked separately; see the follow-up issue linked from #160. The
    Corp's fire latch is partly covered already, because
    runner-signaled-let-fire? independently requires a signal NEWER than this
-   ice's most recent encounter marker in the log."
+   ice's most recent encounter marker in the log.
+
+   nil at an UNNAMEABLE encounter (#198): the position belongs to a different
+   card, and :encounter-count is stack depth, not identity (two consecutive
+   encounters are both 1). Nothing acts at such an encounter — the guard in the
+   handler chain precedes every latch consumer — so no key is needed, and nil
+   cannot collide with a real cid."
   [state]
   (let [ice (encountered-ice state)]
-    (or (:cid ice)
-        (get-in state [:game-state :run :position]))))
+    (cond
+      (:cid ice) (:cid ice)
+      (unnameable-encounter? state) nil
+      :else (get-in state [:game-state :run :position]))))
 
 ;; ============================================================================
 ;; First-Seen Card Display

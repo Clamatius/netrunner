@@ -496,6 +496,7 @@
    held false, as the engine keeps it (set-phase resets it on phase entry)."
   ([subs encounter-passer] (runner-encounter-ctx-state subs encounter-passer 55))
   ([subs encounter-passer cid]
+  (let [whitespace {:cid cid :title "Whitespace" :rezzed true :subroutines subs}]
   {:connected true
    :uid "test-user"
    :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
@@ -503,10 +504,15 @@
    :game-state {:active-player "runner"
                 ;; :encounter-count is always stamped by encounters-summary; a
                 ;; nil :no-action is DROPPED by select-non-nil-keys, so a
-                ;; nobody-has-passed encounter really is just {:encounter-count 1}
-                ;; on the wire (guest panel, 3rd pass — the old fixture wrote
-                ;; {:no-action nil}, which the engine cannot produce).
-                :encounters (cond-> {:encounter-count 1}
+                ;; nobody-has-passed encounter really is just {:encounter-count 1
+                ;; :ice <card>} on the wire (guest panel, 3rd pass — the old
+                ;; fixture wrote {:no-action nil}, which the engine cannot
+                ;; produce). :ice is ALWAYS present for an installed, rezzed
+                ;; card — encounter-ice-summary drops it only when get-card
+                ;; cannot resolve the card. This fixture used to omit it and
+                ;; reached Whitespace through core/encountered-ice's positional
+                ;; fallback, which #198 removed for exactly that payload.
+                :encounters (cond-> {:encounter-count 1 :ice whitespace}
                               encounter-passer (assoc :no-action encounter-passer))
                 :run {:phase "encounter-ice" :position 1
                       :server [:rd] :no-action false}
@@ -514,8 +520,7 @@
                          :prompt-state {:msg "You are encountering Whitespace"
                                         :prompt-type "run"}}
                 :corp {:credit 5
-                       :servers {:rd {:ices [{:cid cid :title "Whitespace" :rezzed true
-                                              :subroutines subs}]}}}}}))
+                       :servers {:rd {:ices [whitespace]}}}}})))
 
 (def ^:private two-unbroken-subs
   [{:label "Make the Runner lose 3 [Credits]" :broken false :fired false}
@@ -1406,6 +1411,19 @@
             :runner {:prompt-state nil}
             :log []}}})
 
+(defn- with-named-encounter
+  "Put `enc` on the ctx's wire as the encounter summary, with :ice = the ICE
+   installed at the run position — what game.core.diffs/encounters-summary
+   emits for an installed, rezzed card. These boards model NAMED encounters;
+   the summary used to be written without :ice and reached the card through
+   core/encountered-ice's positional fallback, which #198 removed for that
+   payload (an unnameable encounter is now a distinct state, not a lookup miss)."
+  [ctx enc]
+  (let [gs (get-in ctx [:state :game-state])
+        server (keyword (name (last (get-in gs [:run :server]))))
+        ice (nth (get-in gs [:corp :servers server :ices]) (dec (get-in gs [:run :position])) nil)]
+    (assoc-in ctx [:state :game-state :encounters] (assoc enc :ice ice))))
+
 (deftest all-subs-resolved-does-not-repass-after-corp-passed
   (testing "handle-corp-all-subs-resolved must not RE-send continue after the Corp already passed (:no-action corp) — the frames-248-252 spam burst of #75"
     (let [sent (atom [])]
@@ -1436,7 +1454,7 @@
                             [{:cid 22 :title "Tithe" :rezzed true
                               :subroutines [{:label "Do 1 net damage" :fired true}
                                             {:label "Gain 1 [Credits]" :fired true}]}])
-                  (assoc-in [:state :game-state :encounters] {:no-action "corp" :encounter-count 1}))
+                  (with-named-encounter {:no-action "corp" :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state live
@@ -1459,7 +1477,7 @@
                               :subroutines [{:label "Do 1 net damage" :fired true}
                                             {:label "Gain 1 [Credits]" :fired true}]}])
                   ;; ack NOT yet in the mirror
-                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+                  (with-named-encounter {:no-action false :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       (corp-handlers/reset-state!)
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
@@ -1475,7 +1493,7 @@
   (testing "the latch is per-run: after reset-state! a fresh encounter passes again"
     (let [sent (atom [])
           ctx (-> (all-subs-resolved-ctx nil)
-                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+                  (with-named-encounter {:no-action false :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state live
@@ -1491,7 +1509,7 @@
   (testing "second guest pass: ws/send-message! returning false (reconnect exhausted) must NOT latch the pass — the engine never saw it, and the Corp still owes it"
     (let [attempts (atom 0)
           ctx (-> (all-subs-resolved-ctx nil)
-                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+                  (with-named-encounter {:no-action false :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       (with-redefs [ws/send-message! (fn [_evt _data] (swap! attempts inc) false)]
         (with-mock-state live
@@ -1505,7 +1523,7 @@
   (testing "second guest pass: the latch only covers the ack window — a stale one (missed run-boundary reset, same ICE at the same position in a later run) must not suppress a fresh owed pass"
     (let [sent (atom [])
           ctx (-> (all-subs-resolved-ctx nil)
-                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+                  (with-named-encounter {:no-action false :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       ;; same [position cid] as the ctx's Palisade, latched long ago
       (reset! corp-handlers/passed-encounter-key
@@ -1524,7 +1542,7 @@
                             [{:cid 22 :title "Tithe" :rezzed true
                               :subroutines [{:label "Do 1 net damage" :fired true}
                                             {:label "Gain 1 [Credits]" :fired true}]}])
-                  (assoc-in [:state :game-state :encounters] {:no-action false :encounter-count 1}))
+                  (with-named-encounter {:no-action false :encounter-count 1}))
           live (mock-client-state :side "corp" :game-state (get-in ctx [:state :game-state]))]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state live
@@ -1539,21 +1557,23 @@
    encounter ([:encounters :no-action] corp), the Runner has not. The log carries
    the engine's fire line so the chain's waiting-after-subs-fired handler can
    name the ICE. The Runner owes the closing continue."
+  (let [tithe {:cid 22 :title "Tithe" :rezzed true
+               :subroutines [{:label "Do 1 net damage" :fired true}
+                             {:label "Gain 1 [Credits]" :fired true}]}]
   {:active-player "runner" :turn 9
    :run {:phase "encounter-ice" :position 1 :server [:hq] :no-action false}
-   :encounters {:no-action "corp" :encounter-count 1}
+   ;; :ice on the wire — see with-named-encounter (#198).
+   :encounters {:no-action "corp" :encounter-count 1 :ice tithe}
    :corp {:click 0
           :prompt-state {:msg "You may use paid abilities" :prompt-type "run" :choices [] :selectable []}
-          :servers {:hq {:ices [{:cid 22 :title "Tithe" :rezzed true
-                                 :subroutines [{:label "Do 1 net damage" :fired true}
-                                               {:label "Gain 1 [Credits]" :fired true}]}]}}}
+          :servers {:hq {:ices [tithe]}}}
    :runner {:click 0
             :prompt-state {:msg "Encounter Tithe" :prompt-type "run" :choices [] :selectable []}}
    :log [{:text "ai-corp rezzes Tithe"}
          {:text "ai-runner indicates to fire all unbroken subroutines on Tithe"}
          {:text "ai-corp resolves 2 unbroken subroutines on Tithe"}
          {:text "ai-corp uses Tithe to do 1 net damage"}
-         {:text "ai-corp uses Tithe to gain 1 [Credits]"}]})
+         {:text "ai-corp uses Tithe to gain 1 [Credits]"}]}))
 
 (deftest continue-run-chain-idles-silently-after-corp-passed-the-encounter
   (testing "#150 through the REAL handler chain: one persistent tick on the stalled board must send nothing, print no 'Corp continuing', and report an opponent wait (the idle status the persistent loop sleeps on)"
@@ -1573,7 +1593,7 @@
   (testing "second guest pass: Runner passed FIRST (log 'has no further action', encounter :no-action runner), Corp fired; the Corp's closing pass is in flight and the mirror is pre-ack. Six chain ticks must send ONE continue — the re-send used to move from the all-subs handler to handle-corp-waiting-after-subs-fired's log branch"
     (let [sent (atom [])
           gs (-> corp-passed-fired-encounter
-                 (assoc :encounters {:no-action "runner" :encounter-count 1})
+                 (update :encounters assoc :no-action "runner")
                  (update :log conj {:text "ai-runner has no further action"}))]
       (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
         (with-mock-state (mock-client-state :side "corp" :game-state gs)
