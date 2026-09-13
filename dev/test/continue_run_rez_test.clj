@@ -1914,13 +1914,16 @@
         (is (re-find #"Brân\".*Brân 1\.0" out) (str "a near miss must name the card to type: " out))
         (is (re-find #"Palisad\"" out) (str "a name matching nothing must be said: " out))))))
 
-(deftest parse-run-flags-without-a-card-db-keeps-the-name-and-says-so
+(deftest parse-run-flags-without-a-card-db-rejects-the-name-and-says-why
+  ;; Panel round 3: keeping an unchecked name re-opened #202's silent no-op. The
+  ;; cards API is served by the game server itself, so no db means no game.
   (with-card-db {}
     (fn []
       (let [out (with-out-str
-                  (is (= #{"Brân"} (:rez (:flags (runs/parse-run-flags ["--rez" "Brân"]))))))]
-        (is (re-find #"(?i)not (be )?checked|unverified" out)
-            (str "an unchecked name must say it was not checked: " out))))))
+                  (is (empty? (:rez (:flags (runs/parse-run-flags ["--rez" "Brân"]))))
+                      "an unchecked name must not enter the set"))]
+        (is (re-find #"(?i)could not be loaded" out)
+            (str "the seat must be told why: " out))))))
 
 (deftest rez-strategy-matches-the-committed-title-ignoring-case-and-diacritics
   (let [sent (atom [])]

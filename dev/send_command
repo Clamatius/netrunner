@@ -508,7 +508,9 @@ ${GREEN}Running:${NC}
 
   ${BLUE}Run Flags:${NC} (usable with run, continue)
     --no-rez         Corp: don't rez any ICE
-    --rez <name>     Corp: auto-rez ICE matching <name>; pause on other unrezzed ICE
+    --rez <name>     Corp: auto-rez the ICE or upgrade titled exactly <name> (case and
+                     accents ignored; a near miss like "Bran" is rejected at once with
+                     the title to type); pause on other unrezzed ICE
                      (repeatable: --rez Diviner --rez Palisade pre-commits both)
     --fire-unbroken  Corp: auto-fire unbroken subroutines once the Runner is
                      done with the encounter (tank signal OR a plain pass)

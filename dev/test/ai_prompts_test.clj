@@ -1050,15 +1050,18 @@
 ;; discard-by-names! refused on every select prompt and errored otherwise: no path
 ;; discarded anything, so the end-of-turn discard it exists for was always refused.
 ;;
-;; The review panel took two rounds to show that LOOSE name resolution (substring,
-;; first-match, copy-by-copy allocation) keeps producing wrong-card discards in new
-;; ways, so the rule here is deliberately small:
+;; Three review rounds shaped the rules, which are deliberately small:
 ;;   - a name is an EXACT title (case- and diacritic-blind), never a substring;
 ;;   - every name is settled against the WHOLE prompt before anything is sent;
 ;;   - copies the wire already marks :selected count toward the request (select
 ;;     toggles, so re-sending one deselects it), and a selected card nobody named
-;;     is a conflict (the engine resolves at :max, so it would be discarded too);
-;;   - anything that does not fit sends nothing.
+;;     — or one this seat cannot see — is a conflict (the engine resolves at :max,
+;;     so it would be discarded too);
+;;   - the wire does not carry :max, so the count comes from "Discard down to N";
+;;     over-asking sends nothing, and a prompt that does not say takes one card;
+;;   - a card is only sent once the previous select has visibly registered: the
+;;     cached :eid lags the engine, and on an unknown eid the engine's select falls
+;;     back to the first pending selection — a later, unrelated prompt.
 ;; ============================================================================
 
 (def ^:private eot-hand
@@ -1066,24 +1069,33 @@
    {:cid "h2" :title "Sure Gamble" :zone ["hand"] :side "Runner" :type "Event"}
    {:cid "h3" :title "Diesel" :zone ["hand"] :side "Runner" :type "Event"}])
 
+(defn- discard-prompt [msg selectable]
+  {:prompt-type "select" :eid "discard-1" :msg msg :selectable selectable})
+
 (def ^:private eot-discard-prompt
-  {:prompt-type "select" :eid "discard-1" :msg "Discard down to 5 cards"
-   :selectable ["h1" "h2" "h3"]})
+  ;; 3 cards down to 1: the engine wants 2.
+  (discard-prompt "Discard down to 1 card" ["h1" "h2" "h3"]))
 
 (defn- run-discard
   "discard-by-names! against a mocked hand + prompt. {:sent [cids] :result r :out s}.
-   `on-send` (optional) runs after each send, e.g. to resolve the prompt."
-  ([side hand prompt names] (run-discard side hand prompt names nil))
-  ([side hand prompt names on-send]
-   (let [sent (atom []) result (atom nil)]
-     (with-mock-state (mock-client-state :side side :hand hand :prompt prompt)
-       (with-redefs [ws/select-card! (fn [card _eid & _]
-                                       (swap! sent conj (:cid card))
-                                       (when on-send (on-send))
-                                       true)
-                     prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-         (let [out (with-out-str (reset! result (prompts/discard-by-names! names)))]
-           {:sent @sent :result @result :out out}))))))
+   The mock sender marks the card :selected in client state, as the engine's diff
+   would, unless :register? false. :on-send runs after each send; :state-fn edits
+   the mocked client state before the call."
+  [side hand prompt names & {:keys [on-send register? state-fn] :or {register? true state-fn identity}}]
+  (let [sent (atom []) result (atom nil)
+        side-kw (keyword side)]
+    (with-mock-state (state-fn (mock-client-state :side side :hand hand :prompt prompt))
+      (with-redefs [ws/select-card! (fn [card _eid & _]
+                                      (swap! sent conj (:cid card))
+                                      (when register?
+                                        (swap! state/client-state update-in [:game-state side-kw :hand]
+                                               (fn [h] (mapv #(if (= (:cid %) (:cid card)) (assoc % :selected true) %) h))))
+                                      (when on-send (on-send))
+                                      true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    prompts/select-register-timeout-ms 50]
+        (let [out (with-out-str (reset! result (prompts/discard-by-names! names)))]
+          {:sent @sent :result @result :out out})))))
 
 (deftest discard-by-names-resolves-the-open-discard-prompt
   (let [{:keys [sent result out]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Diesel"])]
@@ -1102,7 +1114,7 @@
    {:cid "c2" :title "Hive" :zone ["hand"] :side "Corp" :type "ICE"}])
 
 (def ^:private corp-discard-prompt
-  {:prompt-type "select" :eid "discard-c" :msg "Discard down to 5 cards" :selectable ["c1" "c2"]})
+  (discard-prompt "Discard down to 0 cards" ["c1" "c2"]))
 
 (deftest discard-by-names-is-exact-title-never-substring
   (is (= ["c2"] (:sent (run-discard "corp" corp-hand corp-discard-prompt ["Hive"])))
@@ -1139,11 +1151,57 @@
     (is (str/includes? out "Dizel") out)
     (is (str/includes? out "Diesel") (str "should list what can be discarded: " out))))
 
-(deftest discard-by-names-stops-if-the-prompt-resolves-mid-send
+(deftest discard-by-names-asking-for-more-than-the-prompt-wants-sends-nothing
+  ;; Panel round 3: 3 cards down to 2 wants ONE. The second select would land after
+  ;; the prompt resolved — on whatever select prompt comes next.
+  (let [{:keys [sent result out]} (run-discard "runner" eot-hand
+                                               (discard-prompt "Discard down to 2 cards" ["h1" "h2" "h3"])
+                                               ["Sure Gamble" "Diesel"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "over-asking must send nothing, sent: " sent))
+    (is (re-find #"\b1\b" out) (str "should say how many the prompt wants: " out))))
+
+(deftest discard-by-names-over-ask-counts-an-already-selected-card
+  (let [hand (assoc-in eot-hand [0 :selected] true)
+        {:keys [sent result]} (run-discard "runner" hand
+                                           (discard-prompt "Discard down to 2 cards" ["h1" "h2" "h3"])
+                                           ["Sure Gamble" "Diesel"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "h1 is already selected, so Diesel would be one too many, sent: " sent))))
+
+(deftest discard-by-names-on-a-prompt-that-does-not-say-how-many-takes-one-card
+  (let [prompt (discard-prompt "Choose a card to discard" ["h1" "h2" "h3"])
+        two (run-discard "runner" eot-hand prompt ["Sure Gamble" "Diesel"])
+        one (run-discard "runner" eot-hand prompt ["Diesel"])]
+    (is (= :error (:status (:result two))))
+    (is (empty? (:sent two)) (str "no count on the wire: more than one card is a guess, sent: " (:sent two)))
+    (is (re-find #"(?i)one" (:out two)) (:out two))
+    (is (= ["h3"] (:sent one)))))
+
+(deftest discard-by-names-waits-for-each-select-to-register-before-the-next
+  ;; Panel round 3: the cached :eid lags the engine. A send is only followed by the
+  ;; next once client state shows the previous card :selected.
+  (let [{:keys [sent result out]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Diesel"]
+                                               :register? false)]
+    (is (= ["h1"] sent) (str "the second card must wait for the first to register, sent: " sent))
+    (is (not= :success (:status result)) (str "got: " result))
+    (is (re-find #"(?i)not confirmed" out) out)))
+
+(deftest discard-by-names-stops-if-the-prompt-moves-mid-send
   (let [{:keys [sent]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Diesel"]
-                                    #(swap! state/client-state assoc-in
-                                            [:game-state :runner :prompt-state :eid] "a-later-prompt"))]
+                                    :register? false
+                                    :on-send #(swap! state/client-state assoc-in
+                                                     [:game-state :runner :prompt-state :eid] "a-later-prompt"))]
     (is (= ["h1"] sent) (str "nothing may be sent into a prompt that is no longer the discard: " sent))))
+
+(deftest discard-by-names-refuses-when-a-card-this-seat-cannot-see-is-selected
+  (let [{:keys [sent result]} (run-discard "corp" corp-hand
+                                           (discard-prompt "Discard down to 0 cards" ["c1" "c2" "r1"])
+                                           ["Hive"]
+                                           :state-fn #(assoc-in % [:game-state :runner :hand]
+                                                                [{:cid "r1" :zone ["hand"] :side "Runner" :selected true}]))]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "an unseen selected card fails closed, sent: " sent))))
 
 (deftest discard-by-names-does-not-answer-a-prompt-targeting-installed-cards
   (let [installed [{:cid "i1" :title "Sure Gamble" :zone ["rig" "resource"] :side "Runner" :type "Resource"}]
@@ -1159,15 +1217,12 @@
 
 (deftest discard-by-names-refuses-an-in-hand-prompt-that-is-not-a-discard
   (let [{:keys [sent result out]} (run-discard "runner" eot-hand
-                                               {:prompt-type "select" :eid "inst-1"
-                                                :msg "Choose a resource to install" :selectable ["h3"]}
+                                               (discard-prompt "Choose a resource to install" ["h3"])
                                                ["Diesel"])]
     (is (= :error (:status result)))
     (is (empty? sent) (str "Career Fair's install prompt is not a discard, sent: " sent))
     (is (str/includes? out "not a discard") out)))
 
 (deftest discard-by-names-on-an-all-hidden-selectable-list-does-not-claim-no-prompt
-  (let [{:keys [out]} (run-discard "runner" [] {:prompt-type "select" :eid "d-3"
-                                                :msg "Discard down to 5 cards" :selectable ["ghost"]}
-                                   ["Diesel"])]
+  (let [{:keys [out]} (run-discard "runner" [] (discard-prompt "Discard down to 5 cards" ["ghost"]) ["Diesel"])]
     (is (not (str/includes? out "No discard prompt open")) out)))

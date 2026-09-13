@@ -207,14 +207,14 @@
                   ;; Checked against the card db, not the board, so a card installed
                   ;; later can still be committed to.
                   verdict (core/rez-name-verdict ice-name)
-                  kept (case (:verdict verdict)
-                         :exact (:title verdict)
-                         :unverified ice-name
-                         nil)]
+                  ;; Fail closed (panel round 3): keeping an unchecked name re-opened
+                  ;; the silent no-op this exists to stop. The cards API is served by
+                  ;; the game server itself, so a db that will not load means no game.
+                  kept (when (= :exact (:verdict verdict)) (:title verdict))]
               (case (:verdict verdict)
                 :exact nil
                 :unverified
-                (println (format "⚠️  --rez \"%s\": the card database is unavailable, so the name could not be checked. It will match only a card titled exactly that."
+                (println (format "⚠️  --rez \"%s\": the card database could not be loaded, so the name cannot be checked — ignored. Is the game server up? Re-run once it is."
                                  ice-name))
                 :near-miss
                 (println (format "⚠️  --rez \"%s\" is not a card title — ignored. Did you mean: %s ? Re-run with the full title."
