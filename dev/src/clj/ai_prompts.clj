@@ -495,19 +495,22 @@
    used to pick the first copy twice: selected, then deselected (#203).
    Returns the resolved card map or nil."
   [card-name selectable taken]
-  (let [name-lower (clojure.string/lower-case (str card-name))]
-    (first
-     (keep (fn [cid-or-card]
-             (let [card (if (string? cid-or-card)
-                          (core/find-card-by-cid cid-or-card)
-                          cid-or-card)]
-               (when (and card
-                          (not (contains? taken (:cid card)))
-                          (clojure.string/includes?
-                           (clojure.string/lower-case (str (:title card)))
-                           name-lower))
-                 card)))
-           selectable))))
+  (let [name-lower (clojure.string/lower-case (str card-name))
+        name-folded (core/fold-card-name card-name)
+        candidates (keep (fn [cid-or-card]
+                           (let [card (if (string? cid-or-card)
+                                        (core/find-card-by-cid cid-or-card)
+                                        cid-or-card)]
+                             (when (and card (not (contains? taken (:cid card))))
+                               card)))
+                         selectable)]
+    ;; An exact title outranks a substring: "Hive" is inside "Archived Memories",
+    ;; and first-substring-wins discarded the wrong card with a ✅ (#203 panel).
+    (or (first (filter #(= name-folded (core/fold-card-name (:title %))) candidates))
+        (first (filter #(clojure.string/includes?
+                         (clojure.string/lower-case (str (:title %)))
+                         name-lower)
+                       candidates)))))
 
 (defn multi-choose!
   "Select multiple cards from a select prompt (e.g., discard to hand size).
@@ -814,10 +817,26 @@
         prompt (get-in (state/get-game-state) [side :prompt-state])
         {:keys [pickable]} (core/resolve-selectable (:selectable prompt))
         in-hand? (fn [{:keys [card]}]
-                   (= "hand" (some-> card :zone first name)))]
+                   (= "hand" (some-> card :zone first name)))
+        ;; ~115 engine prompts choose {:card in-hand?} and most are not discards
+        ;; (install-from-hand, reveal). The EOT prompt reads "Discard down to N
+        ;; cards" (turns.clj), so the message is what makes it a discard (#203 panel).
+        discard-msg? (re-find #"(?i)discard" (str (:msg prompt)))]
     (cond
-      (and (seq pickable) (every? in-hand? pickable))
+      (and (seq pickable) (every? in-hand? pickable) discard-msg?)
       (apply multi-choose! names-vec)
+
+      (and (seq pickable) (every? in-hand? pickable))
+      (do
+        (println (format "❌ The open prompt (\"%s\") picks cards from your hand, but it is not a discard." (:msg prompt)))
+        (println "   Run `prompt` to see it, then answer with choose-card <index> / multi-choose.")
+        (core/with-cursor {:status :error :reason "Open prompt is not a discard"}))
+
+      (and (seq (:selectable prompt)) (empty? pickable))
+      (do
+        (println "❌ A prompt is open, but none of its selectable cards are visible from this seat.")
+        (println "   Run `prompt` to inspect it.")
+        (core/with-cursor {:status :error :reason "No selectable card visible from this seat"}))
 
       (seq pickable)
       (do

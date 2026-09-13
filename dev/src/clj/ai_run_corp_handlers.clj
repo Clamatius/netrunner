@@ -129,7 +129,9 @@
   (let [servers (vals (get-in state [:game-state :corp :servers]))
         titles (distinct (keep :title (concat (mapcat :ices servers)
                                               (mapcat :content servers))))]
-    (doseq [listed (sort rez-names)]
+    ;; No board, no verdict: "matches nothing" would be a claim about a set we
+    ;; could not see (#202 panel).
+    (doseq [listed (when (seq titles) (sort rez-names))]
       (let [hits (filter #(core/rez-name-matches? listed %) titles)]
         (cond
           (some #{listed} hits) nil

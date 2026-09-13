@@ -631,7 +631,7 @@
     {:title title :index (Integer/parseInt idx) :explicit-index? true}
     {:title card-name :index 0 :explicit-index? false}))
 
-(defn- fold-card-name
+(defn fold-card-name
   "Case-, diacritic- and edge-whitespace-blind form of a card name."
   [s]
   (-> (java.text.Normalizer/normalize (str s) java.text.Normalizer$Form/NFD)
@@ -654,7 +654,19 @@
         t (fold-card-name title)]
     (boolean (and (seq l)
                   (or (= l t)
-                      (str/starts-with? t (str l " ")))))))
+                      (and (str/starts-with? t (str l " "))
+                           ;; A name that IS a card ("Fairchild") names that card
+                           ;; only; the leading-words rule would otherwise also rez
+                           ;; "Fairchild 1.0", silently (#202 panel).
+                           (not (some #(= l (fold-card-name %)) (keys @all-cards)))))))))
+
+(defn card-db-names-card?
+  "Does `listed` name any card in the card db under rez-name-matches?? The parse-
+   time check for `--rez` (#202: a name that is no card is rejected, not echoed as
+   strategy). An unloaded db gives no verdict, so it answers true."
+  [listed]
+  (or (empty? @all-cards)
+      (boolean (some #(rez-name-matches? listed %) (keys @all-cards)))))
 
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection

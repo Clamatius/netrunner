@@ -1920,3 +1920,36 @@
         (str "a name matching nothing must be called out, got: " out))
     (is (not (re-find #"\"Palisade\"" out)) (str "an exact name needs no comment: " out))
     (is (not (re-find #"\"Manegarm Skunkworks\"" out)) (str "an exact upgrade name needs no comment: " out))))
+
+;; #202, panel round 1 (all MINOR/alternative findings, confirmed against the card db):
+;; a name that IS a card title names only that card ("Fairchild" vs "Fairchild 1.0");
+;; a name that is no card at all is rejected when parsed, as the issue asked; and the
+;; entry report makes no claim when there is no board to check against.
+
+(defn- with-card-db [db f]
+  (let [saved @jinteki.cards/all-cards]
+    (try (reset! jinteki.cards/all-cards db) (f)
+         (finally (reset! jinteki.cards/all-cards saved)))))
+
+(deftest rez-name-that-is-itself-a-card-title-matches-only-that-card
+  (with-card-db {"Fairchild" {:title "Fairchild"} "Fairchild 1.0" {:title "Fairchild 1.0"}
+                 "Brân 1.0" {:title "Brân 1.0"}}
+    #(do
+       (is (not (core/rez-name-matches? "Fairchild" "Fairchild 1.0"))
+           "Fairchild is a real card; --rez \"Fairchild\" must not also rez Fairchild 1.0")
+       (is (core/rez-name-matches? "Fairchild" "Fairchild"))
+       (is (core/rez-name-matches? "Brân" "Brân 1.0")
+           "no card is called Brân, so it still names Brân 1.0"))))
+
+(deftest parse-run-flags-rejects-a-rez-name-that-is-no-card
+  (with-card-db {"Palisade" {:title "Palisade"} "Brân 1.0" {:title "Brân 1.0"}}
+    #(let [out (with-out-str
+                 (let [{:keys [flags]} (runs/parse-run-flags
+                                        ["--rez" "Palisad" "--rez" "Brân" "--rez" "Palisade"])]
+                   (is (= #{"Brân" "Palisade"} (:rez flags))
+                       (str "a typo must not enter the set, got: " (:rez flags)))))]
+       (is (re-find #"Palisad\"" out) (str "the rejected name must be said, got: " out)))))
+
+(deftest rez-list-report-stays-silent-without-a-board
+  (is (= "" (with-out-str (corp-handlers/report-rez-list! #{"Brân 1.0"} {:game-state nil})))
+      "no board is not evidence that a name matches nothing"))

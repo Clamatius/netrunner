@@ -1096,3 +1096,38 @@
                       (is (= :error (:status (prompts/discard-by-names! ["Sure Gamble"])))))]
             (is (empty? @sent) (str "must not select a non-hand card, sent: " @sent))
             (is (str/includes? out "NOT in your hand") out)))))))
+
+;; #203, panel round 1: exact title before substring ("Hive" is inside "Archived
+;; Memories"); an in-hand prompt that is not a discard (install, reveal) is not
+;; answered by `discard`; an all-hidden selectable list is not "no prompt".
+
+(deftest discard-by-name-prefers-the-exact-title-over-a-substring
+  (let [sent (atom [])
+        hand [{:cid "c1" :title "Archived Memories" :zone ["hand"] :side "Corp" :type "Operation"}
+              {:cid "c2" :title "Hive" :zone ["hand"] :side "Corp" :type "ICE"}]]
+    (with-mock-state (mock-client-state :side "corp" :hand hand
+                                        :prompt {:prompt-type "select" :eid "d-2"
+                                                 :msg "Discard down to 5 cards" :selectable ["c1" "c2"]})
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (with-out-str (prompts/discard-by-names! ["Hive"]))
+        (is (= ["c2"] @sent) (str "\"Hive\" is Hive, not Archived Memories; sent: " @sent))))))
+
+(deftest discard-by-names-refuses-an-in-hand-prompt-that-is-not-a-discard
+  (let [sent (atom [])]
+    (with-mock-state (mock-client-state :side "runner" :hand eot-hand
+                                        :prompt {:prompt-type "select" :eid "inst-1"
+                                                 :msg "Choose a card to install" :selectable ["h3"]})
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (let [out (with-out-str
+                    (is (= :error (:status (prompts/discard-by-names! ["Diesel"])))))]
+          (is (empty? @sent) (str "an install prompt must not be answered by discard, sent: " @sent))
+          (is (str/includes? out "not a discard") out))))))
+
+(deftest discard-by-names-on-an-all-hidden-selectable-list-does-not-claim-no-prompt
+  (with-mock-state (mock-client-state :side "runner" :hand []
+                                      :prompt {:prompt-type "select" :eid "d-3"
+                                               :msg "Discard down to 5 cards" :selectable ["ghost"]})
+    (let [out (with-out-str (prompts/discard-by-names! ["Diesel"]))]
+      (is (not (str/includes? out "No discard prompt open")) out))))

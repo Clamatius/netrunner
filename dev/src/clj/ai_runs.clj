@@ -199,10 +199,20 @@
               (println "⚠️  --rez requires ICE name argument")
               (recur rest-args server flags))
             (let [ice-name (first rest-args)
-                  current-rez-set (get flags :rez #{})]
+                  current-rez-set (get flags :rez #{})
+                  ;; #202: a name that is no card at all is rejected HERE, as the
+                  ;; issue asked — accepted, it was echoed as strategy and never fired.
+                  ;; Checked against the card db, not the board, so a card installed
+                  ;; later can still be committed to.
+                  card? (core/card-db-names-card? ice-name)]
+              (when-not card?
+                (println (format "⚠️  --rez \"%s\" is not the name of any card — ignored. Use the title as printed (e.g. \"Brân 1.0\")."
+                                 ice-name)))
               (recur (rest rest-args)
                      server
-                     (assoc flags :rez (conj current-rez-set ice-name)))))
+                     (if card?
+                       (assoc flags :rez (conj current-rez-set ice-name))
+                       flags))))
 
           ;; --tactics <edn-string> (takes EDN map argument)
           (= arg "--tactics")
