@@ -3755,3 +3755,22 @@
         (let [s (format-card-for-hand {:cid 2 :title "Nonesuch" :type "Program" :cost 0})]
           (is (not (re-find #"\d+MU" s)) (str "no data, no number — got: " s))))
       (finally (reset! jinteki.cards/all-cards saved)))))
+
+(deftest first-hand-listing-in-a-fresh-process-already-has-the-mu
+  ;; #201, panel round 1b: the card db loads lazily, and show-hand used to format a
+  ;; card BEFORE the first-sight hook loaded it, so a fresh client's first listing
+  ;; had no MU at all. Load first, then render.
+  (let [saved @jinteki.cards/all-cards]
+    (try
+      (reset! jinteki.cards/all-cards {})
+      (with-redefs [core/load-cards-from-api!
+                    (fn [] (when (empty? @jinteki.cards/all-cards)
+                             (reset! jinteki.cards/all-cards
+                                     {"Mayfly" {:title "Mayfly" :type "Program" :cost 1
+                                                :strength 1 :memoryunits 2 :text ""}})))]
+        (with-mock-state (mock-client-state :side "runner"
+                                            :hand [{:cid 1 :title "Mayfly" :type "Program"
+                                                    :cost 1 :strength 1 :zone ["hand"]}])
+          (let [out (with-out-str (display/show-hand))]
+            (is (str/includes? out "2MU") (str "the first listing must carry the MU, got: " out)))))
+      (finally (reset! jinteki.cards/all-cards saved)))))

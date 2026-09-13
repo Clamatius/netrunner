@@ -506,11 +506,15 @@
                          selectable)]
     ;; An exact title outranks a substring: "Hive" is inside "Archived Memories",
     ;; and first-substring-wins discarded the wrong card with a ✅ (#203 panel).
+    ;; A substring is only a name when it fits ONE distinct title; "prey" in a
+    ;; hand of Lamprey and Spyglass Prey is a question, not an answer.
     (or (first (filter #(= name-folded (core/fold-card-name (:title %))) candidates))
-        (first (filter #(clojure.string/includes?
-                         (clojure.string/lower-case (str (:title %)))
-                         name-lower)
-                       candidates)))))
+        (let [loose (filter #(clojure.string/includes?
+                              (clojure.string/lower-case (str (:title %)))
+                              name-lower)
+                            candidates)]
+          (when (= 1 (count (distinct (map :title loose))))
+            (first loose))))))
 
 (defn multi-choose!
   "Select multiple cards from a select prompt (e.g., discard to hand size).
@@ -590,16 +594,32 @@
              []
              card-refs)]
 
-        (if (empty? cards-to-select)
+        (cond
+          (empty? cards-to-select)
           (do
             (println "❌ No valid cards found to select")
             (core/with-cursor {:status :error :reason "No valid cards found"}))
+
+          ;; All or nothing. A partial send left the found cards TOGGLED, and the
+          ;; corrected retry toggled them back off (#203 panel).
+          (< (count cards-to-select) (count card-refs))
+          (do
+            (println (format "❌ Only %d of %d card(s) found — nothing selected. Fix the reference(s) above and re-run the whole command."
+                             (count cards-to-select) (count card-refs)))
+            (core/with-cursor {:status :error :reason "Not every card reference resolved"}))
+
+          :else
           (let [select? (state/select-prompt-type? (:prompt-type prompt))]
             (println (format "📇 Selecting %d card(s)..." (count cards-to-select)))
             (doseq [{:keys [card ref]} cards-to-select]
-              (println (format "   → %s" (:title card)))
-              (ws/select-card! card eid)
-              (Thread/sleep core/short-delay))
+              ;; The engine's select toggles: re-sending a card the wire already
+              ;; marks :selected would DESELECT it (#203 panel).
+              (if (:selected card)
+                (println (format "   → %s (already selected)" (:title card)))
+                (do
+                  (println (format "   → %s" (:title card)))
+                  (ws/select-card! card eid)
+                  (Thread/sleep core/short-delay))))
             ;; Don't claim completion before the prompt confirms it. Only report
             ;; success once the prompt actually moves/resolves. If it stays put the
             ;; selection did NOT resolve — saying "Selection complete" there is the

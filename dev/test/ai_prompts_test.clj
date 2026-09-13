@@ -1131,3 +1131,39 @@
                                                :msg "Discard down to 5 cards" :selectable ["ghost"]})
     (let [out (with-out-str (prompts/discard-by-names! ["Diesel"]))]
       (is (not (str/includes? out "No discard prompt open")) out))))
+
+;; #203, panel round 1b (second seat): a miss sends NOTHING (a partial send left a
+;; card toggled that the corrected retry toggled back off); a card the wire already
+;; marks :selected is satisfied, not re-toggled; a substring fitting two different
+;; titles is a miss, not a guess.
+
+(deftest multi-choose-with-a-missing-name-sends-nothing
+  (let [sent (atom [])]
+    (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (with-out-str
+          (is (= :error (:status (prompts/multi-choose! "Sure Gamble" "Dizel")))))
+        (is (empty? @sent) (str "a miss must not send the other picks, sent: " @sent))))))
+
+(deftest multi-choose-does-not-re-toggle-an-already-selected-card
+  (let [sent (atom [])
+        hand (assoc-in eot-hand [0 :selected] true)]
+    (with-mock-state (mock-client-state :side "runner" :hand hand :prompt eot-discard-prompt)
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (with-out-str (prompts/discard-by-names! ["Sure Gamble" "Diesel"]))
+        (is (= ["h3"] @sent)
+            (str "h1 is already selected; toggling it again would deselect it, sent: " @sent))))))
+
+(deftest multi-choose-substring-fitting-two-titles-is-a-miss
+  (let [sent (atom [])
+        hand [{:cid "p1" :title "Lamprey" :zone ["hand"] :side "Runner" :type "Program"}
+              {:cid "p2" :title "Spyglass Prey" :zone ["hand"] :side "Runner" :type "Program"}]]
+    (with-mock-state (mock-client-state :side "runner" :hand hand
+                                        :prompt {:prompt-type "select" :eid "d-4"
+                                                 :msg "Discard down to 5 cards" :selectable ["p1" "p2"]})
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (with-out-str (prompts/multi-choose! "prey"))
+        (is (empty? @sent) (str "\"prey\" fits two different cards; must not guess, sent: " @sent))))))

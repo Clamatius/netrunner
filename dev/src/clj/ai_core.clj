@@ -639,6 +639,20 @@
       str/lower-case
       str/trim))
 
+(def ^:private folded-db-titles-cache (atom [nil #{}]))
+
+(defn- folded-db-titles
+  "The card db's titles, folded. Cached per db value: the rez handlers ask on every
+   monitor pass, and thousands of NFD normalisations per pass is not a lookup."
+  []
+  (let [db @all-cards
+        [seen folded] @folded-db-titles-cache]
+    (if (identical? seen db)
+      folded
+      (let [folded (into #{} (map fold-card-name) (keys db))]
+        (reset! folded-db-titles-cache [db folded])
+        folded))))
+
 (defn rez-name-matches?
   "Does a seat-typed `--rez` name denote this installed card's title?
 
@@ -658,15 +672,34 @@
                            ;; A name that IS a card ("Fairchild") names that card
                            ;; only; the leading-words rule would otherwise also rez
                            ;; "Fairchild 1.0", silently (#202 panel).
-                           (not (some #(= l (fold-card-name %)) (keys @all-cards)))))))))
+                           (not (contains? (folded-db-titles) l))))))))
 
 (defn card-db-names-card?
   "Does `listed` name any card in the card db under rez-name-matches?? The parse-
    time check for `--rez` (#202: a name that is no card is rejected, not echoed as
    strategy). An unloaded db gives no verdict, so it answers true."
   [listed]
-  (or (empty? @all-cards)
-      (boolean (some #(rez-name-matches? listed %) (keys @all-cards)))))
+  (let [folded (folded-db-titles)
+        l (fold-card-name listed)]
+    (or (empty? folded)
+        (boolean (and (seq l)
+                      (or (contains? folded l)
+                          (some #(str/starts-with? % (str l " ")) folded)))))))
+
+(defn rez-names-title?
+  "Does a --rez set name this installed title? A name equal to it (folded) does. A
+   LOOSE fit counts only when that name fits exactly ONE distinct installed title:
+   with Brân 1.0 and Brân 2.0 both installed, \"Brân\" names neither, rather than
+   rezzing whichever the Runner happens to approach (#202 panel)."
+  [rez-names title installed-titles]
+  (let [t (fold-card-name title)
+        titles (distinct installed-titles)]
+    (boolean
+     (some (fn [listed]
+             (or (= t (fold-card-name listed))
+                 (and (rez-name-matches? listed title)
+                      (= 1 (count (filter #(rez-name-matches? listed %) titles))))))
+           rez-names))))
 
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection

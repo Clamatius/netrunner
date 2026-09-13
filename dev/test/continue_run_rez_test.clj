@@ -1953,3 +1953,34 @@
 (deftest rez-list-report-stays-silent-without-a-board
   (is (= "" (with-out-str (corp-handlers/report-rez-list! #{"Brân 1.0"} {:game-state nil})))
       "no board is not evidence that a name matches nothing"))
+
+;; #202, panel round 1b (second seat): a loose name that fits TWO installed titles
+;; names neither (no auto-rez on a guess); and the entry report calls out a name
+;; whose only matches are cards --rez cannot rez during a run (assets, rezzed ICE).
+
+(deftest rez-strategy-does-not-guess-between-two-titles-a-loose-name-fits
+  (let [sent (atom [])
+        ctx (-> (rez-strategy-ctx-ice {:rez #{"Brân"}} "Brân 1.0")
+                (assoc-in [:state :game-state :corp :servers :remote1 :ices]
+                          [{:cid 78 :title "Brân 2.0" :cost 2 :rezzed false}]))]
+    (with-card-db {}
+      #(with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+         (with-out-str
+           (let [r (corp-handlers/handle-corp-rez-strategy ctx)]
+             (is (= :decision-required (:status r))
+                 (str "\"Brân\" fits Brân 1.0 and Brân 2.0; must pause, not rez either, got: " r))))
+         (is (not-any? (fn [m] (= "rez" (:command m))) @sent))))))
+
+(deftest rez-list-report-names-what-rez-cannot-act-on
+  (let [state {:game-state
+               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :type "ICE" :rezzed false}
+                                             {:cid 4 :title "Brân 2.0" :type "ICE" :rezzed false}
+                                             {:cid 2 :title "Palisade" :type "ICE" :rezzed true}]}
+                                 :remote1 {:content [{:cid 3 :title "PAD Campaign"
+                                                      :type "Asset" :rezzed false}]}}}}}
+        out (with-card-db {}
+              #(with-out-str
+                 (corp-handlers/report-rez-list! #{"PAD Campaign" "Palisade" "Brân"} state)))]
+    (is (re-find #"PAD Campaign\".*(?i)asset" out) (str "an asset is not rezzed by --rez: " out))
+    (is (re-find #"Palisade\".*(?i)already rezzed" out) (str "a rezzed ICE needs no --rez: " out))
+    (is (re-find #"Brân\".*(?i)ambiguous" out) (str "two fits must be called ambiguous: " out))))

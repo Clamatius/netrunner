@@ -1653,6 +1653,11 @@
       (no-side-here! state "the hand")
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
+          ;; The card db loads lazily (first-sight hook, AFTER a card is formatted),
+          ;; and a program's MU comes only from the db (#201). Load it before the
+          ;; first program is rendered, or a fresh client's first listing has no MU.
+          (when (some #(= "Program" (:type %)) hand)
+            (core/load-cards-from-api!))
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
           (doseq [[idx card] (map-indexed vector hand)]
             (let [card-name (core/format-card-name-with-index card hand)
