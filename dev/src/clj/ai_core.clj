@@ -194,11 +194,22 @@
 ;; Card Database Management
 ;; ============================================================================
 
+(defonce ^:private cards-load-failed-at (atom nil))
+
+(def cards-load-retry-ms
+  "After a failed card-db load, how long every caller skips re-attempting it. Without
+   this, each `--rez` name in one command re-tried the HTTP load (5s connect / 10s read
+   each): a heuristic-Corp tick with three ICE could block ~45s (#202 panel)."
+  5000)
+
 (defn load-cards-from-api!
   "Fetch card database from server API and populate all-cards atom
-   Only fetches once - subsequent calls are no-ops if cards already loaded"
+   Only fetches once - subsequent calls are no-ops if cards already loaded.
+   A failed load is not re-attempted for cards-load-retry-ms."
   []
-  (when (empty? @all-cards)
+  (when (and (empty? @all-cards)
+             (not (when-let [t @cards-load-failed-at]
+                    (< (- (System/currentTimeMillis) t) cards-load-retry-ms))))
     (try
       (let [response (http/get "http://localhost:1042/data/cards"
                               {:as :json
@@ -206,8 +217,10 @@
                                :connection-timeout 5000})
             cards (:body response)
             cards-map (into {} (map (juxt :title identity)) cards)]
-        (reset! all-cards cards-map))
+        (reset! all-cards cards-map)
+        (reset! cards-load-failed-at nil))
       (catch Exception e
+        (reset! cards-load-failed-at (System/currentTimeMillis))
         (println "❌ Failed to load cards from API:" (.getMessage e))
         (println "   Make sure the game server is running on localhost:1042")))))
 

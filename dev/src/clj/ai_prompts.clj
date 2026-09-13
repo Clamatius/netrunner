@@ -797,10 +797,16 @@
   "How many cards a discard prompt wants in total, from its message, or nil when it
    does not say. The wire does not carry the engine's :max (diffs.clj prompt-keys);
    the end-of-turn prompt reads \"Discard down to N card(s)\" (turns.clj), so the
-   count is hand size minus N."
+   count is hand size minus N, clamped as the engine clamps. \"Choose N cards to
+   discard\" (Harvester, SYN Attack) says N outright."
   [prompt hand-count]
-  (when-let [[_ n] (re-find #"(?i)discard down to (\d+)" (str (:msg prompt)))]
-    (max 0 (- hand-count (Long/parseLong n)))))
+  (let [msg (str (:msg prompt))]
+    (if-let [[_ n] (re-find #"(?i)discard down to (-?\d+)" msg)]
+      ;; Mirror turns.clj exactly: :max (- cur-hand-size (max hand-size 0)). A
+      ;; negative hand size means the whole hand, not hand + |N| (#203 panel).
+      (max 0 (- hand-count (max 0 (Long/parseLong n))))
+      (when-let [[_ n] (re-find #"(?i)choose (\d+) cards? to discard" msg)]
+        (Long/parseLong n)))))
 
 (defn- plan-discard
   "Settle EVERY named card against the whole prompt before anything is sent (#203).
@@ -871,10 +877,12 @@
                     " — toggle the extra off with choose-card. Nothing discarded.")]}
 
       (and required (> (+ selected-total (count to-send)) required))
-      {:error [(format "❌ This prompt wants %d card(s)%s; you named %d — nothing discarded."
-                       required
-                       (if (pos? selected-total) (format " (%d already selected)" selected-total) "")
-                       (count names))]}
+      {:error [(if (zero? required)
+                 "❌ By your cached hand this prompt wants no more cards, so the cache is stale — nothing discarded. Run `status` to resync, then retry."
+                 (format "❌ This prompt wants %d card(s)%s; you named %d — nothing discarded."
+                         required
+                         (if (pos? selected-total) (format " (%d already selected)" selected-total) "")
+                         (count names)))]}
 
       (and (nil? required) (> (count to-send) 1))
       {:error ["❌ This prompt does not say how many cards it wants, so `discard` takes one card at a time here — name one card and re-run. Nothing discarded."]}
@@ -926,7 +934,7 @@
         (cond
           (= :timeout stop)
           (do
-            (println (format "⚠️  Selected %d of %d card(s), then stopped: that select was not confirmed within %dms, and another select could land on a different prompt."
+            (println (format "⚠️  Selected %d of %d card(s), then stopped: that select was not confirmed within %dms (it may already have resolved the prompt), and another select could land on a different prompt."
                              sent (count to-send) select-register-timeout-ms))
             (println "   Run `prompt` to see what is selected, then name the rest.")
             (core/with-cursor {:status :error

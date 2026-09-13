@@ -1963,3 +1963,25 @@
 (deftest rez-list-report-stays-silent-without-a-board
   (is (= "" (with-out-str (corp-handlers/report-rez-list! #{"Brân 1.0"} {:game-state nil})))
       "no board is not evidence that a name matches nothing"))
+
+;; Panel round 4: with no card db, parse retried the HTTP load once per --rez name
+;; (5s connect / 10s read each). The heuristic Corp passes one --rez per ICE, so a
+;; single tick could block ~45s. One failed load now covers the whole command.
+(deftest parse-run-flags-without-a-card-db-tries-the-load-once
+  (let [calls (atom 0)
+        saved @jinteki.cards/all-cards
+        reset-backoff! #(when-let [v (resolve 'ai-core/cards-load-failed-at)] (reset! @v nil))]
+    (try
+      (reset! jinteki.cards/all-cards {})
+      (reset-backoff!)
+      (with-redefs [clj-http.client/get (fn [& _]
+                                          (swap! calls inc)
+                                          (throw (java.net.ConnectException. "Connection refused")))]
+        (let [out (with-out-str
+                    (runs/parse-run-flags ["--rez" "Palisade" "--rez" "Brân 1.0" "--rez" "Tithe"]))]
+          (is (= 1 @calls) (str "one failed load is enough for one command, got " @calls))
+          (doseq [n ["Palisade" "Brân 1.0" "Tithe"]]
+            (is (clojure.string/includes? out (str "\"" n "\"")) (str "each rejected name is still said: " out)))))
+      (finally
+        (reset! jinteki.cards/all-cards saved)
+        (reset-backoff!)))))

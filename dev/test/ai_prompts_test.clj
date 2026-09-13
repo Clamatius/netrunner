@@ -1226,3 +1226,28 @@
 (deftest discard-by-names-on-an-all-hidden-selectable-list-does-not-claim-no-prompt
   (let [{:keys [out]} (run-discard "runner" [] (discard-prompt "Discard down to 5 cards" ["ghost"]) ["Diesel"])]
     (is (not (str/includes? out "No discard prompt open")) out)))
+
+;; Panel round 4: the count also comes from "Choose N cards to discard" (Harvester,
+;; SYN Attack); a negative hand size mirrors the engine's clamp (turns.clj :max is
+;; (- cur-hand-size (max hand-size 0))); and a cached hand already at or under the
+;; target is a stale cache, so the refusal points at a resync.
+
+(deftest discard-by-names-reads-the-count-from-choose-n-cards-to-discard
+  (let [{:keys [sent out]} (run-discard "runner" eot-hand
+                                        (discard-prompt "Choose 2 cards to discard" ["h1" "h2" "h3"])
+                                        ["Sure Gamble" "Diesel"])]
+    (is (= ["h1" "h3"] sent) (str "the prompt says 2; sent: " sent " " out))
+    (is (not (re-find #"(?i)does not say how many" out)) out)))
+
+(deftest discard-by-names-negative-hand-size-wants-the-whole-hand
+  (let [{:keys [sent out]} (run-discard "runner" eot-hand
+                                        (discard-prompt "Discard down to -1 cards" ["h1" "h2" "h3"])
+                                        ["Sure Gamble" "Sure Gamble" "Diesel"])]
+    (is (= ["h1" "h2" "h3"] sent) (str "all 3 are wanted; sent: " sent " " out))))
+
+(deftest discard-by-names-a-cached-hand-at-or-under-target-says-to-resync
+  (let [{:keys [sent out]} (run-discard "runner" eot-hand
+                                        (discard-prompt "Discard down to 5 cards" ["h1" "h2" "h3"])
+                                        ["Diesel"])]
+    (is (empty? sent))
+    (is (re-find #"status" out) (str "a stale cache must point at a resync: " out))))
