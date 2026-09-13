@@ -3729,3 +3729,29 @@
       (let [out (with-out-str (display/show-prompt-detailed))]
         (is (re-find #"(?i)game over" out) out)
         (is (re-find #"(?i)nothing to resolve" out) out)))))
+
+;; ============================================================================
+;; #201 — the hand listing's MU figure comes from the card db, never a default
+;; ============================================================================
+;; The engine's wire serializer (src/clj/game/core/diffs.clj `card-keys`) does
+;; not carry :memoryunits, so a hand card NEVER has it. `(:memoryunits card 1)`
+;; therefore printed 1MU for every program in every game; `card-text` reads the
+;; card db and said 2. A Fable seat held two "dead" Mayflies believing the hand.
+
+(def ^:private format-card-for-hand #'display/format-card-for-hand)
+
+(deftest hand-listing-reads-mu-from-the-card-db-not-the-wire
+  (let [saved @jinteki.cards/all-cards]
+    (try
+      (reset! jinteki.cards/all-cards
+              {"Mayfly" {:title "Mayfly" :type "Program" :cost 1 :strength 1 :memoryunits 2
+                         :text "Break an AI subroutine."}})
+      (testing "a wire program card (no :memoryunits, as the engine sends it) shows the db figure"
+        (let [s (format-card-for-hand {:cid 1 :title "Mayfly" :type "Program" :cost 1 :strength 1
+                                       :subtypes ["AI" "Icebreaker"]})]
+          (is (str/includes? s "2MU") (str "expected Mayfly's real 2MU, got: " s))
+          (is (not (str/includes? s "1MU")) (str "must not print the invented default, got: " s))))
+      (testing "a program the db does not know prints no MU figure rather than a guess"
+        (let [s (format-card-for-hand {:cid 2 :title "Nonesuch" :type "Program" :cost 0})]
+          (is (not (re-find #"\d+MU" s)) (str "no data, no number — got: " s))))
+      (finally (reset! jinteki.cards/all-cards saved)))))

@@ -5,6 +5,7 @@
    has a rez decision, even when called from runner's side (where runner has
    no prompt and is just waiting)."
   (:require [clojure.test :refer :all]
+            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-actions :as ai]
             [ai-runs :as runs]
@@ -1879,3 +1880,43 @@
               (str "second pass in the same window must be silent, got: " out2))
           (is (= 2 (count (filter #(= "continue" (:command %)) @sent)))
               "the continue itself still goes out each pass — only the print is deduped"))))))
+
+;; =============================================================================
+;; #202 — `--rez "Brân"` was accepted, echoed as strategy, and then never matched
+;; "Brân 1.0" (exact `contains?` on the title), so the pre-committed window
+;; paused unrezzed on the decisive run. A listed name now matches the title
+;; ignoring case, diacritics, and a trailing word-boundary suffix — and a name
+;; that matches nothing installed is said out loud at entry.
+;; =============================================================================
+
+(deftest rez-strategy-matches-a-name-without-its-version-suffix
+  (let [sent (atom [])]
+    (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-out-str
+        (let [r (corp-handlers/handle-corp-rez-strategy
+                 (rez-strategy-ctx-ice {:rez #{"Brân"}} "Brân 1.0"))]
+          (is (= :auto-rezzed (:action r))
+              (str "--rez \"Brân\" is the seat naming Brân 1.0; must rez, got: " r))))
+      (is (some #(= "rez" (:command %)) @sent)))))
+
+(deftest rez-name-matching-is-case-and-diacritic-blind-but-word-bounded
+  (is (core/rez-name-matches? "bran 1.0" "Brân 1.0") "case + diacritics")
+  (is (core/rez-name-matches? "Karunā" "Karunā") "exact")
+  (is (core/rez-name-matches? "Manegarm" "Manegarm Skunkworks") "word-boundary prefix (upgrades too)")
+  (is (not (core/rez-name-matches? "Pali" "Palisade")) "a fragment of a word is not a name")
+  (is (not (core/rez-name-matches? "Brân 1" "Brân 1.0")) "a fragment of the suffix is not a name")
+  (is (not (core/rez-name-matches? "Tithe" "Palisade"))))
+
+(deftest rez-list-names-that-match-nothing-installed-are-reported
+  (let [state {:game-state
+               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :rezzed false}
+                                             {:cid 2 :title "Palisade" :rezzed false}]}
+                                 :remote1 {:content [{:cid 3 :title "Manegarm Skunkworks"
+                                                      :type "Upgrade" :rezzed false}]}}}}}
+        out (with-out-str
+              (corp-handlers/report-rez-list! #{"Brân" "Palisade" "Palisad" "Manegarm Skunkworks"} state))]
+    (is (str/includes? out "Brân 1.0") (str "an inexact name should say what it resolved to: " out))
+    (is (re-find #"Palisad\".*matches no installed" out)
+        (str "a name matching nothing must be called out, got: " out))
+    (is (not (re-find #"\"Palisade\"" out)) (str "an exact name needs no comment: " out))
+    (is (not (re-find #"\"Manegarm Skunkworks\"" out)) (str "an exact upgrade name needs no comment: " out))))

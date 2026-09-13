@@ -1043,3 +1043,56 @@
       (let [out (with-out-str (prompts/discard-to-hand-size!))]
         (is (str/includes? out "board is still cached")
             (str "the #127 branch must survive. Got:\n" out))))))
+
+;; ============================================================================
+;; #203 — `discard <name>` answers the discard prompt it exists for
+;;
+;; discard-by-names! refused on every select prompt ("Use choose-card ...") and
+;; errored on every other state: it had no path that discarded anything, so the
+;; end-of-turn discard — the one situation the by-name form is for — was always
+;; refused. Two models, both sides, same round, reached for it first.
+;; ============================================================================
+
+(def ^:private eot-hand
+  [{:cid "h1" :title "Sure Gamble" :zone ["hand"] :side "Runner" :type "Event"}
+   {:cid "h2" :title "Sure Gamble" :zone ["hand"] :side "Runner" :type "Event"}
+   {:cid "h3" :title "Diesel" :zone ["hand"] :side "Runner" :type "Event"}])
+
+(def ^:private eot-discard-prompt
+  {:prompt-type "select" :eid "discard-1" :msg "Discard 2 cards"
+   :selectable ["h1" "h2" "h3"]})
+
+(deftest discard-by-names-resolves-the-open-discard-prompt
+  (let [sent (atom [])]
+    (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+        (let [out (with-out-str
+                    (let [r (prompts/discard-by-names! ["Sure Gamble" "Diesel"])]
+                      (is (= :success (:status r)) (str "expected success, got: " r))))]
+          (is (= ["h1" "h3"] @sent) (str "should select the named cards, got: " @sent))
+          (is (not (str/includes? out "Use `choose-card"))
+              (str "must not refuse the verb the caller correctly used, got: " out)))))))
+
+(deftest multi-choose-by-repeated-name-selects-distinct-copies
+  (testing "naming a duplicate twice selects both copies, not the first copy twice (a toggle off)"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
+        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+          (with-out-str (prompts/multi-choose! "Sure Gamble" "Sure Gamble"))
+          (is (= ["h1" "h2"] @sent) (str "expected both copies, got: " @sent)))))))
+
+(deftest discard-by-names-does-not-answer-a-prompt-targeting-installed-cards
+  (testing "a select prompt over INSTALLED cards is not a discard; `discard <name>` must not pick for it"
+    (let [sent (atom [])
+          installed [{:cid "i1" :title "Sure Gamble" :zone ["rig" "resource"] :side "Runner" :type "Resource"}]]
+      (with-mock-state (mock-client-state :side "runner" :installed {:resource installed}
+                                          :prompt {:prompt-type "select" :eid "sam-1"
+                                                   :msg "Choose a card to trash" :selectable ["i1"]})
+        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+          (let [out (with-out-str
+                      (is (= :error (:status (prompts/discard-by-names! ["Sure Gamble"])))))]
+            (is (empty? @sent) (str "must not select a non-hand card, sent: " @sent))
+            (is (str/includes? out "NOT in your hand") out)))))))

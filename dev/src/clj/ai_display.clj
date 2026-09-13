@@ -1483,10 +1483,17 @@
                     ;; ICE: show rez cost (not play cost)
                     "ICE" (str " (" (:cost card) "¢)")
                     ;; Programs: show cost, MU, and strength if icebreaker
+                    ;; MU comes from the card db: the engine's wire serializer
+                    ;; (diffs.clj card-keys) does not carry :memoryunits, so the
+                    ;; old `(:memoryunits card 1)` printed 1MU for EVERY program
+                    ;; while card-text said 2 (#201, two dead Mayflies). No
+                    ;; figure beats an invented one.
                     "Program" (let [cost (:cost card)
-                                    mu (:memoryunits card 1)
+                                    mu (or (:memoryunits card)
+                                           (:memoryunits (get @all-cards (:title card))))
                                     strength (:strength card)]
-                                (str " (" cost "¢, " mu "MU"
+                                (str " (" cost "¢"
+                                     (when mu (str ", " mu "MU"))
                                      (when strength (str ", str " strength))
                                      ")"))
                     ;; Hardware: show cost

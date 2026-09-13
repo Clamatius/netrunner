@@ -1683,6 +1683,9 @@
   (let [;; Parse flags if provided, merge with run strategy
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
         strategy (merge (get-strategy) flags)
+        ;; `continue --rez X` is the other way a name enters the set (#202).
+        _ (when-let [rez-names (not-empty (:rez flags))]
+            (corp-handlers/report-rez-list! rez-names @state/client-state))
 
         client-state @state/client-state
         side (:side client-state)
@@ -2291,7 +2294,11 @@
                                     (if (set? v)
                                       (str (name k) " " (clojure.string/join "," v))
                                       (name k)))
-                                  strategy-flags))))))
+                                  strategy-flags))))
+      ;; The echo above repeats what was TYPED; say what each name will match on
+      ;; this board, so a name that matches nothing is not a silent no-op (#202).
+      (when-let [rez-names (not-empty (:rez strategy-flags))]
+        (corp-handlers/report-rez-list! rez-names @state/client-state))))
   (println "👁️  Monitoring run... (auto-passing boring windows)")
   (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
                        :persistent (boolean (:persistent flags))))

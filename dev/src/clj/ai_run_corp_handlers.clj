@@ -116,6 +116,34 @@
 ;; Corp Rez Handlers
 ;; ============================================================================
 
+(defn report-rez-list!
+  "Say, when a --rez set is committed, what each name will match on this board.
+
+   The strategy echo repeats what was TYPED, so `--rez \"Brân\"` read back as an
+   active commitment and then never fired (#202). Exact names stay silent; a name
+   that resolves only loosely (core/rez-name-matches?) prints what it resolved
+   to; a name matching no installed Corp card is called out, with the installed
+   titles, rather than dropped quietly. The set itself is left as typed — a card
+   installed later can still match it."
+  [rez-names state]
+  (let [servers (vals (get-in state [:game-state :corp :servers]))
+        titles (distinct (keep :title (concat (mapcat :ices servers)
+                                              (mapcat :content servers))))]
+    (doseq [listed (sort rez-names)]
+      (let [hits (filter #(core/rez-name-matches? listed %) titles)]
+        (cond
+          (some #{listed} hits) nil
+
+          (empty? hits)
+          (println (format "   ⚠️  --rez \"%s\" matches no installed Corp card — it will not rez anything.%s"
+                           listed
+                           (if (seq titles)
+                             (str " Installed: " (clojure.string/join ", " titles))
+                             "")))
+
+          :else
+          (println (format "   💡 --rez \"%s\" → %s" listed (clojure.string/join ", " hits))))))))
+
 (defn handle-corp-rez-strategy
   "Priority 1.5: Corp rez strategy - auto-handle rez decisions based on --no-rez/--rez flags."
   [{:keys [side run-phase my-prompt strategy state gameid]}]
@@ -136,7 +164,7 @@
           rez-already-attempted? (= (:rez-attempted-at strategy) position)
           should-rez? (and (not (:no-rez strategy))
                           (:rez strategy)
-                          (contains? (:rez strategy) ice-title)
+                          (some #(core/rez-name-matches? % ice-title) (:rez strategy))
                           (not ice-rezzed?))]
       (cond
         ;; --no-rez: always decline
@@ -741,7 +769,7 @@
                                      (decisions/attacked-server-content state)))
               cid (:cid upgrade)
               should-rez? (and (:rez strategy)
-                               (contains? (:rez strategy) card-title))
+                               (some #(core/rez-name-matches? % card-title) (:rez strategy)))
               rez-already-attempted? (and cid (= (:upgrade-rez-attempted strategy) cid))]
           (cond
             ;; --rez listed, already tried this cid, still unrezzed → the rez did

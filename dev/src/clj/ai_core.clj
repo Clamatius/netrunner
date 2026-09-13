@@ -631,6 +631,31 @@
     {:title title :index (Integer/parseInt idx) :explicit-index? true}
     {:title card-name :index 0 :explicit-index? false}))
 
+(defn- fold-card-name
+  "Case-, diacritic- and edge-whitespace-blind form of a card name."
+  [s]
+  (-> (java.text.Normalizer/normalize (str s) java.text.Normalizer$Form/NFD)
+      (str/replace #"\p{M}" "")
+      str/lower-case
+      str/trim))
+
+(defn rez-name-matches?
+  "Does a seat-typed `--rez` name denote this installed card's title?
+
+   Equal ignoring case and diacritics, or the whole title's leading WORDS: \"Brân\"
+   names \"Brân 1.0\", \"Manegarm\" names \"Manegarm Skunkworks\". A fragment of a
+   word or of the suffix (\"Pali\", \"Brân 1\") names nothing.
+
+   The --rez set used to be matched with an exact `contains?`, so `--rez \"Brân\"`
+   was accepted, echoed back as the active strategy, and then silently failed to
+   match \"Brân 1.0\" at the one window it existed for (#202)."
+  [listed title]
+  (let [l (fold-card-name listed)
+        t (fold-card-name title)]
+    (boolean (and (seq l)
+                  (or (= l t)
+                      (str/starts-with? t (str l " ")))))))
+
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection
    Uses 0-based indexing: first copy is [0], second is [1], etc.

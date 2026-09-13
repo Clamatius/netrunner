@@ -489,9 +489,12 @@
              (core/with-cursor {:status :error :reason "Card resolution failed"}))))))))
 
 (defn- find-card-in-selectable
-  "Find a card in the selectable list by name (case-insensitive substring match).
+  "Find a card in the selectable list by name (case-insensitive substring match),
+   skipping any card whose cid is in `taken` — the cards earlier refs in the same
+   call already picked. The engine's select TOGGLES, so naming a duplicate twice
+   used to pick the first copy twice: selected, then deselected (#203).
    Returns the resolved card map or nil."
-  [card-name selectable]
+  [card-name selectable taken]
   (let [name-lower (clojure.string/lower-case (str card-name))]
     (first
      (keep (fn [cid-or-card]
@@ -499,6 +502,7 @@
                           (core/find-card-by-cid cid-or-card)
                           cid-or-card)]
                (when (and card
+                          (not (contains? taken (:cid card)))
                           (clojure.string/includes?
                            (clojure.string/lower-case (str (:title card)))
                            name-lower))
@@ -571,7 +575,8 @@
 
                  ;; By name
                  (string? card-ref)
-                 (if-let [card (find-card-in-selectable card-ref resolved-selectable)]
+                 (if-let [card (find-card-in-selectable card-ref resolved-selectable
+                                                        (set (keep (comp :cid :card) acc)))]
                    (conj acc {:card card :ref card-ref})
                    (do (println (format "⚠️  No selectable card matching: %s" card-ref))
                        acc))
@@ -789,33 +794,41 @@
         (core/with-cursor {:status :error :reason "No discard prompt or no indices"})))))
 
 (defn discard-by-names!
-  "Discard specific cards by their names
-   Supports [N] suffix for duplicates: \"Sure Gamble [1]\"
+  "Answer an open discard-from-hand prompt by card NAME.
+   Repeat a name to discard several copies: (discard-by-names! [\"Sure Gamble\" \"Sure Gamble\"])
 
    Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
-          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy
 
-   NOTE: During end-of-turn discard prompts, the selectable cards are in the
-   prompt's :selectable list, not the raw :hand. Use choose-card or multi-choose
-   for those prompts instead."
+   This used to refuse on every select prompt (\"Use choose-card …\") and error on
+   everything else, so it had no path that discarded anything — the end-of-turn
+   discard it exists for was always refused, and two models on both sides reached
+   for it first (#203). It now hands the names to multi-choose!, which resolves
+   them against the prompt's :selectable cards.
+
+   Only a prompt whose pickable cards are all IN HAND is a discard: a select prompt
+   targeting installed cards (Send a Message's trash, a hosted-card choice) is not
+   answered by a verb called `discard`."
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
-        client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        gs (state/get-game-state)
-        prompt (get-in gs [side :prompt-state])
-        hand (get-in gs [side :hand])]
-    ;; Check if there's a select prompt - if so, guide user to choose-card instead
-    (if (= "select" (:prompt-type prompt))
+        side (state/my-side-kw @state/client-state)
+        prompt (get-in (state/get-game-state) [side :prompt-state])
+        {:keys [pickable]} (core/resolve-selectable (:selectable prompt))
+        in-hand? (fn [{:keys [card]}]
+                   (= "hand" (some-> card :zone first name)))]
+    (cond
+      (and (seq pickable) (every? in-hand? pickable))
+      (apply multi-choose! names-vec)
+
+      (seq pickable)
       (do
-        (println "⚠️  Active select prompt detected.")
-        (println "   Use `choose-card <index>` or `multi-choose` instead.")
-        (println "   Run `prompt` to see available cards.")
-        (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
+        (println "❌ The open prompt selects cards that are NOT in your hand — `discard` only answers a discard-from-hand prompt.")
+        (println "   Run `prompt` to see it, then answer with choose-card <index> / multi-choose.")
+        (core/with-cursor {:status :error :reason "Open prompt is not a discard from hand"}))
+
+      :else
       (do
-        (println "❌ No select prompt active - nothing to discard")
-        (core/with-cursor {:status :error :reason "No select prompt active"})))))
+        (println "❌ No discard prompt open - nothing to discard")
+        (core/with-cursor {:status :error :reason "No discard prompt open"})))))
 
 ;; ============================================================================
 ;; Auto-resolve Info Prompts
