@@ -5,7 +5,6 @@
    has a rez decision, even when called from runner's side (where runner has
    no prompt and is just waiting)."
   (:require [clojure.test :refer :all]
-            [clojure.string :as str]
             [test-helpers :refer :all]
             [ai-actions :as ai]
             [ai-runs :as runs]
@@ -1882,105 +1881,82 @@
               "the continue itself still goes out each pass — only the print is deduped"))))))
 
 ;; =============================================================================
-;; #202 — `--rez "Brân"` was accepted, echoed as strategy, and then never matched
-;; "Brân 1.0" (exact `contains?` on the title), so the pre-committed window
-;; paused unrezzed on the decisive run. A listed name now matches the title
-;; ignoring case, diacritics, and a trailing word-boundary suffix — and a name
-;; that matches nothing installed is said out loud at entry.
+;; #202 — `--rez "Brân"` was accepted, echoed as strategy, and never matched
+;; "Brân 1.0" at the window it existed for.
+;;
+;; The review panel took two rounds to show that LOOSE matching at the window
+;; (leading words, "unless it is itself a card", "unless two titles fit", "unless
+;; the db is not loaded") keeps producing wrong rezzes in new ways. So there is no
+;; loose matching at the window at all. The near-miss is caught where the issue
+;; asked — when the flag is PARSED — and the seat is told the title to type:
+;;   - parse: an exact title (case/diacritic-blind) is stored as the card db spells
+;;     it; a near miss is REJECTED with "did you mean"; a name matching nothing is
+;;     rejected; with no card db the name is kept and flagged as unverified;
+;;   - window: exact title (case/diacritic-blind), nothing else;
+;;   - entry: a name matching no installed card, or only cards --rez cannot act on
+;;     (assets, rezzed ICE), is said out loud.
 ;; =============================================================================
 
-(deftest rez-strategy-matches-a-name-without-its-version-suffix
+(defn- with-card-db [db f]
+  (let [saved @jinteki.cards/all-cards]
+    (try (reset! jinteki.cards/all-cards db)
+         (with-redefs [core/load-cards-from-api! (fn [] nil)] (f))
+         (finally (reset! jinteki.cards/all-cards saved)))))
+
+(deftest parse-run-flags-rejects-a-near-miss-rez-name-and-names-the-card
+  (with-card-db {"Brân 1.0" {:title "Brân 1.0"} "Palisade" {:title "Palisade"}}
+    (fn []
+      (let [out (with-out-str
+                  (let [{:keys [flags]} (runs/parse-run-flags
+                                         ["--rez" "Brân" "--rez" "palisade" "--rez" "Palisad"])]
+                    (is (= #{"Palisade"} (:rez flags))
+                        (str "only the exact title enters the set, as the db spells it: " (:rez flags)))))]
+        (is (re-find #"Brân\".*Brân 1\.0" out) (str "a near miss must name the card to type: " out))
+        (is (re-find #"Palisad\"" out) (str "a name matching nothing must be said: " out))))))
+
+(deftest parse-run-flags-without-a-card-db-keeps-the-name-and-says-so
+  (with-card-db {}
+    (fn []
+      (let [out (with-out-str
+                  (is (= #{"Brân"} (:rez (:flags (runs/parse-run-flags ["--rez" "Brân"]))))))]
+        (is (re-find #"(?i)not (be )?checked|unverified" out)
+            (str "an unchecked name must say it was not checked: " out))))))
+
+(deftest rez-strategy-matches-the-committed-title-ignoring-case-and-diacritics
   (let [sent (atom [])]
     (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
       (with-out-str
         (let [r (corp-handlers/handle-corp-rez-strategy
-                 (rez-strategy-ctx-ice {:rez #{"Brân"}} "Brân 1.0"))]
-          (is (= :auto-rezzed (:action r))
-              (str "--rez \"Brân\" is the seat naming Brân 1.0; must rez, got: " r))))
+                 (rez-strategy-ctx-ice {:rez #{"bran 1.0"}} "Brân 1.0"))]
+          (is (= :auto-rezzed (:action r)) (str "got: " r))))
       (is (some #(= "rez" (:command %)) @sent)))))
 
-(deftest rez-name-matching-is-case-and-diacritic-blind-but-word-bounded
-  (is (core/rez-name-matches? "bran 1.0" "Brân 1.0") "case + diacritics")
-  (is (core/rez-name-matches? "Karunā" "Karunā") "exact")
-  (is (core/rez-name-matches? "Manegarm" "Manegarm Skunkworks") "word-boundary prefix (upgrades too)")
-  (is (not (core/rez-name-matches? "Pali" "Palisade")) "a fragment of a word is not a name")
-  (is (not (core/rez-name-matches? "Brân 1" "Brân 1.0")) "a fragment of the suffix is not a name")
-  (is (not (core/rez-name-matches? "Tithe" "Palisade"))))
+(deftest rez-strategy-never-treats-a-name-as-a-prefix
+  ;; Panel round 2: with the card db unloaded, "Fairchild" rezzed Fairchild 1.0.
+  (with-card-db {}
+    (fn []
+      (let [sent (atom [])]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-rez-strategy
+                     (rez-strategy-ctx-ice {:rez #{"Fairchild"}} "Fairchild 1.0"))]
+              (is (= :decision-required (:status r))
+                  (str "\"Fairchild\" is not Fairchild 1.0; must pause, got: " r)))))
+        (is (not-any? (fn [m] (= "rez" (:command m))) @sent))))))
 
-(deftest rez-list-names-that-match-nothing-installed-are-reported
+(deftest rez-list-report-says-what-rez-cannot-act-on
   (let [state {:game-state
-               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :rezzed false}
-                                             {:cid 2 :title "Palisade" :rezzed false}]}
-                                 :remote1 {:content [{:cid 3 :title "Manegarm Skunkworks"
-                                                      :type "Upgrade" :rezzed false}]}}}}}
+               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :type "ICE" :rezzed false}
+                                             {:cid 2 :title "Palisade" :type "ICE" :rezzed true}]}
+                                 :remote1 {:content [{:cid 3 :title "PAD Campaign"
+                                                      :type "Asset" :rezzed false}]}}}}}
         out (with-out-str
-              (corp-handlers/report-rez-list! #{"Brân" "Palisade" "Palisad" "Manegarm Skunkworks"} state))]
-    (is (str/includes? out "Brân 1.0") (str "an inexact name should say what it resolved to: " out))
-    (is (re-find #"Palisad\".*matches no installed" out)
-        (str "a name matching nothing must be called out, got: " out))
-    (is (not (re-find #"\"Palisade\"" out)) (str "an exact name needs no comment: " out))
-    (is (not (re-find #"\"Manegarm Skunkworks\"" out)) (str "an exact upgrade name needs no comment: " out))))
-
-;; #202, panel round 1 (all MINOR/alternative findings, confirmed against the card db):
-;; a name that IS a card title names only that card ("Fairchild" vs "Fairchild 1.0");
-;; a name that is no card at all is rejected when parsed, as the issue asked; and the
-;; entry report makes no claim when there is no board to check against.
-
-(defn- with-card-db [db f]
-  (let [saved @jinteki.cards/all-cards]
-    (try (reset! jinteki.cards/all-cards db) (f)
-         (finally (reset! jinteki.cards/all-cards saved)))))
-
-(deftest rez-name-that-is-itself-a-card-title-matches-only-that-card
-  (with-card-db {"Fairchild" {:title "Fairchild"} "Fairchild 1.0" {:title "Fairchild 1.0"}
-                 "Brân 1.0" {:title "Brân 1.0"}}
-    #(do
-       (is (not (core/rez-name-matches? "Fairchild" "Fairchild 1.0"))
-           "Fairchild is a real card; --rez \"Fairchild\" must not also rez Fairchild 1.0")
-       (is (core/rez-name-matches? "Fairchild" "Fairchild"))
-       (is (core/rez-name-matches? "Brân" "Brân 1.0")
-           "no card is called Brân, so it still names Brân 1.0"))))
-
-(deftest parse-run-flags-rejects-a-rez-name-that-is-no-card
-  (with-card-db {"Palisade" {:title "Palisade"} "Brân 1.0" {:title "Brân 1.0"}}
-    #(let [out (with-out-str
-                 (let [{:keys [flags]} (runs/parse-run-flags
-                                        ["--rez" "Palisad" "--rez" "Brân" "--rez" "Palisade"])]
-                   (is (= #{"Brân" "Palisade"} (:rez flags))
-                       (str "a typo must not enter the set, got: " (:rez flags)))))]
-       (is (re-find #"Palisad\"" out) (str "the rejected name must be said, got: " out)))))
+              (corp-handlers/report-rez-list! #{"Brân 1.0" "Palisade" "PAD Campaign" "Tithe"} state))]
+    (is (not (re-find #"\"Brân 1\.0\"" out)) (str "an unrezzed installed ICE needs no comment: " out))
+    (is (re-find #"Palisade\".*(?i)already rezzed" out) out)
+    (is (re-find #"PAD Campaign\".*(?i)asset" out) out)
+    (is (re-find #"Tithe\".*matches no installed" out) out)))
 
 (deftest rez-list-report-stays-silent-without-a-board
   (is (= "" (with-out-str (corp-handlers/report-rez-list! #{"Brân 1.0"} {:game-state nil})))
       "no board is not evidence that a name matches nothing"))
-
-;; #202, panel round 1b (second seat): a loose name that fits TWO installed titles
-;; names neither (no auto-rez on a guess); and the entry report calls out a name
-;; whose only matches are cards --rez cannot rez during a run (assets, rezzed ICE).
-
-(deftest rez-strategy-does-not-guess-between-two-titles-a-loose-name-fits
-  (let [sent (atom [])
-        ctx (-> (rez-strategy-ctx-ice {:rez #{"Brân"}} "Brân 1.0")
-                (assoc-in [:state :game-state :corp :servers :remote1 :ices]
-                          [{:cid 78 :title "Brân 2.0" :cost 2 :rezzed false}]))]
-    (with-card-db {}
-      #(with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-         (with-out-str
-           (let [r (corp-handlers/handle-corp-rez-strategy ctx)]
-             (is (= :decision-required (:status r))
-                 (str "\"Brân\" fits Brân 1.0 and Brân 2.0; must pause, not rez either, got: " r))))
-         (is (not-any? (fn [m] (= "rez" (:command m))) @sent))))))
-
-(deftest rez-list-report-names-what-rez-cannot-act-on
-  (let [state {:game-state
-               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :type "ICE" :rezzed false}
-                                             {:cid 4 :title "Brân 2.0" :type "ICE" :rezzed false}
-                                             {:cid 2 :title "Palisade" :type "ICE" :rezzed true}]}
-                                 :remote1 {:content [{:cid 3 :title "PAD Campaign"
-                                                      :type "Asset" :rezzed false}]}}}}}
-        out (with-card-db {}
-              #(with-out-str
-                 (corp-handlers/report-rez-list! #{"PAD Campaign" "Palisade" "Brân"} state)))]
-    (is (re-find #"PAD Campaign\".*(?i)asset" out) (str "an asset is not rezzed by --rez: " out))
-    (is (re-find #"Palisade\".*(?i)already rezzed" out) (str "a rezzed ICE needs no --rez: " out))
-    (is (re-find #"Brân\".*(?i)ambiguous" out) (str "two fits must be called ambiguous: " out))))

@@ -639,67 +639,48 @@
       str/lower-case
       str/trim))
 
-(def ^:private folded-db-titles-cache (atom [nil #{}]))
+(defn rez-set-names?
+  "Does a committed --rez set name this card title? Exact title only, blind to case
+   and diacritics — no prefixes, no guesses.
 
-(defn- folded-db-titles
-  "The card db's titles, folded. Cached per db value: the rez handlers ask on every
-   monitor pass, and thousands of NFD normalisations per pass is not a lookup."
-  []
-  (let [db @all-cards
-        [seen folded] @folded-db-titles-cache]
-    (if (identical? seen db)
-      folded
-      (let [folded (into #{} (map fold-card-name) (keys db))]
-        (reset! folded-db-titles-cache [db folded])
-        folded))))
+   Near misses are caught when the flag is PARSED (rez-name-verdict), where the seat
+   can be told the title to type. Loose matching here, at the window, rezzed the
+   wrong card three different ways across two review rounds (\"Fairchild\" rezzing
+   Fairchild 1.0, a guess between two fits, an unloaded db disabling the guard),
+   so there is none (#202)."
+  [rez-names title]
+  (let [t (fold-card-name title)]
+    (boolean (some #(= t (fold-card-name %)) rez-names))))
 
-(defn rez-name-matches?
-  "Does a seat-typed `--rez` name denote this installed card's title?
+(defn rez-name-verdict
+  "Parse-time verdict on a `--rez` name against the card db (#202: `--rez \"Brân\"`
+   was accepted, echoed as strategy, and never matched \"Brân 1.0\").
 
-   Equal ignoring case and diacritics, or the whole title's leading WORDS: \"Brân\"
-   names \"Brân 1.0\", \"Manegarm\" names \"Manegarm Skunkworks\". A fragment of a
-   word or of the suffix (\"Pali\", \"Brân 1\") names nothing.
+     {:verdict :exact :title t}         a real title; t is the db's own spelling
+     {:verdict :near-miss :suggest [..]} not a title, but the leading words of these
+     {:verdict :unknown}                matches no card
+     {:verdict :unverified}             the card db could not be loaded — no verdict
 
-   The --rez set used to be matched with an exact `contains?`, so `--rez \"Brân\"`
-   was accepted, echoed back as the active strategy, and then silently failed to
-   match \"Brân 1.0\" at the one window it existed for (#202)."
-  [listed title]
-  (let [l (fold-card-name listed)
-        t (fold-card-name title)]
-    (boolean (and (seq l)
-                  (or (= l t)
-                      (and (str/starts-with? t (str l " "))
-                           ;; A name that IS a card ("Fairchild") names that card
-                           ;; only; the leading-words rule would otherwise also rez
-                           ;; "Fairchild 1.0", silently (#202 panel).
-                           (not (contains? (folded-db-titles) l))))))))
-
-(defn card-db-names-card?
-  "Does `listed` name any card in the card db under rez-name-matches?? The parse-
-   time check for `--rez` (#202: a name that is no card is rejected, not echoed as
-   strategy). An unloaded db gives no verdict, so it answers true."
+   Checked against the db, not the board, so a card installed later can still be
+   committed to."
   [listed]
-  (let [folded (folded-db-titles)
-        l (fold-card-name listed)]
-    (or (empty? folded)
-        (boolean (and (seq l)
-                      (or (contains? folded l)
-                          (some #(str/starts-with? % (str l " ")) folded)))))))
-
-(defn rez-names-title?
-  "Does a --rez set name this installed title? A name equal to it (folded) does. A
-   LOOSE fit counts only when that name fits exactly ONE distinct installed title:
-   with Brân 1.0 and Brân 2.0 both installed, \"Brân\" names neither, rather than
-   rezzing whichever the Runner happens to approach (#202 panel)."
-  [rez-names title installed-titles]
-  (let [t (fold-card-name title)
-        titles (distinct installed-titles)]
-    (boolean
-     (some (fn [listed]
-             (or (= t (fold-card-name listed))
-                 (and (rez-name-matches? listed title)
-                      (= 1 (count (filter #(rez-name-matches? listed %) titles))))))
-           rez-names))))
+  (load-cards-from-api!)
+  (let [titles (keys @all-cards)]
+    (if (empty? titles)
+      {:verdict :unverified}
+      (let [l (fold-card-name listed)
+            folded (map (juxt fold-card-name identity) titles)]
+        (if-let [[_ title] (first (filter #(= l (first %)) folded))]
+          {:verdict :exact :title title}
+          (let [suggest (->> folded
+                             (filter #(and (seq l) (str/starts-with? (first %) (str l " "))))
+                             (map second)
+                             sort
+                             (take 5)
+                             vec)]
+            (if (seq suggest)
+              {:verdict :near-miss :suggest suggest}
+              {:verdict :unknown})))))))
 
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection

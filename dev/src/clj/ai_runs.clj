@@ -200,18 +200,32 @@
               (recur rest-args server flags))
             (let [ice-name (first rest-args)
                   current-rez-set (get flags :rez #{})
-                  ;; #202: a name that is no card at all is rejected HERE, as the
-                  ;; issue asked — accepted, it was echoed as strategy and never fired.
+                  ;; #202: `--rez "Brân"` used to be accepted, echoed as strategy,
+                  ;; and never matched "Brân 1.0". A near miss is rejected HERE, as
+                  ;; the issue asked, naming the title to type; the window itself
+                  ;; matches exact titles only (no loose matching to go wrong there).
                   ;; Checked against the card db, not the board, so a card installed
                   ;; later can still be committed to.
-                  card? (core/card-db-names-card? ice-name)]
-              (when-not card?
-                (println (format "⚠️  --rez \"%s\" is not the name of any card — ignored. Use the title as printed (e.g. \"Brân 1.0\")."
+                  verdict (core/rez-name-verdict ice-name)
+                  kept (case (:verdict verdict)
+                         :exact (:title verdict)
+                         :unverified ice-name
+                         nil)]
+              (case (:verdict verdict)
+                :exact nil
+                :unverified
+                (println (format "⚠️  --rez \"%s\": the card database is unavailable, so the name could not be checked. It will match only a card titled exactly that."
+                                 ice-name))
+                :near-miss
+                (println (format "⚠️  --rez \"%s\" is not a card title — ignored. Did you mean: %s ? Re-run with the full title."
+                                 ice-name (clojure.string/join ", " (map #(str "\"" % "\"") (:suggest verdict)))))
+                :unknown
+                (println (format "⚠️  --rez \"%s\" matches no card in the card database — ignored."
                                  ice-name)))
               (recur (rest rest-args)
                      server
-                     (if card?
-                       (assoc flags :rez (conj current-rez-set ice-name))
+                     (if kept
+                       (assoc flags :rez (conj current-rez-set kept))
                        flags))))
 
           ;; --tactics <edn-string> (takes EDN map argument)

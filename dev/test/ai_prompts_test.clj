@@ -1047,10 +1047,18 @@
 ;; ============================================================================
 ;; #203 — `discard <name>` answers the discard prompt it exists for
 ;;
-;; discard-by-names! refused on every select prompt ("Use choose-card ...") and
-;; errored on every other state: it had no path that discarded anything, so the
-;; end-of-turn discard — the one situation the by-name form is for — was always
-;; refused. Two models, both sides, same round, reached for it first.
+;; discard-by-names! refused on every select prompt and errored otherwise: no path
+;; discarded anything, so the end-of-turn discard it exists for was always refused.
+;;
+;; The review panel took two rounds to show that LOOSE name resolution (substring,
+;; first-match, copy-by-copy allocation) keeps producing wrong-card discards in new
+;; ways, so the rule here is deliberately small:
+;;   - a name is an EXACT title (case- and diacritic-blind), never a substring;
+;;   - every name is settled against the WHOLE prompt before anything is sent;
+;;   - copies the wire already marks :selected count toward the request (select
+;;     toggles, so re-sending one deselects it), and a selected card nobody named
+;;     is a conflict (the engine resolves at :max, so it would be discarded too);
+;;   - anything that does not fit sends nothing.
 ;; ============================================================================
 
 (def ^:private eot-hand
@@ -1059,111 +1067,107 @@
    {:cid "h3" :title "Diesel" :zone ["hand"] :side "Runner" :type "Event"}])
 
 (def ^:private eot-discard-prompt
-  {:prompt-type "select" :eid "discard-1" :msg "Discard 2 cards"
+  {:prompt-type "select" :eid "discard-1" :msg "Discard down to 5 cards"
    :selectable ["h1" "h2" "h3"]})
 
-(deftest discard-by-names-resolves-the-open-discard-prompt
-  (let [sent (atom [])]
-    (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (let [out (with-out-str
-                    (let [r (prompts/discard-by-names! ["Sure Gamble" "Diesel"])]
-                      (is (= :success (:status r)) (str "expected success, got: " r))))]
-          (is (= ["h1" "h3"] @sent) (str "should select the named cards, got: " @sent))
-          (is (not (str/includes? out "Use `choose-card"))
-              (str "must not refuse the verb the caller correctly used, got: " out)))))))
+(defn- run-discard
+  "discard-by-names! against a mocked hand + prompt. {:sent [cids] :result r :out s}.
+   `on-send` (optional) runs after each send, e.g. to resolve the prompt."
+  ([side hand prompt names] (run-discard side hand prompt names nil))
+  ([side hand prompt names on-send]
+   (let [sent (atom []) result (atom nil)]
+     (with-mock-state (mock-client-state :side side :hand hand :prompt prompt)
+       (with-redefs [ws/select-card! (fn [card _eid & _]
+                                       (swap! sent conj (:cid card))
+                                       (when on-send (on-send))
+                                       true)
+                     prompts/wait-for-prompt-change! (fn [_eid & _] true)]
+         (let [out (with-out-str (reset! result (prompts/discard-by-names! names)))]
+           {:sent @sent :result @result :out out}))))))
 
-(deftest multi-choose-by-repeated-name-selects-distinct-copies
-  (testing "naming a duplicate twice selects both copies, not the first copy twice (a toggle off)"
-    (let [sent (atom [])]
-      (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
-        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-          (with-out-str (prompts/multi-choose! "Sure Gamble" "Sure Gamble"))
-          (is (= ["h1" "h2"] @sent) (str "expected both copies, got: " @sent)))))))
+(deftest discard-by-names-resolves-the-open-discard-prompt
+  (let [{:keys [sent result out]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Diesel"])]
+    (is (= :success (:status result)) (str "expected success, got: " result))
+    (is (= ["h1" "h3"] sent))
+    (is (not (str/includes? out "Use `choose-card")) out)))
+
+(deftest discard-by-names-repeated-name-discards-distinct-copies
+  (is (= ["h1" "h2"] (:sent (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Sure Gamble"])))))
+
+(deftest discard-by-names-is-case-and-diacritic-blind
+  (is (= ["h1"] (:sent (run-discard "runner" eot-hand eot-discard-prompt ["sure gamble"])))))
+
+(def ^:private corp-hand
+  [{:cid "c1" :title "Archived Memories" :zone ["hand"] :side "Corp" :type "Operation"}
+   {:cid "c2" :title "Hive" :zone ["hand"] :side "Corp" :type "ICE"}])
+
+(def ^:private corp-discard-prompt
+  {:prompt-type "select" :eid "discard-c" :msg "Discard down to 5 cards" :selectable ["c1" "c2"]})
+
+(deftest discard-by-names-is-exact-title-never-substring
+  (is (= ["c2"] (:sent (run-discard "corp" corp-hand corp-discard-prompt ["Hive"])))
+      "\"Hive\" is Hive, not Archived Memories")
+  (let [{:keys [sent result]} (run-discard "corp" corp-hand corp-discard-prompt ["Memories"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) "a fragment of a title names nothing")))
+
+(deftest discard-by-names-more-copies-than-in-hand-sends-nothing
+  ;; Panel round 2: with exact copies used up, the second "Hive" fell back to a
+  ;; substring and discarded Archived Memories.
+  (let [{:keys [sent result out]} (run-discard "corp" corp-hand corp-discard-prompt ["Hive" "Hive"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "must not discard anything, sent: " sent))
+    (is (str/includes? out "Hive") out)))
+
+(deftest discard-by-names-counts-an-already-selected-copy-wherever-it-sits
+  ;; Panel round 2: the selected copy was only noticed when it resolved FIRST.
+  (let [hand (assoc-in eot-hand [1 :selected] true)]
+    (is (= ["h3"] (:sent (run-discard "runner" hand eot-discard-prompt ["Sure Gamble" "Diesel"])))
+        "h2 already satisfies \"Sure Gamble\"; sending h1 would discard both Sure Gambles")))
+
+(deftest discard-by-names-refuses-when-an-unnamed-card-is-already-selected
+  (let [hand (assoc-in eot-hand [2 :selected] true)
+        {:keys [sent result out]} (run-discard "runner" hand eot-discard-prompt ["Sure Gamble"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "Diesel would be discarded too, sent: " sent))
+    (is (str/includes? out "Diesel") out)))
+
+(deftest discard-by-names-unknown-name-sends-nothing-and-lists-the-hand
+  (let [{:keys [sent result out]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Dizel"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "a miss must not send the other names, sent: " sent))
+    (is (str/includes? out "Dizel") out)
+    (is (str/includes? out "Diesel") (str "should list what can be discarded: " out))))
+
+(deftest discard-by-names-stops-if-the-prompt-resolves-mid-send
+  (let [{:keys [sent]} (run-discard "runner" eot-hand eot-discard-prompt ["Sure Gamble" "Diesel"]
+                                    #(swap! state/client-state assoc-in
+                                            [:game-state :runner :prompt-state :eid] "a-later-prompt"))]
+    (is (= ["h1"] sent) (str "nothing may be sent into a prompt that is no longer the discard: " sent))))
 
 (deftest discard-by-names-does-not-answer-a-prompt-targeting-installed-cards
-  (testing "a select prompt over INSTALLED cards is not a discard; `discard <name>` must not pick for it"
-    (let [sent (atom [])
-          installed [{:cid "i1" :title "Sure Gamble" :zone ["rig" "resource"] :side "Runner" :type "Resource"}]]
-      (with-mock-state (mock-client-state :side "runner" :installed {:resource installed}
-                                          :prompt {:prompt-type "select" :eid "sam-1"
-                                                   :msg "Choose a card to trash" :selectable ["i1"]})
-        (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                      prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-          (let [out (with-out-str
-                      (is (= :error (:status (prompts/discard-by-names! ["Sure Gamble"])))))]
-            (is (empty? @sent) (str "must not select a non-hand card, sent: " @sent))
-            (is (str/includes? out "NOT in your hand") out)))))))
-
-;; #203, panel round 1: exact title before substring ("Hive" is inside "Archived
-;; Memories"); an in-hand prompt that is not a discard (install, reveal) is not
-;; answered by `discard`; an all-hidden selectable list is not "no prompt".
-
-(deftest discard-by-name-prefers-the-exact-title-over-a-substring
-  (let [sent (atom [])
-        hand [{:cid "c1" :title "Archived Memories" :zone ["hand"] :side "Corp" :type "Operation"}
-              {:cid "c2" :title "Hive" :zone ["hand"] :side "Corp" :type "ICE"}]]
-    (with-mock-state (mock-client-state :side "corp" :hand hand
-                                        :prompt {:prompt-type "select" :eid "d-2"
-                                                 :msg "Discard down to 5 cards" :selectable ["c1" "c2"]})
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (with-out-str (prompts/discard-by-names! ["Hive"]))
-        (is (= ["c2"] @sent) (str "\"Hive\" is Hive, not Archived Memories; sent: " @sent))))))
+  (let [installed [{:cid "i1" :title "Sure Gamble" :zone ["rig" "resource"] :side "Runner" :type "Resource"}]
+        sent (atom [])]
+    (with-mock-state (mock-client-state :side "runner" :installed {:resource installed}
+                                        :prompt {:prompt-type "select" :eid "sam-1"
+                                                 :msg "Choose a card to trash" :selectable ["i1"]})
+      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)]
+        (let [out (with-out-str
+                    (is (= :error (:status (prompts/discard-by-names! ["Sure Gamble"])))))]
+          (is (empty? @sent))
+          (is (str/includes? out "NOT in your hand") out))))))
 
 (deftest discard-by-names-refuses-an-in-hand-prompt-that-is-not-a-discard
-  (let [sent (atom [])]
-    (with-mock-state (mock-client-state :side "runner" :hand eot-hand
-                                        :prompt {:prompt-type "select" :eid "inst-1"
-                                                 :msg "Choose a card to install" :selectable ["h3"]})
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (let [out (with-out-str
-                    (is (= :error (:status (prompts/discard-by-names! ["Diesel"])))))]
-          (is (empty? @sent) (str "an install prompt must not be answered by discard, sent: " @sent))
-          (is (str/includes? out "not a discard") out))))))
+  (let [{:keys [sent result out]} (run-discard "runner" eot-hand
+                                               {:prompt-type "select" :eid "inst-1"
+                                                :msg "Choose a resource to install" :selectable ["h3"]}
+                                               ["Diesel"])]
+    (is (= :error (:status result)))
+    (is (empty? sent) (str "Career Fair's install prompt is not a discard, sent: " sent))
+    (is (str/includes? out "not a discard") out)))
 
 (deftest discard-by-names-on-an-all-hidden-selectable-list-does-not-claim-no-prompt
-  (with-mock-state (mock-client-state :side "runner" :hand []
-                                      :prompt {:prompt-type "select" :eid "d-3"
-                                               :msg "Discard down to 5 cards" :selectable ["ghost"]})
-    (let [out (with-out-str (prompts/discard-by-names! ["Diesel"]))]
-      (is (not (str/includes? out "No discard prompt open")) out))))
-
-;; #203, panel round 1b (second seat): a miss sends NOTHING (a partial send left a
-;; card toggled that the corrected retry toggled back off); a card the wire already
-;; marks :selected is satisfied, not re-toggled; a substring fitting two different
-;; titles is a miss, not a guess.
-
-(deftest multi-choose-with-a-missing-name-sends-nothing
-  (let [sent (atom [])]
-    (with-mock-state (mock-client-state :side "runner" :hand eot-hand :prompt eot-discard-prompt)
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (with-out-str
-          (is (= :error (:status (prompts/multi-choose! "Sure Gamble" "Dizel")))))
-        (is (empty? @sent) (str "a miss must not send the other picks, sent: " @sent))))))
-
-(deftest multi-choose-does-not-re-toggle-an-already-selected-card
-  (let [sent (atom [])
-        hand (assoc-in eot-hand [0 :selected] true)]
-    (with-mock-state (mock-client-state :side "runner" :hand hand :prompt eot-discard-prompt)
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (with-out-str (prompts/discard-by-names! ["Sure Gamble" "Diesel"]))
-        (is (= ["h3"] @sent)
-            (str "h1 is already selected; toggling it again would deselect it, sent: " @sent))))))
-
-(deftest multi-choose-substring-fitting-two-titles-is-a-miss
-  (let [sent (atom [])
-        hand [{:cid "p1" :title "Lamprey" :zone ["hand"] :side "Runner" :type "Program"}
-              {:cid "p2" :title "Spyglass Prey" :zone ["hand"] :side "Runner" :type "Program"}]]
-    (with-mock-state (mock-client-state :side "runner" :hand hand
-                                        :prompt {:prompt-type "select" :eid "d-4"
-                                                 :msg "Discard down to 5 cards" :selectable ["p1" "p2"]})
-      (with-redefs [ws/select-card! (fn [card _eid & _] (swap! sent conj (:cid card)) true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)]
-        (with-out-str (prompts/multi-choose! "prey"))
-        (is (empty? @sent) (str "\"prey\" fits two different cards; must not guess, sent: " @sent))))))
+  (let [{:keys [out]} (run-discard "runner" [] {:prompt-type "select" :eid "d-3"
+                                                :msg "Discard down to 5 cards" :selectable ["ghost"]}
+                                   ["Diesel"])]
+    (is (not (str/includes? out "No discard prompt open")) out)))
