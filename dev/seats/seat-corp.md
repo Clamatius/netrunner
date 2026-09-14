@@ -158,7 +158,7 @@ pre-committed monitor answers the window *instantly*, whereas a window that has 
 wait for you to think is a window the Runner spends minutes staring at. One
 exception: a name that fits **more than one installed copy** is not guessed. That means two
 Palisades on the attacked server, or, for a `--persistent` monitor (which spans the
-whole turn), a Diviner on HQ and another on R&D. The monitor pauses at each copy's
+whole turn), a Diviner on HQ and another on R&D. The monitor pauses at each unrezzed copy's
 window and asks, and `--rez "<ICE>"` given *at* that window rezzes the copy being
 approached (#151 item 14). Read the decision:
 
@@ -194,8 +194,10 @@ piece of ice, ignoring all costs"). The monitor returns with `🛑 You have a
 pending decision to resolve (agenda trigger / choice)`. This is NOT a rez window,
 so don't answer it with `--rez`: read it with `./dev/send_command corp prompt`,
 then resolve it directly — `choose-value "Done"` to decline (e.g. nothing worth a
-free rez / all your ICE already rezzed), or `choose-card "<ICE>"` to pick a
-target. Then, if the run is still live, re-enter `monitor-run --persistent`.
+free rez / all your ICE already rezzed), or pick a target by its index:
+`prompt` lists the selectable ICE with the server each one is in, then `choose-card <N>`.
+`choose-card` takes the index, not a name, which is also how two ICE with the same name
+are told apart (#151 item 14). Then, if the run is still live, re-enter `monitor-run --persistent`.
 
 `monitor-run` returns at the next real decision or when the run ends (it prints
 `run ended` / `no active run`). When the run is over, go back to the `wait` loop

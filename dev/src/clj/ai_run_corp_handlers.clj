@@ -116,11 +116,23 @@
 ;; Corp Rez Handlers
 ;; ============================================================================
 
+(defn- with-hosted
+  "`cards` plus every Corp card hosted on them, recursively. The engine's
+   all-installed-corp walks :hosted the same way (game.core.board), and Awakening
+   Center hosts ICE, so a hosted copy is an installed copy (#151 item 14 panel).
+   Runner cards hosted on Corp cards (Botulus, Trypano) are not Corp installs."
+  [cards]
+  (mapcat (fn [c]
+            (when-not (= "Runner" (:side c))
+              (cons c (with-hosted (:hosted c)))))
+          cards))
+
 (defn- installed-corp-cards
-  "Every installed Corp card this seat can see: all servers' ICE and content."
+  "Every installed Corp card this seat can see: all servers' ICE and content, and
+   the Corp cards hosted on them."
   [state]
   (let [servers (vals (get-in state [:game-state :corp :servers]))]
-    (concat (mapcat :ices servers) (mapcat :content servers))))
+    (with-hosted (concat (mapcat :ices servers) (mapcat :content servers)))))
 
 (defn- run-server-key
   "The attacked server's key in :servers (:hq, :rd, :remote1), or nil with no run.
@@ -149,7 +161,7 @@
   (let [servers (get-in state [:game-state :corp :servers])
         keys-in-scope (if (= :all-servers scope) (keys servers) (keep identity [(run-server-key state)]))]
     (for [k keys-in-scope
-          c (concat (get-in servers [k :ices]) (get-in servers [k :content]))
+          c (with-hosted (concat (get-in servers [k :ices]) (get-in servers [k :content])))
           :when (core/rez-set-names? [title] (:title c))]
       {:server k :card c})))
 
@@ -211,20 +223,30 @@
                                ")"))]
      (when (seq cards)
        (doseq [listed (sort rez-names)]
-         (let [hits (filter #(core/rez-set-names? [listed] (:title %)) cards)
-               copies (installed-copies state listed scope)]
+         (let [all-copies (installed-copies state listed :all-servers)
+               copies (installed-copies state listed scope)
+               in-scope (map :card copies)
+               here (run-server-key state)]
            (cond
-             (empty? hits)
+             (empty? all-copies)
              (println (format "   ⚠️  --rez \"%s\" matches no installed Corp card — it has nothing to rez. Installed: %s"
                               listed (clojure.string/join ", " (distinct (keep :title cards)))))
 
-             (not-any? actionable? hits)
-             (println (format "   ⚠️  --rez \"%s\" matches only %s — --rez rezzes unrezzed ICE and upgrades during a run, so it will not act."
-                              listed (clojure.string/join ", " (map describe hits))))
+             ;; #151 item 14 panel: installed, but not on the server this run can reach.
+             (and (= :this-run scope) here (empty? copies))
+             (println (format "   ⚠️  --rez \"%s\" is installed only on %s, and this run is on %s, so it has nothing to rez here."
+                              listed
+                              (clojure.string/join ", " (distinct (map #(server-label (:server %)) all-copies)))
+                              (server-label here)))
 
-             ;; #151 item 14
+             (and (seq in-scope) (not-any? actionable? in-scope))
+             (println (format "   ⚠️  --rez \"%s\" matches only %s — --rez rezzes unrezzed ICE and upgrades during a run, so it will not act."
+                              listed (clojure.string/join ", " (map describe in-scope))))
+
+             ;; #151 item 14. Rezzed copies still make the name ambiguous, but a rezzed
+             ;; copy has no rez window to ask at (panel round 1b).
              (> (count copies) 1)
-             (println (format "   ⚠️  --rez \"%s\" fits %d installed copies (%s) — it will not guess: at each copy's window you will be asked whether to rez that one."
+             (println (format "   ⚠️  --rez \"%s\" fits %d installed copies (%s) — it will not guess: at each unrezzed copy's window you will be asked whether to rez that one."
                               listed (count copies) (clojure.string/join ", " (map #(server-label (:server %)) copies)))))))))))
 
 (defn handle-corp-rez-strategy

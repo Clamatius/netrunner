@@ -2232,3 +2232,51 @@
     (is (not-any? (fn [m] (= "rez" (:command m))) sent))
     (is (re-find #"(?i)by hand" out) (str "a name cannot pick between two in one server: " out))
     (is (not (re-find #"the one in this server" out)) (str "there is no single one in this server: " out))))
+
+
+;; =============================================================================
+;; #151 item 14, panel round 1b (second seat)
+;; S3: a copy hosted on another card is an installed copy (engine all-installed-corp
+;;     walks :hosted; Awakening Center hosts ICE).
+;; S4: a name installed only on other servers is said, not silently ignored.
+;; S5: a rezzed copy makes a name ambiguous but has no rez window to ask at.
+;; S6: Send a Message picks by index (choose-card takes no name), so duplicate
+;;     ICE in a select prompt must show their servers.
+;; =============================================================================
+
+(deftest rez-strategy-a-hosted-copy-makes-the-name-ambiguous
+  (let [{:keys [result sent out]}
+        (run-rez-strategy
+         (ice-ctx-with {:rez #{"Diviner"} :rez-scope :all-servers} "Diviner"
+                       :servers {:remote1 {:content [{:cid 90 :title "Awakening Center" :type "Upgrade"
+                                                      :rezzed true :side "Corp"
+                                                      :hosted [{:cid 78 :title "Diviner" :type "ICE"
+                                                                :rezzed false :side "Corp"}]}]}}))]
+    (is (= :decision-required (:status result))
+        (str "a Diviner hosted on Awakening Center is an installed copy, got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))
+    (is (re-find #"2 installed copies" out) out)))
+
+(deftest rez-list-report-says-when-a-name-is-only-on-other-servers-this-run
+  (let [state {:game-state {:run {:phase "approach-ice" :position 1 :server [:hq]}
+                            :corp {:servers {:hq {:ices [{:cid 1 :title "Palisade" :type "ICE" :rezzed false}]}
+                                             :rd {:ices [{:cid 2 :title "Diviner" :type "ICE" :rezzed false}]}}}}}
+        out (with-out-str (corp-handlers/report-rez-list! #{"Diviner"} state :this-run))]
+    (is (re-find #"Diviner\".*R&D" out) (str "the seat must learn its name is installed elsewhere: " out))
+    (is (re-find #"(?i)nothing to rez here" out) out)))
+
+(deftest rez-list-report-does-not-promise-a-question-at-a-rezzed-copy
+  (let [state {:game-state {:corp {:servers {:hq {:ices [{:cid 1 :title "Palisade" :type "ICE" :rezzed true}]}
+                                             :rd {:ices [{:cid 2 :title "Palisade" :type "ICE" :rezzed false}]}}}}}
+        out (with-out-str (corp-handlers/report-rez-list! #{"Palisade"} state :all-servers))]
+    (is (re-find #"2 installed copies" out) out)
+    (is (not (re-find #"at each copy's window" out)) (str "a rezzed copy has no rez window to ask at: " out))
+    (is (re-find #"(?i)unrezzed" out) out)))
+
+(deftest selectable-duplicate-ice-render-with-their-servers
+  ;; Not red-first: this pins the existing rendering the seat-corp.md fix relies on.
+  (let [hq (core/format-selectable-card {:cid 1 :title "Diviner" :type "ICE" :zone [:servers :hq :ices] :rezzed false})
+        rd (core/format-selectable-card {:cid 2 :title "Diviner" :type "ICE" :zone [:servers :rd :ices] :rezzed false})]
+    (is (not= hq rd) (str hq " vs " rd))
+    (is (re-find #"hq" hq) hq)
+    (is (re-find #"rd" rd) rd)))
