@@ -165,6 +165,13 @@
       (<= (count (installed-copies state (:title card) (or (:rez-scope strategy) :this-run))) 1) :commit
       :else :ambiguous)))
 
+(defn upgrade-attempted-cids
+  "The upgrade cids already sent a rez this run, as a set. Older strategies stored a
+   single cid."
+  [strategy]
+  (let [v (:upgrade-rez-attempted strategy)]
+    (cond (set? v) v (some? v) #{v} :else #{})))
+
 (defn window-rez-commitment
   "The cids a `--rez` given AT a rez window names (#151 item 14). At a window the
    name is not ambiguous: it is the card the window is about — the approached ICE
@@ -173,9 +180,13 @@
   [rez-names state]
   (let [phase (get-in state [:game-state :run :phase])
         ice (when (= "approach-ice" phase) (core/current-run-ice state))
+        content (decisions/attacked-server-content state)
+        ;; Two same-title upgrades in one server: the name cannot say which, so neither
+        ;; is committed (#151 item 14 panel) — the seat rezzes one by hand.
+        one-in-server? (fn [c] (= 1 (count (filter #(core/rez-set-names? [(:title c)] (:title %)) content))))
         upgrades (when (= :server-upgrade (:kind (decisions/corp-run-decision state)))
-                   (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)))
-                           (decisions/attacked-server-content state)))]
+                   (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)) (one-in-server? %))
+                           content))]
     (into #{}
           (comp (filter #(and (:cid %) (core/rez-set-names? rez-names (:title %))))
                 (map :cid))
@@ -864,16 +875,18 @@
               ;; first (a listed second upgrade used to never auto-rez), and never
               ;; guess between installed copies of a name.
               verdict (fn [c] (rez-commitment-for strategy c state))
-              attempted (first (filter #(and (= (:cid %) (:upgrade-rez-attempted strategy))
-                                             (= :commit (verdict %)))
-                                       upgrades))
-              to-rez (first (filter #(= :commit (verdict %)) upgrades))
+              tried (upgrade-attempted-cids strategy)
+              ;; An untried committed upgrade is rezzed before any failed one is declined
+              ;; (#151 item 14 panel: a failed first upgrade used to pass the window over
+              ;; the rest). Tried cids are never re-sent.
+              to-rez (first (filter #(and (= :commit (verdict %)) (not (contains? tried (:cid %)))) upgrades))
+              attempted (first (filter #(and (contains? tried (:cid %)) (= :commit (verdict %))) upgrades))
               ambiguous (first (filter #(= :ambiguous (verdict %)) upgrades))
-              upgrade (or attempted to-rez (first upgrades))
+              upgrade (or to-rez attempted (first upgrades))
               card-title (or (:title upgrade) (get-in decision [:card :title] "upgrade"))
               cid (:cid upgrade)
-              should-rez? (boolean (or attempted to-rez))
-              rez-already-attempted? (boolean attempted)]
+              should-rez? (boolean (or to-rez attempted))
+              rez-already-attempted? (boolean (and (nil? to-rez) attempted))]
           (cond
             ;; --rez listed, already tried this cid, still unrezzed → the rez did
             ;; not take (almost always unaffordable). NEVER re-rez (that is the
@@ -929,8 +942,16 @@
                 (reset! last-waiting-status status-key)
                 (println (format "   Server upgrade decision: %s — your --rez \"%s\" fits %d installed copies, so it will not guess."
                                  title title n))
-                (println (format "      continue --rez \"%s\"   - rez the one in this server" title))
-                (println           "      continue --no-rez       - decline"))
+                (if (< 1 (count (filter #(core/rez-set-names? [title] (:title %))
+                                        (decisions/attacked-server-content state))))
+                  ;; Two or more in THIS server: no name picks one (#151 item 14 panel).
+                  (do
+                    (println (format "      More than one %s is in this server, so a name cannot pick one. Rez it by hand:" title))
+                    (println (format "      rez \"%s\"   - lists the copies with their [N]; then rez \"%s [N]\"" title title))
+                    (println           "      continue --no-rez       - decline"))
+                  (do
+                    (println (format "      continue --rez \"%s\"   - rez the one in this server" title))
+                    (println           "      continue --no-rez       - decline"))))
               {:status :decision-required
                :wake-reason (:wake-reason decision)
                :decision decision

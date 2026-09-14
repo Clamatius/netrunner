@@ -1777,7 +1777,10 @@
                   (fn [ctx]  ; Wrapper: mark an upgrade rez attempt (cid-keyed) so a failed (unaffordable) rez isn't retried forever
                     (when-let [result (corp-handlers/handle-corp-server-upgrade-decision ctx)]
                       (when-let [cid (:upgrade-rez-attempted result)]
-                        (set-strategy! {:upgrade-rez-attempted cid}))
+                        ;; A set, so a failed first upgrade does not stop the next
+                        ;; committed one being tried, and two failures cannot ping-pong.
+                        (set-strategy! {:upgrade-rez-attempted
+                                        (conj (corp-handlers/upgrade-attempted-cids (get-strategy)) cid)}))
                       result))
                   ;; #31 §1: MUST precede handle-paid-ability-window, the general
                   ;; "I passed, now I wait for the opponent" handler — correct when
@@ -2315,7 +2318,7 @@
   ;; reset here: it is game-scoped, and clearing it on each monitor-run re-issue
   ;; would re-report the same event every time. (Guest review of #31.)
   (reset-window-grace!)
-  (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
+  (let [strategy-flags (dissoc flags :since :persistent :return-on-signal :rez-cids)]
     (when (seq strategy-flags)
       (set-strategy! strategy-flags)
       ;; #151 item 14: a persistent commitment spans the turn's runs, so every
@@ -2323,7 +2326,11 @@
       ;; A --rez given AT a rez window names that copy.
       (when-let [rez-names (not-empty (:rez strategy-flags))]
         (set-strategy! {:rez-scope (if (:persistent flags) :all-servers :this-run)
-                        :rez-cids (corp-handlers/window-rez-commitment rez-names @state/client-state)}))
+                        ;; Only the commitment monitor-run! derived from the command the
+                        ;; seat TYPED, for the run active at that moment. Re-deriving from
+                        ;; the board here let a park re-entry that landed at approach-ice
+                        ;; (a resync) commit a copy nobody chose (#151 item 14 panel).
+                        :rez-cids (set (:rez-cids flags))}))
       (println (format "🎯 Strategy: %s"
                        (clojure.string/join
                         ", " (map (fn [[k v]]
@@ -2530,7 +2537,12 @@
       (do
         (when (:persistent flags)
           (println "🔁 Persistent mode — owns the whole run (wakes for decisions / run end)"))
-        (let [result (monitor-active-run! flags)]
+        (let [result (monitor-active-run!
+                      ;; The window commitment belongs to THIS invocation's run only; the
+                      ;; park re-entries below get the original flags, without it.
+                      (assoc flags :rez-cids
+                             (when-let [rez-names (not-empty (:rez flags))]
+                               (corp-handlers/window-rez-commitment rez-names @state/client-state))))]
           ;; A persistent monitor whose run just ENDED returns to the post: the
           ;; opponent's turn is still running and they may start another run.
           ;; (Re-arming per-run is exactly the gap that left windows unattended.)

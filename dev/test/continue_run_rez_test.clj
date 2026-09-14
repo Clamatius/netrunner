@@ -2065,6 +2065,10 @@
     (is (= #{} (corp-handlers/window-rez-commitment #{"Palisade"} ice-state))))
   (is (= #{77} (corp-handlers/window-rez-commitment #{"Manegarm Skunkworks"} (:state (upgrade-decision-ctx {}))))))
 
+(defn- upgrade-card [cid title server]
+  {:cid cid :title title :type "Upgrade" :rezzed false
+   :zone ["servers" server "content"] :side "Corp"})
+
 (defn- run-upgrade-handler [ctx]
   (let [sent (atom []) result (atom nil)]
     (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
@@ -2085,10 +2089,13 @@
         (str "the rez must target Manegarm (77), not the first upgrade: " sent))))
 
 (deftest upgrade-rez-strategy-persistent-name-with-copies-on-two-servers-pauses
-  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"} :rez-scope :all-servers})
+  ;; Panel round 1 (F4): Manegarm Skunkworks is unique, so two in play was an impossible
+  ;; board. Cyberdex Virus Suite is not unique.
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Cyberdex Virus Suite"} :rez-scope :all-servers})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 77 "Cyberdex Virus Suite" "remote1")])
                 (assoc-in [:state :game-state :corp :servers :remote2 :content]
-                          [{:cid 79 :title "Manegarm Skunkworks" :type "Upgrade" :rezzed false
-                            :zone ["servers" "remote2" "content"] :side "Corp"}]))
+                          [(upgrade-card 79 "Cyberdex Virus Suite" "remote2")]))
         {:keys [result sent]} (run-upgrade-handler ctx)]
     (is (= :decision-required (:status result)) (str "which Manegarm is the seat's call, got: " result))
     (is (not-any? (fn [m] (= "rez" (:command m))) sent))))
@@ -2119,7 +2126,10 @@
         (with-redefs [runs/auto-continue-loop! (fn [& _] (reset! seen (runs/get-strategy)) {:status :run-complete})]
           (with-out-str (monitor-active-run! {:rez #{"Diviner"} :persistent true}))
           (is (= :all-servers (:rez-scope @seen)) (str "persistent spans runs: " @seen))
-          (is (= #{77} (:rez-cids @seen)) (str "an answer at a window names that copy: " @seen))
+          ;; Panel round 1 (F1): monitor-active-run! no longer derives cids from the
+          ;; board. A park re-entry that lands at approach-ice (e.g. after a resync)
+          ;; must not commit a copy nobody chose; monitor-run! hands in the typed one.
+          (is (= #{} (:rez-cids @seen)) (str "a re-entry commits nothing, even at approach-ice: " @seen))
           (with-out-str (monitor-active-run! {:rez #{"Diviner"}}))
           (is (= :this-run (:rez-scope @seen)) (str "a mid-run commitment is this run only: " @seen))))
       (finally (runs/reset-strategy!)))))
@@ -2144,3 +2154,81 @@
               (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) @sent)
                   (str "answering at the outer Palisade's window rezzes the outer one: " @sent))))
           (finally (runs/reset-strategy!)))))))
+
+
+;; =============================================================================
+;; #151 item 14, panel round 1
+;; F1: the window commitment comes from the command the seat TYPED (monitor-run!),
+;;     never from the board a re-entry happens to see.
+;; F2: one listed upgrade failing to rez does not skip the other listed upgrades.
+;; F3: two same-title upgrades in ONE server are not picked between by name.
+;; =============================================================================
+
+(deftest monitor-run-typed-at-an-approach-commits-that-copy
+  (with-card-db {"Diviner" {:title "Diviner"}}
+    (fn []
+      (let [board {:run {:phase "approach-ice" :position 1 :server [:hq]}
+                   :corp {:servers {:hq {:ices [{:cid 77 :title "Diviner" :cost 1 :rezzed false}]}
+                                    :rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}
+                          :prompt-state {:msg "Rez Diviner?" :prompt-type "run" :choices []}}
+                   :runner {:prompt-state nil}}
+            seen (atom nil)]
+        (try
+          (with-mock-state (mock-client-state :side "corp" :game-state board)
+            (with-redefs [runs/auto-continue-loop! (fn [& _]
+                                                     (reset! seen (runs/get-strategy))
+                                                     {:status :decision-required})]
+              (let [out (with-out-str (runs/monitor-run! "--persistent" "--rez" "Diviner"))]
+                (is (= #{77} (:rez-cids @seen))
+                    (str "the command typed at this window names this copy: " @seen))
+                (is (not (clojure.string/includes? out "rez-cids"))
+                    (str "the strategy echo shows what was typed, not the internal commitment: " out)))))
+          (finally (runs/reset-strategy!)))))))
+
+(deftest upgrade-rez-strategy-tries-the-next-listed-upgrade-after-one-fails
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Bio Vault" "Cyberdex Virus Suite"}
+                                       :upgrade-rez-attempted #{76}})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 76 "Bio Vault" "remote1")
+                           (upgrade-card 77 "Cyberdex Virus Suite" "remote1")]))
+        {:keys [result sent]} (run-upgrade-handler ctx)]
+    (is (= :auto-rezzed-upgrade (:action result))
+        (str "Bio Vault did not take; Cyberdex is still committed and untried, got: " result))
+    (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) sent) (str sent))
+    (is (not-any? (fn [m] (= "continue" (:command m))) sent)
+        "must not pass the window over a committed upgrade not yet tried")))
+
+(deftest upgrade-rez-strategy-two-failed-upgrades-decline-instead-of-ping-ponging
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Bio Vault" "Cyberdex Virus Suite"}
+                                       :upgrade-rez-attempted #{76 77}})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 76 "Bio Vault" "remote1")
+                           (upgrade-card 77 "Cyberdex Virus Suite" "remote1")]))
+        {:keys [result sent]} (run-upgrade-handler ctx)]
+    (is (= :upgrade-rez-failed-declined (:action result)) (str "both tried and still unrezzed, got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent) "never re-send a failed rez")))
+
+(deftest window-rez-commitment-does-not-pick-between-same-title-upgrades-in-one-server
+  (let [one (-> (upgrade-decision-ctx {})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 77 "Cyberdex Virus Suite" "remote1")])
+                :state)
+        two (-> (upgrade-decision-ctx {})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 76 "Cyberdex Virus Suite" "remote1")
+                           (upgrade-card 77 "Cyberdex Virus Suite" "remote1")])
+                :state)]
+    (is (= #{77} (corp-handlers/window-rez-commitment #{"Cyberdex Virus Suite"} one)))
+    (is (= #{} (corp-handlers/window-rez-commitment #{"Cyberdex Virus Suite"} two))
+        "two in this server: the name cannot say which, so nothing is committed")))
+
+(deftest upgrade-same-title-twice-in-one-server-sends-the-seat-to-rez-by-hand
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Cyberdex Virus Suite"}})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 76 "Cyberdex Virus Suite" "remote1")
+                           (upgrade-card 77 "Cyberdex Virus Suite" "remote1")]))
+        {:keys [result sent out]} (run-upgrade-handler ctx)]
+    (is (= :decision-required (:status result)) (str "got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))
+    (is (re-find #"(?i)by hand" out) (str "a name cannot pick between two in one server: " out))
+    (is (not (re-find #"the one in this server" out)) (str "there is no single one in this server: " out))))
