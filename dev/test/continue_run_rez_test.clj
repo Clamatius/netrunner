@@ -2280,3 +2280,50 @@
     (is (not= hq rd) (str hq " vs " rd))
     (is (re-find #"hq" hq) hq)
     (is (re-find #"rd" rd) rd)))
+
+
+;; =============================================================================
+;; #151 item 14, panel round 2
+;; A1: a failed committed upgrade must not decline the window while another upgrade
+;;     is still ambiguous — the ambiguous one is the seat's question.
+;; A4: a hosted card's own zone is just onhost, so a selectable listing must name
+;;     its host and the server the host is in (Send a Message targets).
+;; =============================================================================
+
+(deftest upgrade-rez-strategy-failed-upgrade-does-not-pass-an-ambiguous-one
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Bio Vault" "Cyberdex Virus Suite"}
+                                       :upgrade-rez-attempted #{76}})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [(upgrade-card 76 "Bio Vault" "remote1")
+                           (upgrade-card 77 "Cyberdex Virus Suite" "remote1")
+                           (upgrade-card 78 "Cyberdex Virus Suite" "remote1")]))
+        {:keys [result sent]} (run-upgrade-handler ctx)]
+    (is (= :decision-required (:status result))
+        (str "Bio Vault failed, but which Cyberdex to rez is still open, got: " result))
+    (is (not-any? (fn [m] (= "continue" (:command m))) sent)
+        (str "must not pass the window over an unresolved choice, sent: " sent))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent)
+        (str "must not re-send the failed rez or guess a Cyberdex, sent: " sent))))
+
+(deftest selectable-hosted-ice-render-with-their-host-and-server
+  (let [a (core/format-selectable-card {:cid 1 :title "Eli 1.0" :type "ICE" :zone [:onhost] :rezzed false
+                                        :host {:cid 9 :title "Awakening Center" :zone [:servers :hq :content]}})
+        b (core/format-selectable-card {:cid 2 :title "Eli 1.0" :type "ICE" :zone [:onhost] :rezzed false
+                                        :host {:cid 8 :title "Awakening Center" :zone [:servers :rd :content]}})]
+    (is (not= a b) (str "two hosted Eli 1.0 must be told apart: " a " vs " b))
+    (is (re-find #"Awakening Center" a) a)
+    (is (re-find #"hq" a) a)
+    (is (re-find #"rd" b) b)))
+
+(deftest rez-by-hand-with-duplicates-lists-the-copies-without-claiming-none-exist
+  ;; A3: the pause for two same-title upgrades in one server sends the seat to
+  ;; `rez "X"`. With duplicates that lookup lists the copies, and must not then say
+  ;; the card is not installed.
+  (let [board {:corp {:servers {:remote1 {:content [(upgrade-card 76 "Cyberdex Virus Suite" "remote1")
+                                                    (upgrade-card 77 "Cyberdex Virus Suite" "remote1")]}}}
+               :runner {}}]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (let [out (with-out-str (ai/rez-card! "Cyberdex Virus Suite"))]
+        (is (re-find #"Cyberdex Virus Suite \[0\]" out) (str "the copies must be listed with [N]: " out))
+        (is (not (re-find #"Card not found installed" out))
+            (str "listing two copies and then denying either exists is a contradiction: " out))))))

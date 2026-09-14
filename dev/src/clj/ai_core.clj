@@ -1298,20 +1298,35 @@
     {:pickable [] :phantom []}
     (map-indexed vector selectable))))
 
+(defn- selectable-location
+  "Where a selectable card is. A hosted card's own zone is just [:onhost], so it is
+   located by its host chain and the zone of the outermost host: two Eli 1.0 hosted
+   on Awakening Centers on HQ and R&D must not render identically (#151 item 14
+   panel round 2 — choose-card takes an index, so the listing is how they are told
+   apart)."
+  [card]
+  (let [zone (:zone card)]
+    (if (and (= "onhost" (some-> zone first name)) (map? (:host card)))
+      (let [host (:host card)]
+        (str "on " (or (:title host) "a card")
+             (when-let [where (selectable-location host)] (str " " where))))
+      (when (seq zone)
+        (str "in " (str/join "/" (map name zone)))))))
+
 (defn format-selectable-card
-  "Format one resolved selectable card for display: title, type, zone, rez state.
+  "Format one resolved selectable card for display: title, type, location, rez state.
    A title-less card (e.g. a face-down Corp card being accessed at a breach) is
-   labelled 'face-down card' with its zone so the seat can still pick it. (#70)"
+   labelled 'face-down card' with its zone so the seat can still pick it. (#70)
+   A hosted card shows its host and the host's zone (selectable-location)."
   [card]
   (let [named? (or (:title card) (:printed-title card))
         title (or named? "face-down card")
         card-type (:type card)
-        zone (:zone card)
         rezzed? (:rezzed card)]
     (str title
          (when (and named? (seq (str card-type))) (str " [" card-type "]"))
-         (when (seq zone)
-           (str " (in " (str/join "/" (map name zone)) ")"))
+         (when-let [where (selectable-location card)]
+           (str " (" where ")"))
          (when (some? rezzed?) (if rezzed? " (rezzed)" " (unrezzed)")))))
 
 (defn print-selectable!

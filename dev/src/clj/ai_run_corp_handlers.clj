@@ -907,8 +907,12 @@
               upgrade (or to-rez attempted (first upgrades))
               card-title (or (:title upgrade) (get-in decision [:card :title] "upgrade"))
               cid (:cid upgrade)
-              should-rez? (boolean (or to-rez attempted))
-              rez-already-attempted? (boolean (and (nil? to-rez) attempted))]
+              ;; Order of business (#151 item 14 panel round 2): rez an untried committed
+              ;; upgrade; else, if an upgrade is still AMBIGUOUS, ask (a failed attempt
+              ;; must not pass the window over a question the seat has not answered);
+              ;; only then decline a failed attempt. A failed rez is never re-sent.
+              should-rez? (boolean (or to-rez (and attempted (nil? ambiguous))))
+              rez-already-attempted? (boolean (and (nil? to-rez) (nil? ambiguous) attempted))]
           (cond
             ;; --rez listed, already tried this cid, still unrezzed → the rez did
             ;; not take (almost always unaffordable). NEVER re-rez (that is the
