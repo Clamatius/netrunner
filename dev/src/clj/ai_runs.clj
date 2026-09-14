@@ -1706,10 +1706,16 @@
   [& args]
   (let [;; Parse flags if provided, merge with run strategy
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
-        strategy (merge (get-strategy) flags)
+        strategy (cond-> (merge (get-strategy) flags)
+                   ;; #151 item 14: `continue --single --rez X` at a window names that
+                   ;; copy; a single step is always within this run.
+                   (seq (:rez flags))
+                   (assoc :rez-cids (into (set (:rez-cids (get-strategy)))
+                                          (corp-handlers/window-rez-commitment (:rez flags) @state/client-state))
+                          :rez-scope (or (:rez-scope (get-strategy)) :this-run)))
         ;; `continue --rez X` is the other way a name enters the set (#202).
         _ (when-let [rez-names (not-empty (:rez flags))]
-            (corp-handlers/report-rez-list! rez-names @state/client-state))
+            (corp-handlers/report-rez-list! rez-names @state/client-state :this-run))
 
         client-state @state/client-state
         side (:side client-state)
@@ -2312,6 +2318,12 @@
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal)]
     (when (seq strategy-flags)
       (set-strategy! strategy-flags)
+      ;; #151 item 14: a persistent commitment spans the turn's runs, so every
+      ;; server's copies of a name count; one made during a run is this run's.
+      ;; A --rez given AT a rez window names that copy.
+      (when-let [rez-names (not-empty (:rez strategy-flags))]
+        (set-strategy! {:rez-scope (if (:persistent flags) :all-servers :this-run)
+                        :rez-cids (corp-handlers/window-rez-commitment rez-names @state/client-state)}))
       (println (format "🎯 Strategy: %s"
                        (clojure.string/join
                         ", " (map (fn [[k v]]
@@ -2322,7 +2334,8 @@
       ;; The echo above repeats what was TYPED; say what each name will match on
       ;; this board, so a name that matches nothing is not a silent no-op (#202).
       (when-let [rez-names (not-empty (:rez strategy-flags))]
-        (corp-handlers/report-rez-list! rez-names @state/client-state))))
+        (corp-handlers/report-rez-list! rez-names @state/client-state
+                                        (if (:persistent flags) :all-servers :this-run)))))
   (println "👁️  Monitoring run... (auto-passing boring windows)")
   (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
                        :persistent (boolean (:persistent flags))))

@@ -106,7 +106,9 @@ it. The rule:
 - **Pre-commit your rez policy whenever you can** (`--rez "<ICE name>"` /
   `--no-rez` / `--fire-if-asked`). A pre-committed monitor answers the window
   *instantly*; a window that must wait for you to think is a window the Runner
-  spends minutes staring at. After a real decision, RE-ENTER the monitor (still
+  spends minutes staring at. A name that fits more than one installed copy (this
+  server; every server under `--persistent`) is not guessed: the monitor pauses at
+  each copy and asks, and `--rez` given at that window rezzes the approached copy. After a real decision, RE-ENTER the monitor (still
   `--persistent`) with your choice. For an attacked-server upgrade, use
   `rez "<upgrade>"` or `continue`, then re-enter. Read unclear decisions with
   `./dev/send_command corp prompt` and `./dev/send_command corp board`.

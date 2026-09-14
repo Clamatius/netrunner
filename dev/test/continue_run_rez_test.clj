@@ -1985,3 +1985,151 @@
       (finally
         (reset! jinteki.cards/all-cards saved)
         (reset-backoff!)))))
+
+;; =============================================================================
+;; #151 item 14 — duplicate installs of the same --rez name
+;;
+;; `--rez` is a set of TITLES. With two copies of that title installed, a bare
+;; name used to rez whichever copy the Runner approached, and a persistent monitor
+;; re-applies the same flags on every run of the turn — so `monitor-run --persistent
+;; --rez "Diviner"` committed for HQ also rezzed R&D's Diviner on a later R&D run.
+;;
+;; Rules (Michael, 2026-09-13: "require selection"; pause-and-ask chosen):
+;;   - scope: a persistent commitment spans runs, so it counts copies on EVERY
+;;     server; one made during a run counts only the attacked server;
+;;   - copies are INSTALLED copies of the title, rezzed or not (a Send a Message
+;;     rez must not quietly turn an ambiguous name into an unambiguous one);
+;;   - exactly one copy in scope → auto-rez, as before;
+;;   - more than one → no guess: pause at the window with the rez decision;
+;;   - an answer given AT a window names that copy (its cid), so it rezzes.
+;; =============================================================================
+
+(defn- ice-ctx-with
+  "rez-strategy-ctx-ice, then assoc extra ICE lists by server and the run position."
+  [strategy ice-title & {:keys [servers position]}]
+  (cond-> (rez-strategy-ctx-ice strategy ice-title)
+    servers (update-in [:state :game-state :corp :servers] merge servers)
+    position (assoc-in [:state :game-state :run :position] position)))
+
+(defn- run-rez-strategy
+  "Run handle-corp-rez-strategy; {:result r :sent [msgs] :out s}."
+  [ctx]
+  (let [sent (atom []) result (atom nil)]
+    (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (let [out (with-out-str (reset! result (corp-handlers/handle-corp-rez-strategy ctx)))]
+        {:result @result :sent @sent :out out}))))
+
+(deftest rez-strategy-persistent-name-with-copies-on-two-servers-pauses
+  (let [{:keys [result sent out]}
+        (run-rez-strategy (ice-ctx-with {:rez #{"Diviner"} :rez-scope :all-servers} "Diviner"
+                                        :servers {:rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}))]
+    (is (= :decision-required (:status result)) (str "HQ's or R&D's Diviner is the seat's call, got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))
+    (is (re-find #"2 installed copies" out) out)))
+
+(deftest rez-strategy-during-a-run-ignores-copies-on-other-servers
+  (let [{:keys [result sent]}
+        (run-rez-strategy (ice-ctx-with {:rez #{"Diviner"} :rez-scope :this-run} "Diviner"
+                                        :servers {:rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}))]
+    (is (= :auto-rezzed (:action result)) (str "only HQ's copy can be approached on an HQ run, got: " result))
+    (is (some (fn [m] (= "rez" (:command m))) sent))))
+
+(deftest rez-strategy-two-copies-on-the-attacked-server-pauses
+  ;; ices are innermost-first; position 2 is the outer copy (cid 77)
+  (let [{:keys [result sent]}
+        (run-rez-strategy (ice-ctx-with {:rez #{"Palisade"}} "Palisade"
+                                        :servers {:hq {:ices [{:cid 76 :title "Palisade" :cost 3 :rezzed false}
+                                                              {:cid 77 :title "Palisade" :cost 3 :rezzed false}]}}
+                                        :position 2))]
+    (is (= :decision-required (:status result)) (str "inner or outer Palisade is the seat's call, got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))))
+
+(deftest rez-strategy-rezzes-a-copy-committed-by-cid
+  (let [{:keys [result]}
+        (run-rez-strategy (ice-ctx-with {:rez #{"Diviner"} :rez-scope :all-servers :rez-cids #{77}} "Diviner"
+                                        :servers {:rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}))]
+    (is (= :auto-rezzed (:action result)) (str "the seat named THIS copy, got: " result))))
+
+(deftest rez-strategy-a-rezzed-copy-still-makes-the-name-ambiguous
+  (let [{:keys [result sent]}
+        (run-rez-strategy (ice-ctx-with {:rez #{"Diviner"} :rez-scope :all-servers} "Diviner"
+                                        :servers {:rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed true}]}}))]
+    (is (= :decision-required (:status result))
+        (str "installed copies count, rezzed or not; got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))))
+
+(deftest window-rez-commitment-names-the-approached-copy-or-the-presented-upgrade
+  (let [ice-state (:state (ice-ctx-with {} "Diviner"
+                                        :servers {:rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}))]
+    (is (= #{77} (corp-handlers/window-rez-commitment #{"Diviner"} ice-state)))
+    (is (= #{} (corp-handlers/window-rez-commitment #{"Palisade"} ice-state))))
+  (is (= #{77} (corp-handlers/window-rez-commitment #{"Manegarm Skunkworks"} (:state (upgrade-decision-ctx {}))))))
+
+(defn- run-upgrade-handler [ctx]
+  (let [sent (atom []) result (atom nil)]
+    (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (let [out (with-out-str (reset! result (corp-handlers/handle-corp-server-upgrade-decision ctx)))]
+        {:result @result :sent @sent :out out}))))
+
+(deftest upgrade-rez-strategy-rezzes-a-listed-upgrade-that-is-not-first
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"}})
+                (assoc-in [:state :game-state :corp :servers :remote1 :content]
+                          [{:cid 76 :title "Ash 2X3ZB9CY" :type "Upgrade" :rezzed false
+                            :zone ["servers" "remote1" "content"] :side "Corp"}
+                           {:cid 77 :title "Manegarm Skunkworks" :type "Upgrade" :rezzed false
+                            :zone ["servers" "remote1" "content"] :side "Corp"}]))
+        {:keys [result sent]} (run-upgrade-handler ctx)]
+    (is (= :auto-rezzed-upgrade (:action result)) (str "Manegarm is listed even though Ash is first, got: " result))
+    (is (= 77 (:upgrade-rez-attempted result)))
+    (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) sent)
+        (str "the rez must target Manegarm (77), not the first upgrade: " sent))))
+
+(deftest upgrade-rez-strategy-persistent-name-with-copies-on-two-servers-pauses
+  (let [ctx (-> (upgrade-decision-ctx {:rez #{"Manegarm Skunkworks"} :rez-scope :all-servers})
+                (assoc-in [:state :game-state :corp :servers :remote2 :content]
+                          [{:cid 79 :title "Manegarm Skunkworks" :type "Upgrade" :rezzed false
+                            :zone ["servers" "remote2" "content"] :side "Corp"}]))
+        {:keys [result sent]} (run-upgrade-handler ctx)]
+    (is (= :decision-required (:status result)) (str "which Manegarm is the seat's call, got: " result))
+    (is (not-any? (fn [m] (= "rez" (:command m))) sent))))
+
+(deftest rez-list-report-says-a-name-is-ambiguous-and-will-pause
+  (let [state {:game-state
+               {:corp {:servers {:hq {:ices [{:cid 1 :title "Diviner" :type "ICE" :rezzed false}]}
+                                 :rd {:ices [{:cid 2 :title "Diviner" :type "ICE" :rezzed false}]}}}}}
+        out (with-out-str (corp-handlers/report-rez-list! #{"Diviner"} state :all-servers))]
+    (is (re-find #"Diviner\".*2 installed copies" out) out)
+    (is (re-find #"(?i)ask" out) (str "the seat must know it will be asked: " out))))
+
+(def ^:private monitor-active-run! #'ai-runs/monitor-active-run!)
+
+(deftest monitor-run-records-its-scope-and-commits-the-approached-copy
+  (let [board {:run {:phase "approach-ice" :position 1 :server [:hq]}
+               :corp {:servers {:hq {:ices [{:cid 77 :title "Diviner" :cost 1 :rezzed false}]}
+                                :rd {:ices [{:cid 78 :title "Diviner" :cost 1 :rezzed false}]}}
+                      :prompt-state {:msg "Rez Diviner?" :prompt-type "run" :choices []}}
+               :runner {:prompt-state nil}}
+        seen (atom nil)]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (with-redefs [runs/auto-continue-loop! (fn [& _] (reset! seen (runs/get-strategy)) {:status :run-complete})]
+        (with-out-str (monitor-active-run! {:rez #{"Diviner"} :persistent true}))
+        (is (= :all-servers (:rez-scope @seen)) (str "persistent spans runs: " @seen))
+        (is (= #{77} (:rez-cids @seen)) (str "an answer at a window names that copy: " @seen))
+        (with-out-str (monitor-active-run! {:rez #{"Diviner"}}))
+        (is (= :this-run (:rez-scope @seen)) (str "a mid-run commitment is this run only: " @seen))))))
+
+(deftest continue-single-rez-at-a-same-server-duplicate-rezzes-the-approached-copy
+  (with-card-db {"Palisade" {:title "Palisade"}}
+    (fn []
+      (let [sent (atom [])
+            board {:run {:phase "approach-ice" :position 2 :server [:hq]}
+                   :corp {:credit 9
+                          :servers {:hq {:ices [{:cid 76 :title "Palisade" :cost 3 :rezzed false}
+                                                {:cid 77 :title "Palisade" :cost 3 :rezzed false}]}}
+                          :prompt-state {:msg "Rez Palisade?" :prompt-type "run" :choices []}}
+                   :runner {:prompt-state nil}}]
+        (with-mock-state (mock-client-state :side "corp" :game-state board)
+          (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+            (with-out-str (ai/continue-run! "--rez" "Palisade"))
+            (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) @sent)
+                (str "answering at the outer Palisade's window rezzes the outer one: " @sent))))))))

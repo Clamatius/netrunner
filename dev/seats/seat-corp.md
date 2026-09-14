@@ -155,8 +155,12 @@ runs. Parking is what keeps you present.
 
 **Pre-commit your rez policy** (`--rez "<ICE>"` / `--no-rez`) whenever you can: a
 pre-committed monitor answers the window *instantly*, whereas a window that has to
-wait for you to think is a window the Runner spends minutes staring at. Read the
-decision:
+wait for you to think is a window the Runner spends minutes staring at. One
+exception: a name that fits **more than one installed copy** is not guessed. That means two
+Palisades on the attacked server, or, for a `--persistent` monitor (which spans the
+whole turn), a Diviner on HQ and another on R&D. The monitor pauses at each copy's
+window and asks, and `--rez "<ICE>"` given *at* that window rezzes the copy being
+approached (#151 item 14). Read the decision:
 
 ```
 ./dev/send_command corp prompt
