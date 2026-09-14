@@ -2110,13 +2110,19 @@
                       :prompt-state {:msg "Rez Diviner?" :prompt-type "run" :choices []}}
                :runner {:prompt-state nil}}
         seen (atom nil)]
-    (with-mock-state (mock-client-state :side "corp" :game-state board)
-      (with-redefs [runs/auto-continue-loop! (fn [& _] (reset! seen (runs/get-strategy)) {:status :run-complete})]
-        (with-out-str (monitor-active-run! {:rez #{"Diviner"} :persistent true}))
-        (is (= :all-servers (:rez-scope @seen)) (str "persistent spans runs: " @seen))
-        (is (= #{77} (:rez-cids @seen)) (str "an answer at a window names that copy: " @seen))
-        (with-out-str (monitor-active-run! {:rez #{"Diviner"}}))
-        (is (= :this-run (:rez-scope @seen)) (str "a mid-run commitment is this run only: " @seen))))))
+    ;; Strategy is a global atom and mock state never applies a diff, so nothing
+    ;; expires it between tests: clean up, as the other strategy tests here do. (Left
+    ;; standing, this test's :rez-cids #{77} kept the continue --single test green
+    ;; with its wiring removed — mutation M-a.)
+    (try
+      (with-mock-state (mock-client-state :side "corp" :game-state board)
+        (with-redefs [runs/auto-continue-loop! (fn [& _] (reset! seen (runs/get-strategy)) {:status :run-complete})]
+          (with-out-str (monitor-active-run! {:rez #{"Diviner"} :persistent true}))
+          (is (= :all-servers (:rez-scope @seen)) (str "persistent spans runs: " @seen))
+          (is (= #{77} (:rez-cids @seen)) (str "an answer at a window names that copy: " @seen))
+          (with-out-str (monitor-active-run! {:rez #{"Diviner"}}))
+          (is (= :this-run (:rez-scope @seen)) (str "a mid-run commitment is this run only: " @seen))))
+      (finally (runs/reset-strategy!)))))
 
 (deftest continue-single-rez-at-a-same-server-duplicate-rezzes-the-approached-copy
   (with-card-db {"Palisade" {:title "Palisade"}}
@@ -2128,8 +2134,13 @@
                                                 {:cid 77 :title "Palisade" :cost 3 :rezzed false}]}}
                           :prompt-state {:msg "Rez Palisade?" :prompt-type "run" :choices []}}
                    :runner {:prompt-state nil}}]
-        (with-mock-state (mock-client-state :side "corp" :game-state board)
-          (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
-            (with-out-str (ai/continue-run! "--rez" "Palisade"))
-            (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) @sent)
-                (str "answering at the outer Palisade's window rezzes the outer one: " @sent))))))))
+        ;; Start from an empty strategy, so only THIS command's window commitment can
+        ;; make the rez happen (a leaked :rez-cids made it pass with the wiring removed).
+        (runs/reset-strategy!)
+        (try
+          (with-mock-state (mock-client-state :side "corp" :game-state board)
+            (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+              (with-out-str (ai/continue-run! "--rez" "Palisade"))
+              (is (some (fn [m] (and (= "rez" (:command m)) (= 77 (get-in m [:args :card :cid])))) @sent)
+                  (str "answering at the outer Palisade's window rezzes the outer one: " @sent))))
+          (finally (runs/reset-strategy!)))))))
