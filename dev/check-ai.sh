@@ -19,31 +19,49 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Static list of AI namespaces (order matters for dependencies)
+# Static list of AI namespaces, in TOPOLOGICAL order: every namespace is listed
+# before anything that requires it.
+#
+# This is not cosmetic. REQUIRE_EXPR below reloads them in this order with
+# `(require 'ns :reload)`, and `:reload` is SHALLOW — it recompiles that one
+# namespace against whatever its dependencies are in the long-lived REPL's memory
+# right now. List a dependent before its dependency and the dependent compiles
+# against the PREVIOUS session's copy, so the gate answers about a tree that
+# exists on no disk. Fourteen entries were in the wrong order, including all four
+# ai-run-* namespaces that ai-runs requires, and `make check` reported
+# `No such var` for correct code. dev/test/check_ai_ns_order_test.clj fails if this
+# order regresses.
+#
+# Order fixes that false RED and nothing else. The mirror case — DELETE a var that
+# a dependent still calls — still passes this gate at ANY order, because `:reload`
+# re-evaluates a file but never unmaps what the file stopped defining, so the
+# deleted var is still interned for the dependent to compile against. Do not read
+# a green tick here as "this tree loads cold". That blind spot is #215;
+# `lein check` (make check-full) is the sound answer until it is closed.
 AI_NAMESPACES=(
+    ai-debug
     ai-state
-    ai-websocket-client-v2
     ai-auth
     ai-core
-    ai-connection
+    ai-hud-utils
+    ai-websocket-client-v2
     ai-basic-actions
     ai-prompts
     ai-card-actions
-    ai-runs
-    ai-display
-    ai-hud-utils
-    ai-debug
-    ai-actions
     ai-stall
-    ai-loop-sync
-    ai-goldfish-corp
-    ai-goldfish-runner
-    ai-heuristic-corp
-    ai-heuristic-runner
     ai-run-corp-decisions
-    ai-run-runner-handlers
+    ai-display
+    ai-connection
+    ai-loop-sync
+    ai-goldfish-runner
     ai-run-corp-handlers
     ai-run-tactics
+    ai-run-runner-handlers
+    ai-runs
+    ai-actions
+    ai-goldfish-corp
+    ai-heuristic-corp
+    ai-heuristic-runner
 )
 
 NS_COUNT="${#AI_NAMESPACES[@]}"
