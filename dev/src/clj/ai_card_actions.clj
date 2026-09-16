@@ -658,7 +658,10 @@
                                        (or rez-cost "?") (or credits "?")))
                       (println "   Check `board` and the log before deciding — do not re-send blindly.")
                       {:status :error :reason :rez-not-confirmed :card-name card-name}))))))
-          (println (str "❌ Card not found installed: " card-name)))))))
+          ;; A miss is ambiguity OR absence. find-installed-corp-card has already printed
+          ;; the copies when there are several, so "not found" under that list was a
+          ;; contradiction — and the #151 item 14 pause text sends seats to `rez "X"`.
+          (core/report-installed-lookup-miss! card-name [:corp]))))))
 
 (defn let-subs-fire!
   "Signal intent to let unbroken subroutines fire (Runner only)

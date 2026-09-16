@@ -116,11 +116,93 @@
 ;; Corp Rez Handlers
 ;; ============================================================================
 
+(defn- with-hosted
+  "`cards` plus every Corp card hosted on them, recursively. The engine's
+   all-installed-corp walks :hosted the same way (game.core.board), and Awakening
+   Center hosts ICE, so a hosted copy is an installed copy (#151 item 14 panel).
+   Runner cards hosted on Corp cards (Botulus, Trypano) are not Corp installs."
+  [cards]
+  (mapcat (fn [c]
+            (when-not (= "Runner" (:side c))
+              (cons c (with-hosted (:hosted c)))))
+          cards))
+
 (defn- installed-corp-cards
-  "Every installed Corp card this seat can see: all servers' ICE and content."
+  "Every installed Corp card this seat can see: all servers' ICE and content, and
+   the Corp cards hosted on them."
   [state]
   (let [servers (vals (get-in state [:game-state :corp :servers]))]
-    (concat (mapcat :ices servers) (mapcat :content servers))))
+    (with-hosted (concat (mapcat :ices servers) (mapcat :content servers)))))
+
+(defn- run-server-key
+  "The attacked server's key in :servers (:hq, :rd, :remote1), or nil with no run.
+   Same derivation as core/current-run-ice."
+  [state]
+  (when-let [server (get-in state [:game-state :run :server])]
+    (keyword (last server))))
+
+(defn- server-label [k]
+  (case k
+    :hq "HQ"
+    :rd "R&D"
+    :archives "Archives"
+    (let [n (name k)]
+      (if (clojure.string/starts-with? n "remote") (str "Server " (subs n 6)) n))))
+
+(defn- installed-copies
+  "Installed Corp cards titled `title` (case/diacritic-blind) within `scope`, as
+   [{:server k :card c}]. Rezzed or not: a copy rezzed by Send a Message must not
+   quietly turn an ambiguous name into an unambiguous one (#151 item 14).
+
+   :all-servers — a persistent monitor re-applies its flags on every run of the
+   turn, so every server's copies can be approached under the same commitment.
+   :this-run    — a commitment made during a run: only the attacked server."
+  [state title scope]
+  (let [servers (get-in state [:game-state :corp :servers])
+        keys-in-scope (if (= :all-servers scope) (keys servers) (keep identity [(run-server-key state)]))]
+    (for [k keys-in-scope
+          c (with-hosted (concat (get-in servers [k :ices]) (get-in servers [k :content])))
+          :when (core/rez-set-names? [title] (:title c))]
+      {:server k :card c})))
+
+(defn- rez-commitment-for
+  "How a --rez strategy applies to `card`: :commit (named, and either its cid was
+   committed at a window or it is the only installed copy in scope), :ambiguous
+   (named, but more than one installed copy in scope), or nil (not named).
+   A commitment with no :rez-scope was made during a run."
+  [strategy card state]
+  (when (and card (core/rez-set-names? (:rez strategy) (:title card)))
+    (cond
+      (contains? (:rez-cids strategy) (:cid card)) :commit
+      (<= (count (installed-copies state (:title card) (or (:rez-scope strategy) :this-run))) 1) :commit
+      :else :ambiguous)))
+
+(defn upgrade-attempted-cids
+  "The upgrade cids already sent a rez this run, as a set. Older strategies stored a
+   single cid."
+  [strategy]
+  (let [v (:upgrade-rez-attempted strategy)]
+    (cond (set? v) v (some? v) #{v} :else #{})))
+
+(defn window-rez-commitment
+  "The cids a `--rez` given AT a rez window names (#151 item 14). At a window the
+   name is not ambiguous: it is the card the window is about — the approached ICE
+   at approach-ice, or this server's unrezzed upgrade(s) of that title at the
+   pre-approach-server window."
+  [rez-names state]
+  (let [phase (get-in state [:game-state :run :phase])
+        ice (when (= "approach-ice" phase) (core/current-run-ice state))
+        content (decisions/attacked-server-content state)
+        ;; Two same-title upgrades in one server: the name cannot say which, so neither
+        ;; is committed (#151 item 14 panel) — the seat rezzes one by hand.
+        one-in-server? (fn [c] (= 1 (count (filter #(core/rez-set-names? [(:title c)] (:title %)) content))))
+        upgrades (when (= :server-upgrade (:kind (decisions/corp-run-decision state)))
+                   (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)) (one-in-server? %))
+                           content))]
+    (into #{}
+          (comp (filter #(and (:cid %) (core/rez-set-names? rez-names (:title %))))
+                (map :cid))
+          (cons ice upgrades))))
 
 (defn report-rez-list!
   "Say, when a --rez set is committed, anything that will stop a name from acting.
@@ -130,25 +212,42 @@
    say is about THIS board: a name matching no installed Corp card, or matching
    only cards --rez cannot rez during a run — assets, already-rezzed ICE (#202).
    Silent with no board: that is no evidence that a name matches nothing."
-  [rez-names state]
-  (let [cards (installed-corp-cards state)
-        ;; An unrezzed ICE (approach-ice) or upgrade (pre-approach-server). A card
-        ;; with no :type is not evidence of "cannot": no data, no verdict.
-        actionable? (fn [c] (and (not (:rezzed c)) (contains? #{"ICE" "Upgrade" nil} (:type c))))
-        describe (fn [c] (str (:title c) " ("
-                              (if (:rezzed c) "already rezzed" (clojure.string/lower-case (str (:type c))))
-                              ")"))]
-    (when (seq cards)
-      (doseq [listed (sort rez-names)]
-        (let [hits (filter #(core/rez-set-names? [listed] (:title %)) cards)]
-          (cond
-            (empty? hits)
-            (println (format "   ⚠️  --rez \"%s\" matches no installed Corp card — it has nothing to rez. Installed: %s"
-                             listed (clojure.string/join ", " (distinct (keep :title cards)))))
+  ([rez-names state] (report-rez-list! rez-names state :all-servers))
+  ([rez-names state scope]
+   (let [cards (installed-corp-cards state)
+         ;; An unrezzed ICE (approach-ice) or upgrade (pre-approach-server). A card
+         ;; with no :type is not evidence of "cannot": no data, no verdict.
+         actionable? (fn [c] (and (not (:rezzed c)) (contains? #{"ICE" "Upgrade" nil} (:type c))))
+         describe (fn [c] (str (:title c) " ("
+                               (if (:rezzed c) "already rezzed" (clojure.string/lower-case (str (:type c))))
+                               ")"))]
+     (when (seq cards)
+       (doseq [listed (sort rez-names)]
+         (let [all-copies (installed-copies state listed :all-servers)
+               copies (installed-copies state listed scope)
+               in-scope (map :card copies)
+               here (run-server-key state)]
+           (cond
+             (empty? all-copies)
+             (println (format "   ⚠️  --rez \"%s\" matches no installed Corp card — it has nothing to rez. Installed: %s"
+                              listed (clojure.string/join ", " (distinct (keep :title cards)))))
 
-            (not-any? actionable? hits)
-            (println (format "   ⚠️  --rez \"%s\" matches only %s — --rez rezzes unrezzed ICE and upgrades during a run, so it will not act."
-                             listed (clojure.string/join ", " (map describe hits))))))))))
+             ;; #151 item 14 panel: installed, but not on the server this run can reach.
+             (and (= :this-run scope) here (empty? copies))
+             (println (format "   ⚠️  --rez \"%s\" is installed only on %s, and this run is on %s, so it has nothing to rez here."
+                              listed
+                              (clojure.string/join ", " (distinct (map #(server-label (:server %)) all-copies)))
+                              (server-label here)))
+
+             (and (seq in-scope) (not-any? actionable? in-scope))
+             (println (format "   ⚠️  --rez \"%s\" matches only %s — --rez rezzes unrezzed ICE and upgrades during a run, so it will not act."
+                              listed (clojure.string/join ", " (map describe in-scope))))
+
+             ;; #151 item 14. Rezzed copies still make the name ambiguous, but a rezzed
+             ;; copy has no rez window to ask at (panel round 1b).
+             (> (count copies) 1)
+             (println (format "   ⚠️  --rez \"%s\" fits %d installed copies (%s) — it will not guess: at each unrezzed copy's window you will be asked whether to rez that one."
+                              listed (count copies) (clojure.string/join ", " (map #(server-label (:server %)) copies)))))))))))
 
 (defn handle-corp-rez-strategy
   "Priority 1.5: Corp rez strategy - auto-handle rez decisions based on --no-rez/--rez flags."
@@ -170,7 +269,7 @@
           rez-already-attempted? (= (:rez-attempted-at strategy) position)
           should-rez? (and (not (:no-rez strategy))
                           (:rez strategy)
-                          (core/rez-set-names? (:rez strategy) ice-title)
+                          (= :commit (rez-commitment-for strategy current-ice state))
                           (not ice-rezzed?))]
       (cond
         ;; --no-rez: always decline
@@ -235,6 +334,28 @@
               (println (format "   ✅ Rez confirmed: %s is rezzed — continuing" ice-title))
               (println (format "   ICE %s was already rezzed, continuing" ice-title))))
           (send-continue! gameid))
+
+        ;; Named, but more than one installed copy in scope (#151 item 14): no
+        ;; guess. At this window the answer is unambiguous — `continue --rez` here
+        ;; commits THIS copy (ai-runs records it via window-rez-commitment).
+        (and (not ice-rezzed?) (= :ambiguous (rez-commitment-for strategy current-ice state)))
+        (let [copies (installed-copies state ice-title (or (:rez-scope strategy) :this-run))
+              status-key [:corp-rez-ambiguous position ice-title]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "   Rez decision: %s — your --rez \"%s\" fits %d installed copies (%s), so it will not guess."
+                             ice-title ice-title (count copies)
+                             (clojure.string/join ", " (map #(server-label (:server %)) copies))))
+            (println (format "      continue --rez \"%s\"   - rez THIS one (the ICE being approached)" ice-title))
+            (println           "      continue --no-rez       - decline this and the rest of the run"))
+          {:status :decision-required
+           :wake-reason :rez-ice
+           :ice ice-title
+           :position position
+           :prompt my-prompt
+           :message (format "Corp must decide: rez this %s or continue (--rez name fits %d installed copies)"
+                            ice-title (count copies))})
 
         ;; --rez set exists but THIS unrezzed ICE is not in it: pause for a
         ;; decision rather than silently auto-declining. The old behaviour sent
@@ -770,13 +891,28 @@
              (not (:no-rez strategy)))
     (let [decision (decisions/corp-run-decision state)]
       (when (= :server-upgrade (:kind decision))
-        (let [card-title (get-in decision [:card :title] "upgrade")
-              upgrade (first (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)))
-                                     (decisions/attacked-server-content state)))
+        (let [upgrades (filter #(and (= "Upgrade" (:type %)) (not (:rezzed %)))
+                               (decisions/attacked-server-content state))
+              ;; #151 item 14: consider EVERY unrezzed upgrade here, not only the
+              ;; first (a listed second upgrade used to never auto-rez), and never
+              ;; guess between installed copies of a name.
+              verdict (fn [c] (rez-commitment-for strategy c state))
+              tried (upgrade-attempted-cids strategy)
+              ;; An untried committed upgrade is rezzed before any failed one is declined
+              ;; (#151 item 14 panel: a failed first upgrade used to pass the window over
+              ;; the rest). Tried cids are never re-sent.
+              to-rez (first (filter #(and (= :commit (verdict %)) (not (contains? tried (:cid %)))) upgrades))
+              attempted (first (filter #(and (contains? tried (:cid %)) (= :commit (verdict %))) upgrades))
+              ambiguous (first (filter #(= :ambiguous (verdict %)) upgrades))
+              upgrade (or to-rez attempted (first upgrades))
+              card-title (or (:title upgrade) (get-in decision [:card :title] "upgrade"))
               cid (:cid upgrade)
-              should-rez? (and (:rez strategy)
-                               (core/rez-set-names? (:rez strategy) card-title))
-              rez-already-attempted? (and cid (= (:upgrade-rez-attempted strategy) cid))]
+              ;; Order of business (#151 item 14 panel round 2): rez an untried committed
+              ;; upgrade; else, if an upgrade is still AMBIGUOUS, ask (a failed attempt
+              ;; must not pass the window over a question the seat has not answered);
+              ;; only then decline a failed attempt. A failed rez is never re-sent.
+              should-rez? (boolean (or to-rez (and attempted (nil? ambiguous))))
+              rez-already-attempted? (boolean (and (nil? to-rez) (nil? ambiguous) attempted))]
           (cond
             ;; --rez listed, already tried this cid, still unrezzed → the rez did
             ;; not take (almost always unaffordable). NEVER re-rez (that is the
@@ -821,6 +957,34 @@
                ;; Persisted by the wrapper in ai_runs so a failed (unaffordable)
                ;; rez is detected next pass instead of retried forever.
                :upgrade-rez-attempted cid})
+
+            ;; Named, but more than one installed copy in scope (#151 item 14).
+            ambiguous
+            (let [title (:title ambiguous)
+                  n (count (installed-copies state title (or (:rez-scope strategy) :this-run)))
+                  status-key [:corp-upgrade-rez-ambiguous (:cid ambiguous)]
+                  already-printed? (= @last-waiting-status status-key)]
+              (when-not already-printed?
+                (reset! last-waiting-status status-key)
+                (println (format "   Server upgrade decision: %s — your --rez \"%s\" fits %d installed copies, so it will not guess."
+                                 title title n))
+                (if (< 1 (count (filter #(core/rez-set-names? [title] (:title %))
+                                        (decisions/attacked-server-content state))))
+                  ;; Two or more in THIS server: no name picks one (#151 item 14 panel).
+                  (do
+                    (println (format "      More than one %s is in this server, so a name cannot pick one. Rez it by hand:" title))
+                    (println (format "      rez \"%s\"   - lists the copies with their [N]; then rez \"%s [N]\"" title title))
+                    (println           "      continue --no-rez       - decline"))
+                  (do
+                    (println (format "      continue --rez \"%s\"   - rez the one in this server" title))
+                    (println           "      continue --no-rez       - decline"))))
+              {:status :decision-required
+               :wake-reason (:wake-reason decision)
+               :decision decision
+               :message (format "Corp must decide: rez %s in this server or continue (--rez name fits %d installed copies)"
+                                title n)
+               :card title
+               :server (:server decision)})
 
             ;; No whitelist commitment for this upgrade → surface for a decision.
             :else

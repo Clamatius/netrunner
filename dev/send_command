@@ -511,6 +511,8 @@ ${GREEN}Running:${NC}
     --rez <name>     Corp: auto-rez the ICE or upgrade titled exactly <name> (case and
                      accents ignored; a near miss like "Bran" is rejected at once with
                      the title to type); pause on other unrezzed ICE
+                     A name fitting 2+ installed copies (this server; every server
+                     under --persistent) pauses at each unrezzed copy instead of guessing.
                      (repeatable: --rez Diviner --rez Palisade pre-commits both)
     --fire-unbroken  Corp: auto-fire unbroken subroutines once the Runner is
                      done with the encounter (tank signal OR a plain pass)
