@@ -59,7 +59,8 @@
    exactly that alias at runtime, measured:
 
        ;; in ai-prompts, after a body-level (require '[ai-basic-actions :as basic])
-       (contains? (aliases-of 'ai-prompts) \"ai-basic-actions\")  ;; => true
+       (contains? (set (map (comp str ns-name) (vals (ns-aliases 'ai-prompts))))
+                  \"ai-basic-actions\")                            ;; => true
 
    So the graph would depend on what else had run in the same JVM, differing between
    a focused `lein test` and the full suite, and could fail a healthy order.
@@ -70,10 +71,10 @@
    than a regex, unions every matching declaration, and touches no runtime state.
 
    WHAT THIS PINS
-   That AI_NAMESPACES is in topological order with respect to the loaded namespaces'
-   actual aliases. In topological order every dependency has been re-evaluated
-   before any dependent compiles against it — which is exactly the false-RED
-   direction and no more.
+   That AI_NAMESPACES is in topological order with respect to the `:require`s in each
+   listed namespace's own `ns` form, in the file the classpath resolves for it. In
+   that order every dependency has been re-evaluated before any dependent compiles
+   against it — which is exactly the false-RED direction and no more.
 
    WHAT THIS DOES NOT PIN
      - namespaces outside the list (`jinteki.cards`, `differ.core`, …). They are
@@ -147,9 +148,21 @@
    Asking the classpath for that ONE path is what makes the shadow-file defect
    unreachable: a stale copy of a file is not the resource this resolves to, so it
    cannot claim a namespace no matter what its `ns` form says. Nothing here scans a
-   directory."
+   directory.
+
+   `root-resource` yields only the STEM. `clojure.lang.RT/load` then tries
+   `stem__init.class`, `stem.clj` and `stem.cljc`, in that order, so this tries both
+   source extensions. Appending `.clj` alone made a `.cljc` namespace — which
+   `require` loads perfectly well — report \"no such namespace is on the classpath\":
+   a false error, and `make test` red for a correct tree the day an AI namespace
+   arrives as `.cljc`. Caught by a review seat that put one on the classpath.
+
+   The `__init.class` branch is deliberately NOT tried. An AOT-compiled namespace has
+   no `ns` form to read, and there is none for any listed namespace here; if one
+   appeared, this reports it missing rather than guessing at its requires."
   [ns-name-str]
-  (io/resource (str (-> ns-name-str (str/replace "-" "_") (str/replace "." "/")) ".clj")))
+  (let [stem (-> ns-name-str (str/replace "-" "_") (str/replace "." "/"))]
+    (some #(io/resource (str stem %)) [".clj" ".cljc"])))
 
 (defn- ns-forms-named
   "Every `ns` form in `resource` that declares exactly `ns-name-str`, in file order.
@@ -167,7 +180,12 @@
   (binding [*read-eval* false]
     (with-open [r (java.io.PushbackReader. (io/reader resource))]
       (loop [acc []]
-        (let [form (try (read {:eof ::eof} r) (catch Exception _ ::eof))]
+        ;; `:read-cond :allow` because a .cljc `ns` form may be wrapped in a reader
+        ;; conditional — jinteki.cards' is `#?(:cljs (:require …))`. Without it the
+        ;; read throws, the catch below turns that into ::eof, and the file appears to
+        ;; declare nothing. `*features*` defaults to #{:clj}, so this reads the same
+        ;; platform branch `require` does from Clojure, which is the one that matters.
+        (let [form (try (read {:eof ::eof :read-cond :allow} r) (catch Exception _ ::eof))]
           (cond
             (= form ::eof) acc
             (and (seq? form) (= 'ns (first form)) (= (str (second form)) ns-name-str))
@@ -178,9 +196,14 @@
   "The `:require`d namespace names in one `ns` form."
   [form]
   (set (for [clause (drop 2 form)
-             :when (and (seq? clause) (= :require (first clause)))
+             ;; `sequential?`, not `seq?`: `(ns x [:require [y :as z]])` is a legal
+             ;; VECTOR reference clause that the `ns` macro accepts and creates the
+             ;; alias for. `seq?` returned an empty set for it — an edge silently
+             ;; missed, which is the false-GREEN direction. Unreachable in this tree
+             ;; today; closed rather than documented, because it is the bad direction.
+             :when (and (sequential? clause) (= :require (first clause)))
              spec (rest clause)]
-         (str (if (vector? spec) (first spec) spec)))))
+         (str (if (sequential? spec) (first spec) spec)))))
 
 (defn dependency-graph
   "listed-name -> set of LISTED namespaces its `ns` form requires.
@@ -215,7 +238,7 @@
 ;; The real tree
 ;; ---------------------------------------------------------------------------
 
-(def ^:private script-file (io/file "dev/check-ai.sh"))
+(def ^:private ^java.io.File script-file (io/file "dev/check-ai.sh"))
 
 (deftest the-fixture-is-actually-reading-the-repo
   (testing "an empty parse would satisfy the order assertion for the wrong reason"
@@ -314,18 +337,57 @@
     (is (some? (ns-resource "ai-run-corp-handlers"))
         "dashes must become underscores, as clojure.core/root-resource does")
     (is (str/ends-with? (str (ns-resource "ai-run-corp-handlers")) "/ai_run_corp_handlers.clj"))
+    (is (some? (ns-resource "jinteki.cards"))
+        "dots must become slashes")
     (is (nil? (ns-resource "ai-definitely-not-here"))))
+
+  (testing "a .cljc namespace resolves, as it does for require"
+    ;; jinteki.cards lives at src/cljc/jinteki/cards.cljc and three listed namespaces
+    ;; require it. Appending ".clj" alone returned nil for it, which would have made
+    ;; dependency-graph throw "no such namespace is on the classpath" — a false error
+    ;; the day an AI namespace arrives as .cljc. Found by a review seat.
+    (is (str/ends-with? (str (ns-resource "jinteki.cards")) "/jinteki/cards.cljc"))
+    (is (nil? (io/resource "jinteki/cards.clj"))
+        "fixture: if a .clj appears for this namespace it no longer tests the .cljc branch")
+    (is (= #{"jinteki.cards"}
+           (get (dependency-graph ["jinteki.cards" "ai-core"]) "ai-core"))
+        "a .cljc dependency must be a real edge, not a throw"))
+
+  (testing "a VECTOR reference clause is read, not silently skipped"
+    ;; `(ns x [:require [y :as z]])` is legal and the ns macro creates the alias.
+    ;; Filtering on seq? returned {} for it: an edge missed, the false-GREEN direction.
+    (is (= #{"ai-core"} (requires-of '(ns probe [:require [ai-core :as core]])))
+        "a vector :require clause was skipped")
+    (is (= #{"ai-core"} (requires-of '(ns probe (:require [ai-core :as core]))))
+        "the ordinary list clause must still work")
+    (is (= #{"ai-core"} (requires-of '(ns probe (:require ai-core))))
+        "a bare symbol spec must still work"))
 
   (testing "a RUNTIME alias is not a compile dependency, and must not become an edge"
     ;; ai-prompts creates an `ai-basic-actions` alias from inside a function body.
     ;; The ns-aliases version of this graph reported that as an edge, which made the
     ;; answer depend on what had already run in the JVM and could fail a healthy
     ;; order. Reading the `ns` form cannot see it, which is the point.
-    (require 'ai-prompts)
-    (binding [*ns* (find-ns 'ai-prompts)] (eval '(require '[ai-basic-actions :as basic])))
-    (is (contains? (set (map (comp str ns-name) (vals (ns-aliases 'ai-prompts))))
-                   "ai-basic-actions")
-        "fixture: the runtime alias this guards against is not actually present")
-    (is (not (contains? (get (dependency-graph ["ai-basic-actions" "ai-prompts"]) "ai-prompts")
-                        "ai-basic-actions"))
-        "a body-level require leaked into the compile-dependency graph")))
+    ;;
+    ;; The fixture reads the FILE rather than evaluating the require and then
+    ;; asserting the require happened — a review seat pointed out the earlier version
+    ;; asserted its own setup and so could not fail, leaving the docstring's
+    ;; "measured" claim to go stale silently if ai_prompts.clj ever changed.
+    (let [forms      (binding [*read-eval* false]
+                       (with-open [r (java.io.PushbackReader. (io/reader (ns-resource "ai-prompts")))]
+                         (doall (take-while #(not= ::eof %)
+                                            (repeatedly #(read {:eof ::eof} r))))))
+          ns-form    (first (filter #(and (seq? %) (= 'ns (first %))) forms))
+          body-reqs  (for [x (tree-seq coll? seq (remove #{ns-form} forms))
+                           :when (and (seq? x) (= 'require (first x)))]
+                       x)]
+      (is (some #(str/includes? (pr-str %) "ai-basic-actions") body-reqs)
+          (str "fixture is stale: ai_prompts.clj no longer has a body-level "
+               "`(require '[ai-basic-actions :as basic])`, so this test no longer "
+               "guards anything. Pick another body-level require, or drop the test."))
+      (is (not (contains? (requires-of ns-form) "ai-basic-actions"))
+          "fixture is stale: ai-prompts now requires ai-basic-actions in its ns form, so
+           the runtime alias is no longer a distinguishing case")
+      (is (not (contains? (get (dependency-graph ["ai-basic-actions" "ai-prompts"]) "ai-prompts")
+                          "ai-basic-actions"))
+          "a body-level require leaked into the compile-dependency graph"))))
