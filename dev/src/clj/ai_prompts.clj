@@ -788,34 +788,241 @@
         (println "❌ No discard prompt active or no indices provided")
         (core/with-cursor {:status :error :reason "No discard prompt or no indices"})))))
 
+(def select-register-timeout-ms
+  "How long send-discard-plan! waits for one select to show up in client state
+   before it sends the next card."
+  3000)
+
+(defn- discard-count-required
+  "How many cards a discard prompt wants in total, from its message, or nil when it
+   does not say. The wire does not carry the engine's :max (diffs.clj prompt-keys);
+   the end-of-turn prompt reads \"Discard down to N card(s)\" (turns.clj), so the
+   count is hand size minus N, clamped as the engine clamps. \"Choose N cards to
+   discard\" (Harvester, SYN Attack) says N outright."
+  [prompt hand-count]
+  (let [msg (str (:msg prompt))]
+    (if-let [[_ n] (re-find #"(?i)discard down to (-?\d+)" msg)]
+      ;; Mirror turns.clj exactly: :max (- cur-hand-size (max hand-size 0)). A
+      ;; negative hand size means the whole hand, not hand + |N| (#203 panel).
+      (max 0 (- hand-count (max 0 (Long/parseLong n))))
+      (when-let [[_ n] (re-find #"(?i)choose (\d+) cards? to discard" msg)]
+        (Long/parseLong n)))))
+
+(defn- plan-discard
+  "Settle EVERY named card against the whole prompt before anything is sent (#203).
+   Returns {:to-send [cards]} or {:error [lines]}. Pure.
+
+   `required` is how many cards the prompt wants in total, or nil when the prompt
+   does not say (see discard-count-required).
+
+   Names are exact titles (case/diacritic-blind), never substrings. The engine's
+   select TOGGLES and resolves the moment :max cards are selected, so:
+     - a named copy the wire already marks :selected counts toward the request and
+       is not re-sent (re-sending deselects it);
+     - a selected card nobody named, or one this seat cannot see, is a conflict —
+       it would be discarded too;
+     - naming more copies than there are, or a title that is not there, sends
+       nothing;
+     - asking for more than `required` (counting what is already selected) sends
+       nothing: the extra select would land after the prompt resolved, and on an
+       unknown eid the engine's select answers the NEXT pending selection instead;
+     - with no `required`, more than one card to send is a guess, so it sends nothing.
+   Loose, copy-by-copy resolution discarded the wrong card in several ways across
+   review rounds; these are the rules that replaced it."
+  [names cards required]
+  (let [titled (filter :title cards)
+        by-title (group-by #(core/fold-card-name (:title %)) titled)
+        order (distinct (map core/fold-card-name names))
+        wanted (frequencies (map core/fold-card-name names))
+        typed (into {} (map (juxt core/fold-card-name identity)) (reverse names))
+        spell (fn [k] (or (:title (first (by-title k))) (typed k)))
+        quote-all (fn [ks] (clojure.string/join ", " (map #(str "\"" (spell %) "\"") ks)))
+        unknown (remove by-title order)
+        short (filter #(< (count (by-title %)) (wanted %)) (filter by-title order))
+        over (filter #(> (count (filter :selected (by-title %))) (wanted %)) (filter by-title order))
+        stray (remove #(contains? wanted (core/fold-card-name (:title %))) (filter :selected titled))
+        unseen-selected (filter #(and (:selected %) (not (:title %))) cards)
+        selected-total (count (filter :selected cards))
+        hand-line (str "   Discardable: "
+                       (clojure.string/join ", " (sort (distinct (map :title titled)))))
+        to-send (vec (mapcat (fn [k]
+                               (let [copies (by-title k)
+                                     already (count (filter :selected copies))]
+                                 (take (- (wanted k) already) (remove :selected copies))))
+                             order))]
+    (cond
+      (seq unknown)
+      {:error [(str "❌ Not the exact title of a card you can discard: " (quote-all unknown)
+                    " — nothing discarded.")
+               hand-line]}
+
+      (seq short)
+      {:error [(str "❌ You named more copies than you hold: "
+                    (clojure.string/join ", " (map #(format "%d × %s (you have %d)" (wanted %) (spell %)
+                                                           (count (by-title %)))
+                                                   short))
+                    " — nothing discarded.")
+               hand-line]}
+
+      (seq unseen-selected)
+      {:error ["❌ A card this seat cannot see is already selected on this prompt — the engine would discard it too. Run `prompt` to inspect it. Nothing discarded."]}
+
+      (seq stray)
+      {:error [(str "❌ Already selected on this prompt but not in your list: "
+                    (clojure.string/join ", " (map :title stray))
+                    " — the engine would discard it too. Name it as well, or toggle it off with choose-card. Nothing discarded.")]}
+
+      (seq over)
+      {:error [(str "❌ More copies are already selected than you named: " (quote-all over)
+                    " — toggle the extra off with choose-card. Nothing discarded.")]}
+
+      (and required (> (+ selected-total (count to-send)) required))
+      {:error [(if (zero? required)
+                 "❌ By your cached hand this prompt wants no more cards, so the cache is stale — nothing discarded. Run `status` to resync, then retry."
+                 (format "❌ This prompt wants %d card(s)%s; you named %d — nothing discarded."
+                         required
+                         (if (pos? selected-total) (format " (%d already selected)" selected-total) "")
+                         (count names)))]}
+
+      (and (nil? required) (> (count to-send) 1))
+      {:error ["❌ This prompt does not say how many cards it wants, so `discard` takes one card at a time here — name one card and re-run. Nothing discarded."]}
+
+      :else
+      {:to-send to-send})))
+
+(defn- await-select-registered!
+  "After one select, wait until client state shows it: :registered when the card is
+   now :selected, :prompt-moved when the prompt is gone or replaced, :timeout
+   otherwise. The cached :eid lags the engine, so another select is only safe once
+   the previous one is visible (#203 panel)."
+  [eid cid]
+  (loop [waited 0]
+    (let [prompt (state/get-prompt)
+          side (state/my-side-kw @state/client-state)
+          card (some #(when (= cid (:cid %)) %) (get-in (state/get-game-state) [side :hand]))]
+      (cond
+        (or (nil? prompt) (not= eid (:eid prompt))) :prompt-moved
+        (:selected card) :registered
+        (>= waited select-register-timeout-ms) :timeout
+        :else (do (Thread/sleep 25) (recur (+ waited 25)))))))
+
+(defn- send-discard-plan!
+  "Send a settled discard plan one select at a time. Each card after the first goes
+   only once the previous select is visible in client state, and sending stops if
+   the prompt has moved: a select sent into a resolved prompt is answered by the
+   engine's next pending selection. Reports only what the prompt confirms."
+  [prompt to-send]
+  (let [eid (:eid prompt)
+        select? (state/select-prompt-type? (:prompt-type prompt))]
+    (if (empty? to-send)
+      (do
+        (println "ℹ️  Every named card is already selected — nothing to send.")
+        (core/with-cursor {:status :success :selected 0}))
+      (let [_ (println (format "📇 Discarding %d card(s)..." (count to-send)))
+            {:keys [sent stop]}
+            (reduce (fn [{:keys [sent]} card]
+                      (let [wait (when (pos? sent)
+                                   (await-select-registered! eid (:cid (nth to-send (dec sent)))))]
+                        (if (and wait (not= :registered wait))
+                          (reduced {:sent sent :stop wait})
+                          (do
+                            (println (format "   → %s" (:title card)))
+                            (ws/select-card! card eid)
+                            {:sent (inc sent) :stop nil}))))
+                    {:sent 0 :stop nil}
+                    to-send)]
+        (cond
+          (= :timeout stop)
+          (do
+            (println (format "⚠️  Selected %d of %d card(s), then stopped: that select was not confirmed within %dms (it may already have resolved the prompt), and another select could land on a different prompt."
+                             sent (count to-send) select-register-timeout-ms))
+            (println "   Run `prompt` to see what is selected, then name the rest.")
+            (core/with-cursor {:status :error
+                               :reason "Select not confirmed; stopped before sending the rest"
+                               :selected sent}))
+
+          (= :prompt-moved stop)
+          (do
+            (println (format "⚠️  The discard prompt resolved after %d of %d card(s); the rest were NOT sent."
+                             sent (count to-send)))
+            (println "   Run `status` to see what was discarded.")
+            (core/with-cursor {:status :error
+                               :reason "Prompt resolved before every named card was sent"
+                               :selected sent}))
+
+          (wait-for-prompt-change! eid :old-msg (:msg prompt))
+          (do
+            (println "✅ Discard complete")
+            (core/with-cursor {:status :success :selected sent}))
+
+          select?
+          (do
+            (println (format "⏳ %d card(s) toggled but the discard prompt is still open — it wants more cards." sent))
+            (println "   Run `prompt` to see how many, then name the rest.")
+            (core/with-cursor {:status :waiting-input :selected sent}))
+
+          :else
+          (do
+            (println "↪️  The selection did not register — run `prompt` to inspect.")
+            (core/with-cursor {:status :error :reason "Discard selection did not register"})))))))
+
 (defn discard-by-names!
-  "Discard specific cards by their names
-   Supports [N] suffix for duplicates: \"Sure Gamble [1]\"
+  "Answer an open discard-from-hand prompt by card NAME.
+   Repeat a name to discard several copies: (discard-by-names! [\"Sure Gamble\" \"Sure Gamble\"])
 
    Usage: (discard-by-names! [\"Sure Gamble\" \"Diesel\"])
-          (discard-by-names! \"Sure Gamble [1]\")  ; Specific copy
 
-   NOTE: During end-of-turn discard prompts, the selectable cards are in the
-   prompt's :selectable list, not the raw :hand. Use choose-card or multi-choose
-   for those prompts instead."
+   This used to refuse on every select prompt (\"Use choose-card …\") and error on
+   everything else, so it had no path that discarded anything — the end-of-turn
+   discard it exists for was always refused, and two models on both sides reached
+   for it first (#203). Names are settled by plan-discard (exact titles, the whole
+   prompt at once) and sent by send-discard-plan!.
+
+   Only a prompt whose pickable cards are all IN HAND and whose message says
+   discard is answered: install-from-hand and reveal prompts also pick hand cards
+   (~115 engine prompts choose {:card in-hand?}), and a select over installed cards
+   (Send a Message's trash) is not a discard at all."
   [card-names]
   (let [names-vec (if (vector? card-names) card-names [card-names])
-        client-state @state/client-state
-        side-str (:side client-state)
-        side (when side-str (keyword (clojure.string/lower-case side-str)))
-        gs (state/get-game-state)
-        prompt (get-in gs [side :prompt-state])
-        hand (get-in gs [side :hand])]
-    ;; Check if there's a select prompt - if so, guide user to choose-card instead
-    (if (= "select" (:prompt-type prompt))
+        side (state/my-side-kw @state/client-state)
+        prompt (get-in (state/get-game-state) [side :prompt-state])
+        cards (map :card (:pickable (core/resolve-selectable (:selectable prompt))))
+        in-hand? (fn [card] (= "hand" (some-> card :zone first name)))
+        ;; The EOT prompt reads "Discard down to N cards" (turns.clj).
+        discard-msg? (re-find #"(?i)discard" (str (:msg prompt)))]
+    (cond
+      (and (seq cards) (every? in-hand? cards) discard-msg?)
+      (let [hand-count (count (get-in (state/get-game-state) [side :hand]))
+            {:keys [error to-send]} (plan-discard names-vec cards
+                                                  (discard-count-required prompt hand-count))]
+        (if error
+          (do
+            (doseq [line error] (println line))
+            (core/with-cursor {:status :error :reason "Named cards do not fit the discard prompt"}))
+          (send-discard-plan! prompt to-send)))
+
+      (and (seq cards) (every? in-hand? cards))
       (do
-        (println "⚠️  Active select prompt detected.")
-        (println "   Use `choose-card <index>` or `multi-choose` instead.")
-        (println "   Run `prompt` to see available cards.")
-        (core/with-cursor {:status :error :reason "Use choose-card for select prompts"}))
+        (println (format "❌ The open prompt (\"%s\") picks cards from your hand, but it is not a discard." (:msg prompt)))
+        (println "   Run `prompt` to see it, then answer with choose-card <index> / multi-choose.")
+        (core/with-cursor {:status :error :reason "Open prompt is not a discard"}))
+
+      (seq cards)
       (do
-        (println "❌ No select prompt active - nothing to discard")
-        (core/with-cursor {:status :error :reason "No select prompt active"})))))
+        (println "❌ The open prompt selects cards that are NOT in your hand — `discard` only answers a discard-from-hand prompt.")
+        (println "   Run `prompt` to see it, then answer with choose-card <index> / multi-choose.")
+        (core/with-cursor {:status :error :reason "Open prompt is not a discard from hand"}))
+
+      (seq (:selectable prompt))
+      (do
+        (println "❌ A prompt is open, but none of its selectable cards are visible from this seat.")
+        (println "   Run `prompt` to inspect it.")
+        (core/with-cursor {:status :error :reason "No selectable card visible from this seat"}))
+
+      :else
+      (do
+        (println "❌ No discard prompt open - nothing to discard")
+        (core/with-cursor {:status :error :reason "No discard prompt open"})))))
 
 ;; ============================================================================
 ;; Auto-resolve Info Prompts

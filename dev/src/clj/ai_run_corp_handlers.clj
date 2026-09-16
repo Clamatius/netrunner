@@ -116,6 +116,40 @@
 ;; Corp Rez Handlers
 ;; ============================================================================
 
+(defn- installed-corp-cards
+  "Every installed Corp card this seat can see: all servers' ICE and content."
+  [state]
+  (let [servers (vals (get-in state [:game-state :corp :servers]))]
+    (concat (mapcat :ices servers) (mapcat :content servers))))
+
+(defn report-rez-list!
+  "Say, when a --rez set is committed, anything that will stop a name from acting.
+
+   Names reaching here already passed the parse-time check (core/rez-name-verdict),
+   and the window matches exact titles only (core/rez-set-names?). What is left to
+   say is about THIS board: a name matching no installed Corp card, or matching
+   only cards --rez cannot rez during a run — assets, already-rezzed ICE (#202).
+   Silent with no board: that is no evidence that a name matches nothing."
+  [rez-names state]
+  (let [cards (installed-corp-cards state)
+        ;; An unrezzed ICE (approach-ice) or upgrade (pre-approach-server). A card
+        ;; with no :type is not evidence of "cannot": no data, no verdict.
+        actionable? (fn [c] (and (not (:rezzed c)) (contains? #{"ICE" "Upgrade" nil} (:type c))))
+        describe (fn [c] (str (:title c) " ("
+                              (if (:rezzed c) "already rezzed" (clojure.string/lower-case (str (:type c))))
+                              ")"))]
+    (when (seq cards)
+      (doseq [listed (sort rez-names)]
+        (let [hits (filter #(core/rez-set-names? [listed] (:title %)) cards)]
+          (cond
+            (empty? hits)
+            (println (format "   ⚠️  --rez \"%s\" matches no installed Corp card — it has nothing to rez. Installed: %s"
+                             listed (clojure.string/join ", " (distinct (keep :title cards)))))
+
+            (not-any? actionable? hits)
+            (println (format "   ⚠️  --rez \"%s\" matches only %s — --rez rezzes unrezzed ICE and upgrades during a run, so it will not act."
+                             listed (clojure.string/join ", " (map describe hits))))))))))
+
 (defn handle-corp-rez-strategy
   "Priority 1.5: Corp rez strategy - auto-handle rez decisions based on --no-rez/--rez flags."
   [{:keys [side run-phase my-prompt strategy state gameid]}]
@@ -136,7 +170,7 @@
           rez-already-attempted? (= (:rez-attempted-at strategy) position)
           should-rez? (and (not (:no-rez strategy))
                           (:rez strategy)
-                          (contains? (:rez strategy) ice-title)
+                          (core/rez-set-names? (:rez strategy) ice-title)
                           (not ice-rezzed?))]
       (cond
         ;; --no-rez: always decline
@@ -741,7 +775,7 @@
                                      (decisions/attacked-server-content state)))
               cid (:cid upgrade)
               should-rez? (and (:rez strategy)
-                               (contains? (:rez strategy) card-title))
+                               (core/rez-set-names? (:rez strategy) card-title))
               rez-already-attempted? (and cid (= (:upgrade-rez-attempted strategy) cid))]
           (cond
             ;; --rez listed, already tried this cid, still unrezzed → the rez did

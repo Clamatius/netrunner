@@ -194,11 +194,22 @@
 ;; Card Database Management
 ;; ============================================================================
 
+(defonce ^:private cards-load-failed-at (atom nil))
+
+(def cards-load-retry-ms
+  "After a failed card-db load, how long every caller skips re-attempting it. Without
+   this, each `--rez` name in one command re-tried the HTTP load (5s connect / 10s read
+   each): a heuristic-Corp tick with three ICE could block ~45s (#202 panel)."
+  5000)
+
 (defn load-cards-from-api!
   "Fetch card database from server API and populate all-cards atom
-   Only fetches once - subsequent calls are no-ops if cards already loaded"
+   Only fetches once - subsequent calls are no-ops if cards already loaded.
+   A failed load is not re-attempted for cards-load-retry-ms."
   []
-  (when (empty? @all-cards)
+  (when (and (empty? @all-cards)
+             (not (when-let [t @cards-load-failed-at]
+                    (< (- (System/currentTimeMillis) t) cards-load-retry-ms))))
     (try
       (let [response (http/get "http://localhost:1042/data/cards"
                               {:as :json
@@ -206,8 +217,10 @@
                                :connection-timeout 5000})
             cards (:body response)
             cards-map (into {} (map (juxt :title identity)) cards)]
-        (reset! all-cards cards-map))
+        (reset! all-cards cards-map)
+        (reset! cards-load-failed-at nil))
       (catch Exception e
+        (reset! cards-load-failed-at (System/currentTimeMillis))
         (println "❌ Failed to load cards from API:" (.getMessage e))
         (println "   Make sure the game server is running on localhost:1042")))))
 
@@ -630,6 +643,57 @@
   (if-let [[_ title idx] (re-matches #"(.+?)\s*\[(\d+)\]" card-name)]
     {:title title :index (Integer/parseInt idx) :explicit-index? true}
     {:title card-name :index 0 :explicit-index? false}))
+
+(defn fold-card-name
+  "Case-, diacritic- and edge-whitespace-blind form of a card name."
+  [s]
+  (-> (java.text.Normalizer/normalize (str s) java.text.Normalizer$Form/NFD)
+      (str/replace #"\p{M}" "")
+      str/lower-case
+      str/trim))
+
+(defn rez-set-names?
+  "Does a committed --rez set name this card title? Exact title only, blind to case
+   and diacritics — no prefixes, no guesses.
+
+   Near misses are caught when the flag is PARSED (rez-name-verdict), where the seat
+   can be told the title to type. Loose matching here, at the window, rezzed the
+   wrong card three different ways across two review rounds (\"Fairchild\" rezzing
+   Fairchild 1.0, a guess between two fits, an unloaded db disabling the guard),
+   so there is none (#202)."
+  [rez-names title]
+  (let [t (fold-card-name title)]
+    (boolean (some #(= t (fold-card-name %)) rez-names))))
+
+(defn rez-name-verdict
+  "Parse-time verdict on a `--rez` name against the card db (#202: `--rez \"Brân\"`
+   was accepted, echoed as strategy, and never matched \"Brân 1.0\").
+
+     {:verdict :exact :title t}         a real title; t is the db's own spelling
+     {:verdict :near-miss :suggest [..]} not a title, but the leading words of these
+     {:verdict :unknown}                matches no card
+     {:verdict :unverified}             the card db could not be loaded — no verdict
+
+   Checked against the db, not the board, so a card installed later can still be
+   committed to."
+  [listed]
+  (load-cards-from-api!)
+  (let [titles (keys @all-cards)]
+    (if (empty? titles)
+      {:verdict :unverified}
+      (let [l (fold-card-name listed)
+            folded (map (juxt fold-card-name identity) titles)]
+        (if-let [[_ title] (first (filter #(= l (first %)) folded))]
+          {:verdict :exact :title title}
+          (let [suggest (->> folded
+                             (filter #(and (seq l) (str/starts-with? (first %) (str l " "))))
+                             (map second)
+                             sort
+                             (take 5)
+                             vec)]
+            (if (seq suggest)
+              {:verdict :near-miss :suggest suggest}
+              {:verdict :unknown})))))))
 
 (defn format-card-name-with-index
   "Format card name with [N] suffix if duplicates exist in collection

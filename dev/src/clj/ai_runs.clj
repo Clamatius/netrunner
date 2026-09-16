@@ -199,10 +199,34 @@
               (println "⚠️  --rez requires ICE name argument")
               (recur rest-args server flags))
             (let [ice-name (first rest-args)
-                  current-rez-set (get flags :rez #{})]
+                  current-rez-set (get flags :rez #{})
+                  ;; #202: `--rez "Brân"` used to be accepted, echoed as strategy,
+                  ;; and never matched "Brân 1.0". A near miss is rejected HERE, as
+                  ;; the issue asked, naming the title to type; the window itself
+                  ;; matches exact titles only (no loose matching to go wrong there).
+                  ;; Checked against the card db, not the board, so a card installed
+                  ;; later can still be committed to.
+                  verdict (core/rez-name-verdict ice-name)
+                  ;; Fail closed (panel round 3): keeping an unchecked name re-opened
+                  ;; the silent no-op this exists to stop. The cards API is served by
+                  ;; the game server itself, so a db that will not load means no game.
+                  kept (when (= :exact (:verdict verdict)) (:title verdict))]
+              (case (:verdict verdict)
+                :exact nil
+                :unverified
+                (println (format "⚠️  --rez \"%s\": the card database could not be loaded, so the name cannot be checked — ignored. Is the game server up? Re-run once it is."
+                                 ice-name))
+                :near-miss
+                (println (format "⚠️  --rez \"%s\" is not a card title — ignored. Did you mean: %s ? Re-run with the full title."
+                                 ice-name (clojure.string/join ", " (map #(str "\"" % "\"") (:suggest verdict)))))
+                :unknown
+                (println (format "⚠️  --rez \"%s\" matches no card in the card database — ignored."
+                                 ice-name)))
               (recur (rest rest-args)
                      server
-                     (assoc flags :rez (conj current-rez-set ice-name)))))
+                     (if kept
+                       (assoc flags :rez (conj current-rez-set kept))
+                       flags))))
 
           ;; --tactics <edn-string> (takes EDN map argument)
           (= arg "--tactics")
@@ -1683,6 +1707,9 @@
   (let [;; Parse flags if provided, merge with run strategy
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
         strategy (merge (get-strategy) flags)
+        ;; `continue --rez X` is the other way a name enters the set (#202).
+        _ (when-let [rez-names (not-empty (:rez flags))]
+            (corp-handlers/report-rez-list! rez-names @state/client-state))
 
         client-state @state/client-state
         side (:side client-state)
@@ -2291,7 +2318,11 @@
                                     (if (set? v)
                                       (str (name k) " " (clojure.string/join "," v))
                                       (name k)))
-                                  strategy-flags))))))
+                                  strategy-flags))))
+      ;; The echo above repeats what was TYPED; say what each name will match on
+      ;; this board, so a name that matches nothing is not a silent no-op (#202).
+      (when-let [rez-names (not-empty (:rez strategy-flags))]
+        (corp-handlers/report-rez-list! rez-names @state/client-state))))
   (println "👁️  Monitoring run... (auto-passing boring windows)")
   (auto-continue-loop! :return-on-runner-signal (boolean (:return-on-signal flags))
                        :persistent (boolean (:persistent flags))))

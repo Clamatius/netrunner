@@ -1483,10 +1483,17 @@
                     ;; ICE: show rez cost (not play cost)
                     "ICE" (str " (" (:cost card) "¢)")
                     ;; Programs: show cost, MU, and strength if icebreaker
+                    ;; MU comes from the card db: the engine's wire serializer
+                    ;; (diffs.clj card-keys) does not carry :memoryunits, so the
+                    ;; old `(:memoryunits card 1)` printed 1MU for EVERY program
+                    ;; while card-text said 2 (#201, two dead Mayflies). No
+                    ;; figure beats an invented one.
                     "Program" (let [cost (:cost card)
-                                    mu (:memoryunits card 1)
+                                    mu (or (:memoryunits card)
+                                           (:memoryunits (get @all-cards (:title card))))
                                     strength (:strength card)]
-                                (str " (" cost "¢, " mu "MU"
+                                (str " (" cost "¢"
+                                     (when mu (str ", " mu "MU"))
                                      (when strength (str ", str " strength))
                                      ")"))
                     ;; Hardware: show cost
@@ -1646,6 +1653,11 @@
       (no-side-here! state "the hand")
       (let [hand (get-in state [:game-state (keyword (clojure.string/lower-case side)) :hand])]
         (when hand
+          ;; The card db loads lazily (first-sight hook, AFTER a card is formatted),
+          ;; and a program's MU comes only from the db (#201). Load it before the
+          ;; first program is rendered, or a fresh client's first listing has no MU.
+          (when (some #(= "Program" (:type %)) hand)
+            (core/load-cards-from-api!))
           (println (str "🃏 " (clojure.string/capitalize side) " Hand:"))
           (doseq [[idx card] (map-indexed vector hand)]
             (let [card-name (core/format-card-name-with-index card hand)

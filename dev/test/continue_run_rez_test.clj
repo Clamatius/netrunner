@@ -1879,3 +1879,109 @@
               (str "second pass in the same window must be silent, got: " out2))
           (is (= 2 (count (filter #(= "continue" (:command %)) @sent)))
               "the continue itself still goes out each pass — only the print is deduped"))))))
+
+;; =============================================================================
+;; #202 — `--rez "Brân"` was accepted, echoed as strategy, and never matched
+;; "Brân 1.0" at the window it existed for.
+;;
+;; The review panel took two rounds to show that LOOSE matching at the window
+;; (leading words, "unless it is itself a card", "unless two titles fit", "unless
+;; the db is not loaded") keeps producing wrong rezzes in new ways. So there is no
+;; loose matching at the window at all. The near-miss is caught where the issue
+;; asked — when the flag is PARSED — and the seat is told the title to type:
+;;   - parse: an exact title (case/diacritic-blind) is stored as the card db spells
+;;     it; a near miss is REJECTED with "did you mean"; a name matching nothing is
+;;     rejected; with no card db the name is kept and flagged as unverified;
+;;   - window: exact title (case/diacritic-blind), nothing else;
+;;   - entry: a name matching no installed card, or only cards --rez cannot act on
+;;     (assets, rezzed ICE), is said out loud.
+;; =============================================================================
+
+(defn- with-card-db [db f]
+  (let [saved @jinteki.cards/all-cards]
+    (try (reset! jinteki.cards/all-cards db)
+         (with-redefs [core/load-cards-from-api! (fn [] nil)] (f))
+         (finally (reset! jinteki.cards/all-cards saved)))))
+
+(deftest parse-run-flags-rejects-a-near-miss-rez-name-and-names-the-card
+  (with-card-db {"Brân 1.0" {:title "Brân 1.0"} "Palisade" {:title "Palisade"}}
+    (fn []
+      (let [out (with-out-str
+                  (let [{:keys [flags]} (runs/parse-run-flags
+                                         ["--rez" "Brân" "--rez" "palisade" "--rez" "Palisad"])]
+                    (is (= #{"Palisade"} (:rez flags))
+                        (str "only the exact title enters the set, as the db spells it: " (:rez flags)))))]
+        (is (re-find #"Brân\".*Brân 1\.0" out) (str "a near miss must name the card to type: " out))
+        (is (re-find #"Palisad\"" out) (str "a name matching nothing must be said: " out))))))
+
+(deftest parse-run-flags-without-a-card-db-rejects-the-name-and-says-why
+  ;; Panel round 3: keeping an unchecked name re-opened #202's silent no-op. The
+  ;; cards API is served by the game server itself, so no db means no game.
+  (with-card-db {}
+    (fn []
+      (let [out (with-out-str
+                  (is (empty? (:rez (:flags (runs/parse-run-flags ["--rez" "Brân"]))))
+                      "an unchecked name must not enter the set"))]
+        (is (re-find #"(?i)could not be loaded" out)
+            (str "the seat must be told why: " out))))))
+
+(deftest rez-strategy-matches-the-committed-title-ignoring-case-and-diacritics
+  (let [sent (atom [])]
+    (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-out-str
+        (let [r (corp-handlers/handle-corp-rez-strategy
+                 (rez-strategy-ctx-ice {:rez #{"bran 1.0"}} "Brân 1.0"))]
+          (is (= :auto-rezzed (:action r)) (str "got: " r))))
+      (is (some #(= "rez" (:command %)) @sent)))))
+
+(deftest rez-strategy-never-treats-a-name-as-a-prefix
+  ;; Panel round 2: with the card db unloaded, "Fairchild" rezzed Fairchild 1.0.
+  (with-card-db {}
+    (fn []
+      (let [sent (atom [])]
+        (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+          (with-out-str
+            (let [r (corp-handlers/handle-corp-rez-strategy
+                     (rez-strategy-ctx-ice {:rez #{"Fairchild"}} "Fairchild 1.0"))]
+              (is (= :decision-required (:status r))
+                  (str "\"Fairchild\" is not Fairchild 1.0; must pause, got: " r)))))
+        (is (not-any? (fn [m] (= "rez" (:command m))) @sent))))))
+
+(deftest rez-list-report-says-what-rez-cannot-act-on
+  (let [state {:game-state
+               {:corp {:servers {:hq {:ices [{:cid 1 :title "Brân 1.0" :type "ICE" :rezzed false}
+                                             {:cid 2 :title "Palisade" :type "ICE" :rezzed true}]}
+                                 :remote1 {:content [{:cid 3 :title "PAD Campaign"
+                                                      :type "Asset" :rezzed false}]}}}}}
+        out (with-out-str
+              (corp-handlers/report-rez-list! #{"Brân 1.0" "Palisade" "PAD Campaign" "Tithe"} state))]
+    (is (not (re-find #"\"Brân 1\.0\"" out)) (str "an unrezzed installed ICE needs no comment: " out))
+    (is (re-find #"Palisade\".*(?i)already rezzed" out) out)
+    (is (re-find #"PAD Campaign\".*(?i)asset" out) out)
+    (is (re-find #"Tithe\".*matches no installed" out) out)))
+
+(deftest rez-list-report-stays-silent-without-a-board
+  (is (= "" (with-out-str (corp-handlers/report-rez-list! #{"Brân 1.0"} {:game-state nil})))
+      "no board is not evidence that a name matches nothing"))
+
+;; Panel round 4: with no card db, parse retried the HTTP load once per --rez name
+;; (5s connect / 10s read each). The heuristic Corp passes one --rez per ICE, so a
+;; single tick could block ~45s. One failed load now covers the whole command.
+(deftest parse-run-flags-without-a-card-db-tries-the-load-once
+  (let [calls (atom 0)
+        saved @jinteki.cards/all-cards
+        reset-backoff! #(when-let [v (resolve 'ai-core/cards-load-failed-at)] (reset! @v nil))]
+    (try
+      (reset! jinteki.cards/all-cards {})
+      (reset-backoff!)
+      (with-redefs [clj-http.client/get (fn [& _]
+                                          (swap! calls inc)
+                                          (throw (java.net.ConnectException. "Connection refused")))]
+        (let [out (with-out-str
+                    (runs/parse-run-flags ["--rez" "Palisade" "--rez" "Brân 1.0" "--rez" "Tithe"]))]
+          (is (= 1 @calls) (str "one failed load is enough for one command, got " @calls))
+          (doseq [n ["Palisade" "Brân 1.0" "Tithe"]]
+            (is (clojure.string/includes? out (str "\"" n "\"")) (str "each rejected name is still said: " out)))))
+      (finally
+        (reset! jinteki.cards/all-cards saved)
+        (reset-backoff!)))))
