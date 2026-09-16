@@ -36,26 +36,38 @@
        That is #215, still open. The warm path now says so in its own output,
        because a source comment does not reach whoever reads the green tick.
 
-   WHY THE GRAPH COMES FROM THE RUNTIME AND NOT FROM THE FILES
-   This test's first two versions derived the dependency graph by READING the
-   source files, and three review seats found four separate ways that lied — each
-   one making a real misordering report no violations:
+   WHERE THE GRAPH COMES FROM, AND THE FOUR ANSWERS THAT WERE WRONG
+   The question this must answer is narrow: does compiling namespace A under
+   `(require 'A :reload)` depend on namespace B? The authority is A's `ns` form, in
+   the ONE file Clojure's own `require` rule selects for A. Four earlier versions
+   answered a different question, and three review seats found each one — every
+   failure made a real misordering report no violations:
+     - a paren-balancing regex counted the parens inside ai-heuristic-corp's
+       docstring, which holds a literal `(require '[ai-heuristic-corp :as bot])`
+       example, and reported a self-require that does not exist;
      - `(read-string (slurp f))` returns only a file's FIRST form, so a legal
        leading `(comment \"…\")` emptied a whole file's requires;
      - taking the first `ns` form then reported the emptier of two declarations in
-       one file, though real loading takes the later one;
-     - a stale copy of a file still carrying the original `ns` form (never the file
-       `require` loads) overwrote the real namespace's requires under a
-       last-one-wins map;
-     - a paren-balancing regex — the version before all of those — counted the
-       parens inside ai-heuristic-corp's docstring, which contains a literal
-       `(require '[ai-heuristic-corp :as bot])` example, and reported a
-       self-require that does not exist.
-   Every one of those is a disagreement between \"what the file looks like\" and
-   \"what loading actually does\". So this asks the runtime instead: `require` each
-   listed namespace and read `ns-aliases`, which IS the graph the REPL will use.
-   There is no file-to-namespace mapping left to get wrong, and a list entry naming
-   something unloadable throws at `require` rather than contributing no edges.
+       one file, though loading takes the later;
+     - scanning the directory let ANY file claim a namespace, so a stale copy still
+       carrying the original `ns` form — never the file `require` loads — overwrote
+       the real requires.
+   A fifth version asked the RUNTIME instead, via `ns-aliases`. That is worse, and
+   a fourth seat caught it: `ns-aliases` conflates compile-time requires with
+   aliases created by a body-level `(require '[x :as y])` when a function RUNS.
+   `ai-prompts` does not require `ai-basic-actions` in its `ns` form but creates
+   exactly that alias at runtime, measured:
+
+       ;; in ai-prompts, after a body-level (require '[ai-basic-actions :as basic])
+       (contains? (aliases-of 'ai-prompts) \"ai-basic-actions\")  ;; => true
+
+   So the graph would depend on what else had run in the same JVM, differing between
+   a focused `lein test` and the full suite, and could fail a healthy order.
+
+   This version therefore reads files again, but asks the CLASSPATH which file —
+   `ns-resource` mirrors `clojure.core/root-resource`, the rule `require` uses. That
+   removes the directory scan the shadow-file defect needed, keeps the reader rather
+   than a regex, unions every matching declaration, and touches no runtime state.
 
    WHAT THIS PINS
    That AI_NAMESPACES is in topological order with respect to the loaded namespaces'
@@ -67,14 +79,14 @@
      - namespaces outside the list (`jinteki.cards`, `differ.core`, …). They are
        never reloaded, so their position is not this list's business. They are
        filtered out rather than ordered.
-     - a `:require` with no `:as`. `ns-aliases` only reports aliases. Checked: the
-       only such specs in these files are `[jinteki.cards :refer [all-cards]]` in
-       three namespaces, and jinteki.cards is not in the list, so nothing ordered
-       here is invisible. A future alias-free require BETWEEN two listed namespaces
-       would be, which is why this limit is written down rather than assumed away.
-     - an alias created by a body-level `require` that only exists once a function
-       has RUN. This test loads namespaces and calls nothing, so those do not
-       appear; if one did, it would be an extra edge, i.e. a false RED.
+     - a dependency created by a body-level `(require …)` inside a function rather
+       than by the `ns` form. That is deliberate: such a require runs at call time,
+       not at compile time, so it is not a reason to reload one namespace before
+       another. It is also why `ns-aliases` was the wrong authority.
+     - a `:require` whose spec this does not recognise. `requires-of` takes the
+       first element of a vector spec and the symbol of a bare one, which covers
+       `:as`, `:refer` and plain forms. It does not read `:load`, and prefix lists
+       (`[a.b [c] [d]]`) would be read as the prefix only. There are none here.
      - that the list is COMPLETE. check-ai-sweep covers the rest parse-only, and
        check-ai.sh says out loud that a new namespace gets parse-only coverage
        until someone adds it. A name added in the wrong PLACE is what this catches.
@@ -121,24 +133,74 @@
          (sort-by #(.indexOf ^java.util.List ordered %)) vec)))
 
 ;; ---------------------------------------------------------------------------
-;; The dependency graph, from the runtime rather than from the files
+;; The dependency graph, from the ONE file Clojure would load for each namespace
 ;; ---------------------------------------------------------------------------
 
-(defn dependency-graph
-  "listed-name -> set of LISTED namespace names it requires, read from `ns-aliases`.
+(defn ns-resource
+  "The single resource Clojure's own `require` would load for this namespace name.
 
-   `require` first, so this is the graph the REPL resolves against. A listed entry
-   that names nothing loadable throws here — loudly, which is the point: the
-   previous file-reading versions gave such an entry no edges and passed."
+   Mirrors `clojure.core/root-resource`, which is the rule `require` itself uses:
+
+       (defn- root-resource [lib]
+         (str \\/ (.. (name lib) (replace \\- \\_) (replace \\. \\/))))
+
+   Asking the classpath for that ONE path is what makes the shadow-file defect
+   unreachable: a stale copy of a file is not the resource this resolves to, so it
+   cannot claim a namespace no matter what its `ns` form says. Nothing here scans a
+   directory."
+  [ns-name-str]
+  (io/resource (str (-> ns-name-str (str/replace "-" "_") (str/replace "." "/")) ".clj")))
+
+(defn- ns-forms-named
+  "Every `ns` form in `resource` that declares exactly `ns-name-str`, in file order.
+
+   Every clause of that sentence is a defect that got here:
+     - EVERY form, not the first: `(read-string (slurp f))` reads only a file's
+       first form, so a legal leading `(comment \"…\")` emptied its requires;
+     - EVERY `ns` form, not the first one: a file with two declarations had the
+       emptier one reported, though loading takes the later;
+     - NAMED: a file whose `ns` form declares something else must not have its
+       requires attributed to the namespace whose path it occupies.
+   `*read-eval*` is bound off for the reason check-ai-sweep binds it: a gate should
+   not evaluate what it reads."
+  [resource ns-name-str]
+  (binding [*read-eval* false]
+    (with-open [r (java.io.PushbackReader. (io/reader resource))]
+      (loop [acc []]
+        (let [form (try (read {:eof ::eof} r) (catch Exception _ ::eof))]
+          (cond
+            (= form ::eof) acc
+            (and (seq? form) (= 'ns (first form)) (= (str (second form)) ns-name-str))
+            (recur (conj acc form))
+            :else (recur acc)))))))
+
+(defn- requires-of
+  "The `:require`d namespace names in one `ns` form."
+  [form]
+  (set (for [clause (drop 2 form)
+             :when (and (seq? clause) (= :require (first clause)))
+             spec (rest clause)]
+         (str (if (vector? spec) (first spec) spec)))))
+
+(defn dependency-graph
+  "listed-name -> set of LISTED namespaces its `ns` form requires.
+
+   Throws if a listed name has no resource, or a resource with no matching `ns`
+   form. Every earlier version of this gave such an entry an empty edge set and
+   passed the order assertion over it."
   [listed]
   (let [in-list (set listed)]
     (into {}
           (for [n listed]
-            (do (require (symbol n))
-                [n (set (for [dep (vals (ns-aliases (symbol n)))
-                              :let [dep-name (str (ns-name dep))]
-                              :when (contains? in-list dep-name)]
-                          dep-name))])))))
+            (let [res (or (ns-resource n)
+                          (throw (ex-info (str "AI_NAMESPACES lists " n
+                                               " but no such namespace is on the classpath")
+                                          {:namespace n})))
+                  forms (ns-forms-named res n)
+                  _ (when (empty? forms)
+                      (throw (ex-info (str res " does not declare " n)
+                                      {:namespace n :resource (str res)})))]
+              [n (set (filter in-list (mapcat requires-of forms)))])))))
 
 (defn order-violations
   "Every [dependent dependency] where the list names the dependency LATER."
@@ -236,13 +298,34 @@
   (testing "no array means nil, not a silently empty list that passes everything"
     (is (nil? (listed-namespaces "echo hello\n")))))
 
-(deftest dependency-graph-is-live-and-scoped-to-the-list
+(deftest dependency-graph-is-scoped-to-the-list-and-fails-loudly
   (testing "a dependency outside the list is dropped, not ordered"
     ;; ai-state requires differ.core, which check-ai.sh never reloads.
     (let [graph (dependency-graph ["ai-state" "ai-debug"])]
       (is (= #{"ai-debug"} (get graph "ai-state"))
           "either differ.core leaked in, or the real ai-state -> ai-debug edge vanished")))
-  (testing "a listed name that names nothing loadable FAILS, rather than getting no edges"
-    ;; The file-reading versions gave a stale entry an empty edge set and passed.
-    (is (thrown? java.io.FileNotFoundException
-                 (dependency-graph ["ai-state" "ai-namespace-that-does-not-exist"])))))
+
+  (testing "a listed name with no resource FAILS, rather than getting no edges"
+    ;; Every file-reading version gave a stale entry an empty edge set and passed.
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no such namespace is on the classpath"
+                          (dependency-graph ["ai-state" "ai-namespace-that-does-not-exist"]))))
+
+  (testing "ns-resource mirrors Clojure's own munging, so it finds the file require would"
+    (is (some? (ns-resource "ai-run-corp-handlers"))
+        "dashes must become underscores, as clojure.core/root-resource does")
+    (is (str/ends-with? (str (ns-resource "ai-run-corp-handlers")) "/ai_run_corp_handlers.clj"))
+    (is (nil? (ns-resource "ai-definitely-not-here"))))
+
+  (testing "a RUNTIME alias is not a compile dependency, and must not become an edge"
+    ;; ai-prompts creates an `ai-basic-actions` alias from inside a function body.
+    ;; The ns-aliases version of this graph reported that as an edge, which made the
+    ;; answer depend on what had already run in the JVM and could fail a healthy
+    ;; order. Reading the `ns` form cannot see it, which is the point.
+    (require 'ai-prompts)
+    (binding [*ns* (find-ns 'ai-prompts)] (eval '(require '[ai-basic-actions :as basic])))
+    (is (contains? (set (map (comp str ns-name) (vals (ns-aliases 'ai-prompts))))
+                   "ai-basic-actions")
+        "fixture: the runtime alias this guards against is not actually present")
+    (is (not (contains? (get (dependency-graph ["ai-basic-actions" "ai-prompts"]) "ai-prompts")
+                        "ai-basic-actions"))
+        "a body-level require leaked into the compile-dependency graph")))
