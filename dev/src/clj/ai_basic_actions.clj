@@ -2097,7 +2097,7 @@
           :else
           (do
             (draw-card!)
-            (recur (inc draws)))))))
+            (recur (inc draws))))))))
 
 (defn find-card!
   "DEBUG HELPER: Multi-turn search for a card. Loops through turns until card is found.
@@ -2173,4 +2173,4 @@
           :else
           (do
             (println (format "❌ Unexpected error: %s" (:reason result)))
-            result)))))))
+            result))))))

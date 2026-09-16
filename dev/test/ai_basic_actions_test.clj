@@ -8,10 +8,29 @@
   (:require [clojure.test :refer :all]
             [clojure.string :as str]
             [test-helpers :refer :all]
+            [ai-actions :as actions]
             [ai-basic-actions :as basic]
             [ai-state :as state]
             [ai-core :as core]
             [ai-websocket-client-v2 :as ws]))
+
+(def ^:private card-search-game-state
+  {:runner {:click 4 :credit 5 :hand [{:title "Sure Gamble"}] :deck-count 35}
+   :corp {:click 3 :credit 5 :hand [] :deck-count 35}
+   :turn 1
+   :active-player "runner"
+   :log []})
+
+(deftest test-card-search-helpers-are-top-level-and-executable
+  (testing "draw-to-card returns its status map and the public find-card alias is callable"
+    (with-mock-state (mock-client-state :side "runner" :game-state card-search-game-state)
+      (let [draw-result (basic/draw-to-card! "Sure Gamble")
+            find-result (actions/find-card! "Sure Gamble")]
+        (is (= {:status :success :card "Sure Gamble" :draws 0}
+               (dissoc draw-result :cursor)))
+        (is (= :success (:status find-result)))
+        (is (= "Sure Gamble" (:card find-result)))
+        (is (= 0 (:draws find-result)))))))
 
 (deftest test-start-turn-blocks-on-corp-post-discard
   (testing "start-turn! returns :post-discard-pending error and sends nothing"
