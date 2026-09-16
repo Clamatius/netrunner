@@ -56,10 +56,12 @@
        until someone adds it. A name added to the list in the wrong place is what
        this catches.
      - a require cycle. There is none today, and Clojure would reject one at load
-       anyway. `order-violations` terminates on one and reports the single arc that
-       points forward in the list — in a linear order only one arc of a cycle can
-       have its dependency listed later — which is enough to fail the real-tree
-       test."
+       anyway. `order-violations` terminates on one and reports every arc that
+       points forward in the list: AT LEAST one, and more for a longer cycle —
+       a->b->c->a listed [a b c] reports both a->b and b->c. A two-node cycle is
+       the special case that reports exactly one. Any of them is enough to fail the
+       real-tree test. (Two earlier versions of this sentence were wrong: first
+       \"both arcs\", then \"only one arc\".)"
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -94,48 +96,84 @@
   (->> listed (frequencies) (filter (fn [[_ n]] (> n 1))) (map first)
        (sort-by #(.indexOf ^java.util.List (vec listed) %)) vec))
 
-(defn- first-ns-form
-  "The file's `ns` form, however many forms precede it — or nil.
+(defn- ns-forms
+  "EVERY `ns` form in the file, in file order.
 
-   `(read-string (slurp f))` returns only the FIRST form, so a legal leading
-   `(comment \"…\")` made a file contribute no requires at all, and the guard then
-   passed over a genuinely misordered dependent. `*read-eval*` is bound off for
-   the same reason check-ai-sweep binds it: a gate should not evaluate what it
-   reads."
+   Not \"the first one\". Two earlier versions of this were disarmed by exactly the
+   shape they ignored:
+     - `(read-string (slurp f))` reads only the FIRST FORM, so a legal leading
+       `(comment \"…\")` made a whole file contribute no requires;
+     - taking the first `ns` form then meant a file with a second, fuller `ns`
+       declaration reported the emptier one — and real loading takes the LATER
+       declaration's requires.
+   Reading all of them and unioning below makes the failure direction safe: an
+   extra edge can only ever produce a false RED, never hide a real violation.
+
+   `*read-eval*` is bound off for the reason check-ai-sweep binds it: a gate should
+   not evaluate what it reads. A file that cannot be OPENED throws, loudly; a file
+   that stops READING mid-way contributes what it had, and the completeness
+   assertion below catches the case where that is nothing."
   [file]
   (binding [*read-eval* false]
     (with-open [r (java.io.PushbackReader. (io/reader file))]
-      (loop []
+      (loop [acc []]
         (let [form (try (read {:eof ::eof} r) (catch Exception _ ::eof))]
           (cond
-            (= form ::eof)                        nil
-            (and (seq? form) (= 'ns (first form))) form
-            :else                                  (recur)))))))
+            (= form ::eof)                         acc
+            (and (seq? form) (= 'ns (first form))) (recur (conj acc form))
+            :else                                   (recur acc)))))))
+
+(defn- requires-of
+  "The `:require`d namespace names in one `ns` form."
+  [form]
+  (set (for [clause (drop 2 form)
+             :when (and (seq? clause) (= :require (first clause)))
+             spec (rest clause)]
+         (if (vector? spec) (first spec) spec))))
+
+(defn- clj-files [dir]
+  (->> (file-seq (io/file dir))
+       (filter #(str/ends-with? (.getName %) ".clj"))
+       (sort-by #(.getName %))))
+
+(defn ns-declarations
+  "ns-name -> vector of paths of the files declaring it, one entry per declaration.
+
+   A namespace declared twice is how the guard was silently disarmed: a stale copy
+   of a file (`zz_old_hud.clj` holding a bare `(ns ai-hud-utils)`) is legal, parses
+   clean, is never the file `require` actually loads — and under a last-one-wins
+   map it replaced the real namespace's dependency set with `#{}`, after which the
+   completeness assertion still saw the key and the order assertion passed over a
+   real misordering. Unioning the requires already denies it that effect; this
+   exists so the stale file is also SAID, rather than silently absorbed."
+  [dir]
+  (reduce (fn [acc f]
+            (reduce (fn [a form] (update a (second form) (fnil conj []) (.getPath f)))
+                    acc
+                    (ns-forms f)))
+          {}
+          (clj-files dir)))
 
 (defn ns-requires
   "ns-name -> set of required ns names, read with Clojure's reader.
 
-   The reader is the authority here on purpose: a paren-balancing regex over
-   these files counts the parens inside ai-heuristic-corp's docstring, which
-   contains a literal `(require '[ai-heuristic-corp :as bot])` usage example, and
-   reports a self-require that does not exist.
+   The reader is the authority here on purpose: a paren-balancing regex over these
+   files counts the parens inside ai-heuristic-corp's docstring, which contains a
+   literal `(require '[ai-heuristic-corp :as bot])` usage example, and reports a
+   self-require that does not exist.
 
-   A file with NO `ns` form contributes nothing, which is why the fixture test
-   separately asserts that every LISTED namespace turned up here. A file whose
-   requires simply went missing would otherwise leave this guard green over a
-   real misordering."
+   Every declaration of a namespace contributes; the sets are UNIONED. See
+   `ns-forms` for why that direction, and `ns-declarations` for the case it
+   defends against. A file with no `ns` form contributes nothing, which is why the
+   fixture test separately asserts that every LISTED namespace turned up here."
   [dir]
-  (into {}
-        (for [f (->> (file-seq (io/file dir))
-                     (filter #(str/ends-with? (.getName %) ".clj"))
-                     (sort-by #(.getName %)))
-              :let [form (first-ns-form f)]
-              :when (some? form)]
-          [(second form)
-           (set (for [clause (drop 2 form)
-                      :when (and (seq? clause) (= :require (first clause)))
-                      spec (rest clause)]
-                  (if (vector? spec) (first spec) spec)))])))
+  (reduce (fn [acc f]
+            (reduce (fn [a form]
+                      (update a (second form) (fnil into #{}) (requires-of form)))
+                    acc
+                    (ns-forms f)))
+          {}
+          (clj-files dir)))
 
 (defn order-violations
   "Every [dependent dependency] where the list names the dependency LATER.
@@ -183,6 +221,20 @@
                ". Either the file was renamed/deleted and the list is stale, or its "
                "`ns` form did not read.")))))
 
+(deftest no-namespace-is-declared-twice-in-the-tree
+  (testing "a second declaration of a listed namespace can disarm the order assertion"
+    (let [listed (set (listed-namespaces (slurp script-file)))
+          dupes  (into (sorted-map)
+                       (for [[nsname paths] (ns-declarations src-dir)
+                             :when (and (> (count paths) 1)
+                                        (contains? listed (str nsname)))]
+                         [nsname paths]))]
+      (is (empty? dupes)
+          (str "these namespaces are declared in more than one place, which makes "
+               "\"which file supplies its requires\" ambiguous — most likely a stale "
+               "copy of a file that still carries the original `ns` form: "
+               (pr-str dupes))))))
+
 (deftest ai-namespaces-has-no-duplicate-entries
   (testing "a duplicate makes an entry's position ambiguous and can mask a violation"
     (let [dups (duplicates (listed-namespaces (slurp script-file)))]
@@ -218,12 +270,15 @@
                                   '{ai-runs #{ai-core ai-display}}))))
   (testing "a dependency outside the list is not a violation — it is never reloaded"
     (is (empty? (order-violations ["ai-runs"] '{ai-runs #{jinteki.cards clojure.string}}))))
-  (testing "a cycle terminates and reports the arc that points forward in the list"
-    ;; Only ONE arc can be a violation in a linear order: for [a b] with a<->b,
-    ;; a -> b has its dependency listed later and b -> a does not. One is enough
-    ;; to fail the real-tree test, which is all this needs to do.
+  (testing "a cycle terminates and reports every forward arc — one here, two for a 3-cycle"
+    ;; A two-node cycle reports exactly one arc: for [a b] with a<->b, a -> b has
+    ;; its dependency listed later and b -> a does not. A LONGER cycle reports more,
+    ;; which is why the docstring says "at least one" rather than "one".
     (is (= [["a" "b"]]
-           (order-violations ["a" "b"] '{a #{b} b #{a}}))))
+           (order-violations ["a" "b"] '{a #{b} b #{a}})))
+    (is (= [["a" "b"] ["b" "c"]]
+           (order-violations ["a" "b" "c"] '{a #{b} b #{c} c #{a}}))
+        "a 3-cycle has two forward arcs; 'exactly one' was only true of the 2-node fixture"))
   (testing "a duplicate entry hides a real violation — which is why duplicates are rejected"
     ;; Pinned as the REASON ai-namespaces-has-no-duplicate-entries exists: this is
     ;; the wrong answer, and the only defence against it is rejecting duplicates.
@@ -263,6 +318,60 @@
       (is (contains? requires 'ai-heuristic-corp))
       (is (not (contains? (get requires 'ai-heuristic-corp) 'ai-heuristic-corp))
           "the docstring's `(require '[ai-heuristic-corp :as bot])` leaked in as a real edge"))))
+
+(defn- with-temp-src
+  "Run f on a throwaway source dir built from {filename -> source}."
+  [files f]
+  (let [dir (java.io.File/createTempFile "nsprobe" "")]
+    (.delete dir) (.mkdirs dir)
+    (try
+      (doseq [[name src] files] (spit (io/file dir name) src))
+      (f (.getPath dir))
+      (finally (doseq [x (reverse (file-seq dir))] (.delete x))))))
+
+(deftest a-shadow-file-cannot-empty-a-namespaces-edges
+  (testing "a stale copy declaring the same ns no longer overwrites the real requires"
+    ;; This passed the guard before: `into {}` over name-sorted files let
+    ;; zz_old_hud.clj's bare `(ns ai-hud-utils)` replace the real #{ai-state} with
+    ;; #{}, the completeness assertion still saw the key, and a real misordering
+    ;; (ai-hud-utils listed before ai-state) reported no violations.
+    (with-temp-src
+      {"ai_hud_utils.clj" "(ns ai-hud-utils (:require [ai-state :as state]))\n"
+       "zz_old_hud.clj"   "(ns ai-hud-utils)\n"}
+      (fn [dir]
+        (let [requires (ns-requires dir)]
+          (is (= '#{ai-state} (get requires 'ai-hud-utils))
+              "the shadow declaration emptied the real edge set")
+          (is (= [["ai-hud-utils" "ai-state"]]
+                 (order-violations ["ai-hud-utils" "ai-state"] requires))
+              "the misordering was hidden by the shadow file"))
+        (testing "and the stale file is reported, not merely neutralised"
+          (is (= 2 (count (get (ns-declarations dir) 'ai-hud-utils))))))))
+
+  (testing "an unreadable real file behind a shadow declaration is still not silent"
+    (with-temp-src
+      {"ai_hud_utils.clj" "(\n"
+       "zz_old_hud.clj"   "(ns ai-hud-utils)\n"}
+      (fn [dir]
+        ;; The edges are genuinely gone, so the guard must not claim they are fine.
+        ;; It reports the namespace as declared twice, which is the visible signal.
+        (is (= 1 (count (get (ns-declarations dir) 'ai-hud-utils)))
+            "the unreadable file contributed no declaration, so only the shadow remains")
+        (is (empty? (get (ns-requires dir) 'ai-hud-utils))
+            "nothing pretends the requires were read")))))
+
+(deftest a-second-ns-form-in-one-file-contributes-its-requires
+  (testing "taking only the FIRST ns form reported the emptier declaration"
+    ;; Real loading takes the later declaration's requires, so the first-only
+    ;; reader let `(ns ai-hud-utils)` prepended to its own file hide every edge.
+    (with-temp-src
+      {"ai_hud_utils.clj" "(ns ai-hud-utils)\n(ns ai-hud-utils (:require [ai-state :as state]))\n"}
+      (fn [dir]
+        (is (= '#{ai-state} (get (ns-requires dir) 'ai-hud-utils)))
+        (is (= [["ai-hud-utils" "ai-state"]]
+               (order-violations ["ai-hud-utils" "ai-state"] (ns-requires dir))))
+        (is (= 2 (count (get (ns-declarations dir) 'ai-hud-utils)))
+            "two declarations in one file are two declarations")))))
 
 (deftest ns-requires-finds-an-ns-form-that-is-not-the-first-form
   (testing "a legal leading form no longer hides a whole file's requires"
