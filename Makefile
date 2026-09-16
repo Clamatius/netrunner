@@ -63,6 +63,7 @@ test:
 	  ai-websocket-diff-test \
 	  ai-websocket-error-recovery-test \
 	  ai-wire-card-ref-test \
+	  check-ai-ns-order-test \
 	  check-ai-sweep-test \
 	  continue-run-rez-test \
 	  game.ai-ability-legality-test \
