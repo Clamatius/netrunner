@@ -12,8 +12,9 @@
    names a dependent BEFORE the dependency it requires, the dependent is compiled
    against the previous session's copy of it, and the gate answers about a tree
    that exists nowhere on disk. The list's own comment says `order matters for
-   dependencies`; fourteen entries violated it, including all four `ai-run-*`
-   namespaces that `ai-runs` requires.
+   dependencies`, and it was violated by fourteen dependency arcs spanning seven
+   of the entries — including all four `ai-run-*` namespaces that `ai-runs`
+   requires.
 
    WHAT ORDER DOES AND DOES NOT FIX — measured, not reasoned
    Both directions of \"the gate disagrees with the disk\" were reachable, and order
@@ -55,7 +56,10 @@
        until someone adds it. A name added to the list in the wrong place is what
        this catches.
      - a require cycle. There is none today, and Clojure would reject one at load
-       anyway; `order-violations` would simply report both arcs."
+       anyway. `order-violations` terminates on one and reports the single arc that
+       points forward in the list — in a linear order only one arc of a cycle can
+       have its dependency listed later — which is enough to fail the real-tree
+       test."
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -65,14 +69,48 @@
 ;; ---------------------------------------------------------------------------
 
 (defn listed-namespaces
-  "The AI_NAMESPACES array from a check-ai.sh source, in file order."
+  "The AI_NAMESPACES array from a check-ai.sh source, in file order.
+
+   A trailing `# comment` is stripped, because bash strips it: `ai-runs # note` is
+   ONE array entry named `ai-runs`. Keeping the comment in the name silently
+   detached that entry from its requires and emptied its edges."
   [script-src]
   (when-let [body (second (re-find #"(?s)AI_NAMESPACES=\(\n(.*?)\n\)" script-src))]
     (->> (str/split-lines body)
+         (map #(str/replace % #"#.*$" ""))
          (map str/trim)
          (remove str/blank?)
-         (remove #(str/starts-with? % "#"))
          vec)))
+
+(defn duplicates
+  "Entries appearing more than once, in first-seen order.
+
+   `order-violations` positions an entry by its LAST occurrence, so a duplicate
+   can mask a real violation: with [\"dependent\" \"dependency\" \"dependent\"] the
+   helper returns no violations, while the shell still reloads the FIRST
+   `dependent` before its dependency. Rejecting duplicates keeps positions
+   unambiguous, which is also how the `make test` registration guard handles it."
+  [listed]
+  (->> listed (frequencies) (filter (fn [[_ n]] (> n 1))) (map first)
+       (sort-by #(.indexOf ^java.util.List (vec listed) %)) vec))
+
+(defn- first-ns-form
+  "The file's `ns` form, however many forms precede it — or nil.
+
+   `(read-string (slurp f))` returns only the FIRST form, so a legal leading
+   `(comment \"…\")` made a file contribute no requires at all, and the guard then
+   passed over a genuinely misordered dependent. `*read-eval*` is bound off for
+   the same reason check-ai-sweep binds it: a gate should not evaluate what it
+   reads."
+  [file]
+  (binding [*read-eval* false]
+    (with-open [r (java.io.PushbackReader. (io/reader file))]
+      (loop []
+        (let [form (try (read {:eof ::eof} r) (catch Exception _ ::eof))]
+          (cond
+            (= form ::eof)                        nil
+            (and (seq? form) (= 'ns (first form))) form
+            :else                                  (recur)))))))
 
 (defn ns-requires
   "ns-name -> set of required ns names, read with Clojure's reader.
@@ -80,14 +118,19 @@
    The reader is the authority here on purpose: a paren-balancing regex over
    these files counts the parens inside ai-heuristic-corp's docstring, which
    contains a literal `(require '[ai-heuristic-corp :as bot])` usage example, and
-   reports a self-require that does not exist."
+   reports a self-require that does not exist.
+
+   A file with NO `ns` form contributes nothing, which is why the fixture test
+   separately asserts that every LISTED namespace turned up here. A file whose
+   requires simply went missing would otherwise leave this guard green over a
+   real misordering."
   [dir]
   (into {}
         (for [f (->> (file-seq (io/file dir))
                      (filter #(str/ends-with? (.getName %) ".clj"))
                      (sort-by #(.getName %)))
-              :let [form (try (read-string (slurp f)) (catch Exception _ nil))]
-              :when (and (seq? form) (= 'ns (first form)))]
+              :let [form (first-ns-form f)]
+              :when (some? form)]
           [(second form)
            (set (for [clause (drop 2 form)
                       :when (and (seq? clause) (= :require (first clause)))
@@ -128,6 +171,23 @@
       (is (contains? (get requires 'ai-runs) 'ai-run-corp-handlers)
           "the known ai-runs -> ai-run-corp-handlers edge did not read"))))
 
+(deftest every-listed-namespace-has-its-requires-read
+  (testing "a listed name whose edges did not read would pass the order test vacuously"
+    (let [listed   (listed-namespaces (slurp script-file))
+          requires (ns-requires src-dir)
+          unread   (vec (remove #(contains? requires (symbol %)) listed))]
+      (is (empty? unread)
+          (str "these are in AI_NAMESPACES but no `ns` form for them was read under "
+               src-dir ", so they contribute NO dependency edges and the order "
+               "assertion cannot see them misplaced: " (pr-str unread)
+               ". Either the file was renamed/deleted and the list is stale, or its "
+               "`ns` form did not read.")))))
+
+(deftest ai-namespaces-has-no-duplicate-entries
+  (testing "a duplicate makes an entry's position ambiguous and can mask a violation"
+    (let [dups (duplicates (listed-namespaces (slurp script-file)))]
+      (is (empty? dups) (str "duplicated AI_NAMESPACES entries: " (pr-str dups))))))
+
 (deftest ai-namespaces-is-in-topological-order
   (testing "no namespace is reloaded before a namespace it requires"
     (let [listed     (listed-namespaces (slurp script-file))
@@ -158,15 +218,42 @@
                                   '{ai-runs #{ai-core ai-display}}))))
   (testing "a dependency outside the list is not a violation — it is never reloaded"
     (is (empty? (order-violations ["ai-runs"] '{ai-runs #{jinteki.cards clojure.string}}))))
-  (testing "both arcs of a cycle are reported, rather than the checker looping"
+  (testing "a cycle terminates and reports the arc that points forward in the list"
+    ;; Only ONE arc can be a violation in a linear order: for [a b] with a<->b,
+    ;; a -> b has its dependency listed later and b -> a does not. One is enough
+    ;; to fail the real-tree test, which is all this needs to do.
     (is (= [["a" "b"]]
-           (order-violations ["a" "b"] '{a #{b} b #{a}})))))
+           (order-violations ["a" "b"] '{a #{b} b #{a}}))))
+  (testing "a duplicate entry hides a real violation — which is why duplicates are rejected"
+    ;; Pinned as the REASON ai-namespaces-has-no-duplicate-entries exists: this is
+    ;; the wrong answer, and the only defence against it is rejecting duplicates.
+    (is (empty? (order-violations ["dependent" "dependency" "dependent"]
+                                  '{dependent #{dependency}}))
+        "if this ever reports the violation, order-violations became occurrence-aware")
+    (is (= [["dependent" "dependency"]]
+           (order-violations ["dependent" "dependency"] '{dependent #{dependency}}))
+        "the same graph without the duplicate IS a violation")))
+
+(deftest duplicates-detects-the-defect-it-guards
+  (testing "a repeated entry is reported once, in first-seen order"
+    (is (= ["ai-runs"] (duplicates ["ai-core" "ai-runs" "ai-display" "ai-runs"])))
+    (is (= ["a" "b"] (duplicates ["a" "b" "a" "b" "c"]))))
+  (testing "a list with no repeats is clean"
+    (is (empty? (duplicates ["ai-core" "ai-runs" "ai-display"]))))
+  (testing "the real list is what it is asked about, not a fixture"
+    (is (empty? (duplicates (listed-namespaces (slurp script-file)))))))
 
 (deftest listed-namespaces-parses-the-array
   (testing "the array body, not the whole script"
     (is (= ["ai-core" "ai-runs" "ai-display"] (listed-namespaces fixture-script))))
   (testing "a commented-out entry is not a namespace"
     (is (= ["ai-core"] (listed-namespaces "AI_NAMESPACES=(\n    ai-core\n    # ai-later\n)\n"))))
+  (testing "a TRAILING comment is stripped, because bash strips it"
+    ;; `ai-runs # note` is one entry named ai-runs. Keeping the comment in the name
+    ;; detached it from its requires, emptying its edges silently.
+    (is (= ["ai-runs"] (listed-namespaces "AI_NAMESPACES=(\n    ai-runs # note\n)\n")))
+    (is (= ["ai-core" "ai-runs"]
+           (listed-namespaces "AI_NAMESPACES=(\n    ai-core  # first\n    ai-runs\n)\n"))))
   (testing "no array means nil, not a silently empty list that passes everything"
     (is (nil? (listed-namespaces "echo hello\n")))))
 
@@ -176,3 +263,22 @@
       (is (contains? requires 'ai-heuristic-corp))
       (is (not (contains? (get requires 'ai-heuristic-corp) 'ai-heuristic-corp))
           "the docstring's `(require '[ai-heuristic-corp :as bot])` leaked in as a real edge"))))
+
+(deftest ns-requires-finds-an-ns-form-that-is-not-the-first-form
+  (testing "a legal leading form no longer hides a whole file's requires"
+    ;; This is the hole that made the guard pass over a misordered dependent:
+    ;; read-string returns only the first form, so `(comment …)` before the `ns`
+    ;; emptied that file's edges. The file still loads and the parse sweep still
+    ;; accepts it, so nothing else would have noticed.
+    (let [dir (java.io.File/createTempFile "nsreq" "")]
+      (.delete dir) (.mkdirs dir)
+      (try
+        (spit (io/file dir "leading_comment.clj")
+              "(comment \"harmless\")\n(ns probe-leading (:require [ai-core :as core]))\n")
+        (spit (io/file dir "no_ns_at_all.clj") "(def x 1)\n")
+        (let [requires (ns-requires (.getPath dir))]
+          (is (= '#{ai-core} (get requires 'probe-leading))
+              "the ns form after a leading (comment) was not found")
+          (is (not (contains? requires 'no-ns-at-all))
+              "a file with no ns form should contribute nothing"))
+        (finally (doseq [f (reverse (file-seq dir))] (.delete f)))))))

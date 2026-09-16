@@ -27,8 +27,9 @@ NC='\033[0m'
 # namespace against whatever its dependencies are in the long-lived REPL's memory
 # right now. List a dependent before its dependency and the dependent compiles
 # against the PREVIOUS session's copy, so the gate answers about a tree that
-# exists on no disk. Fourteen entries were in the wrong order, including all four
-# ai-run-* namespaces that ai-runs requires, and `make check` reported
+# exists on no disk. Fourteen dependency arcs were out of order, spanning seven of
+# the entries and including all four ai-run-* namespaces that ai-runs requires;
+# `make check` reported
 # `No such var` for correct code. dev/test/check_ai_ns_order_test.clj fails if this
 # order regresses.
 #
@@ -184,6 +185,14 @@ if [ "$USE_REPL" = true ]; then
             # was checked, and on the fast path it did.
             grep "parse-only:" "$TMPFILE" || true
             echo -e "${GREEN}✅ All ${NS_COUNT} AI namespaces compiled successfully${NC}"
+            # Same principle as the parse-only line above (#184): the tick must not
+            # imply more than was checked, and on the WARM path it does. `:reload`
+            # never unmaps what a file stopped defining, so a var you deleted is
+            # still interned for its callers to compile against, at any list order.
+            # A reviewer asked for this out loud, on the grounds that a source
+            # comment does not reach whoever is reading the tick. #215.
+            echo -e "${YELLOW}   note: warm REPL check — a var DELETED from a file is still interned here,${NC}"
+            echo -e "${YELLOW}   so removals are not validated. \`make check-full\` compiles cold (#215).${NC}"
             echo -e "${GREEN}✅ AI client code compiles successfully (REPL check ~fast)${NC}"
             exit 0
         fi
