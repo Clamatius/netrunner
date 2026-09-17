@@ -627,7 +627,7 @@ ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits
   discard-card <name> - Move card to discard (for testing)
   draw-to-card <name> - Draw until card appears in hand
-  find-card <name>    - Multi-turn search (Corp bot takes turns)
+  find-card <name> [turns] - Multi-turn search; the opponent heuristic bot plays between (default 10)
   eval <expr>         - Execute arbitrary Clojure expression
   nuke-state          - Clear all cached game state
   clear-heartbeats    - Zero the peer-liveness clock (fresh game; reset.sh calls
@@ -1210,13 +1210,97 @@ case "$COMMAND" in
         ;;
 
     find-card)
-        # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
-        TIMEOUT="$REPL_BLOCKING_TIMEOUT"
-        ensure_connection
+        # Spans turns, so it drives BOTH seats — and each seat is its own REPL
+        # process. That is why this loop lives here and not in Clojure (#218): the
+        # old find-card! called the opponent's heuristic bot inside THIS side's
+        # REPL, where it acts on this side's state. Measured once it was reachable:
+        # a Runner search started "turn 1" eight times in a row, the Corp never
+        # played, and the Runner drew its deck down to 3. Every step below is an
+        # ordinary command sent to the REPL of the side it is for.
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command find-card \"Card Name\""
-        info "Multi-turn search for $CARD_NAME (Corp bot will take turns)..."
-        execute "(ai-actions/find-card! \"$CARD_NAME\")"
+        MAX_TURNS="${2:-10}"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command corp|runner find-card \"Card Name\" [max-turns]"
+        case "$CLIENT_NAME" in
+            runner) OPPONENT="corp" ;;
+            corp)   OPPONENT="runner" ;;
+            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;
+        esac
+        [[ "$MAX_TURNS" =~ ^[1-9][0-9]*$ ]] || error "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
+        # The steps below go through `eval`, which skips the game-gone gate (#109),
+        # so take it once here. The opponent's bot-turn takes its own.
+        ensure_connection
+        SELF="$SCRIPT_DIR/send_command"
+        # Prints this side's view of the active player, waiting up to ~10s for it
+        # to become $1 (an end-turn in the other REPL reaches this one as a diff).
+        find_card_active_player() {
+            NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
+                "(loop [i 0] (let [ap (some-> (get-in @ai-state/client-state [:game-state :active-player]) name clojure.string/lower-case)] (if (or (= ap \"$1\") (>= i 40)) (println (str \"FIND-CARD-ACTIVE \" ap)) (do (Thread/sleep 250) (recur (inc i))))))" \
+                | sed -n 's/^FIND-CARD-ACTIVE //p' | tail -n 1 || true
+        }
+        echo "🔍 Searching for $CARD_NAME as $CLIENT_NAME (up to $MAX_TURNS turns; the $OPPONENT heuristic bot plays the turns in between)"
+        for ((turn = 1; turn <= MAX_TURNS; turn++)); do
+            echo "🔍 Turn $turn/$MAX_TURNS: drawing for $CARD_NAME..."
+            # Branch on draw-to-card!'s RETURNED :status, printed on a line of its
+            # own, not on the wording of what it printed along the way.
+            DRAW_OUT=$(TIMEOUT="$REPL_BLOCKING_TIMEOUT" NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
+                "(let [r (ai-actions/draw-to-card! \"$CARD_NAME\")] (println (str \"FIND-CARD-STATUS \" (some-> (:status r) name))) nil)") \
+                || { printf '%s\n' "$DRAW_OUT"; error "draw-to-card did not complete on turn $turn; find-card stopped (nothing further was sent)."; }
+            DRAW_STATUS=$(printf '%s\n' "$DRAW_OUT" | sed -n 's/^FIND-CARD-STATUS //p' | tail -n 1)
+            printf '%s\n' "$DRAW_OUT" | grep -v '^FIND-CARD-STATUS ' || true
+            case "$DRAW_STATUS" in
+                success)
+                    echo "✅ Found $CARD_NAME on turn $turn"
+                    exit 0
+                    ;;
+                out-of-clicks) ;;
+                *)
+                    error "draw-to-card ended with status '${DRAW_STATUS:-none}' — find-card stopped on turn $turn (see above)."
+                    ;;
+            esac
+            if [[ "$turn" -eq "$MAX_TURNS" ]]; then
+                break
+            fi
+
+            # End of our turn: the hand-size discard is a prompt on us, and our
+            # turn does not finish until it is answered.
+            NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" discard > /dev/null \
+                || error "the end-of-turn discard failed on turn $turn; find-card stopped. Check: send_command $CLIENT_NAME prompt"
+
+            # Hand the opponent a turn only if the turn that just ended is OURS.
+            # At our own turn boundary (turn not yet started: 0 clicks, 0 draws)
+            # the active player is still the opponent, and bot-turn would ask
+            # the engine for a second opponent turn in a row.
+            ACTIVE=$(find_card_active_player "$CLIENT_NAME")
+            if [[ "$ACTIVE" != "$CLIENT_NAME" ]]; then
+                error "no turn of yours has just ended (active player is '${ACTIVE:-unknown}'). If your turn has not started yet: send_command $CLIENT_NAME start-turn, then run find-card again."
+            fi
+
+            echo "   $OPPONENT bot plays its turn..."
+            NR_NO_AUTO_PROMPT=1 "$SELF" "$OPPONENT" bot-turn \
+                || error "the $OPPONENT bot-turn failed; find-card stopped before starting your next turn."
+
+            # Do not start our turn unless the opponent demonstrably took one.
+            # start-turn's own guard cannot be leaned on here: it accepts any
+            # opponent "is ending" line in the recent log, including the one from
+            # BEFORE our turn, which is how the old loop gave the Runner turn
+            # after turn.
+            ACTIVE=$(find_card_active_player "$OPPONENT")
+            if [[ "$ACTIVE" != "$OPPONENT" ]]; then
+                error "the $OPPONENT bot did not take a turn (active player is still '${ACTIVE:-unknown}'); find-card stopped rather than start another $CLIENT_NAME turn. Check: send_command $OPPONENT status"
+            fi
+
+            # start-turn reports a refusal as printed text with exit 0, so the
+            # evidence that our turn began is our clicks, not its exit status.
+            NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" start-turn || true
+            CLICKS=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
+                "(loop [i 0] (let [c (or (get-in @ai-state/client-state [:game-state (keyword (:side @ai-state/client-state)) :click]) 0)] (if (or (pos? c) (>= i 40)) (println (str \"FIND-CARD-CLICKS \" c)) (do (Thread/sleep 250) (recur (inc i))))))" \
+                | sed -n 's/^FIND-CARD-CLICKS //p' | tail -n 1) || true
+            if [[ ! "$CLICKS" =~ ^[1-9][0-9]*$ ]]; then
+                error "your turn did not start after the $OPPONENT's turn (clicks: ${CLICKS:-unknown}); find-card stopped. Check: send_command $CLIENT_NAME status"
+            fi
+        done
+        echo "❌ $CARD_NAME not found in $MAX_TURNS turn(s)"
+        exit 1
         ;;
 
     # Dev/Testing commands

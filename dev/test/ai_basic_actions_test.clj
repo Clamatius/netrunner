@@ -8,7 +8,6 @@
   (:require [clojure.test :refer :all]
             [clojure.string :as str]
             [test-helpers :refer :all]
-            [ai-actions :as actions]
             [ai-basic-actions :as basic]
             [ai-state :as state]
             [ai-core :as core]
@@ -21,16 +20,14 @@
    :active-player "runner"
    :log []})
 
-(deftest test-card-search-helpers-are-top-level-and-executable
-  (testing "draw-to-card returns its status map and the public find-card alias is callable"
+(deftest test-draw-to-card-returns-its-status-map
+  ;; #218: `find-card!` was nested inside this fn's body, so the fn returned that
+  ;; inner defn's VAR on every path instead of the map its docstring promises.
+  (testing "draw-to-card returns its documented status map, not a var"
     (with-mock-state (mock-client-state :side "runner" :game-state card-search-game-state)
-      (let [draw-result (basic/draw-to-card! "Sure Gamble")
-            find-result (actions/find-card! "Sure Gamble")]
+      (let [draw-result (basic/draw-to-card! "Sure Gamble")]
         (is (= {:status :success :card "Sure Gamble" :draws 0}
-               (dissoc draw-result :cursor)))
-        (is (= :success (:status find-result)))
-        (is (= "Sure Gamble" (:card find-result)))
-        (is (= 0 (:draws find-result)))))))
+               (dissoc draw-result :cursor)))))))
 
 (deftest test-start-turn-blocks-on-corp-post-discard
   (testing "start-turn! returns :post-discard-pending error and sends nothing"
