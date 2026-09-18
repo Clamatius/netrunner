@@ -52,6 +52,7 @@ case "$expr" in
         step boundary
         if grep -q ' bot-turn$' "$STUB_LOG"; then b="$STUB_OPP_BOUNDARY"; else b="$STUB_MY_BOUNDARY"; fi
         printf 'FIND-CARD-BOUNDARY %s\n' "$b" ;;
+    *FIND-CARD-PROMPT*) step prompt-probe; printf 'FIND-CARD-PROMPT %s\n' "${STUB_PROMPT:-null}" ;;
     *FIND-CARD-RUN*)    step run-probe; printf 'FIND-CARD-RUN %s\n' "${STUB_RUN:-false}" ;;   # live run, not merely a non-nil :run
     *start-turn!*)      step start-turn; printf 'started\n'; exit "${STUB_START_EXIT:-0}" ;;
     *FIND-CARD-CLICKS*) step clicks; printf 'FIND-CARD-CLICKS %s\n' "${STUB_CLICKS:-4}" ;;
@@ -76,7 +77,8 @@ check() {  # NAME CONDITION-RESULT(0/1) DETAIL
 # A turn both sides finish cleanly, unless a case overrides it.
 reset_stub() {
     export STUB_DRAWS="out-of-clicks success" STUB_MY_BOUNDARY="runner/true" \
-           STUB_OPP_BOUNDARY="corp/true" STUB_CLICKS=4 STUB_RUN=false STUB_START_EXIT=0
+           STUB_OPP_BOUNDARY="corp/true" STUB_CLICKS=4 STUB_RUN=false STUB_START_EXIT=0 \
+           STUB_PROMPT=null
 }
 
 # 1. Happy path: runner misses on turn 1, the CORP REPL plays a whole turn
@@ -91,10 +93,21 @@ EXPECTED="7889 draw
 7889 boundary
 7889 start-turn
 7889 clicks
-7889 draw"
+7889 draw
+7889 prompt-probe"
 [[ "$CODE" -eq 0 && "$LOG" == "$EXPECTED" ]]; check "happy-path-order" $? "exit $CODE; expected steps:
 $EXPECTED"
 [[ "$OUT" == *"Found Sure Gamble on turn 2"* ]]; check "happy-path-says-found" $? "no found line"
+[[ "$OUT" != *"prompt is still open"* ]]; check "no-phantom-prompt-warning" $? "warns about a prompt that is not there"
+
+# 1b. Finding the card usually leaves the hand-size discard owed. Say so, and do
+#     NOT answer it: the auto-discard bins the FIRST cards in hand, which after a
+#     search is the wrong end of the hand.
+reset_stub; export STUB_PROMPT="Discard down to 5 cards"
+run runner find-card "Sure Gamble"
+[[ "$CODE" -eq 0 && "$OUT" == *"prompt is still open"* && "$OUT" == *"Discard down to 5 cards"* ]]; check "success-reports-owed-prompt" $? "exit $CODE"
+LAST_DISCARD_PORT=$(grep ' discard$' <<<"$LOG" | tail -1)
+[[ "$(grep -c ' discard$' <<<"$LOG")" -eq 2 ]]; check "success-does-not-discard-the-find" $? "discard steps: $(grep -c ' discard$' <<<"$LOG") (expected the 2 turn-end ones, none after the find)"
 
 # 2. The opponent's turn did not END (its discard prompt outlived its bot-turn, the
 #    commonest multi-turn path): never start another turn of ours.

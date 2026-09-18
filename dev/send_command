@@ -1271,6 +1271,20 @@ case "$COMMAND" in
             case "$DRAW_STATUS" in
                 success)
                     echo "✅ Found $CARD_NAME on turn $turn"
+                    # The search usually ends mid-turn-end with a hand-size discard
+                    # owed. find-card does NOT answer that one: the auto-discard bins
+                    # the FIRST cards in hand (ai_websocket_client_v2/handle-discard-prompt!),
+                    # and the seat that just went looking for a specific card is the
+                    # last caller that should have its hand binned by index. Say it
+                    # instead, because leaving a prompt unmentioned parks the game.
+                    PENDING=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
+                        "(println (str \"FIND-CARD-PROMPT \" (some-> (ai-state/get-prompt @ai-state/client-state) :msg)))" \
+                        | sed -n 's/^FIND-CARD-PROMPT //p' | tail -n 1) || true
+                    if [[ -n "$PENDING" && "$PENDING" != "null" ]]; then
+                        echo "⚠️  A prompt is still open on you: $PENDING"
+                        echo "   find-card left it for you — 'discard' bins the FIRST cards in your hand, which is rarely what you want after a search."
+                        echo "   Choose instead: send_command $CLIENT_NAME prompt   (then 'discard <index> [<index>…]')"
+                    fi
                     exit 0
                     ;;
                 out-of-clicks) ;;
