@@ -1250,12 +1250,34 @@ case "$COMMAND" in
                 "(loop [i 0] (let [gs (:game-state @ai-state/client-state) ap (some-> (:active-player gs) name clojure.string/lower-case) done (true? (:end-turn gs))] (if (or (and (= ap \"$1\") done) (>= i 40)) (println (str \"FIND-CARD-BOUNDARY \" ap \"/\" done)) (do (Thread/sleep 250) (recur (inc i))))))" \
                 | sed -n 's|^FIND-CARD-BOUNDARY ||p' | tail -n 1 || true
         }
-        # Answer our own end-of-turn discard prompt. Its output is SHOWN: the
-        # discard bins the first N cards of hand, and someone staging a scenario
-        # must be able to see which cards went (guest MINOR).
+        # What prompt, if any, is open on a side. Empty when there is none.
+        find_card_prompt() {   # SIDE
+            NR_NO_AUTO_PROMPT=1 "$SELF" "$1" eval \
+                "(println (str \"FIND-CARD-PROMPT \" (some-> (ai-state/get-prompt @ai-state/client-state) :msg)))" \
+                | sed -n 's/^FIND-CARD-PROMPT //p' | tail -n 1 || true
+        }
+        # Answer an end-of-turn discard prompt — and ONLY that one. `discard`
+        # (handle-discard-prompt!) treats any "select" prompt with an over-limit
+        # hand as licence to select the first N cards of that hand, and plenty of
+        # engine prompts select from hand without being discards (delta-review
+        # MAJOR). So the prompt is identified the way ai_prompts already does it,
+        # by the engine's own wording in turns.clj:155, and anything else stops the
+        # search instead of binning cards for it.
+        # The output is SHOWN: it bins the FIRST N cards of hand, and someone
+        # staging a scenario must be able to see which cards went (guest MINOR).
         find_card_discard() {   # SIDE
-            NR_NO_AUTO_PROMPT=1 "$SELF" "$1" discard \
-                || error "the end-of-turn discard failed for $1; find-card stopped. Check: send_command $1 prompt"
+            local pending; pending=$(find_card_prompt "$1")
+            case "$pending" in
+                ""|null) return 0 ;;
+                *[Dd]iscard\ down\ to*)
+                    NR_NO_AUTO_PROMPT=1 "$SELF" "$1" discard \
+                        || error "the end-of-turn discard failed for $1; find-card stopped. Check: send_command $1 prompt"
+                    ;;
+                *)
+                    error "a prompt is open on $1 that is not the end-of-turn discard: $pending
+   find-card stopped rather than select cards for it. Answer it yourself: send_command $1 prompt"
+                    ;;
+            esac
         }
 
         echo "🔍 Searching for $CARD_NAME as $CLIENT_NAME (up to $MAX_TURNS turns; the $OPPONENT heuristic bot plays the turns in between)"
@@ -1277,9 +1299,7 @@ case "$COMMAND" in
                     # and the seat that just went looking for a specific card is the
                     # last caller that should have its hand binned by index. Say it
                     # instead, because leaving a prompt unmentioned parks the game.
-                    PENDING=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                        "(println (str \"FIND-CARD-PROMPT \" (some-> (ai-state/get-prompt @ai-state/client-state) :msg)))" \
-                        | sed -n 's/^FIND-CARD-PROMPT //p' | tail -n 1) || true
+                    PENDING=$(find_card_prompt "$CLIENT_NAME")
                     if [[ -n "$PENDING" && "$PENDING" != "null" ]]; then
                         echo "⚠️  A prompt is still open on you: $PENDING"
                         echo "   find-card left it for you — 'discard' bins the FIRST cards in your hand, which is rarely what you want after a search."
