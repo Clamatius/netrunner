@@ -824,3 +824,11 @@
   (testing "nested encounters: the button is not shown, so nothing is sent"
     (is (= 0 (:sent (toggle-sends {:server ["hq"] :phase "encounter-ice" :position 1}
                                   {:encounter-count 2}))))))
+
+(deftest auto-pass-send-says-what-was-requested-not-what-applied
+  (testing "the message names the direction asked for, from the pre-send flag"
+    (let [{:keys [out]} (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1} nil)]
+      (is (str/includes? out "was OFF, requested ON")))
+    (let [{:keys [out]} (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1
+                                       :corp-auto-no-action true} nil)]
+      (is (str/includes? out "was ON, requested OFF")))))
