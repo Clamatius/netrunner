@@ -52,7 +52,7 @@ case "$expr" in
         step boundary
         if grep -q ' bot-turn$' "$STUB_LOG"; then b="$STUB_OPP_BOUNDARY"; else b="$STUB_MY_BOUNDARY"; fi
         printf 'FIND-CARD-BOUNDARY %s\n' "$b" ;;
-    *FIND-CARD-RUN*)    step run-probe; printf 'FIND-CARD-RUN %s\n' "${STUB_RUN:-false}" ;;
+    *FIND-CARD-RUN*)    step run-probe; printf 'FIND-CARD-RUN %s\n' "${STUB_RUN:-false}" ;;   # live run, not merely a non-nil :run
     *start-turn!*)      step start-turn; printf 'started\n'; exit "${STUB_START_EXIT:-0}" ;;
     *FIND-CARD-CLICKS*) step clicks; printf 'FIND-CARD-CLICKS %s\n' "${STUB_CLICKS:-4}" ;;
     *)                  step "other:${expr:0:40}"; printf 'nil\n' ;;
@@ -103,10 +103,12 @@ run runner find-card "Sure Gamble"
 [[ "$CODE" -ne 0 && "$LOG" != *"start-turn"* ]]; check "no-start-after-unfinished-opponent" $? "exit $CODE; a runner start-turn was sent although the corp's turn had not ended"
 [[ "$OUT" == *"did not end"* ]]; check "unfinished-opponent-says-why" $? "no diagnosis"
 
-# 2b. …and when the reason is a run waiting on us, say THAT, with the two ways out.
+# 2b. …and when the reason is a run waiting on us, say THAT, and name the way out.
+#     NOT 'auto-pass': outside a live run it wedges the seat outright (#221).
 reset_stub; export STUB_OPP_BOUNDARY="corp/false" STUB_RUN=true
 run runner find-card "Sure Gamble"
-[[ "$OUT" == *"parked on a RUN"* && "$OUT" == *"monitor-run"* && "$OUT" == *"auto-pass"* ]]; check "parked-run-diagnosed" $? "run not named"
+[[ "$OUT" == *"parked on a RUN"* && "$OUT" == *"monitor-run"* ]]; check "parked-run-diagnosed" $? "run not named"
+[[ "$OUT" != *"auto-pass"* ]]; check "parked-run-does-not-advise-auto-pass" $? "recommends auto-pass, which wedges a seat with no live run (#221)"
 
 # 3. OUR turn has not ended: do not hand the opponent a second turn in a row.
 #    (Active player alone would say "corp", which is also what our own boundary

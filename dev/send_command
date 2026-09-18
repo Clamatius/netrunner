@@ -1315,12 +1315,17 @@ case "$COMMAND" in
             # turn (#220).
             BOUNDARY=$(find_card_boundary "$OPPONENT")
             if [[ "$BOUNDARY" != "$OPPONENT/true" ]]; then
+                # A LIVE run, not merely a non-nil :run — #221 leaves
+                # {:corp-auto-no-action …} sitting there, which `some?` reads as a run.
                 RUN_LIVE=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                    "(println (str \"FIND-CARD-RUN \" (some? (get-in @ai-state/client-state [:game-state :run]))))" \
+                    "(println (str \"FIND-CARD-RUN \" (boolean (let [r (get-in @ai-state/client-state [:game-state :run])] (and (map? r) (or (:server r) (:phase r) (:position r)))))))" \
                     | sed -n 's/^FIND-CARD-RUN //p' | tail -n 1) || true
                 if [[ "$RUN_LIVE" == "true" ]]; then
+                    # NOT 'auto-pass' as the way out: outside a live run it wedges the
+                    # seat outright (#221), and by the time you read this the run may
+                    # have ended.
                     error "the $OPPONENT bot is parked on a RUN that is waiting for you (active player / end-turn: ${BOUNDARY:-unknown}); find-card stopped rather than start another $CLIENT_NAME turn.
-   find-card cannot play both sides of a run. Answer it yourself (send_command $CLIENT_NAME monitor-run), or toggle 'send_command $CLIENT_NAME auto-pass' before re-running so run windows pass automatically."
+   find-card cannot play both sides of a run. Answer it yourself — send_command $CLIENT_NAME monitor-run — and then run find-card again."
                 fi
                 error "the $OPPONENT's turn did not end (active player / end-turn: ${BOUNDARY:-unknown}); find-card stopped rather than start another $CLIENT_NAME turn. Check: send_command $OPPONENT status"
             fi
