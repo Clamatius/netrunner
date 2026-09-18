@@ -475,6 +475,19 @@
       (core/toggle-auto-no-action state :corp nil)
       (is (= :approach-ice (:phase (:run @state))) "Still approaching ice, because ice is unrezzed")))
 
+(deftest auto-no-action-toggle-outside-a-run-is-a-no-op
+    ;; toggling with no run live must not create one: update-in on a missing
+    ;; path used to leave {:corp-auto-no-action true} at :run, and every click
+    ;; action was then refused "during a run" for the rest of the game
+    (do-game
+      (new-game {:corp {:deck [(qty "Hedge Fund" 5)]}})
+      (is (nil? (:run @state)) "No run to start with")
+      (core/toggle-auto-no-action state :corp nil)
+      (is (nil? (:run @state)) "Toggling outside a run does not create one")
+      (is (changed? [(:credit (get-corp)) 1]
+            (click-credit state :corp))
+          "A click action still works after the toggle")))
+
 (deftest hide-continue-msg-no-message-for-runner-on-approach
     ;; No message for Runner on approach
     (do-game

@@ -682,18 +682,39 @@
                            :args {:msg (str "indicates to fire all unbroken subroutines on " ice-name)}})
         (Thread/sleep core/short-delay)))))
 
+(defn- auto-pass-window?
+  "Mirrors the enable condition of the web UI's 'Auto-pass priority' button
+   (board.cljs corp-run-div): a run is live, it is not at success, and at most
+   one encounter is open. A live run always carries :server — a :run holding
+   only the flag is the phantom #221 left behind, not a run."
+  [game-state]
+  (let [run (:run game-state)]
+    (boolean
+      (and (:server run)
+           (not= "success" (core/normalize-phase (:phase run)))
+           (<= (get-in game-state [:encounters :encounter-count] 0) 1)))))
+
 (defn toggle-auto-no-action!
   "Toggle auto-pass priority during runs (Corp only)
    When enabled, automatically passes on all rez/paid ability windows
    Prompt changes to 'Stop Auto-passing Priority' when active
+
+   Refused outside a run (#221): the engine's toggle used to CREATE a :run
+   there, and a truthy :run refuses every click action for the rest of the game.
 
    Usage: (toggle-auto-no-action!)"
   []
   (let [client-state @state/client-state
         side (:side client-state)
         gameid (:gameid client-state)]
-    (if (not (core/side= "Corp" side))
+    (cond
+      (not (core/side= "Corp" side))
       (println "❌ Only Corp can toggle auto-pass priority")
+
+      (not (auto-pass-window? (:game-state client-state)))
+      (println "❌ auto-pass toggles only during a run, before success and outside nested encounters — nothing sent")
+
+      :else
       (do
         (ws/send-message! :game/action
                           {:gameid gameid
