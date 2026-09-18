@@ -192,6 +192,7 @@ refuse_no_state() {   # VERDICT
             echo -e "${YELLOW}⏳ NO STATE — the resync did not land, so this seat has no board to act on.${NC}" >&2
             echo    "   '$COMMAND' was NOT sent. The game is probably still alive; the state just didn't arrive." >&2
             echo    "   Retry the same command. If it keeps failing: ./dev/send_command $side status" >&2
+            echo    "   Escape hatch: ./dev/send_command $side list-game-ids confirms whether the server still hosts it." >&2
             exit 4
             ;;
         game-over)
@@ -632,6 +633,8 @@ ${GREEN}Debug & Dev:${NC}
   nuke-state          - Clear all cached game state
   clear-heartbeats    - Zero the peer-liveness clock (fresh game; reset.sh calls
                         this so a stale heartbeat can't read as a live opponent)
+  list-game-ids       - List server-hosted games; use after a resync timeout to
+                        distinguish a transient empty board from an idle-purged game
   debug-chat [on|off] - Toggle debug chat mode
   connect             - Manually reconnect WebSocket
 
@@ -987,6 +990,7 @@ case "$COMMAND" in
 
     # Status commands (read-only)
     status)
+        ensure_connection
         execute '(ai-actions/status)'
         ;;
 
@@ -999,6 +1003,7 @@ case "$COMMAND" in
         ;;
 
     snapshot)
+        ensure_connection
         # Bundled per-decision read-loop in one round-trip:
         # status-compact + prompt(if any) + board-compact + hand + last-N log + cursor.
         N="${1:-5}"
@@ -1007,6 +1012,7 @@ case "$COMMAND" in
         ;;
 
     board)
+        ensure_connection
         execute '(ai-actions/show-board)'
         ;;
 
@@ -1015,6 +1021,7 @@ case "$COMMAND" in
         ;;
 
     hand)
+        ensure_connection
         execute '(ai-actions/show-hand)'
         ;;
 
