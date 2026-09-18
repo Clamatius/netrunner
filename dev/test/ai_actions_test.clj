@@ -832,3 +832,12 @@
     (let [{:keys [out]} (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1
                                        :corp-auto-no-action true} nil)]
       (is (str/includes? out "was ON, requested OFF")))))
+
+(deftest auto-pass-failed-send-is-not-reported-as-sent
+  (with-mock-state
+    (mock-client-state :side "corp"
+                       :game-state (corp-board-with {:server ["hq"] :phase "approach-ice" :position 1} nil))
+    (with-redefs [ws/send-message! (fn [& _] nil)]
+      (let [out (with-out-str (ai-actions/toggle-auto-no-action!))]
+        (is (str/includes? out "NOT sent"))
+        (is (not (str/includes? out "Sent auto-pass toggle")))))))

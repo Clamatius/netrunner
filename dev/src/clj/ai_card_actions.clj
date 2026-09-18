@@ -716,17 +716,19 @@
 
       :else
       (let [was-on? (boolean (get-in client-state [:game-state :run :corp-auto-no-action]))]
-        (ws/send-message! :game/action
-                          {:gameid gameid
-                           :command "toggle-auto-no-action"
-                           :args nil})
-        ;; Says what was ASKED, not what applied: the engine drops the toggle if
-        ;; the run ended before it arrived, and a read after the sleep can
-        ;; still show the pre-send board.
-        (println (str "📤 Sent auto-pass toggle: was " (if was-on? "ON" "OFF")
-                      ", requested " (if was-on? "OFF" "ON")
-                      " for this run only — it resets when the run ends"))
-        (Thread/sleep core/quick-delay)))))
+        (if-not (ws/send-message! :game/action
+                                  {:gameid gameid
+                                   :command "toggle-auto-no-action"
+                                   :args nil})
+          (println "❌ auto-pass toggle NOT sent — the connection refused it")
+          ;; Says what was ASKED, not what applied: the engine drops the toggle
+          ;; if the run ended before it arrived, and a read after the sleep can
+          ;; still show the pre-send board.
+          (do
+            (println (str "📤 Sent auto-pass toggle: was " (if was-on? "ON" "OFF")
+                          ", requested " (if was-on? "OFF" "ON")
+                          " for this run only — it resets when the run ends"))
+            (Thread/sleep core/quick-delay)))))))
 
 (defn fire-subs-report
   "Pure: decide what to print and return after firing unbroken subroutines.
