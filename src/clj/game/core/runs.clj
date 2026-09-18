@@ -185,10 +185,13 @@
 
 (defn toggle-auto-no-action
   [state _ _]
-  (swap! state update-in [:run :corp-auto-no-action] not)
-  (when (and (rezzed? (get-current-ice state))
-             (#{:approach-ice :encounter-ice} (:phase (:run @state))))
-    (continue state :corp nil)))
+  ;; update-in would CREATE :run when none is live, and a truthy :run refuses
+  ;; every click action (actions.clj) for the rest of the game
+  (when (:run @state)
+    (swap! state update-in [:run :corp-auto-no-action] not)
+    (when (and (rezzed? (get-current-ice state))
+               (#{:approach-ice :encounter-ice} (:phase (:run @state))))
+      (continue state :corp nil))))
 
 (defn check-auto-no-action
   "If corp-auto-no-action is enabled, presses continue for the corp as long as the only rezzed ice is approached or encountered."
