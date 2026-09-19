@@ -259,6 +259,15 @@ else
         '{:side "runner" :game-state {:run {:corp-auto-no-action true}}}' "$RUN_EXPR" "false"
     semantic "semantics-run-none" \
         '{:side "runner" :game-state {:run nil}}' "$RUN_EXPR" "false"
+    # :server is the authority, the same one toggle-auto-no-action! gates on
+    # (#221/#223): run-summary always carries it for a real run, so a :run map
+    # with only :phase or :position is not a live run (queue review, guest MINOR).
+    semantic "semantics-run-server-only" \
+        '{:side "runner" :game-state {:run {:server ["HQ"]}}}' "$RUN_EXPR" "true"
+    semantic "semantics-run-phase-only" \
+        '{:side "runner" :game-state {:run {:phase :movement}}}' "$RUN_EXPR" "false"
+    semantic "semantics-run-position-only" \
+        '{:side "runner" :game-state {:run {:position 0}}}' "$RUN_EXPR" "false"
 fi
 
 if [[ "$fails" -gt 0 ]]; then echo "find_card_test: $fails failure(s)"; exit 1; fi

@@ -1329,14 +1329,15 @@ case "$COMMAND" in
             if [[ "$BOUNDARY" != "$CLIENT_NAME/true" ]]; then
                 error "your turn has not ended (active player / engine's end-turn flag: ${BOUNDARY:-unknown}) — find-card stopped without giving the $OPPONENT a turn.
    If your turn has not started yet: send_command $CLIENT_NAME start-turn, then run find-card again.
-   If it is still resolving: send_command $CLIENT_NAME prompt"
+   If it is still resolving: send_command $CLIENT_NAME prompt
+   If it is held at 0 clicks (paid window or scorable agenda — see above): send_command $CLIENT_NAME end-turn, then run find-card again."
             fi
 
             echo "   $OPPONENT bot plays its turn..."
             NR_NO_AUTO_PROMPT=1 "$SELF" "$OPPONENT" bot-turn \
                 || error "the $OPPONENT bot-turn failed; find-card stopped before starting your next turn."
-            # The bot sends its end-turn and returns as soon as the discard prompt
-            # ARRIVES; nothing in a single bot-turn answers it, so without this the
+            # The bot sends its end-turn and can return as soon as the discard prompt
+            # ARRIVES, before its own prompt loop sees it; if so, without this the
             # opponent's turn never ends and the failure gets blamed on the wrong
             # side (guest MAJOR). The heuristic Corp draws every turn, so this is
             # the ordinary path, not an edge case.
@@ -1351,8 +1352,10 @@ case "$COMMAND" in
             if [[ "$BOUNDARY" != "$OPPONENT/true" ]]; then
                 # A LIVE run, not merely a non-nil :run — #221 leaves
                 # {:corp-auto-no-action …} sitting there, which `some?` reads as a run.
+                # :server is the authority, as in toggle-auto-no-action!: run-summary
+                # always carries it for a real run.
                 RUN_LIVE=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                    "(println (str \"FIND-CARD-RUN \" (boolean (let [r (get-in @ai-state/client-state [:game-state :run])] (and (map? r) (or (:server r) (:phase r) (:position r)))))))" \
+                    "(println (str \"FIND-CARD-RUN \" (boolean (let [r (get-in @ai-state/client-state [:game-state :run])] (and (map? r) (some? (:server r)))))))" \
                     | sed -n 's/^FIND-CARD-RUN //p' | tail -n 1) || true
                 if [[ "$RUN_LIVE" == "true" ]]; then
                     # NOT 'auto-pass' as the way out: outside a live run it wedges the
