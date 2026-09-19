@@ -258,12 +258,24 @@
 ;; These functions analyze game log entries to determine turn state.
 ;; They are pure functions for testability - pass log and username explicitly.
 
+(defn log-authored-by?
+  "True when TEXT is a direct `system-msg` line authored by USERNAME.
+
+   `system-msg` renders these lines as `username + space + message`.  Match the
+   delimiter as well as the name: substring matching confuses `runner` with
+   `ai-runner`, while a bare prefix still confuses `Clam` with `Clamatius`."
+  [text username]
+  (boolean
+    (and text
+         username
+         (str/starts-with? text (str username " ")))))
+
 (defn find-end-turn-indices
-  "Find indices of 'is ending' log entries, optionally filtered by username.
+  "Find indices of 'is ending' log entries, optionally filtered by author.
 
    Parameters:
    - log: vector of log entries (each with :text key)
-   - exclude-username: if provided, exclude entries containing this username
+   - exclude-username: if provided, exclude entries authored by this username
 
    Returns sequence of indices where end-turn entries appear."
   [log exclude-username]
@@ -273,17 +285,17 @@
        (when (and text
                   (str/includes? text "is ending")
                   (or (nil? exclude-username)
-                      (not (str/includes? text exclude-username))))
+                      (not (log-authored-by? text exclude-username))))
          idx)))
    log))
 
 (defn find-start-turn-indices
-  "Find indices of 'started their turn' log entries, filtered by username inclusion/exclusion.
+  "Find indices of 'started their turn' log entries, filtered by author.
 
    Parameters:
    - log: vector of log entries (each with :text key)
-   - include-username: if provided, only include entries containing this username
-   - exclude-username: if provided (and include-username nil), exclude entries with this username
+   - include-username: if provided, only include entries authored by this username
+   - exclude-username: if provided (and include-username nil), exclude entries authored by this username
 
    Returns sequence of indices where start-turn entries appear."
   [log & {:keys [include-username exclude-username]}]
@@ -293,8 +305,8 @@
        (when (and text
                   (str/includes? text "started their turn")
                   (cond
-                    include-username (str/includes? text include-username)
-                    exclude-username (not (str/includes? text exclude-username))
+                    include-username (log-authored-by? text include-username)
+                    exclude-username (not (log-authored-by? text exclude-username))
                     :else true))
          idx)))
    log))
