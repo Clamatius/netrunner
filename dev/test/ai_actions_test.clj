@@ -786,3 +786,58 @@
           (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1"))]
             (is (re-find #"(?i)waiting for the opponent" out) out)
             (is (not (re-find #"answer a prompt|your confirmation" out)) out)))))))
+
+;; ============================================================================
+;; auto-pass (#221): the toggle outside a run CREATED a phantom :run on the
+;; server that refused every click action for the rest of the game
+;; ============================================================================
+
+(defn- corp-board-with [run encounters]
+  (-> (mock-client-state :side "corp")
+      :game-state
+      (cond-> run (assoc :run run)
+              encounters (assoc :encounters encounters))))
+
+(defn- toggle-sends [run encounters]
+  (let [sent (atom [])]
+    (with-mock-state
+      (mock-client-state :side "corp" :game-state (corp-board-with run encounters))
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (ai-actions/toggle-auto-no-action!))]
+          {:sent (count @sent) :out out})))))
+
+(deftest auto-pass-refused-outside-a-run
+  (testing "no run: nothing is sent, and the refusal says why"
+    (let [{:keys [sent out]} (toggle-sends nil nil)]
+      (is (= 0 sent))
+      (is (str/includes? out "only during a run"))))
+  (testing "a phantom :run (only the flag, no :server) is not a run"
+    (is (= 0 (:sent (toggle-sends {:corp-auto-no-action true} nil))))))
+
+(deftest auto-pass-mirrors-the-web-ui-button
+  (testing "a live run sends the toggle"
+    (is (= 1 (:sent (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1} nil)))))
+  (testing "keyword phases (fixtures/engine shape) are read the same"
+    (is (= 1 (:sent (toggle-sends {:server [:hq] :phase :movement :position 0} nil)))))
+  (testing "success phase: the button is not shown, so nothing is sent"
+    (is (= 0 (:sent (toggle-sends {:server ["hq"] :phase "success" :position 0} nil)))))
+  (testing "nested encounters: the button is not shown, so nothing is sent"
+    (is (= 0 (:sent (toggle-sends {:server ["hq"] :phase "encounter-ice" :position 1}
+                                  {:encounter-count 2}))))))
+
+(deftest auto-pass-send-says-what-was-requested-not-what-applied
+  (testing "the message names the direction asked for, from the pre-send flag"
+    (let [{:keys [out]} (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1} nil)]
+      (is (str/includes? out "was OFF, requested ON")))
+    (let [{:keys [out]} (toggle-sends {:server ["hq"] :phase "approach-ice" :position 1
+                                       :corp-auto-no-action true} nil)]
+      (is (str/includes? out "was ON, requested OFF")))))
+
+(deftest auto-pass-failed-send-is-not-reported-as-sent
+  (with-mock-state
+    (mock-client-state :side "corp"
+                       :game-state (corp-board-with {:server ["hq"] :phase "approach-ice" :position 1} nil))
+    (with-redefs [ws/send-message! (fn [& _] nil)]
+      (let [out (with-out-str (ai-actions/toggle-auto-no-action!))]
+        (is (str/includes? out "NOT sent"))
+        (is (not (str/includes? out "Sent auto-pass toggle")))))))

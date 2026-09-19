@@ -483,7 +483,7 @@ ${GREEN}Card Actions:${NC}
   trash <name>    - Trash installed card by name
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
   fire-subs <name> - Fire FIREABLE ICE subroutines: unbroken, unfired AND resolvable (Corp only, at any encounter you hold priority in — including a FORCED encounter with no run)
-  auto-pass       - Toggle auto-pass priority during runs (Corp only)
+  auto-pass       - Toggle auto-pass priority during a run (Corp only; refused outside one)
   advance <name> [--overadvance]  - Advance installed card (Corp only)
   score <name>    - Score agenda with sufficient advancement counters
 

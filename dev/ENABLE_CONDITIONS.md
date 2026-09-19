@@ -73,7 +73,7 @@ sender; **gap** is what the sender lacked at inventory time. ✅ mirrored ·
 | `unbroken-subroutines` | run panel: encounter (`encounter-ice` phase ∨ `@encounters`) ∧ an unbroken, unfired, resolvable sub; **menu: any active ICE with an unbroken/unfired sub, no encounter check** | manual `fire-unbroken-subs!`: side · **✨ encountering THIS ice** (`[:encounters :ice]` first — forced encounters — else position ICE at encounter-ice) **∧ fireable subs**; strategy handlers already encounter-gated | ai-actions-test `fire-subs-refuses-outside-an-encounter-with-that-ice`, `…-allows-a-forced-encounter-outside-a-run` | ✨ (stricter than the menu; engine `play-unbroken-subroutines` checks only "no blocking prompt") |
 | `subroutine` (fire one) | run panel: corp ∧ encounter; menu: any sub | — | — | ➖ (#112) |
 | `system-msg` ("indicates to fire…") | run panel: encounter ∧ unbroken subs; menu: `(seq subroutines)` | `let-subs-fire!` (tank signal): side | ai-runs-test | ✅ (informational chat line) |
-| `toggle-auto-no-action` | run ∧ encounter-count ≤ 1 ∧ ¬success | `toggle-auto-no-action!`: side | — | ⚠️ unguarded toggle; harmless UI flag |
+| `toggle-auto-no-action` | run ∧ encounter-count ≤ 1 ∧ ¬success | `toggle-auto-no-action!`: side · **✨ run (`:server` present) ∧ encounter-count ≤ 1 ∧ ¬success**; engine toggle is now a no-op with no run | ai-actions-test `auto-pass-refused-outside-a-run`, `auto-pass-mirrors-the-web-ui-button`; runs-test `auto-no-action-toggle-outside-a-run-is-a-no-op` | ✨ (#221: unguarded, it CREATED a phantom `:run` that refused every click action for the rest of the game) |
 
 ## Run flow
 
@@ -94,7 +94,6 @@ either do not send or compute locally. No enable condition to mirror.
 - `:playable` / advanceable flags not checked pre-send for `play`, abilities, `advance`
   (we pre-check cost and verify in the log; a refused action never reports success).
 - `run` does not mirror `:runnable-list` (we never request `generate-runnable-zones`).
-- `toggle-auto-no-action` unguarded (harmless flag).
 - `start-next-phase` is the one vocabulary gap that can wedge a game (#112 item 1).
 - Upstream UI inconsistencies noted above (space-bar end-turn ignores post-discard;
   space-bar `end-phase-12` ignores consent; card-menu fire/rez looser than the run panel).
