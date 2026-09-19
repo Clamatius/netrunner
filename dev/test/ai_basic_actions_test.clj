@@ -13,6 +13,22 @@
             [ai-core :as core]
             [ai-websocket-client-v2 :as ws]))
 
+(def ^:private card-search-game-state
+  {:runner {:click 4 :credit 5 :hand [{:title "Sure Gamble"}] :deck-count 35}
+   :corp {:click 3 :credit 5 :hand [] :deck-count 35}
+   :turn 1
+   :active-player "runner"
+   :log []})
+
+(deftest test-draw-to-card-returns-its-status-map
+  ;; #218: `find-card!` was nested inside this fn's body, so the fn returned that
+  ;; inner defn's VAR on every path instead of the map its docstring promises.
+  (testing "draw-to-card returns its documented status map, not a var"
+    (with-mock-state (mock-client-state :side "runner" :game-state card-search-game-state)
+      (let [draw-result (basic/draw-to-card! "Sure Gamble")]
+        (is (= {:status :success :card "Sure Gamble" :draws 0}
+               (dissoc draw-result :cursor)))))))
+
 (deftest test-start-turn-blocks-on-corp-post-discard
   (testing "start-turn! returns :post-discard-pending error and sends nothing"
     (let [sent (atom [])

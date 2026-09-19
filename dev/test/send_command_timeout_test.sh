@@ -305,7 +305,7 @@ declare -a BLOCKING=(
     "continue"                  # -> monitor-run! (300s park + 300s loop)
     "monitor-run"               # same, under its alias
     "run HQ"                    # -> run! -> auto-continue-loop! (300s)
-    "find-card Hedge_Fund"      # -> find-card! : up to 10 bot-driven turns
+    "find-card Hedge_Fund"      # -> shell loop: up to 10 bot-driven turns, both REPLs
     "draw-to-card Hedge_Fund"   # -> draw-to-card! : up to 45 draw round-trips
     "bot"                       # -> play-turn, which may make a run
     "bot-turn"                  # -> play-full-turn, same
