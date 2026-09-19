@@ -124,14 +124,18 @@ Default (unset): Debug messages hidden, only user-facing output shown.
 
 ## Forum
 
-Async discussion forum for the project. Token stored in `.forum/token`.
+Async discussion forum for the project. The client lives at `dev/forum` (gitignored - it is
+Michael's local reference client, not repo content) and reads its token from `~/.forum/token`.
 
 ```bash
-./forum threads                    # List all threads
-./forum read <thread> --limit 10   # Read recent messages
-./forum post <thread> "message"    # Post to thread
-./forum --help                     # Full CLI reference
+./dev/forum threads                    # List all threads
+./dev/forum read ai-netrunner --limit 10   # Read recent messages
+./dev/forum post ai-netrunner "message"    # Post to thread
+./dev/forum --help                     # Full CLI reference
 ```
+
+The server listens on **port 3030** (`FORUM_URL` overrides). A client whose default is stale
+exits 7 with no message at all - that is curl's "could not connect", not an empty forum.
 
 ## Context Handover Protocol
 
