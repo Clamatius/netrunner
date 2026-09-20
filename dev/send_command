@@ -191,7 +191,15 @@ refuse_no_state() {   # VERDICT
             # "this invocation has state to act on" (guest-panel catch).
             echo -e "${YELLOW}⏳ NO STATE — the resync did not land, so this seat has no board to act on.${NC}" >&2
             echo    "   '$COMMAND' was NOT sent. The game is probably still alive; the state just didn't arrive." >&2
-            echo    "   Retry the same command. If it keeps failing: ./dev/send_command $side status" >&2
+            # Don't send the seat back to the command it is already running.
+            # Since #216 `status` reaches this branch too, and "if it keeps
+            # failing, run status" IS status — the closed diagnosis loop #216
+            # exists to break, rebuilt one branch further in.
+            if [[ "$COMMAND" == "status" ]]; then
+                echo "   Retry the same command." >&2
+            else
+                echo "   Retry the same command. If it keeps failing: ./dev/send_command $side status" >&2
+            fi
             echo    "   Escape hatch: ./dev/send_command $side list-game-ids confirms whether the server still hosts it." >&2
             exit 4
             ;;
@@ -220,8 +228,41 @@ refuse_no_state() {   # VERDICT
 # be hostage to server state (bot-loop-stop). Everything else is gated, so a
 # newly added command inherits the honest default instead of the lying one.
 ensure_connection() {
-    local allow_dead=0
-    [[ "${1:-}" == "--allow-dead" ]] && allow_dead=1
+    local allow_dead=0 allow_decided=0
+    case "${1:-}" in
+        --allow-dead)    allow_dead=1 ;;
+        --allow-decided) allow_decided=1 ;;
+    esac
+
+    # A malformed TIMEOUT is the CALLER's error and needs no socket to detect, so
+    # settle it before the first thing that can fail for a network reason. Since
+    # #216 the reads (status/board/hand/snapshot) come through here BEFORE their
+    # eval, so on an idle-purged game a bad budget surfaced as GAME-GONE, exit 3,
+    # "run reset.sh" — a typo in the caller's own environment blamed on the
+    # server. That turned the shell suite red when #216 merged.
+    #
+    # HERE, rather than in the dispatcher preamble, so the check follows the
+    # network work instead of a list of which commands do network work. `help`,
+    # `peer-status` and `clear-heartbeats` never reach an eval backend; a
+    # preamble check refused all three, and `help` is what a seat reaches for
+    # when it is confused about a budget (panel MINOR, reproduced). Commands that
+    # skip ensure_connection and go straight to `execute` are still validated —
+    # by ai-eval.sh itself, which `execute` hands the budget to.
+    #
+    # AI_EVAL_DEFAULT, not AI_EVAL: that seam is a fake REPL for tests (same
+    # reasoning as check_client's probe skip above), and a fake must not rule on
+    # whether the caller's own budget is well-formed. TIMEOUT is passed
+    # explicitly because it is a shell variable here, not exported.
+    #
+    # The refusal reads exactly as it does when `execute` catches EX_CONFIG
+    # further down: "did not run" is the contract an un-babysat driver checks.
+    local config_err
+    if ! config_err=$(TIMEOUT="$TIMEOUT" TIMEOUT_GRACE="${TIMEOUT_GRACE:-15}" \
+                      "$AI_EVAL_DEFAULT" --check-config 2>&1); then
+        [[ -n "$config_err" ]] && printf '%s\n' "$config_err" >&2
+        echo "❌ '$COMMAND' did not run: the eval backend refused the timeout it was given." >&2
+        exit 78
+    fi
 
     # Use the improved ensure-connected! which checks socket health
     # This detects broken sockets where connected? returns true but socket is dead
@@ -279,7 +320,16 @@ ensure_connection() {
     # a seat out of its own live game.
     if [[ "$allow_dead" -eq 0 ]]; then
         case "$verdict" in
-            game-gone|game-over|resync-failed) refuse_no_state "$verdict" ;;
+            # A DECIDED game still has the state a READ wants: the winner, the
+            # final board, the agenda points. Refusing it is the one verdict
+            # where "was NOT sent" costs the seat the exact thing it asked for,
+            # and the refusal text even says why — "it would have been answered
+            # from a finished game's state" is the post-mortem, not a hazard.
+            # A GONE game is different and stays refused for reads too: there is
+            # no authority behind that board, which is #138.
+            game-over)
+                [[ "$allow_decided" -eq 1 ]] || refuse_no_state "$verdict" ;;
+            game-gone|resync-failed) refuse_no_state "$verdict" ;;
         esac
     fi
 }
@@ -859,28 +909,6 @@ else
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE" 2>/dev/null || true
 fi
 
-# A malformed TIMEOUT is the CALLER's error and is knowable without a socket, so
-# settle it before anything that can fail for a network reason. Since #216 the
-# reads (status/board/hand/snapshot) call ensure_connection first, and on a
-# purged game that answered GAME-GONE — so `TIMEOUT=nonsense status` blamed the
-# server for a typo in the caller's own environment, and told the seat to run
-# reset.sh. ai-eval.sh owns the rule; this asks it rather than restating it, so
-# the two can never disagree. It validates the AMBIENT budget only: a per-command
-# override (`wait 08`) is still validated by the ai-eval call that receives it.
-# AI_EVAL_DEFAULT, not AI_EVAL: the overridable seam is a fake REPL for tests
-# (same reasoning as check_client's probe skip at the top of this file), and a
-# fake must not get to decide whether the caller's own budget is well-formed.
-# TIMEOUT is passed explicitly because it is a shell variable here, not exported
-# — `execute` passes it the same way.
-# The refusal must read exactly as it does when `execute` catches EX_CONFIG
-# further down, because "did not run" is the contract an un-babysat driver
-# checks: same two lines, same order, same exit code.
-if ! CONFIG_ERR=$(TIMEOUT="$TIMEOUT" TIMEOUT_GRACE="${TIMEOUT_GRACE:-15}" \
-                  "$AI_EVAL_DEFAULT" --check-config 2>&1); then
-    [[ -n "$CONFIG_ERR" ]] && printf '%s\n' "$CONFIG_ERR" >&2
-    echo "❌ '$COMMAND' did not run: the eval backend refused the timeout it was given." >&2
-    exit 78
-fi
 
 # ── Peer liveness / dead-peer detection ──────────────────────────────────────
 # Every send_command invocation from a side is a heartbeat: that side's DRIVER
@@ -1013,7 +1041,7 @@ case "$COMMAND" in
 
     # Status commands (read-only)
     status)
-        ensure_connection
+        ensure_connection --allow-decided
         execute '(ai-actions/status)'
         ;;
 
@@ -1026,7 +1054,7 @@ case "$COMMAND" in
         ;;
 
     snapshot)
-        ensure_connection
+        ensure_connection --allow-decided
         # Bundled per-decision read-loop in one round-trip:
         # status-compact + prompt(if any) + board-compact + hand + last-N log + cursor.
         N="${1:-5}"
@@ -1035,7 +1063,7 @@ case "$COMMAND" in
         ;;
 
     board)
-        ensure_connection
+        ensure_connection --allow-decided
         execute '(ai-actions/show-board)'
         ;;
 
@@ -1044,7 +1072,7 @@ case "$COMMAND" in
         ;;
 
     hand)
-        ensure_connection
+        ensure_connection --allow-decided
         execute '(ai-actions/show-hand)'
         ;;
 

@@ -86,7 +86,17 @@
                       :corp {:click 0 :credit 5 :hand []
                              :user {:username "Clamatius"}}
                       :turn 1
-                      :active-player "runner"
+                      ;; The engine-consistent shape for "Clamatius just ended".
+                      ;; :active-player still names the FINISHER until the next
+                      ;; player starts, and :end-turn marks the boundary. The
+                      ;; first version of this fixture said :active-player
+                      ;; "runner" with no :end-turn, which is a state the engine
+                      ;; never produces — and #220's ownership guard keys on
+                      ;; :end-turn, so it never ran here. Both review seats
+                      ;; caught it: the test meant to prove the two fixes compose
+                      ;; was exercising only one of them.
+                      :active-player "corp"
+                      :end-turn true
                       :log [{:text "Clamatius is ending their turn 1 with 5 [Credit]."}]}]
       (with-mock-state (mock-client-state :side "runner" :game-state game-state)
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]

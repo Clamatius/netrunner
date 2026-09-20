@@ -296,6 +296,24 @@ for read_cmd in status board hand snapshot; do
     fi
 done
 
+# ...and the commands that never reach an eval backend must survive it. Round 1
+# of this guard ran in the dispatcher preamble, which refused `help`,
+# `peer-status` and `clear-heartbeats` too (panel MINOR). `help` is precisely
+# what a seat reaches for when it is confused about a budget, so refusing it
+# with a budget error is the worst available answer. The check now lives at the
+# top of ensure_connection, so it follows the network work rather than a
+# hand-kept list of which commands do network work.
+for local_cmd in help peer-status clear-heartbeats; do
+    OUT=$(TIMEOUT=abc "$SEND_CMD" "$local_cmd" 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -ne 0 ]]; then
+        fail "timeout-local" "$local_cmd exited $CODE under a malformed budget, but it
+       never reaches an eval backend — there is no budget for it to refuse.
+       Got: $OUT"
+    else
+        ok "timeout-local" "$local_cmd is unaffected by a malformed budget"
+    fi
+done
+
 # ...and `wait` SEPARATELY, because it is the one caller that captures `execute`
 # inside $( ) — with a `|| true` that LOOKS like it would swallow the refusal.
 #
