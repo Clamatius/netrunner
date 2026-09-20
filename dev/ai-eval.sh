@@ -52,6 +52,20 @@ done
 TIMEOUT=$((10#$TIMEOUT))
 TIMEOUT_GRACE=$((10#$TIMEOUT_GRACE))
 
+# --check-config: run the validation above and stop, touching no socket and no
+# REPL. It exists so a caller can ask "is this budget usable?" BEFORE doing work
+# that can fail for a network or liveness reason, and send_command is the only
+# such caller: `require_valid_budget`, run from the same gate that decides which
+# commands need a backend at all. Without it, #216's connection-first reads
+# (status/board/hand/snapshot call ensure_connection first) reported a malformed
+# TIMEOUT as whatever the network said first — a purged game answered GAME-GONE,
+# so a config typo read as "the server no longer hosts this game". Validation
+# lives HERE, once; send_command asks this script rather than keeping a second
+# copy of the rule.
+if [ "${1:-}" == "--check-config" ]; then
+    exit 0
+fi
+
 # TIMEOUT=0 means NO backstop. Exactly one caller needs it and it is not an
 # escape hatch for "this felt slow": `send_command bot-watch` runs
 # ai-heuristic-corp/watch-for-runs!, an intentionally infinite poll loop whose

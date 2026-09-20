@@ -256,6 +256,64 @@ else
     ok "timeout-parse" "send_command propagates the refusal (exit $CODE)"
 fi
 
+# ...and it must refuse BEFORE any network work, for every read that #216 made
+# connection-first (status/board/hand/snapshot now call ensure_connection first).
+#
+# This is where the assertion above was passing for the wrong reason. It only
+# checks that the refusal is SOMEWHERE in the output, so it stayed green while
+# the answer depended on the state of a live game: with a healthy game
+# ensure_connection fell through and `execute` refused, and with a purged one
+# ensure_connection got there first and answered GAME-GONE — a typo in the
+# caller's own environment reported as "the server no longer hosts this game",
+# with reset.sh as the suggested fix. That is the misleading-output class, and
+# the merge of #216 made it real; an idle-purged game turned this suite red.
+#
+# A malformed budget is knowable with no socket, so assert the ABSENCE of every
+# marker of connection work. Absence is the whole point: "contains the refusal"
+# cannot see the resync that ran first. Because nothing network-side runs, these
+# cases no longer care whether a game is live, gone, or never started.
+for read_cmd in status board hand snapshot; do
+    OUT=$(TIMEOUT=nonsense "$SEND_CMD" corp "$read_cmd" 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -ne 78 ]]; then
+        fail "timeout-first" "$read_cmd exited $CODE, not 78, over a malformed budget.
+       Got: $OUT"
+    elif [[ "$OUT" != *"did not run"* ]]; then
+        fail "timeout-first" "$read_cmd refused without saying the command did not run.
+       Got: $OUT"
+    else
+        bad=""
+        for marker in "GAME-GONE" "auto-resyncing" "NO BOARD" "NO STATE" \
+                      "Attempting to join" "lobby confirmation" "reset.sh"; do
+            [[ "$OUT" == *"$marker"* ]] && bad="$marker"
+        done
+        if [[ -n "$bad" ]]; then
+            fail "timeout-first" "$read_cmd did connection work before validating the
+       budget: output carries '$bad'. A config typo must not be reported as a
+       game/server fault (and must not send the seat to reset.sh)."
+        else
+            ok "timeout-first" "$read_cmd validates the budget before it touches the network"
+        fi
+    fi
+done
+
+# ...and the commands that never reach an eval backend must survive it. Round 1
+# of this guard ran in the dispatcher preamble, which refused `help`,
+# `peer-status` and `clear-heartbeats` too (panel MINOR). `help` is precisely
+# what a seat reaches for when it is confused about a budget, so refusing it
+# with a budget error is the worst available answer. The check now lives at the
+# top of ensure_connection, so it follows the network work rather than a
+# hand-kept list of which commands do network work.
+for local_cmd in help peer-status clear-heartbeats; do
+    OUT=$(TIMEOUT=abc "$SEND_CMD" "$local_cmd" 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -ne 0 ]]; then
+        fail "timeout-local" "$local_cmd exited $CODE under a malformed budget, but it
+       never reaches an eval backend — there is no budget for it to refuse.
+       Got: $OUT"
+    else
+        ok "timeout-local" "$local_cmd is unaffected by a malformed budget"
+    fi
+done
+
 # ...and `wait` SEPARATELY, because it is the one caller that captures `execute`
 # inside $( ) — with a `|| true` that LOOKS like it would swallow the refusal.
 #
@@ -605,6 +663,119 @@ if [[ "$OUT" == *"TIMEOUT="* ]]; then
     ok "killed-eval" "tells the seat how to re-run with a bigger budget"
 else
     fail "killed-eval" "no recovery advice. Got: $OUT"
+fi
+
+# ---------------------------------------------------------------------------
+# The budget that gets validated must be the budget the command USES.
+#
+# Round-3 panel MAJOR. The BLOCKING commands above replace TIMEOUT with
+# REPL_BLOCKING_TIMEOUT during dispatch. A validation gate placed before the
+# dispatch therefore checked the ambient value the command was about to throw
+# away: a malformed REPL_BLOCKING_TIMEOUT sailed through it and came back as
+# GAME-GONE with reset.sh advice — the original misleading-output defect,
+# unfixed, for precisely the long-blocking commands most likely to carry a
+# hand-typed budget. And the mirror error: an ambient TIMEOUT those commands
+# never use was enough to refuse them.
+#
+# The gate now lives in ensure_connection, which every one of these arms calls
+# AFTER its assignment, so it sees the effective value.
+#
+# Driven off the BLOCKING array rather than a fresh list of command names: that
+# array is already this file's answer to "which commands swap their budget", and
+# the unclassified-label check above keeps it honest. A second list here would
+# drift from it silently.
+BUDGET_STUB="$TMP/budget-stub.sh"
+cat > "$BUDGET_STUB" <<'BSEOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--stdin" ]]; then expr="$(cat)"; else expr="${!#}"; fi
+if [[ "$expr" == *"sync-verdict!"* ]]; then printf '"SYNC-VERDICT game-gone"\n'
+elif [[ "$expr" == *"ensure-connected!"* ]]; then printf '"ok"\n'
+else printf 'STUB-EXECUTED\n'; fi
+BSEOF
+chmod +x "$BUDGET_STUB"
+
+for entry in "${BLOCKING[@]}"; do
+    # shellcheck disable=SC2086
+    OUT=$(TIMEOUT=20 REPL_BLOCKING_TIMEOUT=nonsense AI_EVAL="$BUDGET_STUB" \
+          "$SEND_CMD" corp $entry 2>&1) && CODE=0 || CODE=$?
+    name="${entry%% *}"
+    if [[ "$CODE" -ne 78 ]]; then
+        fail "effective-budget" "$name exited $CODE, not 78, over a malformed
+       REPL_BLOCKING_TIMEOUT — the budget it actually runs with. Got: $OUT"
+    elif [[ "$OUT" == *"GAME-GONE"* || "$OUT" == *"reset.sh"* ]]; then
+        fail "effective-budget" "$name reported a server fault for a malformed
+       budget in the caller's own environment. Got: $OUT"
+    else
+        ok "effective-budget" "$name validates the budget it swaps in, before the network"
+    fi
+done
+
+# ...and the mirror: an ambient TIMEOUT a command DISCARDS must not refuse it.
+# bot-watch is the sharpest case — it unconditionally replaces TIMEOUT with 0.
+#
+# ORCHESTRATORS are the exception, and this list exists so the exception is
+# stated rather than quietly skipped. `find-card` does not discard the ambient
+# budget: it drives a multi-turn search out of its own shell loop, and its own
+# round-trips run on ambient TIMEOUT. REPL_BLOCKING_TIMEOUT is what it hands to
+# a CHILD send_command. So BOTH budgets are live for it and both must be
+# refused when malformed — it is asserted in the loop above and again below,
+# not exempted.
+declare -a ORCHESTRATORS=("find-card")
+is_orchestrator() {
+    local n e
+    n="$1"
+    for e in "${ORCHESTRATORS[@]}"; do [[ "$n" == "$e" ]] && return 0; done
+    return 1
+}
+
+# SELF_BUDGETED is in this loop too. Leaving it out is what hid a round-4 MAJOR:
+# `wait` sets TIMEOUT=300 (or the seat's own number) and runs its probes on a
+# fixed 10, so it uses the ambient budget for nothing at all — yet it called
+# ensure_connection one line BEFORE the assignment, so a malformed ambient
+# TIMEOUT refused it. Its arm now parses the argument first and connects after,
+# which also settles #228 (the network work used to happen before the seat's own
+# number was checked).
+for entry in "${UNBOUNDED[@]}" "${BLOCKING[@]}" "${SELF_BUDGETED[@]}"; do
+    name="${entry%% *}"
+    if is_orchestrator "$name"; then
+        # shellcheck disable=SC2086
+        OUT=$(TIMEOUT=nonsense AI_EVAL="$BUDGET_STUB" timeout 20 \
+              "$SEND_CMD" corp $entry 2>&1) && CODE=0 || CODE=$?
+        if [[ "$CODE" -ne 78 ]]; then
+            fail "discarded-budget" "$name is an orchestrator and DOES run its own
+       round-trips on the ambient TIMEOUT, so a malformed one must be refused.
+       Exited $CODE. Got: $OUT"
+        else
+            ok "discarded-budget" "$name (orchestrator) refuses a malformed ambient budget too"
+        fi
+        continue
+    fi
+    # `wait` needs a number, or it parks for its full 300s default.
+    argv="$entry"
+    [[ "$name" == "wait" ]] && argv="wait 1"
+    # shellcheck disable=SC2086
+    OUT=$(TIMEOUT=nonsense AI_EVAL="$BUDGET_STUB" timeout 20 \
+          "$SEND_CMD" corp $argv 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -eq 78 ]]; then
+        fail "discarded-budget" "$name was refused over an ambient TIMEOUT it
+       never uses — it swaps in its own before any eval. Got: $OUT"
+    else
+        ok "discarded-budget" "$name is not refused over a budget it discards"
+    fi
+done
+
+# A TYPO must still get the suggestion, not a budget error. The gate briefly sat
+# in the dispatcher's catch-all arm, which also catches unknown commands (they
+# reach no backend at all), so every mistyped command answered with EX_CONFIG
+# instead of "Did you mean:" (round-3 panel MINOR).
+OUT=$(TIMEOUT=nonsense AI_EVAL="$BUDGET_STUB" "$SEND_CMD" corp card 2>&1) && CODE=0 || CODE=$?
+if [[ "$CODE" -eq 78 ]]; then
+    fail "typo-not-budget" "an unknown command answered with a timeout refusal.
+       A typo never reaches a backend; there is no budget to refuse. Got: $OUT"
+elif [[ "$OUT" != *"Unknown command"* ]]; then
+    fail "typo-not-budget" "an unknown command did not say so. Got: $OUT"
+else
+    ok "typo-not-budget" "an unknown command still gets its suggestion, not a budget error"
 fi
 
 if [[ "$fails" -gt 0 ]]; then

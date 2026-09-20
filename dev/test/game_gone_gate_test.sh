@@ -104,6 +104,65 @@ assert_contains     "gone-end-turn-says-gone"  "$OUT" "GAME-GONE"
 assert_not_contains "gone-end-turn-no-npe"     "$OUT" "NullPointerException"
 assert_not_contains "gone-end-turn-not-sent"   "$LOG" "end-turn!"
 
+# #216: the primary read loop used to bypass this authority. A purged seat saw
+# "NO BOARD -> resync", resync said "try status", and status printed the first
+# message byte-for-byte. These reads must diagnose the teardown before their
+# boardless renderers can send the seat around that cycle again.
+# The expression each read sends. The gate test's stub log records the
+# EXPRESSION it was handed, not what it printed, so "did the read run?" has to
+# be asked with the read's own call — asserting on the stub's output string
+# would be vacuous in both directions, which is the trap this file already
+# caught once.
+read_expr() {
+    case "$1" in
+        status)   echo "ai-actions/status" ;;
+        board)    echo "ai-actions/show-board" ;;
+        hand)     echo "ai-actions/show-hand" ;;
+        snapshot) echo "ai-actions/show-snapshot" ;;
+    esac
+}
+
+for read_cmd in status board hand snapshot; do
+    run game-gone "$read_cmd"
+    assert_contains     "gone-$read_cmd-says-gone" "$OUT" "GAME-GONE"
+    assert_contains     "gone-$read_cmd-recovers"  "$OUT" "reset.sh"
+    # The renderer must not run: a GONE game's cached board has no authority
+    # behind it (#138). Asserting the absence of "NO BOARD" was vacuous — the
+    # stub never emits it, so that check stayed green over the very defect it
+    # named (panel NIT, confirmed by mutation: dropping all four
+    # ensure_connection calls turned 8 assertions red and this was not one).
+    # Assert instead that the read never reached the backend at all.
+    assert_not_contains "gone-$read_cmd-not-sent"  "$LOG" "$(read_expr "$read_cmd")"
+done
+
+echo "--- ...but a DECIDED game is exactly what a READ is for ---"
+# Both review seats, independently, MAJOR. #216 gated the four reads on the same
+# verdict set as actions, so a finished game answered `status` with "was NOT
+# sent (it would have been answered from a finished game's state)" — which is
+# the post-mortem the seat asked for, refused and described in the same breath.
+# Reads take --allow-decided: game-over passes, game-gone and resync-failed do
+# not, and ACTIONS are still refused on all three.
+for read_cmd in status board hand snapshot; do
+    run game-over "$read_cmd"
+    assert_code         "over-$read_cmd-exit-0"    0 "$CODE"
+    assert_contains     "over-$read_cmd-rendered"  "$LOG" "$(read_expr "$read_cmd")"
+    assert_not_contains "over-$read_cmd-not-refused" "$OUT" "was NOT sent"
+done
+
+run game-over draw
+assert_contains     "over-action-still-refused"  "$OUT" "was NOT sent"
+assert_not_contains "over-action-not-sent"       "$LOG" "draw-card!"
+
+# A seat told to retry must not be pointed at the command it is already running.
+# #216 routed `status` into refuse_no_state, where the advice line said "if it
+# keeps failing: ... status" — the closed loop #216 exists to break, one branch
+# further in (panel MINOR).
+run resync-failed status
+assert_contains     "retry-status-says-retry"   "$OUT" "Retry the same command"
+assert_not_contains "retry-status-not-itself"   "$OUT" "keeps failing"
+run resync-failed draw
+assert_contains     "retry-draw-points-at-status" "$OUT" "keeps failing"
+
 echo "--- a DECIDED game is not a GONE game: the seat wants the result ---"
 run game-over draw
 assert_contains     "over-says-over"           "$OUT" "GAME-OVER"
@@ -131,6 +190,9 @@ assert_not_contains "gone-leave-not-refused"   "$OUT" "was NOT sent"
 run game-gone list-lobbies
 assert_not_contains "gone-list-not-refused"    "$OUT" "was NOT sent"
 
+run synced help --dev
+assert_contains     "dev-help-names-game-id-probe" "$OUT" "list-game-ids"
+
 echo "--- a live game is untouched, and a broken backend does not lock the seat out ---"
 run synced draw
 assert_contains     "synced-draw-sent"         "$LOG" "draw-card!"
@@ -142,6 +204,7 @@ assert_not_contains "synced-not-refused"       "$OUT" "was NOT sent"
 run resync-failed draw
 assert_contains     "transient-refused"        "$OUT" "NO STATE"
 assert_contains     "transient-says-retry"     "$OUT" "Retry the same command"
+assert_contains     "transient-names-probe"     "$OUT" "list-game-ids"
 assert_not_contains "transient-not-teardown"   "$OUT" "GAME-GONE"
 assert_code         "transient-exit-4"         4 "$CODE"
 assert_not_contains "transient-not-sent"       "$LOG" "draw-card!"

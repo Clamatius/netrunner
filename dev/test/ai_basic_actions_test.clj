@@ -78,6 +78,81 @@
             (is (not= :post-discard-pending (:reason result))
                 "Without :active flag, post-discard branch must not fire")))))))
 
+(deftest test-start-turn-recognizes-an-overlapping-opponent-username
+  (testing "Clam does not mistake Clamatius's end-turn line for its own"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand []
+                               :user {:username "Clam"}}
+                      :corp {:click 0 :credit 5 :hand []
+                             :user {:username "Clamatius"}}
+                      :turn 1
+                      ;; The engine-consistent shape for "Clamatius just ended".
+                      ;; :active-player still names the FINISHER until the next
+                      ;; player starts, and :end-turn marks the boundary. The
+                      ;; first version of this fixture said :active-player
+                      ;; "runner" with no :end-turn, which is a state the engine
+                      ;; never produces — and #220's ownership guard keys on
+                      ;; :end-turn, so it never ran here. Both review seats
+                      ;; caught it: the test meant to prove the two fixes compose
+                      ;; was exercising only one of them.
+                      :active-player "corp"
+                      :end-turn true
+                      :log [{:text "Clamatius is ending their turn 1 with 5 [Credit]."}]}]
+      (with-mock-state (mock-client-state :side "runner" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :success (:status result)))
+            (is (= "start-turn" (get-in (first @sent) [:data :command])))))))))
+
+(deftest test-start-turn-refuses-the-finisher-despite-an-overlapping-username
+  ;; The success case above proves the two fixes AGREE. It cannot prove #220's
+  ;; guard is still there: deleting the guard leaves it green, because the Runner
+  ;; is allowed to start in that state either way (round-2 panel MINOR). This is
+  ;; the refusal direction of the same composition — same overlapping names, same
+  ;; boundary, but the seat asking is the one that just FINISHED.
+  ;;
+  ;; This case pins #220 specifically. It does NOT also pin #193: the seat here
+  ;; is Clamatius, the LONGER name, so reverting exact authorship to substring
+  ;; matching leaves it green. The success-direction test above is the one that
+  ;; catches that mutation, because there the seat is "Clam" and the opponent's
+  ;; "Clamatius is ending" line is what substring matching steals. The pair
+  ;; covers both fixes; neither test covers both on its own. (An earlier version
+  ;; of this comment claimed otherwise and had the usernames backwards — caught
+  ;; by a round-3 review seat.)
+  (testing "Clam(atius), having just ended, is refused a second consecutive turn"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand []
+                               :user {:username "Clam"}}
+                      :corp {:click 0 :credit 5 :hand []
+                             :user {:username "Clamatius"}}
+                      :turn 1
+                      ;; Clamatius (corp) just ended, so corp is still
+                      ;; :active-player and the RUNNER is owed the start.
+                      :active-player "corp"
+                      :end-turn true
+                      :log [{:text "Clamatius is ending their turn 1 with 5 [Credit]."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :not-your-turn (:reason result)))
+            (is (= "runner" (:expected-side result)))
+            (is (empty? @sent) "a refused start-turn must put nothing on the wire")))))))
+
+(deftest test-turn-log-ownership-is-exact-in-end-turn-guards
+  (let [client-state (mock-client-state
+                       :side "runner"
+                       :game-state {:runner {:click 0 :user {:username "Clam"}}
+                                    :corp {:click 0 :user {:username "Clamatius"}}
+                                    :active-player nil
+                                    :log [{:text "Clamatius is ending their turn 1."}
+                                          {:text "Clamatius started their turn 2."}]})]
+    (with-mock-state client-state
+      (testing "an opponent's overlapping end line is not our already-ended proof"
+        (is (false? (#'basic/already-ended-this-turn? client-state))))
+      (testing "an opponent's overlapping start line proves their turn is underway"
+        (is (true? (#'basic/opponent-turn-underway? client-state)))))))
+
 ;; ============================================================================
 ;; Opening-mulligan race: Corp must not start turn 1 while the opponent's
 ;; mulligan is unresolved. The Corp can keep + start-turn before the Runner
@@ -1648,6 +1723,26 @@
             (is (empty? @sent) (str "must not send over a turn in progress:\n" out))
             (is (re-find #"(?i)refusing start-turn" out) out)
             (is (re-find #"end-turn" out) "must name the move that actually resolves the state")))))))
+
+(deftest test-start-turn-refuses-a-second-consecutive-turn
+  (testing "#220: after Runner ends, an older Corp end in the log must not let Runner start again"
+    (let [sent (atom [])
+          result (atom nil)
+          runner-just-ended
+          {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+           :runner {:click 0 :credit 8 :hand [] :user {:username "ai-runner"}}
+           :turn 1 :active-player "runner" :end-turn true
+           :log [{:user "__system__" :text "ai-corp is ending their turn 1 with 5 [Credit] and 5 cards in HQ."}
+                 {:user "__system__" :text "ai-runner started their turn 1 with 5 [Credit] and 5 cards in their Grip."}
+                 {:user "__system__" :text "ai-runner is ending their turn 1 with 8 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "runner" :game-state runner-just-ended)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 1]
+          (let [out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :error (:status @result)) out)
+            (is (= :not-your-turn (:reason @result)) out)
+            (is (empty? @sent) (str "must refuse before sending start-turn:\n" out))
+            (is (re-find #"(?i)wait for corp" out) out)))))))
 
 (deftest test-start-turn-refusal-names-my-own-prompt-before-telling-me-to-wait
   (testing "fresh-seat delta MAJOR: Corp holds Lightning Laboratory's derez choice inside the
