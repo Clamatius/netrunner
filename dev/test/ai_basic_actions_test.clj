@@ -111,10 +111,14 @@
   ;; the refusal direction of the same composition — same overlapping names, same
   ;; boundary, but the seat asking is the one that just FINISHED.
   ;;
-  ;; It needs #193 as well as #220: with substring authorship, "Clamatius is
-  ;; ending" matches the Corp seat's own name "Clam", so the older guards read
-  ;; the opponent's line as the seat's own and the refusal comes out for the
-  ;; wrong reason. Both fixes have to hold for :not-your-turn to be the answer.
+  ;; This case pins #220 specifically. It does NOT also pin #193: the seat here
+  ;; is Clamatius, the LONGER name, so reverting exact authorship to substring
+  ;; matching leaves it green. The success-direction test above is the one that
+  ;; catches that mutation, because there the seat is "Clam" and the opponent's
+  ;; "Clamatius is ending" line is what substring matching steals. The pair
+  ;; covers both fixes; neither test covers both on its own. (An earlier version
+  ;; of this comment claimed otherwise and had the usernames backwards — caught
+  ;; by a round-3 review seat.)
   (testing "Clam(atius), having just ended, is refused a second consecutive turn"
     (let [sent (atom [])
           game-state {:runner {:click 0 :credit 5 :hand []

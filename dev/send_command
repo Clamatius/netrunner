@@ -220,31 +220,47 @@ refuse_no_state() {   # VERDICT
 }
 
 # A malformed TIMEOUT is the CALLER's error and needs no socket to detect, so
-# settle it before anything that can fail for a network or liveness reason.
+# settle it before the network work — and settle the budget the command will
+# ACTUALLY use, which is the part that took three tries to get right.
 #
-# Two orderings were wrong before this one. #216 made the reads
-# (status/board/hand/snapshot) call ensure_connection BEFORE their eval, so on an
-# idle-purged game a bad budget surfaced as GAME-GONE, exit 3, "run reset.sh" — a
-# typo in the caller's own environment blamed on the server (this turned the
-# shell suite red when #216 merged). Moving the check into ensure_connection
-# fixed that but put it after check_client, so a bad budget with a stopped REPL
-# reported "AI Client REPL not running", exit 1 — true, but not the cheaper and
-# more actionable answer, and it left the regression test passing only because a
-# REPL happened to be up (round-2 panel MAJOR).
+# #216 made the reads (status/board/hand/snapshot) call ensure_connection BEFORE
+# their eval, so on an idle-purged game a bad budget surfaced as GAME-GONE, exit
+# 3, "run reset.sh": a typo in the caller's own environment blamed on the server.
+# That is the defect this exists to kill, and it is the only one of the failures
+# below in which the seat is told something FALSE.
 #
-# So it belongs immediately before check_client, sharing that gate's existing
-# answer to "which commands need a backend at all?" — `help`, `peer-status` and
-# `clear-heartbeats` are pure-text/local and are exempt from both. One list, not
-# two that can drift; `help` in particular is what a seat reaches for when it is
-# confused about a budget, and refusing it with a budget error is the worst
-# available answer (round-1 panel MINOR).
+# Rejected placements, each caught by a later review round:
+#   - dispatcher preamble: refused `help`, `peer-status`, `clear-heartbeats`,
+#     which reach no backend — and `help` is what a seat reaches for when it is
+#     confused about a budget. It also refused every TYPO, replacing "Did you
+#     mean: card-text" with a timeout error.
+#   - before check_client, from the gate that exempts those three: same typo
+#     problem, and worse, it validated the WRONG VALUE. Seven arms
+#     (draw-to-card, run, continue, monitor-run, bot, bot-turn, bot-respond)
+#     assign TIMEOUT="$REPL_BLOCKING_TIMEOUT" during dispatch, so a pre-dispatch
+#     check validated the ambient budget the command then discarded — leaving
+#     GAME-GONE as the answer for a malformed REPL_BLOCKING_TIMEOUT, which is the
+#     original defect, unfixed, for exactly the long-blocking commands most
+#     likely to carry a hand-typed budget. It also refused an ambient TIMEOUT
+#     those commands never use.
+#
+# HERE is where the budget is final: every one of those arms assigns TIMEOUT and
+# THEN calls ensure_connection, so this sees the effective value. Commands that
+# skip ensure_connection are still validated by ai-eval.sh, which `execute` hands
+# the budget to. Unknown commands and the pure-text ones never arrive.
+#
+# KNOWN COST, accepted deliberately: check_client runs before any dispatch, so a
+# malformed budget PLUS a stopped REPL reports "AI Client REPL not running",
+# exit 1, and the budget error only on the retry. A review round called that a
+# MAJOR and it is a real cost — but that message is TRUE and actionable, whereas
+# every alternative above answers some case with a false one. Prefer the honest
+# message that arrives second over the wrong message that arrives first.
 #
 # AI_EVAL_DEFAULT, not AI_EVAL: that seam is a fake REPL for tests (same
 # reasoning as check_client's probe skip above), and a fake must not rule on
 # whether the caller's own budget is well-formed. TIMEOUT is passed explicitly
 # because it is a shell variable here, not exported — `execute` passes it the
-# same way. Commands reaching `execute` without this are still validated, by
-# ai-eval.sh itself.
+# same way.
 #
 # The refusal reads exactly as it does when `execute` catches EX_CONFIG further
 # down: "did not run" is the contract an un-babysat driver checks.
@@ -267,6 +283,7 @@ require_valid_budget() {
 # be hostage to server state (bot-loop-stop). Everything else is gated, so a
 # newly added command inherits the honest default instead of the lying one.
 ensure_connection() {
+    require_valid_budget
     local allow_dead=0 allow_decided=0
     case "${1:-}" in
         --allow-dead)    allow_dead=1 ;;
@@ -1030,7 +1047,7 @@ case "$COMMAND" in
     help|--help|-h)  ;;
     peer-status)     ;;   # reads local heartbeat files only — no REPL needed
     clear-heartbeats) ;;  # removes local heartbeat files only — no REPL needed
-    *)               require_valid_budget; check_client ;;
+    *)               check_client ;;
 esac
 
 case "$COMMAND" in
@@ -1302,8 +1319,16 @@ case "$COMMAND" in
         # this the reader sees several forms and the search never runs (guest MAJOR).
         CARD_NAME_CLJ=${CARD_NAME//\\/\\\\}
         CARD_NAME_CLJ=${CARD_NAME_CLJ//\"/\\\"}
-        # The steps below go through `eval`, which skips the game-gone gate (#109),
-        # so take it once here. The opponent's bot-turn takes its own.
+        # find-card is an ORCHESTRATOR, and the only one: its OWN budget is the
+        # ambient TIMEOUT, but it hands REPL_BLOCKING_TIMEOUT to a CHILD
+        # send_command further down. The child does validate it — after this loop
+        # has already taken real turns with the opponent's bot. Settle it here,
+        # while nothing has happened yet, and BEFORE ensure_connection, so a
+        # budget the caller can fix is not reported as a game that is gone.
+        TIMEOUT="$REPL_BLOCKING_TIMEOUT" require_valid_budget
+        # The steps below go through `eval`, which skips the game-gone gate
+        # (#109), so take it once here. This also validates the ambient TIMEOUT,
+        # which find-card's own round-trips use.
         ensure_connection
         SELF="$SCRIPT_DIR/send_command"
 
