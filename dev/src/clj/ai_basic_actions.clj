@@ -548,6 +548,20 @@
         (println (format "   Wait for %s to finish their turn first" (name opp-side)))
         (core/with-cursor {:status :error :reason :opponent-has-clicks :opp-clicks opp-clicks}))
 
+      ;; #220: :end-turn says a real boundary exists; :active-player still
+      ;; names the player who JUST ended until the next player starts.  An old
+      ;; opponent "is ending" line anywhere in the log is therefore not turn
+      ;; ownership.  Ask the same authority used by wait/status so the finisher
+      ;; cannot start a second consecutive turn.
+      (and (true? (get-in client-state [:game-state :end-turn]))
+           (not (state/my-turn-to-act? client-state (name my-side))))
+      (do
+        (println "⛔ Refusing start-turn: this turn boundary belongs to your opponent.")
+        (println (format "   Wait for %s to start and complete their turn." (name opp-side)))
+        (core/with-cursor {:status :error
+                           :reason :not-your-turn
+                           :expected-side (name opp-side)}))
+
       ;; ERROR: Opponent end-turn not in recent log
       (not opp-ended?)
       (do
@@ -596,9 +610,9 @@
         (core/with-cursor {:status :error :reason :no-turn-boundary :turn turn-number}))
 
       ;; OK: All validations passed
-      ;; Note: We don't check active-player because it doesn't switch until start-turn succeeds.
-      ;; After opponent's end-turn, active-player is still opponent (Netrunner priority system).
-      ;; The other checks (opp-clicks, opp-ended, my-clicks) are sufficient to prevent turn stealing.
+      ;; active-player does not switch until start-turn succeeds.  The boundary
+      ;; guard above accounts for that: the side owed the start is the one that
+      ;; is NOT active while :end-turn is true.
       :else
       (let [before-hand (count (get-in client-state [:game-state my-side :hand]))
             sent? (ws/send-message! :game/action

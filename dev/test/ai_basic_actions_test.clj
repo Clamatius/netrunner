@@ -1649,6 +1649,26 @@
             (is (re-find #"(?i)refusing start-turn" out) out)
             (is (re-find #"end-turn" out) "must name the move that actually resolves the state")))))))
 
+(deftest test-start-turn-refuses-a-second-consecutive-turn
+  (testing "#220: after Runner ends, an older Corp end in the log must not let Runner start again"
+    (let [sent (atom [])
+          result (atom nil)
+          runner-just-ended
+          {:corp {:click 0 :credit 5 :hand [] :user {:username "ai-corp"}}
+           :runner {:click 0 :credit 8 :hand [] :user {:username "ai-runner"}}
+           :turn 1 :active-player "runner" :end-turn true
+           :log [{:user "__system__" :text "ai-corp is ending their turn 1 with 5 [Credit] and 5 cards in HQ."}
+                 {:user "__system__" :text "ai-runner started their turn 1 with 5 [Credit] and 5 cards in their Grip."}
+                 {:user "__system__" :text "ai-runner is ending their turn 1 with 8 [Credit] and 5 cards in their Grip."}]}]
+      (with-mock-state (mock-client-state :side "runner" :game-state runner-just-ended)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 1]
+          (let [out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :error (:status @result)) out)
+            (is (= :not-your-turn (:reason @result)) out)
+            (is (empty? @sent) (str "must refuse before sending start-turn:\n" out))
+            (is (re-find #"(?i)wait for corp" out) out)))))))
+
 (deftest test-start-turn-refusal-names-my-own-prompt-before-telling-me-to-wait
   (testing "fresh-seat delta MAJOR: Corp holds Lightning Laboratory's derez choice inside the
             Runner's turn-end (both 0 clicks, :end-turn false) — the resolution waits on ME"
