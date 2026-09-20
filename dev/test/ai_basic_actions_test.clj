@@ -104,6 +104,37 @@
             (is (= :success (:status result)))
             (is (= "start-turn" (get-in (first @sent) [:data :command])))))))))
 
+(deftest test-start-turn-refuses-the-finisher-despite-an-overlapping-username
+  ;; The success case above proves the two fixes AGREE. It cannot prove #220's
+  ;; guard is still there: deleting the guard leaves it green, because the Runner
+  ;; is allowed to start in that state either way (round-2 panel MINOR). This is
+  ;; the refusal direction of the same composition — same overlapping names, same
+  ;; boundary, but the seat asking is the one that just FINISHED.
+  ;;
+  ;; It needs #193 as well as #220: with substring authorship, "Clamatius is
+  ;; ending" matches the Corp seat's own name "Clam", so the older guards read
+  ;; the opponent's line as the seat's own and the refusal comes out for the
+  ;; wrong reason. Both fixes have to hold for :not-your-turn to be the answer.
+  (testing "Clam(atius), having just ended, is refused a second consecutive turn"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand []
+                               :user {:username "Clam"}}
+                      :corp {:click 0 :credit 5 :hand []
+                             :user {:username "Clamatius"}}
+                      :turn 1
+                      ;; Clamatius (corp) just ended, so corp is still
+                      ;; :active-player and the RUNNER is owed the start.
+                      :active-player "corp"
+                      :end-turn true
+                      :log [{:text "Clamatius is ending their turn 1 with 5 [Credit]."}]}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :error (:status result)))
+            (is (= :not-your-turn (:reason result)))
+            (is (= "runner" (:expected-side result)))
+            (is (empty? @sent) "a refused start-turn must put nothing on the wire")))))))
+
 (deftest test-turn-log-ownership-is-exact-in-end-turn-guards
   (let [client-state (mock-client-state
                        :side "runner"
