@@ -46,6 +46,16 @@
     (or (core/my-username client-state)
         (:uid client-state))))
 
+(defn- player-usernames
+  "Author candidates for rendered game-log lines. Prefer the board's two player
+   names; retain the authenticated uid as the same fallback get-my-username uses
+   while a partial state is arriving."
+  [client-state]
+  (distinct
+    (keep identity [(get-in client-state [:game-state :corp :user :username])
+                    (get-in client-state [:game-state :runner :user :username])
+                    (:uid client-state)])))
+
 (defn- print-no-board-cause!
   "Say why there is no board, claiming only as much as the state actually shows.
 
@@ -118,12 +128,15 @@
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
+        usernames (player-usernames client-state)
 
         ;; Use extracted log analysis helpers
-        opp-end-indices (core/find-end-turn-indices recent-log my-username)
+        opp-end-indices (core/find-end-turn-indices recent-log my-username usernames)
         last-opp-end-idx (last opp-end-indices)
 
-        opp-start-indices (core/find-start-turn-indices recent-log :exclude-username my-username)
+        opp-start-indices (core/find-start-turn-indices recent-log
+                                                        :exclude-username my-username
+                                                        :usernames usernames)
         last-opp-start-idx (last opp-start-indices)
 
         ;; Check if opponent started AGAIN after ending (they're playing again, we missed window)
@@ -286,14 +299,17 @@
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
+        usernames (player-usernames client-state)
 
         ;; Use extracted log analysis helpers
-        opp-end-indices (core/find-end-turn-indices recent-log my-username)
+        opp-end-indices (core/find-end-turn-indices recent-log my-username usernames)
         last-opp-end-idx (last opp-end-indices)
         last-opp-end-turn (when last-opp-end-idx
                             (core/extract-turn-number (:text (get recent-log last-opp-end-idx))))
 
-        my-start-indices (core/find-start-turn-indices recent-log :include-username my-username)
+        my-start-indices (core/find-start-turn-indices recent-log
+                                                       :include-username my-username
+                                                       :usernames usernames)
         last-my-start-idx (last my-start-indices)
         last-my-start-turn (when last-my-start-idx
                              (core/extract-turn-number (:text (get recent-log last-my-start-idx))))]
@@ -428,11 +444,12 @@
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
         ;; This prevents Corp from ending and immediately starting again
         my-username (get-my-username)
+        usernames (player-usernames client-state)
         opp-ended? (some #(let [text (:text %)]
                             (and text
                                  (str/includes? text "is ending")
                                  (or (nil? my-username)
-                                     (not (core/log-authored-by? text my-username)))))
+                                     (not (core/log-authored-by? text my-username usernames)))))
                         recent-log)
         ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
         ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
@@ -1029,13 +1046,14 @@
   [client-state]
   (let [log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
-        my-username (get-my-username)]
+        my-username (get-my-username)
+        usernames (player-usernames client-state)]
     (boolean
       (some #(let [text (:text %)]
                (and text
                     (str/includes? text "is ending")
                     my-username
-                    (core/log-authored-by? text my-username)))
+                    (core/log-authored-by? text my-username usernames)))
             recent-log))))
 
 (defn- opponent-turn-underway?
@@ -1053,11 +1071,12 @@
         log (get-in client-state [:game-state :log])
         recent (take-last 6 log)
         my-username (get-my-username)
+        usernames (player-usernames client-state)
         opp-started? (some #(let [t (:text %)]
                               (and t
-                                   (str/includes? t "started their turn")
+                                   (core/start-turn-log-line? t)
                                    (or (nil? my-username)
-                                       (not (core/log-authored-by? t my-username)))))
+                                       (not (core/log-authored-by? t my-username usernames)))))
                            recent)]
     (boolean
      (or (and opp-clicks (pos? opp-clicks))

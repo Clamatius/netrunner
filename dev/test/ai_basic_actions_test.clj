@@ -153,6 +153,20 @@
       (testing "an opponent's overlapping start line proves their turn is underway"
         (is (true? (#'basic/opponent-turn-underway? client-state)))))))
 
+(deftest test-turn-log-ownership-handles-space-prefix-and-rendered-pronoun
+  (let [client-state (mock-client-state
+                       :side "runner"
+                       :game-state {:runner {:click 0 :user {:username "Clam"}}
+                                    :corp {:click 0 :user {:username "Clam Jones"}}
+                                    :active-player nil
+                                    :log [{:text "Clam Jones is ending her turn 1."}
+                                          {:text "Clam Jones started her turn 2."}]})]
+    (with-mock-state client-state
+      (testing "the longer opponent name does not become our already-ended proof"
+        (is (false? (#'basic/already-ended-this-turn? client-state))))
+      (testing "the opponent's rendered pronoun still proves their turn is underway"
+        (is (true? (#'basic/opponent-turn-underway? client-state)))))))
+
 ;; ============================================================================
 ;; Opening-mulligan race: Corp must not start turn 1 while the opponent's
 ;; mulligan is unresolved. The Corp can keep + start-turn before the Runner
