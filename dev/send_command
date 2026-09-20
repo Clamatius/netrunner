@@ -859,6 +859,29 @@ else
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] default: $COMMAND $*" >> "$LOG_FILE" 2>/dev/null || true
 fi
 
+# A malformed TIMEOUT is the CALLER's error and is knowable without a socket, so
+# settle it before anything that can fail for a network reason. Since #216 the
+# reads (status/board/hand/snapshot) call ensure_connection first, and on a
+# purged game that answered GAME-GONE — so `TIMEOUT=nonsense status` blamed the
+# server for a typo in the caller's own environment, and told the seat to run
+# reset.sh. ai-eval.sh owns the rule; this asks it rather than restating it, so
+# the two can never disagree. It validates the AMBIENT budget only: a per-command
+# override (`wait 08`) is still validated by the ai-eval call that receives it.
+# AI_EVAL_DEFAULT, not AI_EVAL: the overridable seam is a fake REPL for tests
+# (same reasoning as check_client's probe skip at the top of this file), and a
+# fake must not get to decide whether the caller's own budget is well-formed.
+# TIMEOUT is passed explicitly because it is a shell variable here, not exported
+# — `execute` passes it the same way.
+# The refusal must read exactly as it does when `execute` catches EX_CONFIG
+# further down, because "did not run" is the contract an un-babysat driver
+# checks: same two lines, same order, same exit code.
+if ! CONFIG_ERR=$(TIMEOUT="$TIMEOUT" TIMEOUT_GRACE="${TIMEOUT_GRACE:-15}" \
+                  "$AI_EVAL_DEFAULT" --check-config 2>&1); then
+    [[ -n "$CONFIG_ERR" ]] && printf '%s\n' "$CONFIG_ERR" >&2
+    echo "❌ '$COMMAND' did not run: the eval backend refused the timeout it was given." >&2
+    exit 78
+fi
+
 # ── Peer liveness / dead-peer detection ──────────────────────────────────────
 # Every send_command invocation from a side is a heartbeat: that side's DRIVER
 # (Claude / devin / any guest) is alive and acting. We touch a per-side file so

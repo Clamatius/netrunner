@@ -256,6 +256,46 @@ else
     ok "timeout-parse" "send_command propagates the refusal (exit $CODE)"
 fi
 
+# ...and it must refuse BEFORE any network work, for every read that #216 made
+# connection-first (status/board/hand/snapshot now call ensure_connection first).
+#
+# This is where the assertion above was passing for the wrong reason. It only
+# checks that the refusal is SOMEWHERE in the output, so it stayed green while
+# the answer depended on the state of a live game: with a healthy game
+# ensure_connection fell through and `execute` refused, and with a purged one
+# ensure_connection got there first and answered GAME-GONE — a typo in the
+# caller's own environment reported as "the server no longer hosts this game",
+# with reset.sh as the suggested fix. That is the misleading-output class, and
+# the merge of #216 made it real; an idle-purged game turned this suite red.
+#
+# A malformed budget is knowable with no socket, so assert the ABSENCE of every
+# marker of connection work. Absence is the whole point: "contains the refusal"
+# cannot see the resync that ran first. Because nothing network-side runs, these
+# cases no longer care whether a game is live, gone, or never started.
+for read_cmd in status board hand snapshot; do
+    OUT=$(TIMEOUT=nonsense "$SEND_CMD" corp "$read_cmd" 2>&1) && CODE=0 || CODE=$?
+    if [[ "$CODE" -ne 78 ]]; then
+        fail "timeout-first" "$read_cmd exited $CODE, not 78, over a malformed budget.
+       Got: $OUT"
+    elif [[ "$OUT" != *"did not run"* ]]; then
+        fail "timeout-first" "$read_cmd refused without saying the command did not run.
+       Got: $OUT"
+    else
+        bad=""
+        for marker in "GAME-GONE" "auto-resyncing" "NO BOARD" "NO STATE" \
+                      "Attempting to join" "lobby confirmation" "reset.sh"; do
+            [[ "$OUT" == *"$marker"* ]] && bad="$marker"
+        done
+        if [[ -n "$bad" ]]; then
+            fail "timeout-first" "$read_cmd did connection work before validating the
+       budget: output carries '$bad'. A config typo must not be reported as a
+       game/server fault (and must not send the seat to reset.sh)."
+        else
+            ok "timeout-first" "$read_cmd validates the budget before it touches the network"
+        fi
+    fi
+done
+
 # ...and `wait` SEPARATELY, because it is the one caller that captures `execute`
 # inside $( ) — with a `|| true` that LOOKS like it would swallow the refusal.
 #
