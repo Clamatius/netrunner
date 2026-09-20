@@ -104,6 +104,17 @@ assert_contains     "gone-end-turn-says-gone"  "$OUT" "GAME-GONE"
 assert_not_contains "gone-end-turn-no-npe"     "$OUT" "NullPointerException"
 assert_not_contains "gone-end-turn-not-sent"   "$LOG" "end-turn!"
 
+# #216: the primary read loop used to bypass this authority. A purged seat saw
+# "NO BOARD -> resync", resync said "try status", and status printed the first
+# message byte-for-byte. These reads must diagnose the teardown before their
+# boardless renderers can send the seat around that cycle again.
+for read_cmd in status board hand snapshot; do
+    run game-gone "$read_cmd"
+    assert_contains     "gone-$read_cmd-says-gone" "$OUT" "GAME-GONE"
+    assert_contains     "gone-$read_cmd-recovers"  "$OUT" "reset.sh"
+    assert_not_contains "gone-$read_cmd-no-loop"   "$OUT" "NO BOARD"
+done
+
 echo "--- a DECIDED game is not a GONE game: the seat wants the result ---"
 run game-over draw
 assert_contains     "over-says-over"           "$OUT" "GAME-OVER"
@@ -131,6 +142,9 @@ assert_not_contains "gone-leave-not-refused"   "$OUT" "was NOT sent"
 run game-gone list-lobbies
 assert_not_contains "gone-list-not-refused"    "$OUT" "was NOT sent"
 
+run synced help --dev
+assert_contains     "dev-help-names-game-id-probe" "$OUT" "list-game-ids"
+
 echo "--- a live game is untouched, and a broken backend does not lock the seat out ---"
 run synced draw
 assert_contains     "synced-draw-sent"         "$LOG" "draw-card!"
@@ -142,6 +156,7 @@ assert_not_contains "synced-not-refused"       "$OUT" "was NOT sent"
 run resync-failed draw
 assert_contains     "transient-refused"        "$OUT" "NO STATE"
 assert_contains     "transient-says-retry"     "$OUT" "Retry the same command"
+assert_contains     "transient-names-probe"     "$OUT" "list-game-ids"
 assert_not_contains "transient-not-teardown"   "$OUT" "GAME-GONE"
 assert_code         "transient-exit-4"         4 "$CODE"
 assert_not_contains "transient-not-sent"       "$LOG" "draw-card!"
