@@ -1968,7 +1968,14 @@ case "$COMMAND" in
         ;;
 
     wait)
-        ensure_connection --allow-dead
+        # Budget FIRST, connection second. `wait` discards the ambient TIMEOUT
+        # (300s default, or the number the seat passed), and its own probes run
+        # on a fixed 10 — so connecting first meant refusing over a budget
+        # nothing uses, and, for `wait 08`, doing the network work before
+        # discovering the seat's own number was malformed (#228). Parsing the
+        # argument before ensure_connection settles both: the guard inside
+        # ensure_connection then sees the budget this command will actually run
+        # with, the same as every other arm.
         TIMEOUT="300"
         SINCE=""
         while [[ $# -gt 0 ]]; do
@@ -1985,6 +1992,7 @@ case "$COMMAND" in
                     ;;
             esac
         done
+        ensure_connection --allow-dead
         if [[ -n "$SINCE" ]]; then
             info "Waiting (timeout: ${TIMEOUT}s, since cursor: ${SINCE})..."
             WAIT_OUT="$(execute "(ai-actions/wait-for-relevant-diff {:timeout $TIMEOUT :since $SINCE})" || true)"

@@ -728,7 +728,14 @@ is_orchestrator() {
     return 1
 }
 
-for entry in "${UNBOUNDED[@]}" "${BLOCKING[@]}"; do
+# SELF_BUDGETED is in this loop too. Leaving it out is what hid a round-4 MAJOR:
+# `wait` sets TIMEOUT=300 (or the seat's own number) and runs its probes on a
+# fixed 10, so it uses the ambient budget for nothing at all — yet it called
+# ensure_connection one line BEFORE the assignment, so a malformed ambient
+# TIMEOUT refused it. Its arm now parses the argument first and connects after,
+# which also settles #228 (the network work used to happen before the seat's own
+# number was checked).
+for entry in "${UNBOUNDED[@]}" "${BLOCKING[@]}" "${SELF_BUDGETED[@]}"; do
     name="${entry%% *}"
     if is_orchestrator "$name"; then
         # shellcheck disable=SC2086
@@ -743,9 +750,12 @@ for entry in "${UNBOUNDED[@]}" "${BLOCKING[@]}"; do
         fi
         continue
     fi
+    # `wait` needs a number, or it parks for its full 300s default.
+    argv="$entry"
+    [[ "$name" == "wait" ]] && argv="wait 1"
     # shellcheck disable=SC2086
     OUT=$(TIMEOUT=nonsense AI_EVAL="$BUDGET_STUB" timeout 20 \
-          "$SEND_CMD" corp $entry 2>&1) && CODE=0 || CODE=$?
+          "$SEND_CMD" corp $argv 2>&1) && CODE=0 || CODE=$?
     if [[ "$CODE" -eq 78 ]]; then
         fail "discarded-budget" "$name was refused over an ambient TIMEOUT it
        never uses — it swaps in its own before any eval. Got: $OUT"
