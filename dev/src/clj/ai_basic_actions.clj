@@ -432,7 +432,7 @@
                             (and text
                                  (str/includes? text "is ending")
                                  (or (nil? my-username)
-                                     (not (str/includes? text my-username)))))
+                                     (not (core/log-authored-by? text my-username)))))
                         recent-log)
         ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
         ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
@@ -1016,7 +1016,7 @@
                (and text
                     (str/includes? text "is ending")
                     my-username
-                    (str/includes? text my-username)))
+                    (core/log-authored-by? text my-username)))
             recent-log))))
 
 (defn- opponent-turn-underway?
@@ -1038,7 +1038,7 @@
                               (and t
                                    (str/includes? t "started their turn")
                                    (or (nil? my-username)
-                                       (not (str/includes? t my-username)))))
+                                       (not (core/log-authored-by? t my-username)))))
                            recent)]
     (boolean
      (or (and opp-clicks (pos? opp-clicks))

@@ -67,6 +67,13 @@
     (is (nil? (core/extract-turn-number "clicked for credit")))
     (is (nil? (core/extract-turn-number "played Sure Gamble")))))
 
+(deftest test-log-authored-by-requires-the-username-delimiter
+  (testing "matches only the exact system-msg author, not a substring or prefix"
+    (is (core/log-authored-by? "Clam is ending their turn 1" "Clam"))
+    (is (not (core/log-authored-by? "ai-Clam is ending their turn 1" "Clam")))
+    (is (not (core/log-authored-by? "Clamatius is ending their turn 1" "Clam")))
+    (is (not (core/log-authored-by? "Runner mentions Clam during a trace" "Clam")))))
+
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
     (let [log [(make-log-entry "AI-corp is ending their turn 1")
@@ -80,6 +87,13 @@
                (make-log-entry "AI-runner is ending their turn 1")]]
       (is (= [0] (vec (core/find-end-turn-indices log "AI-runner"))))
       (is (= [1] (vec (core/find-end-turn-indices log "AI-corp")))))))
+
+(deftest test-find-end-turn-indices-does-not-confuse-overlapping-usernames
+  (testing "opponent end detection is author-exact for prefix and suffix collisions"
+    (let [log [(make-end-turn-entry "ai-runner" 1)
+               (make-end-turn-entry "runner" 1)
+               (make-end-turn-entry "runner-2" 1)]]
+      (is (= [0 2] (vec (core/find-end-turn-indices log "runner")))))))
 
 (deftest test-find-start-turn-indices-basic
   (testing "finds start turn indices"
@@ -101,6 +115,14 @@
                (make-log-entry "AI-runner started their turn 1")]]
       (is (= [1] (vec (core/find-start-turn-indices log :exclude-username "AI-corp"))))
       (is (= [0] (vec (core/find-start-turn-indices log :exclude-username "AI-runner")))))))
+
+(deftest test-find-start-turn-indices-does-not-confuse-overlapping-usernames
+  (testing "start detection includes and excludes the exact author only"
+    (let [log [(make-start-turn-entry "Clamatius" 1)
+               (make-start-turn-entry "Clam" 1)
+               (make-start-turn-entry "ai-Clam" 1)]]
+      (is (= [1] (vec (core/find-start-turn-indices log :include-username "Clam"))))
+      (is (= [0 2] (vec (core/find-start-turn-indices log :exclude-username "Clam")))))))
 
 ;; ============================================================================
 ;; extract-turn-from-log tests (private function - legacy, kept for coverage)

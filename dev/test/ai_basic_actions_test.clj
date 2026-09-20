@@ -78,6 +78,36 @@
             (is (not= :post-discard-pending (:reason result))
                 "Without :active flag, post-discard branch must not fire")))))))
 
+(deftest test-start-turn-recognizes-an-overlapping-opponent-username
+  (testing "Clam does not mistake Clamatius's end-turn line for its own"
+    (let [sent (atom [])
+          game-state {:runner {:click 0 :credit 5 :hand []
+                               :user {:username "Clam"}}
+                      :corp {:click 0 :credit 5 :hand []
+                             :user {:username "Clamatius"}}
+                      :turn 1
+                      :active-player "runner"
+                      :log [{:text "Clamatius is ending their turn 1 with 5 [Credit]."}]}]
+      (with-mock-state (mock-client-state :side "runner" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (basic/start-turn!)]
+            (is (= :success (:status result)))
+            (is (= "start-turn" (get-in (first @sent) [:data :command])))))))))
+
+(deftest test-turn-log-ownership-is-exact-in-end-turn-guards
+  (let [client-state (mock-client-state
+                       :side "runner"
+                       :game-state {:runner {:click 0 :user {:username "Clam"}}
+                                    :corp {:click 0 :user {:username "Clamatius"}}
+                                    :active-player nil
+                                    :log [{:text "Clamatius is ending their turn 1."}
+                                          {:text "Clamatius started their turn 2."}]})]
+    (with-mock-state client-state
+      (testing "an opponent's overlapping end line is not our already-ended proof"
+        (is (false? (#'basic/already-ended-this-turn? client-state))))
+      (testing "an opponent's overlapping start line proves their turn is underway"
+        (is (true? (#'basic/opponent-turn-underway? client-state)))))))
+
 ;; ============================================================================
 ;; Opening-mulligan race: Corp must not start turn 1 while the opponent's
 ;; mulligan is unresolved. The Corp can keep + start-turn before the Runner
