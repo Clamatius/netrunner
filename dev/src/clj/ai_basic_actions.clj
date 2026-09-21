@@ -129,6 +129,20 @@
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
         usernames (player-usernames client-state)
+        ;; For the ownership arm only, and deliberately NOT the `my-side` above:
+        ;; that one is the house-style `(keyword (:side ...))` hand-roll #129
+        ;; exists to retire, and reconnect-game! (the `make resume` path) writes
+        ;; :side capitalized until the resync normalizes it, so it can be :Corp.
+        ;;
+        ;; Not claiming a bug in this arm from that — I checked, and there is
+        ;; none: with :end-turn true the authority's deciding clause compares
+        ;; NAMES, and "Corp" never equals the engine's lowercase active-player,
+        ;; so the capitalized spelling makes it read TRUE and the arm simply
+        ;; does not fire. It is used because a predicate whose whole purpose is
+        ;; to be the one authority should be fed by the one derivation, not
+        ;; because the hand-roll is known to break here. nil when the seat has
+        ;; no side, which disables the arm rather than NPEing on (name nil).
+        my-side-name (some-> (state/my-side-kw client-state) name)
 
         ;; Use extracted log analysis helpers
         opp-end-indices (core/find-end-turn-indices recent-log my-username usernames)
@@ -203,6 +217,24 @@
       ;; Opponent still has clicks
       (and opp-clicks (> opp-clicks 0))
       {:can-start false :reason :opponent-has-clicks}
+
+      ;; NOT OUR BOUNDARY — the mirror of start-turn!'s #220 arm (round-2 fresh
+      ;; seat, MAJOR). Subordinating the recency arm below to :end-turn removed
+      ;; the only thing that refused the FINISHER once its own start line had
+      ;; also scrolled out of the window: `already-played?` stops answering, the
+      ;; recency arm is exempted, and the preflight returned :ready for a state
+      ;; start-turn! refuses :not-your-turn. The loop then auto-starts, is
+      ;; rejected at the wire, and goes round again — the wire stays safe and
+      ;; the seat stays stuck, which is the exact shape the :no-game-state arm
+      ;; at the top of this cond exists to prevent.
+      ;;
+      ;; Ranked ABOVE the recency arm, as in start-turn!: the flag plus the
+      ;; authority is the answer, and a log window does not get a second
+      ;; opinion in either direction.
+      (and my-side-name
+           (true? (get-in client-state [:game-state :end-turn]))
+           (not (state/my-turn-to-act? client-state my-side-name)))
+      {:can-start false :reason :not-your-turn}
 
       ;; Opponent hasn't ended.
       ;;

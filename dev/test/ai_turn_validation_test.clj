@@ -335,6 +335,41 @@
         (is (false? (:can-start result))
             (str "the preflight must not send a loop at a wall start-turn! will refuse: " result))))))
 
+(deftest test-can-start-refuses-the-finisher-when-its-own-history-scrolled-out
+  (testing "round-2 fresh seat, MAJOR and MY regression: subordinating the recency arm to
+            :end-turn removed the only thing refusing the FINISHER once its own start line has
+            also scrolled out. already-played? stops answering, the recency arm is exempted,
+            and the preflight says :ready for a seat that start-turn! will refuse
+            :not-your-turn — the loop auto-starts, is rejected, and goes round again.
+
+            The round-1 test for this state kept the start line in the window, so
+            :turn-already-played masked it. That test is why the arm was not added; this one
+            is why it is."
+    (let [;; Runner ended turn 3. Then 100 chat lines: both the Corp's end line
+          ;; and the Runner's own start line are outside the window.
+          scrolled (into [(make-end-turn-entry "AI-corp" 3)
+                          (make-start-turn-entry "AI-runner" 3)
+                          (make-end-turn-entry "AI-runner" 3)]
+                         (for [i (range 100)]
+                           {:user {:username "watcher"} :text (format "good game (%d)" i)}))]
+      (with-mock-state
+        (with-end-turn-flag
+          (make-game-state-with-log
+           :my-side :runner
+           :my-clicks 0
+           :opp-clicks 0
+           :turn 3
+           :active-player "runner"          ; I am the one who just ended
+           :log scrolled
+           :my-username "AI-runner")
+          true)
+        (is (false? (state/my-turn-to-act? @state/client-state "runner"))
+            "fixture precondition: the authority says the boundary is the Corp's")
+        (let [result (actions/can-start-turn?)]
+          (is (false? (:can-start result))
+              (str "the preflight must not claim :ready for a turn the wire will refuse: " result))
+          (is (= :not-your-turn (:reason result)) (str result)))))))
+
 (deftest test-can-start-opponent-restarted
   (testing "cannot start when opponent started new turn after ending"
     (with-mock-state
