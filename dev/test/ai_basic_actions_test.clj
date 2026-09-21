@@ -1804,13 +1804,21 @@
             and must not print a statement (\"opponent hasn't ended\") that the flag contradicts"
     (let [sent (atom [])
           result (atom nil)
-          ;; Corp's end line, then 55 run lines: the engine logs approach/breach/
-          ;; access per run, so a run-heavy turn scrolls it out easily.
+          ;; Corp's end line, then 55 CHAT lines.
+          ;;
+          ;; Chat is the reachable filler, and the first draft of this fixture
+          ;; got it wrong (fresh-seat catch): the engine emits "is ending" at
+          ;; end-turn-continue, AFTER the discard step, so the opponent's own
+          ;; run lines all PRECEDE it and `take-last` never counts them. Almost
+          ;; nothing engine-authored lands between that line and our start-turn.
+          ;; Chat does — it shares the :log, an opponent or spectator can emit
+          ;; it while we are owed the start, and it pushes the window along all
+          ;; the same.
           long-log (into [{:user "__system__"
                            :text "ai-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."}]
                          (for [i (range 55)]
-                           {:user "__system__"
-                            :text (format "ai-runner accesses an unseen card from R&D. (%d)" i)}))
+                           {:user {:username "watcher"}
+                            :text (format "nice line, that one (%d)" i)}))
           scrolled-out (assoc runner-owed-start :log long-log)]
       (with-mock-state (mock-client-state :side "runner" :game-state scrolled-out)
         (with-redefs [ws/send-message! (mock-websocket-send! sent)

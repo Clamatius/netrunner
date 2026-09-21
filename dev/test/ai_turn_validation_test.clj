@@ -104,6 +104,28 @@
       (is (= [0 2] (vec (core/find-end-turn-indices log "runner"
                                                     ["runner" "ai-runner" "runner-2"])))))))
 
+(deftest test-turn-scans-ignore-player-chat
+  (testing "fresh-seat MINOR: chat shares the game :log, and the pronoun-tolerant shape matches
+            any 'started <word> turn N' — so a human typing about their turn was counted as the
+            OPPONENT's boundary line (chat carries no author prefix, so the exclude-username
+            test cannot see it). Engine lines are :user \"__system__\"; chat is a user MAP."
+    (let [chat-start {:user {:username "Clamatius"} :text "I started my turn 3, finally"}
+          chat-end   {:user {:username "Clamatius"} :text "my patience is ending their turn 3"}
+          engine-start {:user "__system__" :text "AI-corp started their turn 3"}
+          engine-end   {:user "__system__" :text "AI-corp is ending their turn 3"}]
+      (testing "a chat line is never a start-turn boundary"
+        (is (= [1] (vec (core/find-start-turn-indices [chat-start engine-start]
+                                                      :exclude-username "AI-runner"
+                                                      :usernames ["AI-runner" "AI-corp"])))))
+      (testing "a chat line is never an end-turn boundary"
+        (is (= [1] (vec (core/find-end-turn-indices [chat-end engine-end]
+                                                    "AI-runner"
+                                                    ["AI-runner" "AI-corp"])))))
+      (testing "fixtures that omit :user are still engine lines (the ai_runs rule)"
+        (is (= [0] (vec (core/find-start-turn-indices [(make-start-turn-entry "AI-corp" 3)]
+                                                      :exclude-username "AI-runner"
+                                                      :usernames ["AI-runner"]))))))))
+
 (deftest test-find-start-turn-indices-basic
   (testing "finds start turn indices"
     (let [log [(make-log-entry "AI-corp started their turn 1")
@@ -251,6 +273,67 @@
       (let [result (actions/can-start-turn?)]
         (is (true? (:can-start result)))
         (is (= :ready (:reason result)))))))
+
+(defn- with-end-turn-flag
+  "The engine's :end-turn, which make-game-state-with-log does not model."
+  [state flag]
+  (assoc-in state [:game-state :end-turn] flag))
+
+(deftest test-can-start-agrees-with-the-authority-when-the-end-line-scrolled-out
+  (testing "#226 follow-up (fresh-seat MAJOR): can-start-turn? is the preflight all four
+            autonomous loops gate on, and it had NO :end-turn arm — only the 100-entry
+            recency test. With the opponent's end line scrolled out, the loop is told
+            :opponent-not-ended while wait/status say it is our move, and nothing in the
+            loop can change that state: it spins forever."
+    (let [;; Corp ended, then 100 chat lines push its end line out of the window.
+          ;; Chat is the reachable filler: it lands in the same :log via `say`,
+          ;; and a spectator or opponent can emit it while we are owed the start.
+          scrolled (into [(make-end-turn-entry "AI-corp" 3)]
+                         (for [i (range 100)]
+                           {:user "watcher" :text (format "nice run (%d)" i)}))]
+      (with-mock-state
+        (with-end-turn-flag
+          (make-game-state-with-log
+           :my-side :runner
+           :my-clicks 0
+           :opp-clicks 0
+           :turn 3
+           :active-player "corp"
+           :log scrolled
+           :my-username "AI-runner")
+          true)
+        (is (true? (state/my-turn-to-act? @state/client-state "runner"))
+            "fixture precondition: the authority says it is the Runner's move")
+        (let [result (actions/can-start-turn?)]
+          (is (true? (:can-start result))
+              (str "the preflight must not contradict the authority: " result))
+          (is (not= :opponent-not-ended (:reason result)) (str result)))))))
+
+(deftest test-can-start-refuses-the-finishers-second-consecutive-turn
+  (testing "the other direction of the same invariant: my-turn-to-act?'s docstring promises it
+            and can-start-turn? agree BY CONSTRUCTION, and start-turn! refuses this state
+            :not-your-turn (#220). The preflight already refuses it — by a DIFFERENT arm
+            (:turn-already-played, from the log index comparison), which is why the
+            subordination below is the only change needed here. Pins the agreement, not the
+            arm: the reason keyword is not what the loops read."
+    (with-mock-state
+      (with-end-turn-flag
+        (make-game-state-with-log
+         :my-side :runner
+         :my-clicks 0
+         :opp-clicks 0
+         :turn 1
+         :active-player "runner"           ; I am the one who just ended
+         :log [(make-end-turn-entry "AI-corp" 1)
+               (make-start-turn-entry "AI-runner" 1)
+               (make-end-turn-entry "AI-runner" 1)]
+         :my-username "AI-runner")
+        true)
+      (is (false? (state/my-turn-to-act? @state/client-state "runner"))
+          "fixture precondition: the authority says the boundary is the Corp's")
+      (let [result (actions/can-start-turn?)]
+        (is (false? (:can-start result))
+            (str "the preflight must not send a loop at a wall start-turn! will refuse: " result))))))
 
 (deftest test-can-start-opponent-restarted
   (testing "cannot start when opponent started new turn after ending"

@@ -204,8 +204,26 @@
       (and opp-clicks (> opp-clicks 0))
       {:can-start false :reason :opponent-has-clicks}
 
-      ;; Opponent hasn't ended
-      (empty? opp-end-indices)
+      ;; Opponent hasn't ended.
+      ;;
+      ;; Subordinate to :end-turn, for the same reason as the twin arm in
+      ;; start-turn! (#226) — but this is the copy that actually wedges a seat.
+      ;; The four autonomous loops (goldfish corp/runner, heuristic corp/runner)
+      ;; gate on THIS function, not on start-turn!'s return, so a refusal here
+      ;; is not a message to a human — it is a loop that never starts its turn
+      ;; and has nothing available to change the state. It spins every tick.
+      ;;
+      ;; my-turn-to-act?'s own docstring promises that it and can-start-turn?
+      ;; "agree by construction"; with :end-turn true and the opponent's end
+      ;; line pushed out of the 100-entry window (chat, or a spectator, lands in
+      ;; the same :log), they did not: the authority said our move, this said
+      ;; :opponent-not-ended. Ask the authority instead of a recency proxy.
+      ;;
+      ;; `(not (true? ...))` rather than `false?`, as in start-turn!: an ABSENT
+      ;; :end-turn must keep the recency arm, or a partial state would read as
+      ;; :ready and the loop would send over an unknown boundary.
+      (and (not (true? (get-in client-state [:game-state :end-turn])))
+           (empty? opp-end-indices))
       {:can-start false :reason :opponent-not-ended}
 
       ;; All checks passed
@@ -445,8 +463,11 @@
         ;; This prevents Corp from ending and immediately starting again
         my-username (get-my-username)
         usernames (player-usernames client-state)
+        ;; #226 delta (fresh seat): chat shares the :log, so gate on the engine
+        ;; author here too — see core/system-authored?.
         opp-ended? (some #(let [text (:text %)]
                             (and text
+                                 (core/system-authored? %)
                                  (str/includes? text "is ending")
                                  (or (nil? my-username)
                                      (not (core/log-authored-by? text my-username usernames)))))
@@ -588,8 +609,10 @@
       ;; that authority (my-turn-to-act?, what `wait` and `status` answer with)
       ;; and declined to refuse; this arm must not then overrule it on the
       ;; grounds that the opponent's "is ending" line has scrolled out of a
-      ;; 50-entry window. A run-heavy turn scrolls it out easily (the engine
-      ;; logs approach/breach/access per run), and the seat was told
+      ;; 50-entry window. Chat is what scrolls it: the engine emits "is ending"
+      ;; at end-turn-continue, after the discard step, so engine lines rarely
+      ;; follow it — but chat shares the :log and a human or spectator can fill
+      ;; the window while we are owed the start. The seat was then told
       ;; "Opponent hasn't ended their turn yet" about an opponent who ended —
       ;; a false statement, with no exit for an unattended seat, because the
       ;; two surfaces it would consult disagree with the one that refused it.
@@ -1051,6 +1074,7 @@
     (boolean
       (some #(let [text (:text %)]
                (and text
+                    (core/system-authored? %)
                     (str/includes? text "is ending")
                     my-username
                     (core/log-authored-by? text my-username usernames)))
@@ -1074,6 +1098,7 @@
         usernames (player-usernames client-state)
         opp-started? (some #(let [t (:text %)]
                               (and t
+                                   (core/system-authored? %)
                                    (core/start-turn-log-line? t)
                                    (or (nil? my-username)
                                        (not (core/log-authored-by? t my-username usernames)))))

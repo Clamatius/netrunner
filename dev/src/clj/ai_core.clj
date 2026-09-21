@@ -258,6 +258,29 @@
 ;; These functions analyze game log entries to determine turn state.
 ;; They are pure functions for testability - pass log and username explicitly.
 
+(defn system-authored?
+  "True when ENTRY is an engine line rather than player chat.
+
+   Chat shares the game :log. `say` writes it with the speaker's user MAP as
+   :user; every engine line goes through `make-system-message`, whose :user is
+   the string \"__system__\" (game/core/say.clj). Every turn-boundary scan below
+   has to gate on this or a human can move the seat by talking: chat carries no
+   author prefix, so `log-author` returns nil and an exclude-username scan
+   counts the line as the OPPONENT's.
+
+   The literal \"started their turn\" needed those exact words. The
+   pronoun-tolerant shape matches any \"started <word> turn N\", so \"I started
+   my turn 3\" in chat now qualifies — widening the match widened this hole,
+   which is why the gate lands in the same change.
+
+   Same rule and same spelling as `run-start-line?` in ai_runs, which grew it
+   from the same guest catch: fixtures that omit :user are engine lines.
+
+   Not a username check: an engine line carries the acting player's name in the
+   TEXT, and \"__system__\" in :user."
+  [entry]
+  (contains? #{nil "__system__"} (:user entry)))
+
 (defn log-author
   "Return the author of a direct `system-msg` line from USERNAMES.
 
@@ -303,6 +326,7 @@
    (fn [idx entry]
      (let [text (:text entry)]
        (when (and text
+                  (system-authored? entry)
                   (str/includes? text "is ending")
                   (or (nil? exclude-username)
                       (not (log-authored-by? text exclude-username usernames))))
@@ -324,6 +348,7 @@
    (fn [idx entry]
      (let [text (:text entry)]
        (when (and text
+                  (system-authored? entry)
                   (start-turn-log-line? text)
                   (cond
                     include-username (log-authored-by? text include-username usernames)
