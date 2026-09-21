@@ -370,6 +370,34 @@
               (str "the preflight must not claim :ready for a turn the wire will refuse: " result))
           (is (= :not-your-turn (:reason result)) (str result)))))))
 
+(deftest test-can-start-refuses-a-seatless-client
+  (testing "round-3 fresh seat, MAJOR (pre-existing): a nil :side can coexist with a valid
+            board — a spectator is exactly that — and every arm of this cond then falls
+            through to :ready. start-turn! refuses the same state :no-side, so the preflight
+            was sending the loops at a wall: they gate on :can-start alone, auto-start, are
+            refused at the wire, and go round again.
+
+            The ownership arm cannot cover this: with no side there is nobody to ask the
+            authority ABOUT, which is why it must be refused before it, not disabled."
+    (with-mock-state
+      (-> (with-end-turn-flag
+            (make-game-state-with-log
+             :my-side :runner
+             :my-clicks 0
+             :opp-clicks 0
+             :turn 3
+             :active-player "runner"
+             :log []
+             :my-username "AI-runner")
+            true)
+          (assoc :side nil))
+      (is (nil? (state/my-side-kw @state/client-state))
+          "fixture precondition: a board, but no seat")
+      (let [result (actions/can-start-turn?)]
+        (is (false? (:can-start result))
+            (str "a seatless client cannot start anyone's turn: " result))
+        (is (= :no-side (:reason result)) (str result))))))
+
 (deftest test-can-start-opponent-restarted
   (testing "cannot start when opponent started new turn after ending"
     (with-mock-state

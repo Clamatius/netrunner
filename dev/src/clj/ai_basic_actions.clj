@@ -182,6 +182,22 @@
       (not (state/board? (:game-state client-state)))
       {:can-start false :reason :no-game-state}
 
+      ;; NO SEAT — mirrors start-turn!'s own first refusal (`refuse-no-seat!`,
+      ;; #127), which this had no counterpart for (round-3 fresh seat, MAJOR,
+      ;; pre-existing). A nil :side coexists with a perfectly valid board — a
+      ;; spectator is exactly that — and every arm below then reads its falsy
+      ;; default (`my-clicks` nil, no start line, no end line authored by a name
+      ;; we do not have) and falls through to :ready. The loops gate on
+      ;; :can-start alone, so they auto-started, were refused :no-side at the
+      ;; wire, and went round again.
+      ;;
+      ;; Ranked above the ownership arm below because it is a precondition FOR
+      ;; it: with no side there is nobody to ask the authority about. Disabling
+      ;; that arm on a nil side — which is what it did — leaves this state
+      ;; answered by the fallthrough, which is the fail-open.
+      (nil? my-side-name)
+      {:can-start false :reason :no-side}
+
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
@@ -231,8 +247,7 @@
       ;; Ranked ABOVE the recency arm, as in start-turn!: the flag plus the
       ;; authority is the answer, and a log window does not get a second
       ;; opinion in either direction.
-      (and my-side-name
-           (true? (get-in client-state [:game-state :end-turn]))
+      (and (true? (get-in client-state [:game-state :end-turn]))
            (not (state/my-turn-to-act? client-state my-side-name)))
       {:can-start false :reason :not-your-turn}
 
