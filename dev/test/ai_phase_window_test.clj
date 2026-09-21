@@ -220,7 +220,8 @@
                {:connected true :side "corp"
                 :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
                 :game-state {:turn 4
-                             :corp {:click 0 :hand []} :runner {:click 0}
+                             :corp {:click 0 :hand [] :user {:username "me"}}
+                             :runner {:click 0 :user {:username "ai-runner"}}
                              :log [{:text "ai-runner is ending their turn 4"}]
                              :corp-phase-12 {:active true}}})]
       (is (clojure.string/includes? out "phase 1.2")
@@ -233,7 +234,8 @@
                {:connected true :side "corp"
                 :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
                 :game-state {:turn 4
-                             :corp {:click 0 :hand []} :runner {:click 0}
+                             :corp {:click 0 :hand [] :user {:username "me"}}
+                             :runner {:click 0 :user {:username "ai-runner"}}
                              :log [{:text "ai-runner is ending their turn 4"}]}})]
       (is (not (clojure.string/includes? out "phase 1.2"))
           (str "announced a window that is not open — the engine closes an unheld one, got:\n" out)))))

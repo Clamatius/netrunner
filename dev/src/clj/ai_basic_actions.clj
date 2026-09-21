@@ -510,14 +510,14 @@
         ;; This prevents Corp from ending and immediately starting again
         my-username (get-my-username)
         usernames (player-usernames client-state)
-        ;; #226 delta (fresh seat): chat shares the :log, so gate on the engine
-        ;; author here too — see core/system-authored?.
+        ;; Chat and command echoes share the log. Only a direct turn boundary
+        ;; authored by a known player can establish that the opponent ended.
         opp-ended? (some #(let [text (:text %)]
                             (and text
                                  (core/system-authored? %)
-                                 (str/includes? text "is ending")
+                                 (core/turn-log-author text usernames :end)
                                  (or (nil? my-username)
-                                     (not (core/log-authored-by? text my-username usernames)))))
+                                     (not= my-username (core/turn-log-author text usernames :end)))))
                         recent-log)
         ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
         ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
@@ -1122,9 +1122,9 @@
       (some #(let [text (:text %)]
                (and text
                     (core/system-authored? %)
-                    (str/includes? text "is ending")
+                    (core/turn-log-author text usernames :end)
                     my-username
-                    (core/log-authored-by? text my-username usernames)))
+                    (= my-username (core/turn-log-author text usernames :end))))
             recent-log))))
 
 (defn- opponent-turn-underway?
@@ -1146,9 +1146,9 @@
         opp-started? (some #(let [t (:text %)]
                               (and t
                                    (core/system-authored? %)
-                                   (core/start-turn-log-line? t)
+                                   (core/start-turn-log-line? t usernames)
                                    (or (nil? my-username)
-                                       (not (core/log-authored-by? t my-username usernames)))))
+                                       (not= my-username (core/turn-log-author t usernames :start)))))
                            recent)]
     (boolean
      (or (and opp-clicks (pos? opp-clicks))

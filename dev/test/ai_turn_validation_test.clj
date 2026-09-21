@@ -8,7 +8,8 @@
             [ai-basic-actions :as actions]
             [ai-core :as core]
             [ai-state :as state]
-            [ai-websocket-client-v2 :as ws]))
+            [ai-websocket-client-v2 :as ws]
+            [game.core.process-actions :as process-actions]))
 
 ;; ============================================================================
 ;; Test Helpers - Log Entry Builders
@@ -44,7 +45,8 @@
      :game-state {my-side {:click my-clicks
                            :user {:username my-username}
                            :prompt-state my-prompt}
-                  opp-side {:click opp-clicks}
+                  opp-side {:click opp-clicks
+                            :user {:username (if (= opp-side :corp) "AI-corp" "AI-runner")}}
                   :turn turn
                   :active-player active-player
                   :log log}}))
@@ -77,17 +79,18 @@
       (is (nil? (core/log-author "Runner mentions Clam during a trace" usernames))))))
 
 (deftest test-start-turn-log-line-allows-rendered-pronouns
-  (is (core/start-turn-log-line? "Clam started their turn 1"))
-  (is (core/start-turn-log-line? "Clam started his turn 2"))
-  (is (core/start-turn-log-line? "Clam Jones started zir turn 3"))
-  (is (not (core/start-turn-log-line? "Clam started a run on turn 3"))))
+  (let [usernames ["Clam" "Clam Jones"]]
+    (is (core/start-turn-log-line? "Clam started their turn 1" usernames))
+    (is (core/start-turn-log-line? "Clam started his turn 2" usernames))
+    (is (core/start-turn-log-line? "Clam Jones started zir turn 3" usernames))
+    (is (not (core/start-turn-log-line? "Clam started a run on turn 3" usernames)))))
 
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
     (let [log [(make-log-entry "AI-corp is ending their turn 1")
                (make-log-entry "AI-runner took credit")
                (make-log-entry "AI-runner is ending their turn 1")]]
-      (is (= [0 2] (vec (core/find-end-turn-indices log nil nil)))))))
+      (is (= [0 2] (vec (core/find-end-turn-indices log nil ["AI-corp" "AI-runner"])))))))
 
 (deftest test-find-end-turn-indices-exclude-username
   (testing "excludes entries with specified username"
@@ -124,14 +127,71 @@
       (testing "fixtures that omit :user are still engine lines (the ai_runs rule)"
         (is (= [0] (vec (core/find-start-turn-indices [(make-start-turn-entry "AI-corp" 3)]
                                                       :exclude-username "AI-runner"
-                                                      :usernames ["AI-runner"]))))))))
+                                                      :usernames ["AI-corp" "AI-runner"]))))))))
+
+(deftest test-turn-scans-ignore-real-command-echoes
+  (let [engine (atom {:corp {:user {:username "AI-corp"}}
+                      :runner {:user {:username "AI-runner"}}
+                      :log []})
+        usernames ["AI-corp" "AI-runner"]]
+    (process-actions/command-parser engine :corp
+                                    {:user {:username "AI-corp"}
+                                     :text "/roll 6 I started my turn 3"})
+    (let [echo (get-in @engine [:log 1 :public])]
+      (is (= "__system__" (:user echo)))
+      (is (= "[!]AI-corp uses a command: /roll 6 I started my turn 3" (:text echo)))
+      (is (empty? (core/find-start-turn-indices [echo]
+                                                :exclude-username "AI-runner"
+                                                :usernames usernames)))
+      (with-mock-state
+        (assoc-in
+          (make-game-state-with-log :my-side :runner
+                                    :turn 3 :active-player "corp"
+                                    :log [(make-end-turn-entry "AI-corp" 3) echo])
+          [:game-state :end-turn] true)
+        (is (true? (:can-start (actions/can-start-turn?))))))
+    (process-actions/command-parser engine :corp
+                                    {:user {:username "AI-corp"}
+                                     :text "/roll 6 is ending their turn 3"})
+    (let [echo (get-in @engine [:log 3 :public])]
+      (is (= "__system__" (:user echo)))
+      (is (= "[!]AI-corp uses a command: /roll 6 is ending their turn 3" (:text echo)))
+      (is (empty? (core/find-end-turn-indices [echo] "AI-runner" usernames))))
+    (process-actions/command-parser engine :runner
+                                    {:user {:username "AI-runner"}
+                                     :text "/roll 6 is ending their turn 3"})
+    (let [opp-start-echo (get-in @engine [:log 1 :public])
+          my-end-echo (get-in @engine [:log 5 :public])]
+      (with-mock-state
+        (make-game-state-with-log :my-side :runner
+                                  :turn 3 :active-player "runner"
+                                  :log [opp-start-echo my-end-echo])
+        (is (false? (#'actions/already-ended-this-turn? @state/client-state)))
+        (is (false? (#'actions/opponent-turn-underway? @state/client-state)))
+        (with-redefs [core/standard-delay 0]
+          (is (= :resend
+                 (actions/end-turn-self-heal-decision
+                   (actions/recheck-end-turn-state 3)))))))))
+
+(deftest test-turn-scans-disambiguate-a-username-containing-the-verb
+  (let [usernames ["Clam" "Clam is"]
+        log [(make-end-turn-entry "Clam" 1)
+             (make-end-turn-entry "Clam is" 1)
+             (make-start-turn-entry "Clam" 2)]]
+    (is (= "Clam" (core/log-author (:text (first log)) usernames)))
+    (is (= "Clam is" (core/log-author (:text (second log)) usernames)))
+    (is (= [0] (vec (core/find-end-turn-indices log "Clam is" usernames))))
+    (is (= [2] (vec (core/find-start-turn-indices log
+                                                :include-username "Clam"
+                                                :usernames usernames))))))
 
 (deftest test-find-start-turn-indices-basic
   (testing "finds start turn indices"
     (let [log [(make-log-entry "AI-corp started their turn 1")
                (make-log-entry "AI-corp took credit")
                (make-log-entry "AI-runner started their turn 1")]]
-      (is (= [0 2] (vec (core/find-start-turn-indices log)))))))
+      (is (= [0 2] (vec (core/find-start-turn-indices log
+                                                     :usernames ["AI-corp" "AI-runner"])))))))
 
 (deftest test-find-start-turn-indices-include-username
   (testing "includes only entries with specified username"
