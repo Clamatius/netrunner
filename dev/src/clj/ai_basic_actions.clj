@@ -562,8 +562,27 @@
                            :reason :not-your-turn
                            :expected-side (name opp-side)}))
 
-      ;; ERROR: Opponent end-turn not in recent log
-      (not opp-ended?)
+      ;; ERROR: Opponent end-turn not in recent log.
+      ;;
+      ;; #226: SUBORDINATE to the :end-turn arm above. This is a RECENCY test
+      ;; standing in for an ordering question — the same shape as #220 itself,
+      ;; and the same shape as the #31/#68 house rule that turn ownership has
+      ;; one authority. When :end-turn is true the arm above has already asked
+      ;; that authority (my-turn-to-act?, what `wait` and `status` answer with)
+      ;; and declined to refuse; this arm must not then overrule it on the
+      ;; grounds that the opponent's "is ending" line has scrolled out of a
+      ;; 50-entry window. A run-heavy turn scrolls it out easily (the engine
+      ;; logs approach/breach/access per run), and the seat was told
+      ;; "Opponent hasn't ended their turn yet" about an opponent who ended —
+      ;; a false statement, with no exit for an unattended seat, because the
+      ;; two surfaces it would consult disagree with the one that refused it.
+      ;;
+      ;; Deliberately `(not (true? ...))`, not `false?`: the :end-turn FALSE
+      ;; path keeps this arm, and so does an ABSENT :end-turn (older fixtures).
+      ;; #220 left the false path alone because the no-turn-boundary arm below
+      ;; gives it a more specific recovery, and that stays true.
+      (and (not (true? (get-in client-state [:game-state :end-turn])))
+           (not opp-ended?))
       (do
         (println "❌ ERROR: Opponent hasn't ended their turn yet")
         (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))

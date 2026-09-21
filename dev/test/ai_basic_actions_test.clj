@@ -1784,6 +1784,58 @@
    :turn 3 :active-player "corp" :end-turn true
    :log [{:user "__system__" :text "ai-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."}]})
 
+(deftest test-start-turn-recency-arm-does-not-override-the-ownership-arm
+  (testing "#226: the opponent's end line has scrolled out of the 50-entry window, but :end-turn
+            and my-turn-to-act? both say the boundary is MINE — the recency arm must not refuse,
+            and must not print a statement (\"opponent hasn't ended\") that the flag contradicts"
+    (let [sent (atom [])
+          result (atom nil)
+          ;; Corp's end line, then 55 run lines: the engine logs approach/breach/
+          ;; access per run, so a run-heavy turn scrolls it out easily.
+          long-log (into [{:user "__system__"
+                           :text "ai-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."}]
+                         (for [i (range 55)]
+                           {:user "__system__"
+                            :text (format "ai-runner accesses an unseen card from R&D. (%d)" i)}))
+          scrolled-out (assoc runner-owed-start :log long-log)]
+      (with-mock-state (mock-client-state :side "runner" :game-state scrolled-out)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 1
+                      basic/get-my-username (constantly "ai-runner")]
+          (let [out (with-out-str (reset! result (basic/start-turn!)))]
+            ;; my-turn-to-act? is the authority wait/status answer with; start-turn
+            ;; must not contradict it.
+            (is (true? (state/my-turn-to-act? @state/client-state "runner"))
+                "fixture precondition: wait/status say it is the Runner's move")
+            (is (not= :opponent-not-ended (:reason @result))
+                (str "the flag says the boundary exists; recency must not overrule it:\n" out))
+            (is (not (re-find #"(?i)hasn't ended their turn" out))
+                (str "that statement is false — the opponent ended 55 lines ago:\n" out))
+            (is (seq @sent)
+                (str "the Runner is owed this start-turn; it must go out:\n" out))))))))
+
+(deftest test-start-turn-recency-arm-still-guards-an-absent-end-turn-key
+  (testing "#226 mutation guard: with the :end-turn key ABSENT (partial/older state) the recency
+            arm is the only thing left — `false?` here would skip it AND the no-turn-boundary arm
+            below, and start-turn would go out over a board where nobody has ended"
+    (let [sent (atom [])
+          result (atom nil)
+          ;; runner-owed-start without the :end-turn key, and with no opponent
+          ;; end line anywhere in the log.
+          no-flag (-> runner-owed-start
+                      (dissoc :end-turn)
+                      (assoc :log [{:user "__system__"
+                                    :text "ai-runner spends [Click] to make a run on R&D."}]))]
+      (with-mock-state (mock-client-state :side "runner" :game-state no-flag)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      core/action-timeout 1
+                      basic/get-my-username (constantly "ai-runner")]
+          (let [out (with-out-str (reset! result (basic/start-turn!)))]
+            (is (= :opponent-not-ended (:reason @result))
+                (str "no flag and no end line: the recency arm must still refuse:\n" out))
+            (is (empty? @sent)
+                (str "must not send start-turn over an unknown boundary:\n" out))))))))
+
 (deftest test-end-turn-log-line-alone-is-in-progress-not-ended
   (testing "guest panel MAJOR: the engine logs 'is ending' BEFORE end-of-turn triggers resolve and
             before :end-turn flips; reading the indicator off that state re-derives 'NOT ended — end it'"
