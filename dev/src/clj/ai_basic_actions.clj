@@ -46,6 +46,16 @@
     (or (core/my-username client-state)
         (:uid client-state))))
 
+(defn- player-usernames
+  "Author candidates for rendered game-log lines. Prefer the board's two player
+   names; retain the authenticated uid as the same fallback get-my-username uses
+   while a partial state is arriving."
+  [client-state]
+  (distinct
+    (keep identity [(get-in client-state [:game-state :corp :user :username])
+                    (get-in client-state [:game-state :runner :user :username])
+                    (:uid client-state)])))
+
 (defn- print-no-board-cause!
   "Say why there is no board, claiming only as much as the state actually shows.
 
@@ -118,12 +128,29 @@
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
+        usernames (player-usernames client-state)
+        ;; For the ownership arm only, and deliberately NOT the `my-side` above:
+        ;; that one is the house-style `(keyword (:side ...))` hand-roll #129
+        ;; exists to retire, and reconnect-game! (the `make resume` path) writes
+        ;; :side capitalized until the resync normalizes it, so it can be :Corp.
+        ;;
+        ;; Not claiming a bug in this arm from that — I checked, and there is
+        ;; none: with :end-turn true the authority's deciding clause compares
+        ;; NAMES, and "Corp" never equals the engine's lowercase active-player,
+        ;; so the capitalized spelling makes it read TRUE and the arm simply
+        ;; does not fire. It is used because a predicate whose whole purpose is
+        ;; to be the one authority should be fed by the one derivation, not
+        ;; because the hand-roll is known to break here. nil when the seat has
+        ;; no side, which disables the arm rather than NPEing on (name nil).
+        my-side-name (some-> (state/my-side-kw client-state) name)
 
         ;; Use extracted log analysis helpers
-        opp-end-indices (core/find-end-turn-indices recent-log my-username)
+        opp-end-indices (core/find-end-turn-indices recent-log my-username usernames)
         last-opp-end-idx (last opp-end-indices)
 
-        opp-start-indices (core/find-start-turn-indices recent-log :exclude-username my-username)
+        opp-start-indices (core/find-start-turn-indices recent-log
+                                                        :exclude-username my-username
+                                                        :usernames usernames)
         last-opp-start-idx (last opp-start-indices)
 
         ;; Check if opponent started AGAIN after ending (they're playing again, we missed window)
@@ -154,6 +181,22 @@
       ;; its falsy default — the first-turn signature again, one step further out.
       (not (state/board? (:game-state client-state)))
       {:can-start false :reason :no-game-state}
+
+      ;; NO SEAT — mirrors start-turn!'s own first refusal (`refuse-no-seat!`,
+      ;; #127), which this had no counterpart for (round-3 fresh seat, MAJOR,
+      ;; pre-existing). A nil :side coexists with a perfectly valid board — a
+      ;; spectator is exactly that — and every arm below then reads its falsy
+      ;; default (`my-clicks` nil, no start line, no end line authored by a name
+      ;; we do not have) and falls through to :ready. The loops gate on
+      ;; :can-start alone, so they auto-started, were refused :no-side at the
+      ;; wire, and went round again.
+      ;;
+      ;; Ranked above the ownership arm below because it is a precondition FOR
+      ;; it: with no side there is nobody to ask the authority about. Disabling
+      ;; that arm on a nil side — which is what it did — leaves this state
+      ;; answered by the fallthrough, which is the fail-open.
+      (nil? my-side-name)
+      {:can-start false :reason :no-side}
 
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
@@ -191,8 +234,43 @@
       (and opp-clicks (> opp-clicks 0))
       {:can-start false :reason :opponent-has-clicks}
 
-      ;; Opponent hasn't ended
-      (empty? opp-end-indices)
+      ;; NOT OUR BOUNDARY — the mirror of start-turn!'s #220 arm (round-2 fresh
+      ;; seat, MAJOR). Subordinating the recency arm below to :end-turn removed
+      ;; the only thing that refused the FINISHER once its own start line had
+      ;; also scrolled out of the window: `already-played?` stops answering, the
+      ;; recency arm is exempted, and the preflight returned :ready for a state
+      ;; start-turn! refuses :not-your-turn. The loop then auto-starts, is
+      ;; rejected at the wire, and goes round again — the wire stays safe and
+      ;; the seat stays stuck, which is the exact shape the :no-game-state arm
+      ;; at the top of this cond exists to prevent.
+      ;;
+      ;; Ranked ABOVE the recency arm, as in start-turn!: the flag plus the
+      ;; authority is the answer, and a log window does not get a second
+      ;; opinion in either direction.
+      (and (true? (get-in client-state [:game-state :end-turn]))
+           (not (state/my-turn-to-act? client-state my-side-name)))
+      {:can-start false :reason :not-your-turn}
+
+      ;; Opponent hasn't ended.
+      ;;
+      ;; Subordinate to :end-turn, for the same reason as the twin arm in
+      ;; start-turn! (#226) — but this is the copy that actually wedges a seat.
+      ;; The four autonomous loops (goldfish corp/runner, heuristic corp/runner)
+      ;; gate on THIS function, not on start-turn!'s return, so a refusal here
+      ;; is not a message to a human — it is a loop that never starts its turn
+      ;; and has nothing available to change the state. It spins every tick.
+      ;;
+      ;; my-turn-to-act?'s own docstring promises that it and can-start-turn?
+      ;; "agree by construction"; with :end-turn true and the opponent's end
+      ;; line pushed out of the 100-entry window (chat, or a spectator, lands in
+      ;; the same :log), they did not: the authority said our move, this said
+      ;; :opponent-not-ended. Ask the authority instead of a recency proxy.
+      ;;
+      ;; `(not (true? ...))` rather than `false?`, as in start-turn!: an ABSENT
+      ;; :end-turn must keep the recency arm, or a partial state would read as
+      ;; :ready and the loop would send over an unknown boundary.
+      (and (not (true? (get-in client-state [:game-state :end-turn])))
+           (empty? opp-end-indices))
       {:can-start false :reason :opponent-not-ended}
 
       ;; All checks passed
@@ -286,14 +364,17 @@
         log (get-in client-state [:game-state :log])
         recent-log (vec (take-last 100 log))
         my-username (get-my-username)
+        usernames (player-usernames client-state)
 
         ;; Use extracted log analysis helpers
-        opp-end-indices (core/find-end-turn-indices recent-log my-username)
+        opp-end-indices (core/find-end-turn-indices recent-log my-username usernames)
         last-opp-end-idx (last opp-end-indices)
         last-opp-end-turn (when last-opp-end-idx
                             (core/extract-turn-number (:text (get recent-log last-opp-end-idx))))
 
-        my-start-indices (core/find-start-turn-indices recent-log :include-username my-username)
+        my-start-indices (core/find-start-turn-indices recent-log
+                                                       :include-username my-username
+                                                       :usernames usernames)
         last-my-start-idx (last my-start-indices)
         last-my-start-turn (when last-my-start-idx
                              (core/extract-turn-number (:text (get recent-log last-my-start-idx))))]
@@ -428,11 +509,15 @@
         ;; IMPORTANT: Check that OPPONENT ended, not just that someone ended
         ;; This prevents Corp from ending and immediately starting again
         my-username (get-my-username)
+        usernames (player-usernames client-state)
+        ;; #226 delta (fresh seat): chat shares the :log, so gate on the engine
+        ;; author here too — see core/system-authored?.
         opp-ended? (some #(let [text (:text %)]
                             (and text
+                                 (core/system-authored? %)
                                  (str/includes? text "is ending")
                                  (or (nil? my-username)
-                                     (not (core/log-authored-by? text my-username)))))
+                                     (not (core/log-authored-by? text my-username usernames)))))
                         recent-log)
         ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
         ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
@@ -562,8 +647,29 @@
                            :reason :not-your-turn
                            :expected-side (name opp-side)}))
 
-      ;; ERROR: Opponent end-turn not in recent log
-      (not opp-ended?)
+      ;; ERROR: Opponent end-turn not in recent log.
+      ;;
+      ;; #226: SUBORDINATE to the :end-turn arm above. This is a RECENCY test
+      ;; standing in for an ordering question — the same shape as #220 itself,
+      ;; and the same shape as the #31/#68 house rule that turn ownership has
+      ;; one authority. When :end-turn is true the arm above has already asked
+      ;; that authority (my-turn-to-act?, what `wait` and `status` answer with)
+      ;; and declined to refuse; this arm must not then overrule it on the
+      ;; grounds that the opponent's "is ending" line has scrolled out of a
+      ;; 50-entry window. Chat is what scrolls it: the engine emits "is ending"
+      ;; at end-turn-continue, after the discard step, so engine lines rarely
+      ;; follow it — but chat shares the :log and a human or spectator can fill
+      ;; the window while we are owed the start. The seat was then told
+      ;; "Opponent hasn't ended their turn yet" about an opponent who ended —
+      ;; a false statement, with no exit for an unattended seat, because the
+      ;; two surfaces it would consult disagree with the one that refused it.
+      ;;
+      ;; Deliberately `(not (true? ...))`, not `false?`: the :end-turn FALSE
+      ;; path keeps this arm, and so does an ABSENT :end-turn (older fixtures).
+      ;; #220 left the false path alone because the no-turn-boundary arm below
+      ;; gives it a more specific recovery, and that stays true.
+      (and (not (true? (get-in client-state [:game-state :end-turn])))
+           (not opp-ended?))
       (do
         (println "❌ ERROR: Opponent hasn't ended their turn yet")
         (println (format "   Recent log doesn't show %s ending turn" (name opp-side)))
@@ -1010,13 +1116,15 @@
   [client-state]
   (let [log (get-in client-state [:game-state :log])
         recent-log (take-last 3 log)
-        my-username (get-my-username)]
+        my-username (get-my-username)
+        usernames (player-usernames client-state)]
     (boolean
       (some #(let [text (:text %)]
                (and text
+                    (core/system-authored? %)
                     (str/includes? text "is ending")
                     my-username
-                    (core/log-authored-by? text my-username)))
+                    (core/log-authored-by? text my-username usernames)))
             recent-log))))
 
 (defn- opponent-turn-underway?
@@ -1034,11 +1142,13 @@
         log (get-in client-state [:game-state :log])
         recent (take-last 6 log)
         my-username (get-my-username)
+        usernames (player-usernames client-state)
         opp-started? (some #(let [t (:text %)]
                               (and t
-                                   (str/includes? t "started their turn")
+                                   (core/system-authored? %)
+                                   (core/start-turn-log-line? t)
                                    (or (nil? my-username)
-                                       (not (core/log-authored-by? t my-username)))))
+                                       (not (core/log-authored-by? t my-username usernames)))))
                            recent)]
     (boolean
      (or (and opp-clicks (pos? opp-clicks))

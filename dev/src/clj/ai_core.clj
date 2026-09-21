@@ -258,17 +258,59 @@
 ;; These functions analyze game log entries to determine turn state.
 ;; They are pure functions for testability - pass log and username explicitly.
 
-(defn log-authored-by?
-  "True when TEXT is a direct `system-msg` line authored by USERNAME.
+(defn system-authored?
+  "True when ENTRY is an engine line rather than player chat.
 
-   `system-msg` renders these lines as `username + space + message`.  Match the
-   delimiter as well as the name: substring matching confuses `runner` with
-   `ai-runner`, while a bare prefix still confuses `Clam` with `Clamatius`."
-  [text username]
-  (boolean
-    (and text
-         username
-         (str/starts-with? text (str username " ")))))
+   Chat shares the game :log. `say` writes it with the speaker's user MAP as
+   :user; every engine line goes through `make-system-message`, whose :user is
+   the string \"__system__\" (game/core/say.clj). Every turn-boundary scan below
+   has to gate on this or a human can move the seat by talking: chat carries no
+   author prefix, so `log-author` returns nil and an exclude-username scan
+   counts the line as the OPPONENT's.
+
+   The literal \"started their turn\" needed those exact words. The
+   pronoun-tolerant shape matches any \"started <word> turn N\", so \"I started
+   my turn 3\" in chat now qualifies — widening the match widened this hole,
+   which is why the gate lands in the same change.
+
+   Same rule and same spelling as `run-start-line?` in ai_runs, which grew it
+   from the same guest catch: fixtures that omit :user are engine lines.
+
+   Not a username check: an engine line carries the acting player's name in the
+   TEXT, and \"__system__\" in :user."
+  [entry]
+  (contains? #{nil "__system__"} (:user entry)))
+
+(defn log-author
+  "Return the author of a direct `system-msg` line from USERNAMES.
+
+   `system-msg` renders `username + space + message`, but spaces are legal in a
+   username.  When one player's name is a space-delimited prefix of the other's
+   (for example `Clam` / `Clam Jones`), the rendered line is ambiguous unless
+   both candidates are known.  The longest matching game username is the only
+   possible author in the two-player game."
+  [text usernames]
+  (when text
+    (->> usernames
+         (remove nil?)
+         (filter #(str/starts-with? text (str % " ")))
+         (sort-by count >)
+         first)))
+
+(defn log-authored-by?
+  "True when TEXT's longest matching author in USERNAMES is USERNAME."
+  [text username usernames]
+  (and username
+       (= username (log-author text usernames))))
+
+(defn start-turn-log-line?
+  "True when TEXT has the stable shape of an engine start-turn log line.
+
+   The engine renders `[their]` according to the author's pronoun setting, so
+   matching the literal phrase `started their turn` hides human players whose
+   configured possessive is `his`, `her`, `zir`, etc."
+  [text]
+  (boolean (and text (re-find #" started \S+ turn \d+" text))))
 
 (defn find-end-turn-indices
   "Find indices of 'is ending' log entries, optionally filtered by author.
@@ -276,16 +318,18 @@
    Parameters:
    - log: vector of log entries (each with :text key)
    - exclude-username: if provided, exclude entries authored by this username
+   - usernames: known game usernames used to disambiguate rendered author prefixes
 
    Returns sequence of indices where end-turn entries appear."
-  [log exclude-username]
+  [log exclude-username usernames]
   (keep-indexed
    (fn [idx entry]
      (let [text (:text entry)]
        (when (and text
+                  (system-authored? entry)
                   (str/includes? text "is ending")
                   (or (nil? exclude-username)
-                      (not (log-authored-by? text exclude-username))))
+                      (not (log-authored-by? text exclude-username usernames))))
          idx)))
    log))
 
@@ -296,17 +340,19 @@
    - log: vector of log entries (each with :text key)
    - include-username: if provided, only include entries authored by this username
    - exclude-username: if provided (and include-username nil), exclude entries authored by this username
+   - usernames: known game usernames used to disambiguate rendered author prefixes
 
    Returns sequence of indices where start-turn entries appear."
-  [log & {:keys [include-username exclude-username]}]
+  [log & {:keys [include-username exclude-username usernames]}]
   (keep-indexed
    (fn [idx entry]
      (let [text (:text entry)]
        (when (and text
-                  (str/includes? text "started their turn")
+                  (system-authored? entry)
+                  (start-turn-log-line? text)
                   (cond
-                    include-username (log-authored-by? text include-username)
-                    exclude-username (not (log-authored-by? text exclude-username))
+                    include-username (log-authored-by? text include-username usernames)
+                    exclude-username (not (log-authored-by? text exclude-username usernames))
                     :else true))
          idx)))
    log))
