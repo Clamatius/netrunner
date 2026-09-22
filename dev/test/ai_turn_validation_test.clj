@@ -302,6 +302,32 @@
               "refusing the Corp's first turn here would wedge the one turn nobody has acted in")
           (is (= :first-turn (:reason check))))))))
 
+(deftest test-already-played-still-refuses-on-a-board-that-names-both-players
+  ;; Round 4 found this by MUTATION: deleting the :turn-already-played arm
+  ;; outright left the whole suite green, so the arm round 3 subordinated was
+  ;; pinned by nothing and the claim "changes nothing on a board that names both
+  ;; players" was true only by reading. Pre-existing gap; this is the fixture.
+  ;;
+  ;; The #117 orphaned shape on a fully named board: their end, then our start,
+  ;; 0 clicks left, :end-turn false. already-played? is the ONLY preflight
+  ;; refusal here — the wire's counterpart is its own :no-turn-boundary arm.
+  (let [orphaned (-> (make-game-state-with-log
+                       :my-side :runner
+                       :turn 3 :active-player "runner"
+                       :log [(make-end-turn-entry "AI-corp" 2)
+                             (make-start-turn-entry "AI-runner" 3)])
+                     (assoc-in [:game-state :end-turn] false))]
+    (with-mock-state orphaned
+      (let [check (actions/can-start-turn?)]
+        (is (false? (:can-start check)))
+        (is (= :turn-already-played (:reason check))
+            "the arm subordinated for the unnameable-opponent window must still
+             decide this one, where both players are named")))
+    (testing "and it is the log comparison deciding, not the flag: the same board
+              with the opponent unnameable is answered by the identity arm"
+      (with-mock-state (update-in orphaned [:game-state :corp] dissoc :user)
+        (is (= :opponent-identity-unknown (:reason (actions/can-start-turn?))))))))
+
 (deftest test-turn-scans-disambiguate-a-username-containing-the-verb
   (let [usernames ["Clam" "Clam is"]
         log [(make-end-turn-entry "Clam" 1)
