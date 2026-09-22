@@ -238,20 +238,37 @@
                                   (make-end-turn-entry "AI-corp" 3)])
                           (assoc-in [:game-state :end-turn] true)
                           (update-in [:game-state :corp] dissoc :user))]
-    (testing "the refusal names what is missing, and does not claim we played"
+    (testing "the AUTHORITY still decides when it can: :end-turn + my-turn-to-act?
+              affirm the boundary is ours, and a missing name does not unmake it.
+              Delta seat's CRITICAL: the four loops gate on :can-start alone, and
+              start-turn! accepts this exact state, so refusing it wedges them."
       (with-mock-state opponent-left
         (let [check (actions/can-start-turn?)]
+          (is (true? (:can-start check)))
+          (is (= :ready-authority-confirmed (:reason check)))
+          (is (not= :turn-already-played (:reason check)))
+          (is (not= :opponent-identity-unknown (:reason check))))))
+    (testing "with no boundary flag the authority cannot affirm it, so the refusal
+              names what is missing instead of claiming we played"
+      (let [no-flag (update-in opponent-left [:game-state] dissoc :end-turn)]
+        (with-mock-state no-flag
+          (let [check (actions/can-start-turn?)]
+            (is (false? (:can-start check)))
+            (is (= :opponent-identity-unknown (:reason check)))
+            (is (not= :turn-already-played (:reason check)))))
+        (with-mock-state no-flag
+          (let [out (java.io.StringWriter.)
+                ok? (binding [*out* out] (actions/ensure-turn-started!))]
+            (is (false? ok?))
+            (is (re-find #"(?i)does not name your opponent" (str out)) (str out))
+            (is (not (re-find #"(?i)already" (str out))) (str out))
+            (is (not (re-find #"(?i)Turn not ready" (str out))) (str out))))))
+    (testing "and when the authority says the boundary is the OPPONENT's, an
+              unnameable opponent is still not permission to start"
+      (with-mock-state (assoc-in opponent-left [:game-state :active-player] "runner")
+        (let [check (actions/can-start-turn?)]
           (is (false? (:can-start check)))
-          (is (= :opponent-identity-unknown (:reason check)))
-          (is (not= :turn-already-played (:reason check))))))
-    (testing "the message says the board does not name them, not that we played"
-      (with-mock-state opponent-left
-        (let [out (java.io.StringWriter.)
-              ok? (binding [*out* out] (actions/ensure-turn-started!))]
-          (is (false? ok?))
-          (is (re-find #"(?i)does not name your opponent" (str out)) (str out))
-          (is (not (re-find #"(?i)already" (str out))) (str out))
-          (is (not (re-find #"(?i)Turn not ready" (str out))) (str out)))))
+          (is (not= :ready-authority-confirmed (:reason check))))))
     (testing "the SAME board with the opponent still seated is unaffected"
       (with-mock-state (assoc-in (update-in opponent-left [:game-state :corp]
                                             assoc :user {:username "AI-corp"})

@@ -59,10 +59,13 @@
 
    - can-start-turn? / start-turn! refuse — and can-start-turn? refuses with
      :opponent-identity-unknown rather than claiming :turn-already-played.
-   - opponent-turn-underway? answers false, which turns the end-turn self-heal's
-     :confirmed-ended into :resend. Executed by the 2026-09-21 panel; the send
-     itself stays fenced by the off-turn :active-player guard and the engine's
-     guarded-end-turn, so it is a wasted round trip and not a second end-turn.
+   - opponent-turn-underway? loses only its LOG arm; it still answers true from
+     the opponent's clicks or from :active-player, so the self-heal stays
+     :confirmed-ended unless neither of those is present either (delta seat's
+     correction to an earlier, wider claim here). In that narrow state the
+     decision becomes :resend — and the send is still fenced by the off-turn
+     :active-player guard and the engine's guarded-end-turn, so it costs a round
+     trip rather than a second end-turn.
    - already-ended-this-turn? is unaffected by a missing OPPONENT name; it needs
      ours, and the uid fallback supplies it.
 
@@ -136,7 +139,10 @@
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
    - :opponent-identity-unknown - board present, but it does not name the opponent,
-     so none of the log scans below can see their boundaries
+     so none of the log scans below can see their boundaries, and the authority
+     cannot affirm the boundary either
+   - :ready-authority-confirmed - as above, except :end-turn + my-turn-to-act?
+     affirm the boundary is ours, so the missing name does not matter
    - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
@@ -244,12 +250,29 @@
       ;; evidence, and refusing it would wedge the one turn no opponent has yet
       ;; acted in.
       ;;
-      ;; A refusal, not delegation: the alternative is to subordinate
-      ;; already-played? to the authority the way #220/#226 subordinated the
-      ;; other recency arms, which would let this state start the turn rather
-      ;; than explain itself. That is the rewrite #233 reserves for Michael —
-      ;; this arm deliberately does not pre-empt it, and #233 is where the
-      ;; twelfth arm of this cond is an argument for delegating.
+      ;; …but a refusal is only right when nothing else can answer. The delta
+      ;; seat's CRITICAL: the four autonomous loops gate on :can-start alone, so
+      ;; refusing a state the WIRE would accept wedges them forever — and
+      ;; start-turn! does accept this one (:end-turn true sends its recency arm
+      ;; to sleep and its authority arm permits). "True but permanent" is not
+      ;; better than "false but recoverable"; both are bugs.
+      ;;
+      ;; So ask the authority FIRST, and only in this window: with :end-turn
+      ;; true and my-turn-to-act? affirming, the boundary is ours and the
+      ;; missing name changes nothing about whose it is. Deliberately scoped to
+      ;; the nil-username case rather than subordinating already-played?
+      ;; generally — that general delegation is #233's question and Michael's
+      ;; call, and this keeps the blast radius to boards that cannot name a
+      ;; player, which no full serialized state is.
+      (and (pos? turn-number)
+           (nil? (get-in client-state [:game-state opp-side :user :username]))
+           (true? (get-in client-state [:game-state :end-turn]))
+           (state/my-turn-to-act? client-state my-side-name))
+      {:can-start true :reason :ready-authority-confirmed}
+
+      ;; Authority cannot affirm it either (no :end-turn flag, or it says the
+      ;; boundary is not ours). NOW refuse, and say what is missing rather than
+      ;; claiming we already played.
       (and (pos? turn-number)
            (nil? (get-in client-state [:game-state opp-side :user :username])))
       {:can-start false :reason :opponent-identity-unknown}
