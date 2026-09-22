@@ -240,14 +240,30 @@
                           (update-in [:game-state :corp] dissoc :user))]
     (testing "the AUTHORITY still decides when it can: :end-turn + my-turn-to-act?
               affirm the boundary is ours, and a missing name does not unmake it.
-              Delta seat's CRITICAL: the four loops gate on :can-start alone, and
+              Round 2's CRITICAL: the four loops gate on :can-start alone, and
               start-turn! accepts this exact state, so refusing it wedges them."
       (with-mock-state opponent-left
         (let [check (actions/can-start-turn?)]
           (is (true? (:can-start check)))
-          (is (= :ready-authority-confirmed (:reason check)))
+          (is (= :ready (:reason check)))
           (is (not= :turn-already-played (:reason check)))
           (is (not= :opponent-identity-unknown (:reason check))))))
+    (testing "round 3's CRITICAL: skipping the stale arm must not skip the VETOES
+              below it. An opponent who ended with clicks still in hand and then
+              left is refused :opponent-has-clicks — what start-turn! answers —
+              and not waved through as ready."
+      (with-mock-state (assoc-in opponent-left [:game-state :corp :click] 3)
+        (let [check (actions/can-start-turn?)]
+          (is (false? (:can-start check)))
+          (is (= :opponent-has-clicks (:reason check)))
+          (is (not= :ready (:reason check))))))
+    (testing "round 3's MAJOR: a board missing :active-player TOO is not
+              affirmation — the authority's own clause is satisfied by nil, so the
+              flag alone must not stand in for ownership"
+      (with-mock-state (update-in opponent-left [:game-state] dissoc :active-player)
+        (let [check (actions/can-start-turn?)]
+          (is (false? (:can-start check)))
+          (is (= :opponent-identity-unknown (:reason check))))))
     (testing "with no boundary flag the authority cannot affirm it, so the refusal
               names what is missing instead of claiming we played"
       (let [no-flag (update-in opponent-left [:game-state] dissoc :end-turn)]

@@ -69,9 +69,13 @@
    - already-ended-this-turn? is unaffected by a missing OPPONENT name; it needs
      ours, and the uid fallback supplies it.
 
-   The one wire window where a name is missing is an opponent who has left
-   (`web/lobby.clj` dissocs that side's :user); `strip-state` ships both
-   usernames on every full state."
+   The one wire window where a name is missing is an opponent who has LEFT
+   (`web/lobby.clj` dissocs that side's :user). `strip-state` ships both
+   usernames while they are seated, but the post-leave board still serializes
+   FULLY — `public-states` plus the JSON round trip retains an unnameable
+   opponent (round-3 seat, executed) — so this is not a partial-state-only
+   window, and an earlier claim here that no full state could reach it was
+   wrong."
   [client-state]
   (distinct
     (keep identity [(get-in client-state [:game-state :corp :user :username])
@@ -139,10 +143,9 @@
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
    - :opponent-identity-unknown - board present, but it does not name the opponent,
-     so none of the log scans below can see their boundaries, and the authority
-     cannot affirm the boundary either
-   - :ready-authority-confirmed - as above, except :end-turn + my-turn-to-act?
-     affirm the boundary is ours, so the missing name does not matter
+     so no log scan can see their boundaries AND the authority cannot affirm the
+     boundary either. When the authority CAN affirm it, the one stale log-derived
+     arm is skipped and the ordinary arms below it decide
    - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
@@ -191,7 +194,34 @@
                             (empty? opp-end-indices))
 
         ;; Check if we effectively already played this turn
-        already-played? (turn-started-since-last-opp-end?)]
+        already-played? (turn-started-since-last-opp-end?)
+
+        ;; BOARD THAT CANNOT NAME THE OPPONENT. Since #230/#231 every log scan
+        ;; resolves a boundary's author against the board's usernames, so a
+        ;; missing opponent name does not leave their lines merely unattributed
+        ;; — it makes them INVISIBLE, and every arm derived from them answers
+        ;; from our half of the log alone. `strip-state` ships :username for both
+        ;; sides while they are seated; a player who LEAVES has theirs dissoc'd
+        ;; (`web/lobby.clj`), and that board still serializes fully. Turn 0 is
+        ;; excluded: the Corp's first turn needs no opponent evidence, and
+        ;; refusing it would wedge the one turn nobody has yet acted in.
+        unnameable-opponent? (and (pos? turn-number)
+                                  (nil? (get-in client-state
+                                                [:game-state opp-side :user :username])))
+
+        ;; The one thing that can still say whose boundary it is when the log
+        ;; cannot: the #31/#68 authority, plus the engine flag it keys on.
+        ;;
+        ;; `:active-player` is required PRESENT, and this is not a second
+        ;; ownership derivation — it is a precondition on the authority's own
+        ;; input. Its "opponent ended" clause is `(and end-turn (not= my-side
+        ;; active-player))`, which a nil active-player satisfies, so on a board
+        ;; that has already lost one field a second missing field would read as
+        ;; affirmation (round-3 seat, MAJOR, executed on a partial board).
+        authority-affirms-boundary?
+        (and (true? (get-in client-state [:game-state :end-turn]))
+             (not (str/blank? (get-in client-state [:game-state :active-player])))
+             (state/my-turn-to-act? client-state my-side-name))]
 
     (cond
       ;; NO GAME STATE — must mirror start-turn!'s first branch, or the fix is
@@ -229,56 +259,41 @@
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
 
-      ;; NO OPPONENT NAME — a precondition arm, like :no-side above, for the
-      ;; same reason: every log scan below resolves a boundary's author against
-      ;; the board's two usernames (#230/#231 made that a requirement rather
-      ;; than a tiebreak), so a board that cannot NAME the opponent cannot see
-      ;; their boundaries at all. It then answered from the half it could still
-      ;; see — our own start line — and told the seat :turn-already-played about
-      ;; a turn it had not played, with the authority saying the opposite
-      ;; (2026-09-21 panel, both seats, executed).
+      ;; CANNOT NAME THE OPPONENT AND THE AUTHORITY CANNOT SAY EITHER. The arms
+      ;; below that read the log answer from our half of it alone in this window;
+      ;; already-played? is the one that then told the seat :turn-already-played
+      ;; about a turn it had not played, with the authority saying the opposite
+      ;; (2026-09-21 panel, both seats, executed). Say what is actually missing.
       ;;
-      ;; Ranked ABOVE already-played? because that is the arm that makes the
-      ;; false claim. It does not fire in ordinary play: `strip-state` ships
-      ;; :username for both sides on every full state. The one window found on
-      ;; the wire is an opponent who has LEFT — `web/lobby.clj` dissocs that
-      ;; side's :user — and "your opponent is no longer at the table" is the
-      ;; true thing to say there.
-      ;;
-      ;; `(pos? turn-number)` keeps turn 0 out of it: the Corp's first turn is
-      ;; decided by the is-first-turn? arm below, which needs no opponent
-      ;; evidence, and refusing it would wedge the one turn no opponent has yet
-      ;; acted in.
-      ;;
-      ;; …but a refusal is only right when nothing else can answer. The delta
-      ;; seat's CRITICAL: the four autonomous loops gate on :can-start alone, so
-      ;; refusing a state the WIRE would accept wedges them forever — and
-      ;; start-turn! does accept this one (:end-turn true sends its recency arm
-      ;; to sleep and its authority arm permits). "True but permanent" is not
-      ;; better than "false but recoverable"; both are bugs.
-      ;;
-      ;; So ask the authority FIRST, and only in this window: with :end-turn
-      ;; true and my-turn-to-act? affirming, the boundary is ours and the
-      ;; missing name changes nothing about whose it is. Deliberately scoped to
-      ;; the nil-username case rather than subordinating already-played?
-      ;; generally — that general delegation is #233's question and Michael's
-      ;; call, and this keeps the blast radius to boards that cannot name a
-      ;; player, which no full serialized state is.
-      (and (pos? turn-number)
-           (nil? (get-in client-state [:game-state opp-side :user :username]))
-           (true? (get-in client-state [:game-state :end-turn]))
-           (state/my-turn-to-act? client-state my-side-name))
-      {:can-start true :reason :ready-authority-confirmed}
-
-      ;; Authority cannot affirm it either (no :end-turn flag, or it says the
-      ;; boundary is not ours). NOW refuse, and say what is missing rather than
-      ;; claiming we already played.
-      (and (pos? turn-number)
-           (nil? (get-in client-state [:game-state opp-side :user :username])))
+      ;; Only when the authority cannot affirm the boundary. Round 2's CRITICAL:
+      ;; the four autonomous loops gate on :can-start alone, so refusing a state
+      ;; the WIRE accepts wedges them forever — and start-turn! accepts this one
+      ;; whenever :end-turn is true (its recency arm is subordinate to the flag,
+      ;; and its authority arm permits). "True but permanent" is not better than
+      ;; "false but recoverable"; both are bugs.
+      (and unnameable-opponent?
+           (not authority-affirms-boundary?))
       {:can-start false :reason :opponent-identity-unknown}
 
-      ;; Already played this turn (0 clicks but log shows we started)
-      already-played?
+      ;; Already played this turn (0 clicks but log shows we started) — unless
+      ;; the opponent cannot be named, in which case the authority has already
+      ;; affirmed the boundary is ours (the arm above refuses otherwise) and this
+      ;; arm is reading half a log: our own start line is visible, and the
+      ;; opponent's end — the thing that makes it stale — is not.
+      ;;
+      ;; Round 3's CRITICAL is why this is a SUBORDINATION and not an allow-arm
+      ;; ranked above: an allow-arm answered :ready before the vetoes BELOW it
+      ;; had been consulted, so an opponent who ended with clicks still in hand
+      ;; and then left got a preflight :ready against a wire that refuses
+      ;; :opponent-has-clicks — the same loop spin from the other end. Skipping
+      ;; the ONE stale arm is all the permission this window needs; every arm
+      ;; below still gets to refuse.
+      ;;
+      ;; Deliberately not the general delegation of turn ownership to the
+      ;; authority — that is #233's question and Michael's call. This changes
+      ;; nothing on any board that names both players.
+      (and already-played?
+           (not unnameable-opponent?))
       {:can-start false :reason :turn-already-played}
 
       ;; Opponent hasn't finished their opening mulligan — starting now races
