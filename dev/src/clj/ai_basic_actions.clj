@@ -49,7 +49,26 @@
 (defn- player-usernames
   "Author candidates for rendered game-log lines. Prefer the board's two player
    names; retain the authenticated uid as the same fallback get-my-username uses
-   while a partial state is arriving."
+   while a partial state is arriving.
+
+   These names are a REQUIREMENT of every turn-boundary scan, not a tiebreak
+   between candidates: since #230/#231 a boundary line whose author is not in
+   this list is not a boundary at all. So a name missing here makes that
+   player's starts and ends invisible, and the direction each consumer then
+   fails in matters:
+
+   - can-start-turn? / start-turn! refuse — and can-start-turn? refuses with
+     :opponent-identity-unknown rather than claiming :turn-already-played.
+   - opponent-turn-underway? answers false, which turns the end-turn self-heal's
+     :confirmed-ended into :resend. Executed by the 2026-09-21 panel; the send
+     itself stays fenced by the off-turn :active-player guard and the engine's
+     guarded-end-turn, so it is a wasted round trip and not a second end-turn.
+   - already-ended-this-turn? is unaffected by a missing OPPONENT name; it needs
+     ours, and the uid fallback supplies it.
+
+   The one wire window where a name is missing is an opponent who has left
+   (`web/lobby.clj` dissocs that side's :user); `strip-state` ships both
+   usernames on every full state."
   [client-state]
   (distinct
     (keep identity [(get-in client-state [:game-state :corp :user :username])
@@ -116,6 +135,8 @@
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
+   - :opponent-identity-unknown - board present, but it does not name the opponent,
+     so none of the log scans below can see their boundaries
    - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
@@ -201,6 +222,37 @@
       ;; Already have clicks - turn already started
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
+
+      ;; NO OPPONENT NAME — a precondition arm, like :no-side above, for the
+      ;; same reason: every log scan below resolves a boundary's author against
+      ;; the board's two usernames (#230/#231 made that a requirement rather
+      ;; than a tiebreak), so a board that cannot NAME the opponent cannot see
+      ;; their boundaries at all. It then answered from the half it could still
+      ;; see — our own start line — and told the seat :turn-already-played about
+      ;; a turn it had not played, with the authority saying the opposite
+      ;; (2026-09-21 panel, both seats, executed).
+      ;;
+      ;; Ranked ABOVE already-played? because that is the arm that makes the
+      ;; false claim. It does not fire in ordinary play: `strip-state` ships
+      ;; :username for both sides on every full state. The one window found on
+      ;; the wire is an opponent who has LEFT — `web/lobby.clj` dissocs that
+      ;; side's :user — and "your opponent is no longer at the table" is the
+      ;; true thing to say there.
+      ;;
+      ;; `(pos? turn-number)` keeps turn 0 out of it: the Corp's first turn is
+      ;; decided by the is-first-turn? arm below, which needs no opponent
+      ;; evidence, and refusing it would wedge the one turn no opponent has yet
+      ;; acted in.
+      ;;
+      ;; A refusal, not delegation: the alternative is to subordinate
+      ;; already-played? to the authority the way #220/#226 subordinated the
+      ;; other recency arms, which would let this state start the turn rather
+      ;; than explain itself. That is the rewrite #233 reserves for Michael —
+      ;; this arm deliberately does not pre-empt it, and #233 is where the
+      ;; twelfth arm of this cond is an argument for delegating.
+      (and (pos? turn-number)
+           (nil? (get-in client-state [:game-state opp-side :user :username])))
+      {:can-start false :reason :opponent-identity-unknown}
 
       ;; Already played this turn (0 clicks but log shows we started)
       already-played?
@@ -340,6 +392,13 @@
 
           :opponent-mulligan
           (println "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn")
+
+          ;; Say what is actually missing. Every turn-boundary scan needs the
+          ;; opponent's name, so without it this seat cannot tell whose boundary
+          ;; it is holding — and the recovery is to find out whether they are
+          ;; still at the table, not to wait for a turn that may already be ours.
+          :opponent-identity-unknown
+          (println "❌ Cannot perform action: The board does not name your opponent\n   Their turn boundaries are invisible until it does — they may have left the game\n   Use 'peer-status' to check, then 'status'")
 
           ;; Default
           (println "❌ Cannot perform action: Turn not ready"))

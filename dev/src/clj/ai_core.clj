@@ -273,7 +273,21 @@
 
    Require the verb immediately after the whole username. This rejects system
    command echoes containing a quoted boundary and distinguishes `Clam` from
-   `Clam is` while retaining `Clam` / `Clam Jones` disambiguation."
+   `Clam is` while retaining `Clam` / `Clam Jones` disambiguation.
+
+   Anchoring is load-bearing and a known-username whitelist is the only thing
+   that supplies it: a command echo reads `[!]<name> uses a command: <text>`, so
+   an anchored match with an UNKNOWN author would happily read the envelope's
+   `[!]AI-corp uses a command: /roll 6 I` as the author and the quoted suffix as
+   the boundary (#231).
+
+   What it costs, both executed by the 2026-09-21 panel and filed rather than
+   fixed here: a boundary whose author this board cannot NAME is invisible, not
+   merely unattributed — an opponent who has left has their `:user` dissoc'd
+   (`web/lobby.clj`), which is the window can-start-turn?'s
+   :opponent-identity-unknown arm exists to answer truthfully. The possessive
+   slot is `\\S+` rather than the engine's pronoun set (#235), and a username
+   containing a pronoun marker renders differently than it serializes (#236)."
   [text usernames kind]
   (when (and text (contains? #{:start :end} kind))
     (let [verb (if (= kind :start) "started" "is ending")]
@@ -287,29 +301,27 @@
            (sort-by count >)
            first))))
 
-(defn log-author
-  "Return the author of a direct start or end turn line from USERNAMES."
-  [text usernames]
-  (or (turn-log-author text usernames :start)
-      (turn-log-author text usernames :end)))
-
-(defn log-authored-by?
-  "True when TEXT's direct turn-boundary author is USERNAME."
-  [text username usernames]
-  (and username
-       (= username (log-author text usernames))))
-
 (defn start-turn-log-line?
-  "True when TEXT has the stable shape of an engine start-turn log line.
+  "True when TEXT is a direct start-turn boundary authored by a known player.
+
+   NOT a grammar-only check, despite the name: it answers turn-log-author, so it
+   requires an author from USERNAMES as well as the shape. The general-purpose
+   `log-author` / `log-authored-by?` pair this used to sit beside is gone —
+   narrowing them to turn boundaries (#230) left them answering a question
+   nobody asks, with a name that promised the wider one (#181).
 
    The engine renders `[their]` according to the author's pronoun setting, so
-   matching the literal phrase `started their turn` hides human players whose
-   configured possessive is `his`, `her`, `zir`, etc."
+   matching the literal phrase `started their turn` hid human players whose
+   configured possessive is `his`, `her`, `zir` (#227); every possessive
+   `select-pronoun` can produce is a single token."
   [text usernames]
   (boolean (turn-log-author text usernames :start)))
 
 (defn find-end-turn-indices
-  "Find indices of 'is ending' log entries, optionally filtered by author.
+  "Find indices of direct end-turn boundary entries, optionally filtered by author.
+
+   Not a substring search for \"is ending\": the text has to BE a boundary
+   authored by a known player, or a slash-command echo quoting one counts (#231).
 
    Parameters:
    - log: vector of log entries (each with :text key)
