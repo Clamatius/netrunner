@@ -8,7 +8,8 @@
             [ai-basic-actions :as actions]
             [ai-core :as core]
             [ai-state :as state]
-            [ai-websocket-client-v2 :as ws]))
+            [ai-websocket-client-v2 :as ws]
+            [game.core.process-actions :as process-actions]))
 
 ;; ============================================================================
 ;; Test Helpers - Log Entry Builders
@@ -44,7 +45,8 @@
      :game-state {my-side {:click my-clicks
                            :user {:username my-username}
                            :prompt-state my-prompt}
-                  opp-side {:click opp-clicks}
+                  opp-side {:click opp-clicks
+                            :user {:username (if (= opp-side :corp) "AI-corp" "AI-runner")}}
                   :turn turn
                   :active-player active-player
                   :log log}}))
@@ -67,27 +69,33 @@
     (is (nil? (core/extract-turn-number "clicked for credit")))
     (is (nil? (core/extract-turn-number "played Sure Gamble")))))
 
-(deftest test-log-author-uses-the-longest-game-username
+(deftest test-turn-log-author-uses-the-longest-game-username
   (let [usernames ["Clam" "Clam Jones"]]
     (testing "matches the exact system-msg author, including a legal space-prefix name"
-      (is (= "Clam" (core/log-author "Clam is ending their turn 1" usernames)))
-      (is (= "Clam Jones" (core/log-author "Clam Jones is ending their turn 1" usernames)))
-      (is (core/log-authored-by? "Clam is ending their turn 1" "Clam" usernames))
-      (is (not (core/log-authored-by? "Clam Jones is ending their turn 1" "Clam" usernames)))
-      (is (nil? (core/log-author "Runner mentions Clam during a trace" usernames))))))
+      (is (= "Clam" (core/turn-log-author "Clam is ending their turn 1" usernames :end)))
+      (is (= "Clam Jones" (core/turn-log-author "Clam Jones is ending their turn 1"
+                                                usernames :end)))
+      (is (nil? (core/turn-log-author "Runner mentions Clam during a trace" usernames :end)))
+      (is (nil? (core/turn-log-author "Runner mentions Clam during a trace" usernames :start))))
+    (testing "a boundary is not the other KIND of boundary"
+      (is (nil? (core/turn-log-author "Clam is ending their turn 1" usernames :start)))
+      (is (nil? (core/turn-log-author "Clam started their turn 1" usernames :end))))
+    (testing "an unknown author is no author — the whitelist is what anchors the scan"
+      (is (nil? (core/turn-log-author "Stranger is ending their turn 1" usernames :end))))))
 
 (deftest test-start-turn-log-line-allows-rendered-pronouns
-  (is (core/start-turn-log-line? "Clam started their turn 1"))
-  (is (core/start-turn-log-line? "Clam started his turn 2"))
-  (is (core/start-turn-log-line? "Clam Jones started zir turn 3"))
-  (is (not (core/start-turn-log-line? "Clam started a run on turn 3"))))
+  (let [usernames ["Clam" "Clam Jones"]]
+    (is (core/start-turn-log-line? "Clam started their turn 1" usernames))
+    (is (core/start-turn-log-line? "Clam started his turn 2" usernames))
+    (is (core/start-turn-log-line? "Clam Jones started zir turn 3" usernames))
+    (is (not (core/start-turn-log-line? "Clam started a run on turn 3" usernames)))))
 
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
     (let [log [(make-log-entry "AI-corp is ending their turn 1")
                (make-log-entry "AI-runner took credit")
                (make-log-entry "AI-runner is ending their turn 1")]]
-      (is (= [0 2] (vec (core/find-end-turn-indices log nil nil)))))))
+      (is (= [0 2] (vec (core/find-end-turn-indices log nil ["AI-corp" "AI-runner"])))))))
 
 (deftest test-find-end-turn-indices-exclude-username
   (testing "excludes entries with specified username"
@@ -124,14 +132,221 @@
       (testing "fixtures that omit :user are still engine lines (the ai_runs rule)"
         (is (= [0] (vec (core/find-start-turn-indices [(make-start-turn-entry "AI-corp" 3)]
                                                       :exclude-username "AI-runner"
-                                                      :usernames ["AI-runner"]))))))))
+                                                      :usernames ["AI-corp" "AI-runner"]))))))))
+
+(deftest test-turn-scans-ignore-real-command-echoes
+  (let [engine (atom {:corp {:user {:username "AI-corp"}}
+                      :runner {:user {:username "AI-runner"}}
+                      :log []})
+        usernames ["AI-corp" "AI-runner"]]
+    (process-actions/command-parser engine :corp
+                                    {:user {:username "AI-corp"}
+                                     :text "/roll 6 I started my turn 3"})
+    (let [echo (get-in @engine [:log 1 :public])]
+      (is (= "__system__" (:user echo)))
+      (is (= "[!]AI-corp uses a command: /roll 6 I started my turn 3" (:text echo)))
+      (is (empty? (core/find-start-turn-indices [echo]
+                                                :exclude-username "AI-runner"
+                                                :usernames usernames)))
+      (with-mock-state
+        (assoc-in
+          (make-game-state-with-log :my-side :runner
+                                    :turn 3 :active-player "corp"
+                                    :log [(make-end-turn-entry "AI-corp" 3) echo])
+          [:game-state :end-turn] true)
+        (is (true? (:can-start (actions/can-start-turn?))))))
+    (process-actions/command-parser engine :corp
+                                    {:user {:username "AI-corp"}
+                                     :text "/roll 6 is ending their turn 3"})
+    (let [echo (get-in @engine [:log 3 :public])]
+      (is (= "__system__" (:user echo)))
+      (is (= "[!]AI-corp uses a command: /roll 6 is ending their turn 3" (:text echo)))
+      (is (empty? (core/find-end-turn-indices [echo] "AI-runner" usernames))))
+    (process-actions/command-parser engine :runner
+                                    {:user {:username "AI-runner"}
+                                     :text "/roll 6 is ending their turn 3"})
+    (let [opp-start-echo (get-in @engine [:log 1 :public])
+          my-end-echo (get-in @engine [:log 5 :public])]
+      (with-mock-state
+        (make-game-state-with-log :my-side :runner
+                                  :turn 3 :active-player "runner"
+                                  :log [opp-start-echo my-end-echo])
+        (is (false? (#'actions/already-ended-this-turn? @state/client-state)))
+        (is (false? (#'actions/opponent-turn-underway? @state/client-state)))
+        (with-redefs [core/standard-delay 0]
+          (is (= :resend
+                 (actions/end-turn-self-heal-decision
+                   (actions/recheck-end-turn-state 3)))))))))
+
+(deftest test-turn-scans-reject-an-echo-quoting-a-PERFECT-boundary
+  ;; The committed echo payloads (`/roll 6 I started my turn 3`) are rejected by
+  ;; the AUTHOR check alone, so they stay green even with the anchor removed —
+  ;; they do not pin the repair they were written for (2026-09-21 panel, both
+  ;; seats, mutation-executed). An echo quoting a fully rendered boundary does:
+  ;; unanchor turn-log-author and it resolves to AI-corp.
+  (let [engine (atom {:corp {:user {:username "AI-corp"}}
+                      :runner {:user {:username "AI-runner"}}
+                      :log []})
+        usernames ["AI-corp" "AI-runner"]]
+    (process-actions/command-parser
+      engine :corp
+      {:user {:username "AI-corp"}
+       :text "/roll 6 AI-corp started their turn 3 with 5 [Credit] and 5 cards in HQ."})
+    (process-actions/command-parser
+      engine :corp
+      {:user {:username "AI-corp"}
+       :text "/roll 6 AI-corp is ending their turn 3 with 5 [Credit] and 5 cards in HQ."})
+    (let [start-echo (get-in @engine [:log 1 :public])
+          end-echo (get-in @engine [:log 3 :public])]
+      (testing "the engine really does put a perfect boundary inside a system line"
+        (is (= "__system__" (:user start-echo)))
+        (is (clojure.string/includes? (:text start-echo) "AI-corp started their turn 3 with"))
+        (is (= "__system__" (:user end-echo)))
+        (is (clojure.string/includes? (:text end-echo) "AI-corp is ending their turn 3 with")))
+      (testing "no author is resolved from a quoted boundary, either kind"
+        (is (nil? (core/turn-log-author (:text start-echo) usernames :start)))
+        (is (nil? (core/turn-log-author (:text end-echo) usernames :end))))
+      (testing "and no scan counts it"
+        (is (empty? (core/find-start-turn-indices [start-echo]
+                                                 :exclude-username "AI-runner"
+                                                 :usernames usernames)))
+        (is (empty? (core/find-end-turn-indices [end-echo] "AI-runner" usernames))))
+      (testing "the Runner owed the start is not refused by the Corp's die roll"
+        (with-mock-state
+          (assoc-in
+            (make-game-state-with-log :my-side :runner
+                                      :turn 3 :active-player "corp"
+                                      :log [(make-end-turn-entry "AI-corp" 3)
+                                            start-echo end-echo])
+            [:game-state :end-turn] true)
+          (let [check (actions/can-start-turn?)]
+            (is (true? (:can-start check)))
+            (is (= :ready (:reason check)))))))))
+
+(deftest test-a-board-that-cannot-name-the-opponent-says-so
+  ;; Both panel seats, executed: every turn scan now needs the opponent's name,
+  ;; so a board without it loses their boundaries and answered from the half it
+  ;; could still see — our own start line — reporting :turn-already-played for a
+  ;; turn we had not played, while my-turn-to-act? said the opposite. The one
+  ;; wire window is an opponent who has LEFT (web/lobby.clj dissocs their :user).
+  (let [opponent-left (-> (make-game-state-with-log
+                            :my-side :runner
+                            ;; :end-turn true + the Corp as active player is the
+                            ;; Runner being owed the start: the authority agrees.
+                            :turn 3 :active-player "corp"
+                            :log [(make-start-turn-entry "AI-runner" 2)
+                                  (make-end-turn-entry "AI-corp" 3)])
+                          (assoc-in [:game-state :end-turn] true)
+                          (update-in [:game-state :corp] dissoc :user))]
+    (testing "the AUTHORITY still decides when it can: :end-turn + my-turn-to-act?
+              affirm the boundary is ours, and a missing name does not unmake it.
+              Round 2's CRITICAL: the four loops gate on :can-start alone, and
+              start-turn! accepts this exact state, so refusing it wedges them."
+      (with-mock-state opponent-left
+        (let [check (actions/can-start-turn?)]
+          (is (true? (:can-start check)))
+          (is (= :ready (:reason check)))
+          (is (not= :turn-already-played (:reason check)))
+          (is (not= :opponent-identity-unknown (:reason check))))))
+    (testing "round 3's CRITICAL: skipping the stale arm must not skip the VETOES
+              below it. An opponent who ended with clicks still in hand and then
+              left is refused :opponent-has-clicks — what start-turn! answers —
+              and not waved through as ready."
+      (with-mock-state (assoc-in opponent-left [:game-state :corp :click] 3)
+        (let [check (actions/can-start-turn?)]
+          (is (false? (:can-start check)))
+          (is (= :opponent-has-clicks (:reason check)))
+          (is (not= :ready (:reason check))))))
+    (testing "round 3's MAJOR: a board missing :active-player TOO is not
+              affirmation — the authority's own clause is satisfied by nil, so the
+              flag alone must not stand in for ownership"
+      (with-mock-state (update-in opponent-left [:game-state] dissoc :active-player)
+        (let [check (actions/can-start-turn?)]
+          (is (false? (:can-start check)))
+          (is (= :opponent-identity-unknown (:reason check))))))
+    (testing "with no boundary flag the authority cannot affirm it, so the refusal
+              names what is missing instead of claiming we played"
+      (let [no-flag (update-in opponent-left [:game-state] dissoc :end-turn)]
+        (with-mock-state no-flag
+          (let [check (actions/can-start-turn?)]
+            (is (false? (:can-start check)))
+            (is (= :opponent-identity-unknown (:reason check)))
+            (is (not= :turn-already-played (:reason check)))))
+        (with-mock-state no-flag
+          (let [out (java.io.StringWriter.)
+                ok? (binding [*out* out] (actions/ensure-turn-started!))]
+            (is (false? ok?))
+            (is (re-find #"(?i)does not name your opponent" (str out)) (str out))
+            (is (not (re-find #"(?i)already" (str out))) (str out))
+            (is (not (re-find #"(?i)Turn not ready" (str out))) (str out))))))
+    (testing "and when the authority says the boundary is the OPPONENT's, an
+              unnameable opponent is still not permission to start"
+      (with-mock-state (assoc-in opponent-left [:game-state :active-player] "runner")
+        (let [check (actions/can-start-turn?)]
+          (is (false? (:can-start check)))
+          (is (not= :ready-authority-confirmed (:reason check))))))
+    (testing "the SAME board with the opponent still seated is unaffected"
+      (with-mock-state (assoc-in (update-in opponent-left [:game-state :corp]
+                                            assoc :user {:username "AI-corp"})
+                                 [:game-state :end-turn] true)
+        (let [check (actions/can-start-turn?)]
+          (is (true? (:can-start check)))
+          (is (= :ready (:reason check))))))
+    (testing "turn 0 is left to the first-turn arm — no opponent evidence exists yet"
+      (with-mock-state (-> (make-game-state-with-log
+                             :my-side :corp :my-username "AI-corp"
+                             :turn 0 :active-player "corp" :log [])
+                           (update-in [:game-state :runner] dissoc :user))
+        (let [check (actions/can-start-turn?)]
+          (is (true? (:can-start check))
+              "refusing the Corp's first turn here would wedge the one turn nobody has acted in")
+          (is (= :first-turn (:reason check))))))))
+
+(deftest test-already-played-still-refuses-on-a-board-that-names-both-players
+  ;; Round 4 found this by MUTATION: deleting the :turn-already-played arm
+  ;; outright left the whole suite green, so the arm round 3 subordinated was
+  ;; pinned by nothing and the claim "changes nothing on a board that names both
+  ;; players" was true only by reading. Pre-existing gap; this is the fixture.
+  ;;
+  ;; The #117 orphaned shape on a fully named board: their end, then our start,
+  ;; 0 clicks left, :end-turn false. already-played? is the ONLY preflight
+  ;; refusal here — the wire's counterpart is its own :no-turn-boundary arm.
+  (let [orphaned (-> (make-game-state-with-log
+                       :my-side :runner
+                       :turn 3 :active-player "runner"
+                       :log [(make-end-turn-entry "AI-corp" 2)
+                             (make-start-turn-entry "AI-runner" 3)])
+                     (assoc-in [:game-state :end-turn] false))]
+    (with-mock-state orphaned
+      (let [check (actions/can-start-turn?)]
+        (is (false? (:can-start check)))
+        (is (= :turn-already-played (:reason check))
+            "the arm subordinated for the unnameable-opponent window must still
+             decide this one, where both players are named")))
+    (testing "and it is the log comparison deciding, not the flag: the same board
+              with the opponent unnameable is answered by the identity arm"
+      (with-mock-state (update-in orphaned [:game-state :corp] dissoc :user)
+        (is (= :opponent-identity-unknown (:reason (actions/can-start-turn?))))))))
+
+(deftest test-turn-scans-disambiguate-a-username-containing-the-verb
+  (let [usernames ["Clam" "Clam is"]
+        log [(make-end-turn-entry "Clam" 1)
+             (make-end-turn-entry "Clam is" 1)
+             (make-start-turn-entry "Clam" 2)]]
+    (is (= "Clam" (core/turn-log-author (:text (first log)) usernames :end)))
+    (is (= "Clam is" (core/turn-log-author (:text (second log)) usernames :end)))
+    (is (= [0] (vec (core/find-end-turn-indices log "Clam is" usernames))))
+    (is (= [2] (vec (core/find-start-turn-indices log
+                                                :include-username "Clam"
+                                                :usernames usernames))))))
 
 (deftest test-find-start-turn-indices-basic
   (testing "finds start turn indices"
     (let [log [(make-log-entry "AI-corp started their turn 1")
                (make-log-entry "AI-corp took credit")
                (make-log-entry "AI-runner started their turn 1")]]
-      (is (= [0 2] (vec (core/find-start-turn-indices log)))))))
+      (is (= [0 2] (vec (core/find-start-turn-indices log
+                                                     :usernames ["AI-corp" "AI-runner"])))))))
 
 (deftest test-find-start-turn-indices-include-username
   (testing "includes only entries with specified username"

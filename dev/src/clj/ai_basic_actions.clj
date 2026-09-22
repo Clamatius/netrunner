@@ -49,7 +49,33 @@
 (defn- player-usernames
   "Author candidates for rendered game-log lines. Prefer the board's two player
    names; retain the authenticated uid as the same fallback get-my-username uses
-   while a partial state is arriving."
+   while a partial state is arriving.
+
+   These names are a REQUIREMENT of every turn-boundary scan, not a tiebreak
+   between candidates: since #230/#231 a boundary line whose author is not in
+   this list is not a boundary at all. So a name missing here makes that
+   player's starts and ends invisible, and the direction each consumer then
+   fails in matters:
+
+   - can-start-turn? / start-turn! refuse — and can-start-turn? refuses with
+     :opponent-identity-unknown rather than claiming :turn-already-played.
+   - opponent-turn-underway? loses only its LOG arm; it still answers true from
+     the opponent's clicks or from :active-player, so the self-heal stays
+     :confirmed-ended unless neither of those is present either (delta seat's
+     correction to an earlier, wider claim here). In that narrow state the
+     decision becomes :resend — and the send is still fenced by the off-turn
+     :active-player guard and the engine's guarded-end-turn, so it costs a round
+     trip rather than a second end-turn.
+   - already-ended-this-turn? is unaffected by a missing OPPONENT name; it needs
+     ours, and the uid fallback supplies it.
+
+   The one wire window where a name is missing is an opponent who has LEFT
+   (`web/lobby.clj` dissocs that side's :user). `strip-state` ships both
+   usernames while they are seated, but the post-leave board still serializes
+   FULLY — `public-states` plus the JSON round trip retains an unnameable
+   opponent (round-3 seat, executed) — so this is not a partial-state-only
+   window, and an earlier claim here that no full state could reach it was
+   wrong."
   [client-state]
   (distinct
     (keep identity [(get-in client-state [:game-state :corp :user :username])
@@ -116,6 +142,10 @@
    - :first-turn - Corp can start first turn
    - :opponent-has-clicks - opponent still has clicks remaining
    - :opponent-not-ended - opponent hasn't ended turn (not in recent log)
+   - :opponent-identity-unknown - board present, but it does not name the opponent,
+     so no log scan can see their boundaries AND the authority cannot affirm the
+     boundary either. When the authority CAN affirm it, the one stale log-derived
+     arm is skipped and the ordinary arms below it decide
    - :no-game-state - nothing to reason about (purged game, or resync in flight)
    - :ready - all checks passed, can start turn"
   []
@@ -164,7 +194,34 @@
                             (empty? opp-end-indices))
 
         ;; Check if we effectively already played this turn
-        already-played? (turn-started-since-last-opp-end?)]
+        already-played? (turn-started-since-last-opp-end?)
+
+        ;; BOARD THAT CANNOT NAME THE OPPONENT. Since #230/#231 every log scan
+        ;; resolves a boundary's author against the board's usernames, so a
+        ;; missing opponent name does not leave their lines merely unattributed
+        ;; — it makes them INVISIBLE, and every arm derived from them answers
+        ;; from our half of the log alone. `strip-state` ships :username for both
+        ;; sides while they are seated; a player who LEAVES has theirs dissoc'd
+        ;; (`web/lobby.clj`), and that board still serializes fully. Turn 0 is
+        ;; excluded: the Corp's first turn needs no opponent evidence, and
+        ;; refusing it would wedge the one turn nobody has yet acted in.
+        unnameable-opponent? (and (pos? turn-number)
+                                  (nil? (get-in client-state
+                                                [:game-state opp-side :user :username])))
+
+        ;; The one thing that can still say whose boundary it is when the log
+        ;; cannot: the #31/#68 authority, plus the engine flag it keys on.
+        ;;
+        ;; `:active-player` is required PRESENT, and this is not a second
+        ;; ownership derivation — it is a precondition on the authority's own
+        ;; input. Its "opponent ended" clause is `(and end-turn (not= my-side
+        ;; active-player))`, which a nil active-player satisfies, so on a board
+        ;; that has already lost one field a second missing field would read as
+        ;; affirmation (round-3 seat, MAJOR, executed on a partial board).
+        authority-affirms-boundary?
+        (and (true? (get-in client-state [:game-state :end-turn]))
+             (not (str/blank? (get-in client-state [:game-state :active-player])))
+             (state/my-turn-to-act? client-state my-side-name))]
 
     (cond
       ;; NO GAME STATE — must mirror start-turn!'s first branch, or the fix is
@@ -202,8 +259,41 @@
       (and my-clicks (> my-clicks 0))
       {:can-start false :reason :turn-already-started}
 
-      ;; Already played this turn (0 clicks but log shows we started)
-      already-played?
+      ;; CANNOT NAME THE OPPONENT AND THE AUTHORITY CANNOT SAY EITHER. The arms
+      ;; below that read the log answer from our half of it alone in this window;
+      ;; already-played? is the one that then told the seat :turn-already-played
+      ;; about a turn it had not played, with the authority saying the opposite
+      ;; (2026-09-21 panel, both seats, executed). Say what is actually missing.
+      ;;
+      ;; Only when the authority cannot affirm the boundary. Round 2's CRITICAL:
+      ;; the four autonomous loops gate on :can-start alone, so refusing a state
+      ;; the WIRE accepts wedges them forever — and start-turn! accepts this one
+      ;; whenever :end-turn is true (its recency arm is subordinate to the flag,
+      ;; and its authority arm permits). "True but permanent" is not better than
+      ;; "false but recoverable"; both are bugs.
+      (and unnameable-opponent?
+           (not authority-affirms-boundary?))
+      {:can-start false :reason :opponent-identity-unknown}
+
+      ;; Already played this turn (0 clicks but log shows we started) — unless
+      ;; the opponent cannot be named, in which case the authority has already
+      ;; affirmed the boundary is ours (the arm above refuses otherwise) and this
+      ;; arm is reading half a log: our own start line is visible, and the
+      ;; opponent's end — the thing that makes it stale — is not.
+      ;;
+      ;; Round 3's CRITICAL is why this is a SUBORDINATION and not an allow-arm
+      ;; ranked above: an allow-arm answered :ready before the vetoes BELOW it
+      ;; had been consulted, so an opponent who ended with clicks still in hand
+      ;; and then left got a preflight :ready against a wire that refuses
+      ;; :opponent-has-clicks — the same loop spin from the other end. Skipping
+      ;; the ONE stale arm is all the permission this window needs; every arm
+      ;; below still gets to refuse.
+      ;;
+      ;; Deliberately not the general delegation of turn ownership to the
+      ;; authority — that is #233's question and Michael's call. This changes
+      ;; nothing on any board that names both players.
+      (and already-played?
+           (not unnameable-opponent?))
       {:can-start false :reason :turn-already-played}
 
       ;; Opponent hasn't finished their opening mulligan — starting now races
@@ -340,6 +430,13 @@
 
           :opponent-mulligan
           (println "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn")
+
+          ;; Say what is actually missing. Every turn-boundary scan needs the
+          ;; opponent's name, so without it this seat cannot tell whose boundary
+          ;; it is holding — and the recovery is to find out whether they are
+          ;; still at the table, not to wait for a turn that may already be ours.
+          :opponent-identity-unknown
+          (println "❌ Cannot perform action: The board does not name your opponent\n   Their turn boundaries are invisible until it does — they may have left the game\n   Use 'peer-status' to check, then 'status'")
 
           ;; Default
           (println "❌ Cannot perform action: Turn not ready"))
@@ -510,14 +607,14 @@
         ;; This prevents Corp from ending and immediately starting again
         my-username (get-my-username)
         usernames (player-usernames client-state)
-        ;; #226 delta (fresh seat): chat shares the :log, so gate on the engine
-        ;; author here too — see core/system-authored?.
+        ;; Chat and command echoes share the log. Only a direct turn boundary
+        ;; authored by a known player can establish that the opponent ended.
         opp-ended? (some #(let [text (:text %)]
                             (and text
                                  (core/system-authored? %)
-                                 (str/includes? text "is ending")
+                                 (core/turn-log-author text usernames :end)
                                  (or (nil? my-username)
-                                     (not (core/log-authored-by? text my-username usernames)))))
+                                     (not= my-username (core/turn-log-author text usernames :end)))))
                         recent-log)
         ;; Upstream's two-phase end-turn pauses on :corp-post-discard / :runner-post-discard
         ;; when a card sets :force-post-discard-{self,opponent}. While active, end-turn-continue
@@ -1122,9 +1219,9 @@
       (some #(let [text (:text %)]
                (and text
                     (core/system-authored? %)
-                    (str/includes? text "is ending")
+                    (core/turn-log-author text usernames :end)
                     my-username
-                    (core/log-authored-by? text my-username usernames)))
+                    (= my-username (core/turn-log-author text usernames :end))))
             recent-log))))
 
 (defn- opponent-turn-underway?
@@ -1146,9 +1243,9 @@
         opp-started? (some #(let [t (:text %)]
                               (and t
                                    (core/system-authored? %)
-                                   (core/start-turn-log-line? t)
+                                   (core/start-turn-log-line? t usernames)
                                    (or (nil? my-username)
-                                       (not (core/log-authored-by? t my-username usernames)))))
+                                       (not= my-username (core/turn-log-author t usernames :start)))))
                            recent)]
     (boolean
      (or (and opp-clicks (pos? opp-clicks))

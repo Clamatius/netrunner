@@ -259,61 +259,69 @@
 ;; They are pure functions for testability - pass log and username explicitly.
 
 (defn system-authored?
-  "True when ENTRY is an engine line rather than player chat.
+  "Reject player chat before considering a log line as engine evidence.
 
-   Chat shares the game :log. `say` writes it with the speaker's user MAP as
-   :user; every engine line goes through `make-system-message`, whose :user is
-   the string \"__system__\" (game/core/say.clj). Every turn-boundary scan below
-   has to gate on this or a human can move the seat by talking: chat carries no
-   author prefix, so `log-author` returns nil and an exclude-username scan
-   counts the line as the OPPONENT's.
-
-   The literal \"started their turn\" needed those exact words. The
-   pronoun-tolerant shape matches any \"started <word> turn N\", so \"I started
-   my turn 3\" in chat now qualifies — widening the match widened this hole,
-   which is why the gate lands in the same change.
-
-   Same rule and same spelling as `run-start-line?` in ai_runs, which grew it
-   from the same guest catch: fixtures that omit :user are engine lines.
-
-   Not a username check: an engine line carries the acting player's name in the
-   TEXT, and \"__system__\" in :user."
+   Engine messages carry :user \"__system__\"; chat carries a user map.
+   Command echoes also carry \"__system__\" and may quote arbitrary player
+   text, so turn scans must additionally require turn-log-author's direct
+   boundary grammar. Omitted :user is retained for legacy test fixtures."
   [entry]
   (contains? #{nil "__system__"} (:user entry)))
 
-(defn log-author
-  "Return the author of a direct `system-msg` line from USERNAMES.
+(defn turn-log-author
+  "Return the known player whose direct turn boundary begins TEXT.
 
-   `system-msg` renders `username + space + message`, but spaces are legal in a
-   username.  When one player's name is a space-delimited prefix of the other's
-   (for example `Clam` / `Clam Jones`), the rendered line is ambiguous unless
-   both candidates are known.  The longest matching game username is the only
-   possible author in the two-player game."
-  [text usernames]
-  (when text
-    (->> usernames
-         (remove nil?)
-         (filter #(str/starts-with? text (str % " ")))
-         (sort-by count >)
-         first)))
+   Require the verb immediately after the whole username. This rejects system
+   command echoes containing a quoted boundary and distinguishes `Clam` from
+   `Clam is` while retaining `Clam` / `Clam Jones` disambiguation.
 
-(defn log-authored-by?
-  "True when TEXT's longest matching author in USERNAMES is USERNAME."
-  [text username usernames]
-  (and username
-       (= username (log-author text usernames))))
+   Anchoring is load-bearing and a known-username whitelist is the only thing
+   that supplies it: a command echo reads `[!]<name> uses a command: <text>`, so
+   an anchored match with an UNKNOWN author would happily read the envelope's
+   `[!]AI-corp uses a command: /roll 6 I` as the author and the quoted suffix as
+   the boundary (#231).
+
+   What it costs, both executed by the 2026-09-21 panel and filed rather than
+   fixed here: a boundary whose author this board cannot NAME is invisible, not
+   merely unattributed — an opponent who has left has their `:user` dissoc'd
+   (`web/lobby.clj`), which is the window can-start-turn?'s
+   :opponent-identity-unknown arm exists to answer truthfully. The possessive
+   slot is `\\S+` rather than the engine's pronoun set (#235), and a username
+   containing a pronoun marker renders differently than it serializes (#236)."
+  [text usernames kind]
+  (when (and text (contains? #{:start :end} kind))
+    (let [verb (if (= kind :start) "started" "is ending")]
+      (->> usernames
+           (remove nil?)
+           (filter (fn [username]
+                     (let [prefix (str username " " verb " ")]
+                       (and (str/starts-with? text prefix)
+                            (re-find #"^\S+ turn \d+(?:\s|\.|$)"
+                                     (subs text (count prefix)))))))
+           (sort-by count >)
+           first))))
 
 (defn start-turn-log-line?
-  "True when TEXT has the stable shape of an engine start-turn log line.
+  "True when TEXT is a direct start-turn boundary authored by a known player.
+
+   NOT a grammar-only check, despite the name: it answers turn-log-author, so it
+   requires an author from USERNAMES as well as the shape. The general-purpose
+   `log-author` / `log-authored-by?` pair this used to sit beside is gone —
+   narrowing them to turn boundaries (#230) left them answering a question
+   nobody asks, with a name that promised the wider one (#181).
 
    The engine renders `[their]` according to the author's pronoun setting, so
-   matching the literal phrase `started their turn` hides human players whose
-   configured possessive is `his`, `her`, `zir`, etc."
-  [text]
-  (boolean (and text (re-find #" started \S+ turn \d+" text))))
+   matching the literal phrase `started their turn` hid human players whose
+   configured possessive is `his`, `her`, `zir` (#227); every possessive
+   `select-pronoun` can produce is a single token."
+  [text usernames]
+  (boolean (turn-log-author text usernames :start)))
 
 (defn find-end-turn-indices
-  "Find indices of 'is ending' log entries, optionally filtered by author.
+  "Find indices of direct end-turn boundary entries, optionally filtered by author.
+
+   Not a substring search for \"is ending\": the text has to BE a boundary
+   authored by a known player, or a slash-command echo quoting one counts (#231).
 
    Parameters:
    - log: vector of log entries (each with :text key)
@@ -327,14 +335,14 @@
      (let [text (:text entry)]
        (when (and text
                   (system-authored? entry)
-                  (str/includes? text "is ending")
+                  (turn-log-author text usernames :end)
                   (or (nil? exclude-username)
-                      (not (log-authored-by? text exclude-username usernames))))
+                      (not= exclude-username (turn-log-author text usernames :end))))
          idx)))
    log))
 
 (defn find-start-turn-indices
-  "Find indices of 'started their turn' log entries, filtered by author.
+  "Find indices of direct start-turn log entries, filtered by author.
 
    Parameters:
    - log: vector of log entries (each with :text key)
@@ -349,10 +357,10 @@
      (let [text (:text entry)]
        (when (and text
                   (system-authored? entry)
-                  (start-turn-log-line? text)
+                  (start-turn-log-line? text usernames)
                   (cond
-                    include-username (log-authored-by? text include-username usernames)
-                    exclude-username (not (log-authored-by? text exclude-username usernames))
+                    include-username (= include-username (turn-log-author text usernames :start))
+                    exclude-username (not= exclude-username (turn-log-author text usernames :start))
                     :else true))
          idx)))
    log))
