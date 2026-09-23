@@ -152,8 +152,9 @@
 ;; ONCE and then wait for the Corp's priority pass, instead of re-sending every
 ;; loop iteration (which mislabelled fired subs as "broken" and tripped the
 ;; stuck-state guard). Keyed by the encountered CARD rather than :position
-;; because two forced encounters share :position 0 (#160). Like every key in this
-;; file it is a card, not an encounter — see signaled-fire-encounter above.
+;; because two forced encounters share :position 0 (#160). Per-ENCOUNTER since
+;; #197: core/encounter-key is the engine's encounter id when the wire has one,
+;; so a Sisyphus re-encounter of the same card no longer inherits this latch (#163).
 (defonce passed-ice-encounter (atom nil))
 
 (defn reset-state!
@@ -758,10 +759,9 @@
               ;; to read. Re-send rather than wait for a reply to a pass the
               ;; engine never saw — the deadlock this issue exists to remove.
               ;;
-              ;; This is also what keeps #163 (encounter-key is a card cid, not
-              ;; an encounter identity) from being a hang on this path: a
-              ;; Sisyphus re-encounter of the same card inherits the stale key,
-              ;; but as soon as the Corp passes it, this override closes it.
+              ;; Before #197 this was also what kept #163 from being a hang on
+              ;; this path: encounter-key was a card cid, so a Sisyphus
+              ;; re-encounter inherited the stale key until the Corp passed.
               latch-is-stale? (core/opponent-passed-encounter? state side)]
           ;; The LEDGER naming us is as good as the latch, and better: the latch
           ;; is one slot, set by these two handlers only, so a pass sent by any

@@ -2929,34 +2929,31 @@
   (boolean (and ice (or (:rezzed ice) (live-encounter? state)))))
 
 (defn encounter-key
-  "Latch key for the encountered CARD — the encountered ICE's :cid, falling back
-   to :position when the wire gives us no encounter. Used by the \"I already
-   signalled here\" / \"I already fired here\" latches.
+  "Latch key for the current ENCOUNTER. Every \"I already passed / signalled /
+   fired here\" latch keys on this.
 
-   Strictly better than the :position it replaced, which a forced encounter
-   leaves pointing somewhere else entirely (usually 0), so two different forced
-   encounters in one run shared a key and the second was treated as already
-   handled.
+   `[:encounter n]` when the wire carries the engine's own encounter id
+   (game.core.diffs/encounters-summary :encounter-id, #197). That is a real
+   per-encounter identity: a Sisyphus Protocol re-encounter of the same card
+   gets a new one (#163), two consecutive depth-1 encounters differ, and a
+   nested encounter's outer id comes back when the inner one ends. Pinned
+   against the engine in game.ai-encounter-id-wire-test. Tagged because eids,
+   cids and positions are all small integers, and a latch written from one
+   branch below must never compare equal to a key from another.
 
-   NOT a per-ENCOUNTER identity, and deliberately no longer named as one (guest
-   panel, #160): a :cid is stable across two encounters of the SAME physical
-   card, which Sisyphus Protocol produces inside a single run. The wire carries
-   no encounter id to key on — game.core.diffs/encounter-keys is
-   [:encounter-count :ice :no-action], and the engine's own encounter :eid is not
-   serialized — so closing that gap needs a client-side encounter-transition
-   observer. Tracked separately; see the follow-up issue linked from #160. The
-   Corp's fire latch is partly covered already, because
-   runner-signaled-let-fire? independently requires a signal NEWER than this
-   ice's most recent encounter marker in the log.
-
-   nil at an UNNAMEABLE encounter (#198): the position belongs to a different
-   card, and :encounter-count is stack depth, not identity (two consecutive
-   encounters are both 1). Nothing acts at such an encounter — the guard in the
-   handler chain precedes every latch consumer — so no key is needed, and nil
-   cannot collide with a real cid."
+   The fallbacks are for a wire with no id (a server predating #197, or no
+   encounter at all), and they are CARD keys, not encounter keys:
+     * the encountered ICE's :cid — stable across two encounters of one card;
+     * nil at an UNNAMEABLE encounter (#198) with no id — the position belongs
+       to a different card, and nothing acts there anyway;
+     * :position when there is no encounter — which two forced encounters
+       share (#160), the reason the cid branch exists."
   [state]
-  (let [ice (encountered-ice state)]
+  (let [ice (encountered-ice state)
+        enc-id (when (encounter-window? state)
+                 (get-in state [:game-state :encounters :encounter-id]))]
     (cond
+      enc-id [:encounter enc-id]
       (:cid ice) (:cid ice)
       (unnameable-encounter? state) nil
       :else (get-in state [:game-state :run :position]))))

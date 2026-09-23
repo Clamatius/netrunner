@@ -83,7 +83,7 @@
       (let [wire (runner-wire-state state)
             ice (ai-core/encountered-ice wire)]
         (is (= "Archangel" (:title ice)))
-        (is (some? (:cid ice)) "encounter-key resolves on :cid")
+        (is (some? (:cid ice)) "the handlers resolve the card on :cid")
         (is (seq (:subroutines ice))
             "the unbroken-sub filter reads :subroutines off this map")
         ;; The engine has NOT stamped :broken/:fired on these subs, and
@@ -96,7 +96,10 @@
         (is (= 1 (count (filter #(and (not (:broken %)) (not (:fired %)))
                                 (:subroutines ice))))
             "and it counts this sub as pending, which is the whole point")
-        (is (= (:cid ice) (ai-core/encounter-key wire)))))))
+        ;; Was (= (:cid ice) (encounter-key wire)) — that pinned the card key
+        ;; #163 is about. The real engine now publishes the encounter's own id.
+        (is (= [:encounter (get-in wire [:game-state :encounters :encounter-id])]
+               (ai-core/encounter-key wire)))))))
 
 (deftest the-forced-encounter-ice-is-never-rezzed
   (testing "the guard that nearly made the whole #160 fix a no-op"

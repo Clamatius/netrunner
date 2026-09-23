@@ -20,6 +20,10 @@
   (:require [game.core :as core]
             [game.core.diffs :as diffs]
             [game.test-framework :refer :all]
+            [ai-core]
+            [ai-state]
+            [ai-run-runner-handlers :as runner-handlers]
+            [ai-websocket-client-v2 :as ws]
             [clojure.test :refer :all]))
 
 (defn- wire-encounter
@@ -108,3 +112,86 @@
         (is (= "Konjin" (get-in (wire-encounter state :runner) [:ice :title])) "premise: back at Konjin")
         (is (= konjin-id (encounter-id state))
             "the outer encounter is the SAME encounter resumed, not a new one")))))
+
+;; ---------------------------------------------------------------------------
+;; The client: encounter-key, and the #163 latch it feeds
+;; ---------------------------------------------------------------------------
+
+(defn- runner-wire [state]
+  {:side "runner"
+   :game-state (cond-> (:runner-state (diffs/public-states state))
+                 true (update-in [:run :phase] #(some-> % name)))})
+
+(deftest encounter-key-distinguishes-a-sisyphus-re-encounter
+  (testing "#163: same card, same cid — the key must still change"
+    (do-game
+      (new-game {:corp {:hand ["Sisyphus Protocol" "Whitespace"]}})
+      (play-and-score state "Sisyphus Protocol")
+      (play-from-hand state :corp "Whitespace" "HQ")
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (run-continue state)
+      (let [k1 (ai-core/encounter-key (runner-wire state))]
+        (run-continue state)
+        (click-prompt state :corp "Pay 1 [Credit]")
+        (let [k2 (ai-core/encounter-key (runner-wire state))]
+          (is (some? k1))
+          (is (some? k2))
+          (is (not= k1 k2)))))))
+
+(defn- break-tithe!
+  "Break both Tithe subs with Mimic's own ability. Not auto-pump-and-break: that
+   dynamic ability also records the Runner's pass on the encounter, so the pass
+   latch would never be consulted."
+  [state]
+  (doseq [sub ["Do 1 net damage" "Gain 1 [Credits]"]]
+    (card-ability state :runner (get-program state 0) 0)
+    (click-prompt state :runner sub)))
+
+(defn- runner-pass-broken-ice!
+  "Run the Runner's pass handler against the real wire; return what it sent."
+  [state]
+  (let [wire (runner-wire state)
+        sent (atom [])]
+    (reset! ai-state/client-state wire)
+    (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+      (with-out-str
+        (runner-handlers/handle-runner-pass-broken-ice
+          {:side "runner"
+           :run-phase (get-in wire [:game-state :run :phase])
+           :state wire
+           :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000163")
+           :my-prompt (get-in wire [:game-state :runner :prompt-state])})))
+    (filterv #(= "continue" (:command %)) @sent)))
+
+(deftest runner-passes-a-re-encounter-it-has-fully-broken
+  (testing "#163: the pass latch from the FIRST Tithe encounter must not swallow the second's pass"
+    (let [prev @ai-state/client-state]
+      (try
+        (runner-handlers/reset-state!)
+        (do-game
+          (new-game {:corp {:hand ["Sisyphus Protocol" "Tithe"]}
+                     :runner {:hand ["Mimic"] :credits 20}})
+          (play-and-score state "Sisyphus Protocol")
+          (play-from-hand state :corp "Tithe" "HQ")
+          (take-credits state :corp)
+          (play-from-hand state :runner "Mimic")
+          (run-on state "HQ")
+          (rez state :corp (get-ice state :hq 0))
+          (run-continue state)
+          (break-tithe! state)
+          (is (= 1 (count (runner-pass-broken-ice! state)))
+              "premise: first encounter, all broken — the handler passes")
+          ;; deliver that pass for real, then the Corp's: the encounter ends
+          (core/process-action "continue" state :runner nil)
+          (core/process-action "continue" state :corp nil)
+          (click-prompt state :corp "Pay 1 [Credit]")
+          (is (= "Tithe" (get-in (wire-encounter state :runner) [:ice :title]))
+              "premise: Sisyphus has the Runner encountering Tithe again")
+          (break-tithe! state)
+          (is (= 1 (count (runner-pass-broken-ice! state)))
+              "second encounter, all broken again: the Runner owes a pass and must send it"))
+        (finally
+          (runner-handlers/reset-state!)
+          (reset! ai-state/client-state prev))))))

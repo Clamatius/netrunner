@@ -157,6 +157,24 @@
           (is (false? (core/unnameable-encounter? st)))
           (is (= "archangel-9" (core/encounter-key st))))))))
 
+(deftest encounter-key-prefers-the-wire-encounter-id
+  ;; #197/#163. The real-engine half (Sisyphus, nesting) is in
+  ;; game.ai-encounter-id-wire-test; this pins the branch order.
+  (let [forced {:cid "archangel-9" :title "Archangel" :zone ["hand"] :subroutines []}]
+    (testing "id present → the id, not the card"
+      (with-mock-state (encounter-state (karuna two-broken) {:ice forced :encounter-count 1 :encounter-id 7})
+        (is (= [:encounter 7] (core/encounter-key @ai-state/client-state)))))
+    (testing "same card, different id → different key (the Sisyphus shape)"
+      (let [k (fn [id] (with-mock-state (encounter-state (karuna two-broken) {:ice forced :encounter-count 1 :encounter-id id})
+                         (core/encounter-key @ai-state/client-state)))]
+        (is (not= (k 7) (k 8)))))
+    (testing "an unnameable encounter still has an identity when the wire gives one"
+      (with-mock-state (encounter-state (karuna two-broken) (assoc unnameable :encounter-id 7))
+        (is (= [:encounter 7] (core/encounter-key @ai-state/client-state)))))
+    (testing "the id cannot collide with a cid or position of the same number"
+      (with-mock-state (encounter-state (karuna two-broken) {:ice (assoc forced :cid 7) :encounter-count 1 :encounter-id 7})
+        (is (not= 7 (core/encounter-key @ai-state/client-state)))))))
+
 (deftest manual-fire-subs-refuses-at-an-unnameable-encounter
   ;; ai-card-actions/fire-unbroken-subs! kept its own copy of the fallback, so
   ;; the cid gate compared the named card against the POSITIONAL card and let a
