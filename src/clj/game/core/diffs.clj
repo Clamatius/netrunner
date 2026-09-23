@@ -453,6 +453,7 @@
 
 (def encounter-keys
   [:encounter-count
+   :encounter-id
    :ice
    :no-action])
 
@@ -465,6 +466,9 @@
       (-> current-encounter
           (update :ice encounter-ice-summary state)
           (assoc :encounter-count encounter-count)
+          ;; ai-player fork: the encounter's own eid number, so a client can tell
+          ;; two encounters of the same card apart (#197)
+          (assoc :encounter-id (get-in current-encounter [:eid :eid]))
           (select-non-nil-keys encounter-keys)))))
 
 (def state-keys
