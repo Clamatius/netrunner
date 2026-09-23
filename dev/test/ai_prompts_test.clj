@@ -267,17 +267,23 @@
   ;; shape. So the resolution stands and the INEXACTNESS is stated -- which is
   ;; #204's other ask ("echo the resolved choice ... so a mis-indexed pick is
   ;; visible immediately rather than three commands later").
+  ;; SUPERSEDED FIXTURE, round 3: this block used "Server 1" -> "Server 10",
+  ;; which round 3 turned into an outright REFUSAL (a named number that is not
+  ;; the label's number names something not on offer). Warning about it was the
+  ;; weaker behaviour and the test would now be asserting it. Changed to a WORD
+  ;; near-miss, which is still the warn-and-resolve path -- the block keeps
+  ;; testing what it was written to test.
   (testing "a near-miss names what was asked and what was pressed"
-    (let [prompt {:prompt-type "other" :eid "ix-1" :msg "Choose a server"
-                  :choices [{:uuid "u1" :value "Server 10"}]}
-          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+    (let [prompt {:prompt-type "other" :eid "ix-1" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Trash the top card"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Trash the top")]
       (is (= {:uuid "u1"} (:choice (:args sent)))
           "the paraphrase path still resolves — it is not a refusal")
       (is (str/includes? out "not an exact")
           (str "must say the label did not match exactly:\n" out))
-      (is (str/includes? out "Server 1\"")
+      (is (str/includes? out "Trash the top\"")
           (str "must quote what the seat actually asked for:\n" out))
-      (is (str/includes? out "Server 10")
+      (is (str/includes? out "Trash the top card")
           (str "must name what it pressed instead:\n" out))))
   (testing "an EXACT label passes silently — no warning noise on the common path"
     (let [prompt {:prompt-type "other" :eid "ix-2" :msg "Choose a server"
@@ -300,6 +306,64 @@
       (is (= {:uuid "u1"} (:choice (:args sent))))
       (is (not (str/includes? out "not an exact"))
           (str "a card matched by its exact title is not a near-miss:\n" out)))))
+
+(deftest choose-by-value-refuses-a-name-whose-NUMBER-is-not-the-labels-number
+  ;; Round 3 (Fable 5.1, executed): round 2's comment claimed the near-miss
+  ;; "Server 1" -> "Server 10" is structurally indistinguishable from #101's
+  ;; paraphrase "draw" -> "Draw 2 cards". That claim is false, and the seat
+  ;; proved it rather than argued it: the Server match ends MID-TOKEN (the next
+  ;; character is a digit) while the paraphrase ends at a token boundary.
+  ;;
+  ;; Their rule -- refuse whenever the next character is alphanumeric -- is too
+  ;; broad to adopt: it would refuse "Gain 3 credit" against "Gain 3 [Credits]",
+  ;; a paraphrase a seat would plausibly type, on the letter 's'. Narrowed to
+  ;; the shape #204 is actually about: the seat named a NUMBER and the label's
+  ;; number is a different one. "Server 1" is not a sloppy spelling of
+  ;; "Server 10"; it names a server that is not on offer, which is precisely
+  ;; the ask ("erroring if that server isn't offered").
+  (testing "a numbered name that is not the label's number is refused, not resolved"
+    (let [prompt {:prompt-type "other" :eid "nb-1" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+      (is (nil? sent)
+          (str "must press NOTHING — Server 1 is not on offer:\n" out))
+      (is (str/includes? out "Server 10")
+          (str "names what IS on offer:\n" out))))
+  (testing "the same server named exactly still resolves"
+    (let [prompt {:prompt-type "other" :eid "nb-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "Server 10")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))))
+  (testing "a WORD paraphrase ending mid-token is still resolved (#101)"
+    ;; The case Fable's broader rule would have broken. "credit" -> "credits".
+    (let [prompt {:prompt-type "other" :eid "nb-3" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Gain 3 credit")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          (str "a letter-boundary paraphrase must still resolve:\n" out))
+      (is (str/includes? out "not an exact")
+          (str "...but it is still flagged as inexact:\n" out))))
+  (testing "a boundary paraphrase resolves and is flagged inexact"
+    (let [prompt {:prompt-type "other" :eid "nb-4" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Draw 2 cards"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "draw")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (str/includes? out "not an exact") out)))
+  (testing "the seat must have named a NUMBER — a word followed by a digit resolves"
+    ;; This pins the half of number-mismatch? that asks whether the NEEDLE ends
+    ;; in a digit. Without it, a needle ending in a letter that the label
+    ;; continues with a digit ("Sandbox" -> "Sandbox2") would be refused as a
+    ;; wrong number, though the seat named no number at all -- that is an
+    ;; ordinary word near-miss and belongs on the warn-and-resolve path.
+    ;; Added because mutating that check away left the whole suite green: the
+    ;; restriction was unproven, which is not the same as unnecessary.
+    (let [prompt {:prompt-type "other" :eid "nb-5" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Sandbox2"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Sandbox")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          (str "the seat named no number; this is a word near-miss:\n" out))
+      (is (str/includes? out "not an exact")
+          (str "...still flagged inexact:\n" out)))))
 
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"

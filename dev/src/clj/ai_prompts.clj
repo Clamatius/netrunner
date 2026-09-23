@@ -366,6 +366,29 @@
                (> (count (distinct hits)) 1))
       (vec (distinct hits)))))
 
+(defn number-mismatch?
+  "Pure: true when `needle` matches inside `label` but the seat named a NUMBER
+   that is not the label's number -- the needle ends in a digit and the label
+   continues with one. \"Server 1\" against \"Server 10\" is true;
+   \"Server 10\" against \"Server 10\" is false.
+
+   Round 3 (Fable 5.1) disproved by execution the claim that this shape cannot
+   be told apart from #101's paraphrase path: the number match ends MID-TOKEN,
+   the paraphrase ends at a token boundary. Their rule -- refuse on any
+   alphanumeric successor -- is not adopted, because it also refuses
+   \"Gain 3 credit\" against \"Gain 3 [Credits]\" on the letter 's', which a
+   seat would plausibly type and mean. Restricted to digits, a false refusal
+   would need the seat to name a number it did not mean."
+  [label needle]
+  (let [l (normalize-choice-text label)
+        n (normalize-choice-text needle)]
+    (when-let [i (clojure.string/index-of l n)]
+      (boolean
+       (and (seq n)
+            (Character/isDigit ^char (last n))
+            (when-let [after (get l (+ i (count n)))]
+              (Character/isDigit ^char after)))))))
+
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring
    match, tolerant of [icon] brackets — see choice-match-index).
@@ -382,8 +405,24 @@
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         choices (:choices prompt)
         ambiguous (choice-match-ambiguity choices value-text)
-        matching-idx (when-not ambiguous (choice-match-index choices value-text))]
+        candidate-idx (when-not ambiguous (choice-match-index choices value-text))
+        ;; A named number that is not the label's number is a server that is
+        ;; not on offer, not a misspelling of one. Refuse it. (Round 3.)
+        wrong-number (when candidate-idx
+                       (let [c (nth choices candidate-idx)]
+                         (when (number-mismatch? (choice-match-text c) value-text)
+                           c)))
+        matching-idx (when-not wrong-number candidate-idx)]
     (cond
+      wrong-number
+      (do
+        (println (format "\u274c \"%s\" is not on offer here \u2014 nothing pressed."
+                         value-text))
+        (println "   The closest label names a different number:")
+        (println (str "      " (core/format-choice wrong-number)))
+        (println "   \u2192 Give the full label, or press by index with: choose <N>")
+        (core/with-cursor {:status :error :reason "Named number is not on offer"}))
+
       ;; #204: press nothing rather than guess. Guessing here is how the
       ;; marquee turn was lost -- the wrong server was run and the echo
       ;; faithfully reported the wrong server.
@@ -405,11 +444,18 @@
         ;; #204, fresh delta seat: the ambiguity refusal above needs TWO or more
         ;; candidates. With exactly one, `choose "Server 1"` against
         ;; ["Server 10"] pressed Server 10 and reported it as a plain success.
-        ;; It cannot simply refuse -- a needle that is a proper substring of one
-        ;; label is structurally identical to #101's paraphrase path, where
-        ;; "draw" SHOULD reach "Draw 2 cards" -- so the resolution stands and
-        ;; the inexactness is SAID. That is #204's other ask: make a mis-pick
-        ;; visible immediately rather than three commands later.
+        ;; It cannot simply refuse ACROSS THE BOARD: for a word near-miss
+        ;; ("trash the top" -> "Trash the top card") this is #101's paraphrase
+        ;; path and refusing would break it, so the resolution stands and the
+        ;; inexactness is SAID -- #204's other ask, make a mis-pick visible
+        ;; immediately rather than three commands later.
+        ;;
+        ;; Round 2 of this review claimed here that the "Server 1" -> "Server
+        ;; 10" case was INDISTINGUISHABLE from that paraphrase. It is not, and
+        ;; a seat disproved it by execution rather than argument: the number
+        ;; match ends mid-token. That case is refused above by
+        ;; number-mismatch?, and only the genuinely ambiguous-by-shape
+        ;; near-miss reaches this warning.
         (when-not exact?
           (println (format "⚠️  \"%s\" is not an exact label here — resolving to \"%s\"."
                            value-text (core/format-choice chosen)))
