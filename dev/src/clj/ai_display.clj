@@ -2697,7 +2697,22 @@
           (when has-choices
             (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
             (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-              (println (str "    " idx ". " (core/format-choice choice))))))
+              (println (str "    " idx ". " (core/format-choice choice))))
+            ;; #204: the numbered list was the ONLY thing on offer, so seats
+            ;; addressed prompts by position. An index is a position in THIS
+            ;; render, and the engine refilters some choice lists between calls
+            ;; -- Red Team drops servers already run this turn, so index 1 meant
+            ;; R&D and then HQ, and a marquee seat spent a turn on the wrong
+            ;; server. `choose "<label>"` has resolved against the live prompt
+            ;; since #101; nothing said so. Not on a select prompt, where
+            ;; `choose <N>` is refused outright and the steer above already
+            ;; names choose-value.
+            (when-not (state/select-prompt-type? (:prompt-type prompt))
+              (println (str "    ↳ Answer by NAME — `choose \""
+                            (core/format-choice (first (:choices prompt)))
+                            "\"` — not by index where you can."))
+              (println (str "      An index is a position in THIS render; some lists renumber "
+                            "between calls (#204).")))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")

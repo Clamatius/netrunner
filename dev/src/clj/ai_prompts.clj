@@ -292,21 +292,34 @@
       (clojure.string/replace #"[\[\]]" "")))
 
 (defn choice-match-index
-  "Pure: index of the first choice whose :value/:label contains `value-text`,
-   comparing bracket-stripped lowercase text. nil when nothing matches."
+  "Pure: index of the choice whose :value/:label matches `value-text`,
+   comparing bracket-stripped lowercase text. An EXACT match wins outright,
+   wherever it sits in the list; only if none is exact does the first
+   SUBSTRING match answer. nil when nothing matches.
+
+   Exact-first is #204. Naming a choice is the cure for a list that renumbers
+   between calls, but first-substring-wins made naming unsafe on exactly that
+   prompt: a server list carrying both \"Server 10\" and \"Server 1\" resolved
+   `choose \"Server 1\"` to whichever the engine happened to list first. An
+   exact label is never the wrong answer, so it cannot be stolen by a longer
+   one above it. Substring stays as the fallback — it is what lets the
+   paraphrase \"draw\" reach \"Draw 2 cards\" (#101)."
   [choices value-text]
-  (let [needle (normalize-choice-text value-text)]
-    ;; A needle that normalizes to blank (e.g. "[]") would substring-match
-    ;; EVERY label and silently press option 0 — no match is the honest answer
-    ;; (guest review).
-    (when-not (clojure.string/blank? needle)
-      (first
-       (keep-indexed
-        (fn [idx choice]
-          (let [choice-val (or (:value choice) (:label choice) "")]
-            (when (clojure.string/includes? (normalize-choice-text choice-val) needle)
-              idx)))
-        choices)))))
+  (let [needle (normalize-choice-text value-text)
+        ;; A needle that normalizes to blank (e.g. "[]") would substring-match
+        ;; EVERY label and silently press option 0 — no match is the honest
+        ;; answer (guest review).
+        candidates (when-not (clojure.string/blank? needle)
+                     (map-indexed
+                      (fn [idx choice]
+                        [idx (normalize-choice-text
+                              (or (:value choice) (:label choice) ""))])
+                      choices))]
+    (when (seq candidates)
+      (or (first (for [[idx text] candidates :when (= text needle)] idx))
+          (first (for [[idx text] candidates
+                       :when (clojure.string/includes? text needle)]
+                   idx))))))
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring

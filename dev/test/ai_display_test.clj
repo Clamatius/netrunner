@@ -1397,6 +1397,61 @@
         (is (str/includes? out "choose-card")
             (str "Selectable block keeps its choose-card verb:\n" out))))))
 
+;; ============================================================================
+;; #204: a numbered list does not tell the seat that naming is allowed
+;;
+;; Red Team's server prompt drops servers already run this turn, so the list
+;; renumbers between calls: index 1 meant R&D, then HQ. The Fable 5.1 Runner
+;; seat ran the wrong server, lost Jailbreak to a facechecked Diviner, and
+;; wrote up "naming the server would be safer than an index" as a REQUEST —
+;; `choose "R&D"` had already routed to the label matcher since #101, and
+;; press-choice! had echoed the resolved label since 2025-11. Both remedies
+;; the issue asks for were already shipped; what was missing was any way for
+;; the seat to find out. The Choices block advertised indices and nothing else.
+;; ============================================================================
+
+(deftest show-prompt-detailed-advertises-naming-for-a-numbered-choice-prompt
+  (testing "a non-select Choices block offers the label form, not indices alone"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 2
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "rt-1"
+                                            :msg "Choose a server to run"
+                                            :choices [{:value "HQ"} {:value "R&D"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "choose \"")
+            (str "must show the label form `choose \"<label>\"`, not indices alone:\n" out))
+        (is (str/includes? out "#204")
+            (str "cites the issue so the hazard is traceable:\n" out))
+        (is (str/includes? out "renumber")
+            (str "must say WHY a label is safer — the list can renumber between calls:\n" out))))))
+
+(deftest show-prompt-detailed-does-not-advertise-naming-on-a-select-prompt
+  ;; On a select prompt `choose <N>` is refused outright and the :choices are
+  ;; meta-buttons. Adding a `choose "<label>"` line there would contradict the
+  ;; both-blocks steer immediately above it — the #38/#41 failure again.
+  (testing "a select prompt keeps its choose-value steer and gains no choose hint"
+    (with-mock-state
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 5
+                    :corp {:hand []
+                           :prompt-state {:prompt-type "select"
+                                          :eid "sel-204"
+                                          :msg "Select cards to trash"
+                                          :choices [{:value "Done"}]
+                                          :selectable [{:cid "c1" :title "Hedge Fund"}]}}
+                    :runner {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "#204"))
+            (str "the naming hint must not fire on a select prompt:\n" out))
+        (is (str/includes? out "choose-value")
+            (str "the existing choose-value steer survives:\n" out))))))
+
 (deftest show-prompt-detailed-select-both-blocks-uses-choose-value
   ;; Codex review of PR #41: on a "select"-typed prompt the :choices are
   ;; meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>` there,

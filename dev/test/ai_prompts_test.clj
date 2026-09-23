@@ -126,6 +126,41 @@
       (is (nil? (prompts/choice-match-index choices "")))
       (is (nil? (prompts/choice-match-index choices "[ ]"))))))
 
+;; ============================================================================
+;; choice-match-index — an EXACT label beats a substring (#204)
+;;
+;; #204's seat lost a turn to a positional index into a list that renumbers
+;; between calls, and asked for naming instead. Naming already existed (#101)
+;; -- but first-substring-wins makes it unsafe on exactly the prompt #204 is
+;; about: a server list carrying both "Server 1" and "Server 10" resolves
+;; `choose "Server 1"` to whichever appears FIRST. Same family as #212.
+;; An exact normalized match is never the wrong answer, so it wins outright.
+;; ============================================================================
+
+(deftest choice-match-index-prefers-an-exact-label-over-a-substring
+  (testing "a shorter name is not stolen by a longer one listed first"
+    (let [choices [{:uuid "a" :value "Server 10"}
+                   {:uuid "b" :value "Server 1"}]]
+      (is (= 1 (prompts/choice-match-index choices "Server 1"))
+          "exact 'Server 1' resolves to Server 1, not to the Server 10 above it")
+      (is (= 0 (prompts/choice-match-index choices "Server 10"))
+          "exact 'Server 10' still resolves to Server 10")))
+  (testing "the same hazard on the central servers #204 was actually run on"
+    (let [choices [{:uuid "a" :value "Archives"}
+                   {:uuid "b" :value "HQ"}
+                   {:uuid "c" :value "R&D"}]]
+      (is (= 2 (prompts/choice-match-index choices "R&D")))
+      (is (= 1 (prompts/choice-match-index choices "hq")))))
+  (testing "exact match wins regardless of position, and bracket-stripping still applies"
+    (let [choices [{:uuid "a" :value "Gain 3 [Credits] and draw"}
+                   {:uuid "b" :value "Gain 3 [Credits]"}]]
+      (is (= 1 (prompts/choice-match-index choices "Gain 3 credits"))
+          "the exact (bracket-stripped) label beats the longer one listed first")))
+  (testing "substring matching still works when nothing matches exactly"
+    (let [choices [{:uuid "a" :value "Gain 3 [Credits]"}
+                   {:uuid "b" :value "Draw 2 cards"}]]
+      (is (= 1 (prompts/choice-match-index choices "draw"))))))
+
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"
     (with-mock-state (mock-client-state :side "corp" :prompt select-prompt-with-done)
