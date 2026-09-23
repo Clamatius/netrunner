@@ -488,6 +488,37 @@
             (click-credit state :corp))
           "A click action still works after the toggle")))
 
+(deftest auto-no-action-toggle-is-corp-only
+    ;; #224: the button lives only in corp-run-div, but the engine command bound
+    ;; its side as `_`. A Runner-authenticated action therefore flipped the
+    ;; CORP's setting and -- on a rezzed ice in an approach/encounter phase --
+    ;; pressed continue FOR the Corp, from inside the Runner's own run.
+    ;; Driven through process-action, not the fn: a test that called the fn
+    ;; directly would not notice if the dispatch table stopped passing side.
+    (do-game
+      (new-game {:corp {:deck [(qty "Hedge Fund" 5)]
+                        :hand ["Vanilla"]}
+                 :runner {:deck [(qty "Sure Gamble" 5)]
+                          :hand ["Corroder"]}})
+      (play-from-hand state :corp "Vanilla" "HQ")
+      (take-credits state :corp)
+      (play-from-hand state :runner "Corroder")
+      (let [v0 (get-ice state :hq 0)]
+        (rez state :corp v0)
+        (run-on state :hq)
+        (core/continue state :runner nil)
+        (is (= :approach-ice (:phase (:run @state))) "Still approaching ice, waiting on Corp")
+        (core/process-action "toggle-auto-no-action" state :runner nil)
+        (is (not (get-in @state [:run :corp-auto-no-action]))
+            "A Runner action does not flip the Corp's auto-pass setting")
+        (is (= :approach-ice (:phase (:run @state)))
+            "A Runner action does not press continue for the Corp")
+        (core/process-action "toggle-auto-no-action" state :corp nil)
+        (is (get-in @state [:run :corp-auto-no-action])
+            "The Corp's own action still flips the setting")
+        (is (= :encounter-ice (:phase (:run @state)))
+            "The Corp's own action still presses continue"))))
+
 (deftest hide-continue-msg-no-message-for-runner-on-approach
     ;; No message for Runner on approach
     (do-game

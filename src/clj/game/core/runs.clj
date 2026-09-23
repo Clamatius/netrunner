@@ -184,10 +184,13 @@
           (start-next-phase state side nil)))))
 
 (defn toggle-auto-no-action
-  [state _ _]
+  [state side _]
   ;; update-in would CREATE :run when none is live, and a truthy :run refuses
-  ;; every click action (actions.clj) for the rest of the game
-  (when (:run @state)
+  ;; every click action (actions.clj) for the rest of the game.
+  ;; The side check is the engine half of what board.cljs already asserts: the
+  ;; button renders in corp-run-div only. Without it a Runner-authenticated
+  ;; :game/action flipped the CORP's setting and pressed continue for the Corp.
+  (when (and (:run @state) (= side :corp))
     (swap! state update-in [:run :corp-auto-no-action] not)
     (when (and (rezzed? (get-current-ice state))
                (#{:approach-ice :encounter-ice} (:phase (:run @state))))
