@@ -253,6 +253,54 @@
       (is (= {:uuid "u2"} (:choice (:args sent)))
           "one substring match is still a decision"))))
 
+(deftest choose-by-value-says-so-when-the-label-resolved-INEXACTLY
+  ;; Fresh delta seat (Astra), MAJOR: the ambiguity refusal only fires on TWO
+  ;; or more distinct substring matches. With exactly one, `choose "Server 1"`
+  ;; against ["Server 10"] still presses Server 10 and reports
+  ;; "✅ Chose: Server 10" as though that were what was asked for. #204's ask
+  ;; is that the client error "if that server isn't offered", and Server 1 is
+  ;; not offered.
+  ;;
+  ;; It cannot simply refuse: a needle that is a proper substring of exactly
+  ;; one label is structurally identical to #101's paraphrase path, where
+  ;; "draw" SHOULD reach "Draw 2 cards". The two are indistinguishable by
+  ;; shape. So the resolution stands and the INEXACTNESS is stated -- which is
+  ;; #204's other ask ("echo the resolved choice ... so a mis-indexed pick is
+  ;; visible immediately rather than three commands later").
+  (testing "a near-miss names what was asked and what was pressed"
+    (let [prompt {:prompt-type "other" :eid "ix-1" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          "the paraphrase path still resolves — it is not a refusal")
+      (is (str/includes? out "not an exact")
+          (str "must say the label did not match exactly:\n" out))
+      (is (str/includes? out "Server 1\"")
+          (str "must quote what the seat actually asked for:\n" out))
+      (is (str/includes? out "Server 10")
+          (str "must name what it pressed instead:\n" out))))
+  (testing "an EXACT label passes silently — no warning noise on the common path"
+    (let [prompt {:prompt-type "other" :eid "ix-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "HQ"} {:uuid "u2" :value "R&D"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "R&D")]
+      (is (= {:uuid "u2"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "an exact match must not be warned about:\n" out))))
+  (testing "bracket-stripping still counts as exact (#101)"
+    (let [prompt {:prompt-type "other" :eid "ix-3" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Gain 3 credits")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "the icon-token paraphrase is an exact label, not a near-miss:\n" out))))
+  (testing "a wire-shaped card resolves on its title and counts as exact"
+    (let [prompt {:prompt-type "other" :eid "ix-4" :msg "Choose a card"
+                  :choices [{:uuid "u1" :value {:cid "c1" :title "Hedge Fund"}}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Hedge Fund")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "a card matched by its exact title is not a near-miss:\n" out)))))
+
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"
     (with-mock-state (mock-client-state :side "corp" :prompt select-prompt-with-done)

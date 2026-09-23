@@ -88,7 +88,13 @@ fi
 echo "--- no execute site interpolates a bare variable into a Clojure string ---"
 # The structural half. A helper nothing is obliged to call decays: this fails on
 # a NEW raw site rather than waiting for someone to play a Cerberus.
-RAW=$(grep -nE 'execute .*\\"\$[A-Za-z_]+\\"' "$SEND_CMD" | grep -v 'clj_str' || true)
+# Per-INTERPOLATION, not per-line. `grep -v clj_str` discarded the whole line,
+# so a site with two arguments stayed green when only ONE lost its escaping --
+# install-card! takes both a card name and a server. (Fresh delta seat, Astra,
+# who executed the partial revert rather than reasoning about it.) Strip every
+# wrapped interpolation first, then look at what is left.
+RAW=$(sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' "$SEND_CMD" \
+      | grep -nE 'execute .*\\"\$[A-Za-z_]+\\"' || true)
 if [[ -z "$RAW" ]]; then
     echo "ok   [no-raw-interpolation-sites]"
     PASS=$((PASS + 1))
@@ -112,12 +118,25 @@ fi
 
 # ...and that a WRAPPED site is not falsely flagged.
 SAFE='execute "(ai-actions/play-card! \"$(clj_str "$CARD_NAME")\")"'
-if echo "$SAFE" | grep -E 'execute .*\\"\$[A-Za-z_]+\\"' | grep -qv 'clj_str'; then
+if echo "$SAFE" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
+   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
     echo "FAIL [mutation-wrapped-site-is-clean] — a wrapped site is flagged"
     FAIL=$((FAIL + 1))
 else
     echo "ok   [mutation-wrapped-site-is-clean]"
     PASS=$((PASS + 1))
+fi
+
+# The case that made the old per-line form useless: TWO interpolations on one
+# line, only one of them escaped. install-card! is exactly this shape.
+PARTIAL='execute "(ai-actions/install-card! \"$CARD_NAME\" \"$(clj_str "$SERVER")\")"'
+if echo "$PARTIAL" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
+   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
+    echo "ok   [mutation-partial-escaping-is-detected]"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL [mutation-partial-escaping-is-detected] — one unescaped arg hides behind another's clj_str"
+    FAIL=$((FAIL + 1))
 fi
 
 echo

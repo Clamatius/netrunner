@@ -399,7 +399,22 @@
         (core/with-cursor {:status :error :reason "Ambiguous choice label"}))
 
       matching-idx
-      (press-choice! (nth choices matching-idx))
+      (let [chosen (nth choices matching-idx)
+            exact? (= (normalize-choice-text (choice-match-text chosen))
+                      (normalize-choice-text value-text))]
+        ;; #204, fresh delta seat: the ambiguity refusal above needs TWO or more
+        ;; candidates. With exactly one, `choose "Server 1"` against
+        ;; ["Server 10"] pressed Server 10 and reported it as a plain success.
+        ;; It cannot simply refuse -- a needle that is a proper substring of one
+        ;; label is structurally identical to #101's paraphrase path, where
+        ;; "draw" SHOULD reach "Draw 2 cards" -- so the resolution stands and
+        ;; the inexactness is SAID. That is #204's other ask: make a mis-pick
+        ;; visible immediately rather than three commands later.
+        (when-not exact?
+          (println (format "⚠️  \"%s\" is not an exact label here — resolving to \"%s\"."
+                           value-text (core/format-choice chosen)))
+          (println "   If that is not what you meant, the full labels are in `prompt`."))
+        (press-choice! chosen))
 
       :else
       (do
