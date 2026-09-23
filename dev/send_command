@@ -1775,9 +1775,8 @@ case "$COMMAND" in
             info "Choosing option $CHOICE..."
             execute "(ai-actions/choose-option! $CHOICE)"
         else
-            # Labels are unambiguous within one prompt (#101): a non-numeric
-            # arg routes to the same matcher as choose-value instead of the
-            # old 'Choice must be a number' refusal.
+            # A non-numeric arg routes to choose-value's matcher, which handles
+            # exact labels, ambiguity, and unsafe number-prefix near misses.
             info "Choosing option matching: $CHOICE..."
             execute "(ai-actions/choose-by-value! \"$(clj_str "$CHOICE")\")"
         fi
