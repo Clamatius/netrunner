@@ -291,6 +291,35 @@
       (clojure.string/lower-case)
       (clojure.string/replace #"[\[\]]" "")))
 
+(defn choice-match-text
+  "Pure: the text a seat may address this choice by.
+
+   A card-valued choice arrives from the wire as
+   {:value {:cid .. :title .. :printed-title ..}} (diffs.clj/prompt-summary),
+   and the title is the only part of that a seat can see or say. Stringifying
+   the whole map instead -- which is what happened before -- had two costs:
+   the exact-match pass could never fire on a card, leaving the collision it
+   exists to prevent unguarded on the choices most likely to collide; and the
+   :cid and the map's own key names became matchable text, so `choose \"c1\"`
+   or `choose \"printed-title\"` pressed a card. (Panel, Fable 5.1.)"
+  [choice]
+  (let [v (:value choice)]
+    (cond
+      (and (map? v) (:title v)) (:title v)
+      (some? v) v
+      :else (or (:label choice) ""))))
+
+(defn- match-candidates
+  "Pure: [index normalized-text] for every choice, or nil for a needle that
+   normalizes to blank. A blank needle would substring-match EVERY label and
+   silently press option 0 — no match is the honest answer (guest review)."
+  [choices needle]
+  (when-not (clojure.string/blank? needle)
+    (map-indexed
+     (fn [idx choice]
+       [idx (normalize-choice-text (choice-match-text choice))])
+     choices)))
+
 (defn choice-match-index
   "Pure: index of the choice whose :value/:label matches `value-text`,
    comparing bracket-stripped lowercase text. An EXACT match wins outright,
@@ -306,20 +335,36 @@
    paraphrase \"draw\" reach \"Draw 2 cards\" (#101)."
   [choices value-text]
   (let [needle (normalize-choice-text value-text)
-        ;; A needle that normalizes to blank (e.g. "[]") would substring-match
-        ;; EVERY label and silently press option 0 — no match is the honest
-        ;; answer (guest review).
-        candidates (when-not (clojure.string/blank? needle)
-                     (map-indexed
-                      (fn [idx choice]
-                        [idx (normalize-choice-text
-                              (or (:value choice) (:label choice) ""))])
-                      choices))]
+        candidates (match-candidates choices needle)]
     (when (seq candidates)
       (or (first (for [[idx text] candidates :when (= text needle)] idx))
           (first (for [[idx text] candidates
                        :when (clojure.string/includes? text needle)]
                    idx))))))
+
+(defn choice-match-ambiguity
+  "Pure: the DISTINCT labels `value-text` substring-matches when none matches
+   exactly, or nil when it resolves unambiguously (or not at all).
+
+   #204 asks the client to error when the named thing is not on offer.
+   Exact-first stops a longer label stealing a shorter one, but it is silent
+   when nothing matches exactly: `choose \"Server 1\"` against
+   [\"Server 10\" \"Server 12\"] pressed Server 10 and reported
+   `✅ Chose: Server 10` -- an honest echo of an act the seat did not ask
+   for, which is how #204's marquee turn was actually lost. A needle matching
+   several distinct labels and none of them exactly has named nothing.
+
+   Identical labels are excluded deliberately: two choices reading
+   \"Ghost Runner\" are the same act, so pressing either is not a guess."
+  [choices value-text]
+  (let [needle (normalize-choice-text value-text)
+        hits (->> (match-candidates choices needle)
+                  (filter (fn [[_ text]] (clojure.string/includes? text needle)))
+                  (map second))]
+    (when (and (seq hits)
+               (not-any? #(= % needle) hits)
+               (> (count (distinct hits)) 1))
+      (vec (distinct hits)))))
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring
@@ -336,9 +381,27 @@
         side-kw (when side (keyword (clojure.string/lower-case side)))
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         choices (:choices prompt)
-        matching-idx (choice-match-index choices value-text)]
-    (if matching-idx
+        ambiguous (choice-match-ambiguity choices value-text)
+        matching-idx (when-not ambiguous (choice-match-index choices value-text))]
+    (cond
+      ;; #204: press nothing rather than guess. Guessing here is how the
+      ;; marquee turn was lost -- the wrong server was run and the echo
+      ;; faithfully reported the wrong server.
+      ambiguous
+      (do
+        (println (str "❌ \"" value-text "\" matches " (count ambiguous)
+                      " different choices — nothing pressed."))
+        (println "   It could have meant:")
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (when (some #(= % (normalize-choice-text (choice-match-text choice))) ambiguous)
+            (println (str "      " idx ". " (core/format-choice choice)))))
+        (println "   → Give the full label, or press by index with: choose <N>")
+        (core/with-cursor {:status :error :reason "Ambiguous choice label"}))
+
+      matching-idx
       (press-choice! (nth choices matching-idx))
+
+      :else
       (do
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")

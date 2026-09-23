@@ -2707,12 +2707,32 @@
             ;; since #101; nothing said so. Not on a select prompt, where
             ;; `choose <N>` is refused outright and the steer above already
             ;; names choose-value.
-            (when-not (state/select-prompt-type? (:prompt-type prompt))
-              (println (str "    ↳ Answer by NAME — `choose \""
-                            (core/format-choice (first (:choices prompt)))
-                            "\"` — not by index where you can."))
-              (println (str "      An index is a position in THIS render; some lists renumber "
-                            "between calls (#204).")))))
+            ;; Only for an ordinary sequential list of labelled choices. A
+            ;; :number prompt (Brain Rewiring) carries :choices as a MAP, and
+            ;; neither verb can resolve a MapEntry. (Panel, Sol 5.6.)
+            (when (and (not (state/select-prompt-type? (:prompt-type prompt)))
+                       (sequential? (:choices prompt)))
+              ;; A PLACEHOLDER, never a real option. These seats are language
+              ;; models and this output is their whole sensory channel, so
+              ;; "`choose \"Take 1 tag\"`" reads as advice to take the tag --
+              ;; and the first option is routinely the one that hurts (K. P.
+              ;; Lynn, Argus, Mr. Hendrik all lead with the damage). The list
+              ;; above already supplies the labels. (Panel, Sol 5.6.)
+              ;;
+              ;; The verb depends on the labels: send_command classifies a
+              ;; `choose` argument by ^[0-9]+$ AFTER the shell has eaten the
+              ;; quotes, so an all-digit label is indistinguishable from an
+              ;; index -- Top Hat labels its choices "1".."5", and `choose "1"`
+              ;; presses index 1 and accesses the SECOND R&D card. Keyed on ANY
+              ;; label, not the first: the seat copies whichever it wants.
+              ;; (Panel, Fable 5.1 and Sol 5.6, found independently.)
+              (let [labels (map #(str (core/format-choice %)) (:choices prompt))
+                    verb (if (some #(re-matches #"\d+" %) labels)
+                           "choose-value" "choose")]
+                (println (str "    ↳ Answer by NAME where you can — `" verb
+                              " \"<label>\"` — copying a label from the list above."))
+                (println (str "      An index is a position in THIS render; some lists renumber "
+                              "between calls (#204)."))))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")

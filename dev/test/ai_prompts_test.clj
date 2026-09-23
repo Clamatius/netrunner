@@ -161,6 +161,98 @@
                    {:uuid "b" :value "Draw 2 cards"}]]
       (is (= 1 (prompts/choice-match-index choices "draw"))))))
 
+(deftest choice-match-index-matches-the-title-of-a-wire-shaped-card-choice
+  ;; Panel (Fable 5.1), MINOR-1: the exact-match pass above was INERT for the
+  ;; choices most likely to collide. diffs.clj/prompt-summary sends a card
+  ;; choice as {:value {:cid .. :title .. :printed-title ..}}, and
+  ;; normalize-choice-text stringified the whole map -- so (= text needle)
+  ;; could never be true and only the substring arm ever fired. Two titles
+  ;; where one prefixes the other (a deck-search prompt like Mutual Favor) is
+  ;; far likelier than the ten-remote "Server 10" case the fix was built
+  ;; around, and it was exactly the unprotected one. The fixtures missed it
+  ;; because every one of them used {:value "string"}, a shape the wire does
+  ;; not send for cards.
+  (testing "the wire's card-choice shape matches on :title, exactly"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Boomerang X"
+                                      :printed-title "Boomerang X"}}
+                   {:uuid "b" :value {:cid "c2" :title "Boomerang"
+                                      :printed-title "Boomerang"}}]]
+      (is (= 1 (prompts/choice-match-index choices "Boomerang"))
+          "exact title wins over the longer title listed first")
+      (is (= 0 (prompts/choice-match-index choices "Boomerang X"))
+          "the longer title is still reachable by its own exact name")))
+  (testing "substring still reaches a wire-shaped card when nothing is exact"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Hedge Fund"}}
+                   {:uuid "b" :value {:cid "c2" :title "Sure Gamble"}}]]
+      (is (= 1 (prompts/choice-match-index choices "gamble")))))
+  (testing "a card choice no longer matches on its :cid or the map's punctuation"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Hedge Fund"}}]]
+      (is (nil? (prompts/choice-match-index choices "c1"))
+          "the :cid is not a name the seat should be able to address")
+      (is (nil? (prompts/choice-match-index choices "printed-title"))
+          "stringified map keys must not be matchable"))))
+
+;; ============================================================================
+;; An AMBIGUOUS label must refuse, not guess (#204's "erroring" ask)
+;;
+;; Panel (Fable 5.1), MINOR-3: exact-first stops a longer label stealing a
+;; shorter one, but it does nothing when NO label matches exactly. `choose
+;; "Server 1"` against ["Server 10" "Server 12"] still pressed Server 10 --
+;; silently, which is the whole complaint of #204 ("no echo of what was
+;; chosen ... the first sign of trouble was an ICE encounter on the wrong
+;; server"). The issue asks for the client to error when the named thing is
+;; not on offer. A needle that substring-matches several DISTINCT labels and
+;; none exactly has not named anything; say so and press nothing.
+;;
+;; Identical labels are not ambiguous in any way that matters -- pressing
+;; either is the same act -- so they still resolve.
+;; ============================================================================
+
+(defn- capture-choose-value-on
+  "choose-by-value! against an arbitrary mocked prompt."
+  [prompt value-text]
+  (let [sent (atom nil)]
+    (with-mock-state (mock-client-state :side "corp" :prompt prompt)
+      (with-redefs [ws/send-message! (fn [_evt data] (reset! sent data) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (let [out (with-out-str (prompts/choose-by-value! value-text))]
+          {:sent @sent :out out})))))
+
+(deftest choose-by-value-refuses-an-ambiguous-substring-and-sends-nothing
+  (testing "a needle matching several distinct labels, none exactly, presses nothing"
+    (let [prompt {:prompt-type "other" :eid "amb-1" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}
+                            {:uuid "u2" :value "Server 12"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+      (is (nil? sent)
+          (str "must not send a wire message for an ambiguous label:\n" out))
+      (is (str/includes? out "Server 10")
+          (str "names the candidates it could not choose between:\n" out))
+      (is (str/includes? out "Server 12")
+          (str "names ALL the candidates, not just the first:\n" out))))
+  (testing "an exact match among the ambiguous ones still resolves"
+    (let [prompt {:prompt-type "other" :eid "amb-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}
+                            {:uuid "u2" :value "Server 1"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "Server 1")]
+      (is (= {:uuid "u2"} (:choice (:args sent)))
+          "the exact label is not ambiguous and still presses")))
+  (testing "identical labels are not ambiguous — pressing either is the same act"
+    (let [prompt {:prompt-type "other" :eid "amb-3" :msg "Pay 1 [Credits]"
+                  :choices [{:uuid "u1" :value "Ghost Runner"}
+                            {:uuid "u2" :value "Ghost Runner"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "ghost")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          "a substring hitting two identical labels still resolves")))
+  (testing "an unambiguous substring is untouched (#101's paraphrase path)"
+    (let [prompt {:prompt-type "other" :eid "amb-4" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}
+                            {:uuid "u2" :value "Draw 2 cards"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "draw")]
+      (is (= {:uuid "u2"} (:choice (:args sent)))
+          "one substring match is still a decision"))))
+
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"
     (with-mock-state (mock-client-state :side "corp" :prompt select-prompt-with-done)
