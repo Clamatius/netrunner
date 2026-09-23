@@ -2929,8 +2929,10 @@
   (boolean (and ice (or (:rezzed ice) (live-encounter? state)))))
 
 (defn encounter-key
-  "Latch key for the current ENCOUNTER. Every \"I already passed / signalled /
-   fired here\" latch keys on this.
+  "Latch key for the current ENCOUNTER. The \"I already passed / fired here\"
+   latches and the failed-ability budget key on this. The Runner's tank-signal
+   latch (runner-handlers/signaled-fire-encounter) does NOT: it keys on
+   {:cid :title :mark} and answers from the log.
 
    `[:encounter n]` when the wire carries the engine's own encounter id
    (game.core.diffs/encounters-summary :encounter-id, #197). That is a real

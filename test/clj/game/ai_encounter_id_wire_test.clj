@@ -23,6 +23,7 @@
             [ai-core]
             [ai-state]
             [ai-run-runner-handlers :as runner-handlers]
+            [ai-run-corp-handlers :as corp-handlers]
             [ai-websocket-client-v2 :as ws]
             [clojure.test :refer :all]))
 
@@ -194,4 +195,57 @@
               "second encounter, all broken again: the Runner owes a pass and must send it"))
         (finally
           (runner-handlers/reset-state!)
+          (reset! ai-state/client-state prev))))))
+
+(defmacro ^:private with-out-str-result
+  "Evaluate body with *out* discarded; return its value."
+  [& body]
+  `(binding [*out* (java.io.StringWriter.)] ~@body))
+
+(defn- corp-fire-unbroken!
+  "Run the Corp's --fire-unbroken handler against the real wire with `strategy`;
+   return [result sent-fire-commands]."
+  [state strategy]
+  (let [gs (:corp-state (diffs/public-states state))
+        wire {:side "corp" :game-state (update-in gs [:run :phase] #(some-> % name))}
+        sent (atom [])]
+    (reset! ai-state/client-state wire)
+    (let [result (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+                   (with-out-str-result
+                     (corp-handlers/handle-corp-fire-unbroken
+                       {:side "corp"
+                        :run-phase (get-in wire [:game-state :run :phase])
+                        :strategy strategy
+                        :state wire
+                        :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000163")})))]
+      [result (filterv #(= "unbroken-subroutines" (:command %)) @sent)])))
+
+(deftest corp-fires-a-re-encounter-of-a-card-it-already-fired
+  (testing "#163, Corp side: :fired-at-encounter from the FIRST Tithe encounter must not suppress the second's fire"
+    (let [prev @ai-state/client-state]
+      (try
+        (do-game
+          (new-game {:corp {:hand ["Sisyphus Protocol" "Tithe"]}})
+          (play-and-score state "Sisyphus Protocol")
+          (play-from-hand state :corp "Tithe" "HQ")
+          (take-credits state :corp)
+          (run-on state "HQ")
+          (rez state :corp (get-ice state :hq 0))
+          (run-continue state)
+          (core/process-action "continue" state :runner nil)
+          (let [[r1 fires1] (corp-fire-unbroken! state {:fire-unbroken true})
+                strategy {:fire-unbroken true :fired-at-encounter (:fired-at-encounter r1)}]
+            (is (= 1 (count fires1)) "premise: the Runner passed with subs unbroken — the Corp fires")
+            (is (some? (:fired-at-encounter strategy)) "premise: the caller has a key to record")
+            ;; the fire was captured, not delivered: close the encounter with the
+            ;; Corp's pass, and Sisyphus sends the Runner back in
+            (core/process-action "continue" state :corp nil)
+            (click-prompt state :corp "Pay 1 [Credit]")
+            (is (= "Tithe" (get-in (wire-encounter state :corp) [:ice :title]))
+                "premise: re-encountering Tithe")
+            (core/process-action "continue" state :runner nil)
+            (let [[_ fires2] (corp-fire-unbroken! state strategy)]
+              (is (= 1 (count fires2))
+                  "a NEW encounter of the same card: the Corp's standing fire order applies again"))))
+        (finally
           (reset! ai-state/client-state prev))))))

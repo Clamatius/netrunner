@@ -192,13 +192,15 @@
    stops.
 
    Getting there took four wrong latches, and the shape of the error was the same
-   every time: the latch was asked WHICH ENCOUNTER we last signalled, and no
-   primitive in this client can answer that (#197). Set BEFORE the send, a refused
+   every time: the latch was asked WHICH ENCOUNTER we last signalled, and at the
+   time no primitive in this client could answer that (#197). Set BEFORE the send, a refused
    send latched as sent. Set on socket ACCEPTANCE and read as delivery, an
    accepted-but-undelivered send latched as sent. A per-encounter re-send BUDGET
    keyed on core/encounter-key starved the second encounter of one physical card,
-   because that key is a card :cid its own docstring says is not an encounter
-   identity. Keyed on ice TITLE instead, it collapsed two DIFFERENT cards of the
+   because that key was then a card :cid, not an encounter identity. (Since
+   #197 the wire carries the engine's encounter id and encounter-key uses it, so
+   a bounded re-send is implementable again; this latch has not been moved onto
+   it and still keys on {:cid :title :mark}.) Keyed on ice TITLE instead, it collapsed two DIFFERENT cards of the
    same name — the second Whitespace was never signalled at all (guest panel
    CRITICAL, round 4).
 
