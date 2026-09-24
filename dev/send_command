@@ -51,7 +51,7 @@ BOT_NS="ai-heuristic-corp"
 
 # Check if first argument looks like a client name (not a command)
 FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|decklist|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
+if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|decklist|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|select-deck|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
     CLIENT_NAME="$1"
     shift
 
@@ -650,6 +650,7 @@ ${GREEN}Waiting / Synchronization:${NC}
 
 ${GREEN}Lobby:${NC}
   create-game <title> [side] [precon] [gateway-type]  - Create new game
+  select-deck <deck-id>  - Constructed lobbies: pick a deck you own (id from dev/seed-decks.sh)
   start-game      - Start game (after opponent joins)
   auto-start      - Auto-start game if lobby is ready
   leave-game      - Leave current game lobby
@@ -2081,6 +2082,16 @@ case "$COMMAND" in
                                         :open-decklists true
                                         :turmoil false
                                         :timer nil})
+                   nil)"
+        ;;
+
+    select-deck)
+        ensure_connection --allow-dead
+        DECK_ID="${1:?usage: select-deck <deck-id>  (dev/seed-decks.sh prints it)}"
+        info "Selecting deck $DECK_ID..."
+        execute "(do
+                   (require (quote [ai-connection :as conn]))
+                   (conn/select-deck! \"$DECK_ID\")
                    nil)"
         ;;
 

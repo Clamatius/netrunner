@@ -61,7 +61,8 @@
 
 (defmacro with-fast-timeouts [& body]
   `(binding [conn/*seat-discovery-timeout-ms* 300
-             conn/*create-confirm-timeout-ms* 300]
+             conn/*create-confirm-timeout-ms* 300
+             conn/*deck-confirm-timeout-ms* 300]
      ~@body))
 
 ;; ============================================================================
@@ -392,3 +393,73 @@
                 (is (= :resync-failed @verdict)
                     "still seated in the lobby ⇒ transient, not a teardown")
                 (is (.contains out "holding no board state"))))))))))
+
+;; ============================================================================
+;; select-deck! (System Gateway Constructed: no precon, each seat brings a deck)
+;; ============================================================================
+
+(def lobby-id (java.util.UUID/fromString "00000000-0000-0000-0000-0000000010bb"))
+
+(defn- seated-client-state
+  "Seated in an unstarted lobby as the mock user, no deck selected yet."
+  []
+  (let [s (mock-client-state)]
+    (assoc s :gameid lobby-id
+             :lobby-state {:gameid lobby-id :started false
+                           :players [{:user {:username (:username s)} :side "Corp"}]})))
+
+(defn- mock-deck-server
+  "Simulates :lobby/deck. The server only seats a deck it could find for this
+   user AND that is legal for the lobby (handle-select-deck); otherwise it
+   pushes the lobby state back unchanged, which is all the client gets to see."
+  [sent accept?]
+  (fn [event-type data]
+    (swap! sent conj {:type event-type :data data})
+    (when (and (= :lobby/deck event-type) accept?)
+      (swap! state/client-state update-in [:lobby-state :players 0]
+             assoc :deck {:_id (:deck-id data) :name "SG Haas-Bioroid"}))
+    nil))
+
+(deftest test-select-deck-confirmed-by-lobby-state
+  (testing "the deck counts as selected only once our player carries its id"
+    (let [sent (atom [])]
+      (with-mock-state (seated-client-state)
+        (with-redefs [ws/send-message! (mock-deck-server sent true)]
+          (with-fast-timeouts
+            (let [out (with-out-str (is (true? (conn/select-deck! "6ab49eacf614e7240b883631"))))]
+              (is (.contains out "SG Haas-Bioroid") "names the deck the server seated")
+              (is (= [{:type :lobby/deck :data {:gameid lobby-id :deck-id "6ab49eacf614e7240b883631"}}]
+                     @sent)))))))))
+
+(deftest test-select-deck-refusal-is-not-success
+  (testing "an unknown/illegal deck is refused silently server-side — say so"
+    (let [sent (atom [])]
+      (with-mock-state (seated-client-state)
+        (with-redefs [ws/send-message! (mock-deck-server sent false)]
+          (with-fast-timeouts
+            (let [out (with-out-str (is (false? (conn/select-deck! "6ab49eacf614e7240b883631"))))]
+              (is (.contains out "not seated") "must report the deck did not take")
+              (is (not (.contains out "✅")) "no success line on a refusal"))))))))
+
+(deftest test-select-deck-needs-a-lobby
+  (testing "no lobby: nothing is sent"
+    (let [sent (atom [])]
+      (with-mock-state (assoc (seated-client-state) :gameid nil)
+        (with-redefs [ws/send-message! (mock-deck-server sent true)]
+          (with-fast-timeouts
+            (is (false? (conn/select-deck! "abc")))
+            (is (empty? @sent))))))))
+
+(deftest test-lobby-state-with-a-selected-deck-parses
+  (testing "a seated deck's :date arrives as #time/date-time — the push must not be dropped"
+    ;; Precon lobbies never carry a deck :date, so until Constructed nothing sent
+    ;; this tag and the reader had no entry for it: parse-message threw, and the
+    ;; lobby push that confirms deck selection was silently lost.
+    (let [msg (str "[[:lobby/state {:gameid #uuid \"" lobby-id "\" :players "
+                   "[{:side \"Corp\" :deck {:name \"SG Haas-Bioroid\" :_id \"abc\" "
+                   ":date #time/date-time \"2026-09-24T03:55:55.797\"}}]}]]")
+          events (atom nil)
+          out (with-out-str (reset! events (ws/parse-message msg)))]
+      (is (not (.contains out "Error parsing")))
+      (is (= "SG Haas-Bioroid"
+             (get-in (first @events) [:data :players 0 :deck :name]))))))

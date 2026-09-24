@@ -31,7 +31,7 @@ what you can legitimately see. That's the whole point.
   (credit floor, just-in-time rig, when to run). Optional deeper:
   `dev/netrunner-eval/runner-playbook.md`.
 - Full command list: `./dev/send_command help --full`.
-- This is the System Gateway tutorial matchup; you win at **7 agenda points**
+- This is System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points**
   (steal agendas off R&D / HQ / remotes), or by decking the Corp.
 
 ## Turn 0 — mulligan
@@ -45,7 +45,7 @@ Corp goes first in Netrunner and has already kept. Make your mulligan call:
 ./dev/send_command runner keep-hand   # or:  ./dev/send_command runner mulligan
 ```
 
-**Read `decklist` before you decide.** It prints every card in your 40-card
+**Read `decklist` before you decide.** It prints every card in your
 deck grouped by type, with full card text — so a mulligan is a judgement about
 *this* deck rather than a guess. It is derived from the game state, not a
 document, so the titles and counts cannot be out of date (the rules text

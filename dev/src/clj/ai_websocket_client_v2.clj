@@ -11,7 +11,8 @@
    [clojure.string :as str]
    [differ.core :as differ]
    [gniazdo.core :as ws]
-   [jinteki.cards :refer [all-cards]])
+   [jinteki.cards :refer [all-cards]]
+   [time-literals.read-write :as time-literals])
   (:import [java.net URLEncoder]
            [org.eclipse.jetty.websocket.client WebSocketClient]
            [org.eclipse.jetty.util.ssl SslContextFactory]))
@@ -76,7 +77,11 @@
   [msg]
   (try
     (let [data (if (string? msg)
-                 (edn/read-string {:readers {'time/instant #(java.time.Instant/parse %)}} msg)
+                 ;; The server prints java.time values via time-literals, so read
+                 ;; them with its own tag table. Hand-listing tags missed one:
+                 ;; #time/date-time (a seated deck's :date — only Constructed
+                 ;; lobbies have one) threw, and the whole push was dropped.
+                 (edn/read-string {:readers time-literals/tags} msg)
                  msg)]
       (debug/debug "🔍 RAW RECEIVED:" (pr-str data))
 

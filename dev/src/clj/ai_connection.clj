@@ -187,6 +187,36 @@
                        password (assoc :password password)))
     (println "🎮 Attempting to join game" gameid "as" request-side)))
 
+(def ^:dynamic *deck-confirm-timeout-ms*
+  "How long to wait for the :lobby/state push that shows our deck seated."
+  5000)
+
+(defn select-deck!
+  "Select a deck we own for the lobby we are seated in (Constructed lobbies
+   have no precon, so both seats must do this before start-game).
+   deck-id is the mongo id `dev/seed-decks.sh` prints.
+
+   The server refuses SILENTLY — an id it can't find for our username, or a
+   deck illegal for the lobby's format, just re-pushes the lobby unchanged
+   (handle-select-deck) — so success is our player carrying that deck's id in
+   the lobby state, not the send. Returns true/false."
+  [deck-id]
+  (let [{:keys [gameid username]} @state/client-state
+        my-deck (fn []
+                  (let [me (some #(when (= username (get-in % [:user :username])) %)
+                                 (get-in @state/client-state [:lobby-state :players]))]
+                    (when (= deck-id (get-in me [:deck :_id]))
+                      (:deck me))))]
+    (if-not gameid
+      (do (println "❌ Not in a lobby — create or join one first.") false)
+      (do (ws/send-message! :lobby/deck {:gameid gameid :deck-id deck-id})
+          (if-let [deck (poll-until my-deck *deck-confirm-timeout-ms*)]
+            (do (println "✅ Deck selected:" (:name deck)) true)
+            (do (println "❌ Deck" deck-id "not seated — the server refuses silently when the id")
+                (println "   isn't owned by" username "or the deck is illegal for this lobby's format.")
+                (println "   Re-run dev/seed-decks.sh: it prints the id AND the server's legality verdict.")
+                false))))))
+
 (defn watch-game!
   "Join a game as a spectator
    Options:

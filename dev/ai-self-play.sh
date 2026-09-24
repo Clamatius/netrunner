@@ -7,6 +7,11 @@
 # - Both AI client REPLs running (use ./dev/start-ai-both.sh)
 #
 # Usage: ./dev/ai-self-play.sh
+#        CORP_DECK=dev/decks/sg-haas-bioroid.edn RUNNER_DECK=dev/decks/sg-shaper.edn ./dev/ai-self-play.sh
+#
+# With BOTH deck vars set the lobby is System Gateway *Constructed* (no precon):
+# each deck file is seeded into mongo for its seat (dev/seed-decks.sh) and
+# selected before start. The env passes through reset.sh / `make reset`.
 
 set -e  # Exit on error
 
@@ -49,9 +54,25 @@ for seat in corp runner; do
 done
 echo ""
 
+GATEWAY_TYPE="Intermediate"
+if [[ -n "${CORP_DECK:-}" || -n "${RUNNER_DECK:-}" ]]; then
+    if [[ -z "${CORP_DECK:-}" || -z "${RUNNER_DECK:-}" ]]; then
+        echo "❌ Constructed needs BOTH CORP_DECK and RUNNER_DECK (got corp='${CORP_DECK:-}' runner='${RUNNER_DECK:-}')"
+        exit 1
+    fi
+    GATEWAY_TYPE="Constructed"
+    # Seed before creating anything: an illegal list should stop us here, not
+    # leave a lobby that silently never starts.
+    echo "🃏 Seeding decks..."
+    CORP_DECK_ID=$(./dev/seed-decks.sh ai-corp "$CORP_DECK" | tail -1)
+    RUNNER_DECK_ID=$(./dev/seed-decks.sh ai-runner "$RUNNER_DECK" | tail -1)
+    echo "✅ Corp deck $CORP_DECK_ID ($CORP_DECK), Runner deck $RUNNER_DECK_ID ($RUNNER_DECK)"
+    echo ""
+fi
+
 # Step 1: Corp creates a lobby
-echo "📋 Corp creating game lobby..."
-TIMEOUT=20 ./dev/send_command corp create-game "AI Self-Play Test"
+echo "📋 Corp creating game lobby ($GATEWAY_TYPE)..."
+TIMEOUT=20 ./dev/send_command corp create-game "AI Self-Play Test" "Any Side" "" "$GATEWAY_TYPE"
 sleep 2
 
 # Step 2: Get the game ID from Corp's state
@@ -70,6 +91,16 @@ echo ""
 echo "🏃 Runner joining game..."
 TIMEOUT=10 ./dev/send_command runner join "$GAME_ID" Runner
 sleep 3
+
+if [[ "$GATEWAY_TYPE" == "Constructed" ]]; then
+    echo ""
+    echo "🃏 Selecting decks..."
+    for pair in "corp:$CORP_DECK_ID" "runner:$RUNNER_DECK_ID"; do
+        out=$(TIMEOUT=15 ./dev/send_command "${pair%%:*}" select-deck "${pair#*:}" 2>&1) || true
+        echo "$out"
+        echo "$out" | grep -q "Deck selected" || { echo "❌ ${pair%%:*} deck did not take — the lobby cannot start."; exit 1; }
+    done
+fi
 
 # Step 4: Start the game
 echo ""

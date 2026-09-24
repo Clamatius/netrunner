@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Haas-Bioroid faction deck: every Haas-Bioroid
+;; and Neutral Corp card in ONE System Gateway box, at box quantity.
+;; Generated from data/cards.edn (set_code "sg"), then TRIMMED to legality: the
+;; whole box is 46 cards / 26 agenda points, and 45-49 cards needs 20-21. Cut
+;; 2x Offworld Office + 1x Send a Message -> 43 cards / 19 points (40-44 needs 18-19).
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "SG Haas-Bioroid",
+ :format "system-gateway",
+ :identity {:title "Haas-Bioroid: Precision Design"},
+ :cards
+ [{:qty 1, :card "Luminal Transubstantiation"}
+  {:qty 1, :card "Offworld Office"}
+  {:qty 3, :card "Orbital Superiority"}
+  {:qty 2, :card "Send a Message"}
+  {:qty 3, :card "Superconducting Hub"}
+  {:qty 3, :card "Nico Campaign"}
+  {:qty 3, :card "Regolith Mining License"}
+  {:qty 3, :card "Ansel 1.0"}
+  {:qty 3, :card "Brân 1.0"}
+  {:qty 3, :card "Palisade"}
+  {:qty 3, :card "Tithe"}
+  {:qty 3, :card "Whitespace"}
+  {:qty 3, :card "Hedge Fund"}
+  {:qty 3, :card "Seamless Launch"}
+  {:qty 3, :card "Sprint"}
+  {:qty 3, :card "Manegarm Skunkworks"}]}
