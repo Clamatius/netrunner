@@ -31,7 +31,7 @@ If you ever feel the urge to "just peek" — don't. That's the whole point.
   install an agenda naked (protect scoring remotes behind ICE), rez ICE only when
   the run actually threatens something worth the credits.
 - Full command list: `./dev/send_command help --full`.
-- System Gateway tutorial matchup. You win at **7 agenda points** (score agendas
+- System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points** (score agendas
   from a protected remote) or by flatlining / decking the Runner.
 
 ## Turn 0 — mulligan (you go FIRST)
@@ -45,12 +45,12 @@ Corp mulligans before the Runner. Make your call, then the Runner will mulligan:
 ./dev/send_command corp keep-hand    # or:  ./dev/send_command corp mulligan
 ```
 
-**Read `decklist` before you decide.** It prints every card in your 44-card
+**Read `decklist` before you decide.** It prints every card in your
 deck grouped by type, with full card text — so a mulligan is a judgement about
 *this* deck rather than a guess. It is derived from the game state, not a
 document, so the titles and counts cannot be out of date (the rules text
 comes from the card database, so that much is only as fresh as the card data). You can re-read it at any point in the
-game; do that rather than trying to hold 22 cards in your head. It tells you what is IN
+game; do that rather than trying to hold the whole list in your head. It tells you what is IN
 the deck, never the ORDER — your own R&D/stack order stays fog-of-war.
 
 **You do NOT get the Runner's decklist.** That is deliberate — the same as a
