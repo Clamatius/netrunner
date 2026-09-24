@@ -44,7 +44,7 @@ sender; **gap** is what the sender lacked at inventory time. ✅ mirrored ·
 | `start-turn` | active player ≠ me ∧ `:end-turn` ∧ ¬post-discard | `start-turn!`: no-board · post-discard · first-turn/side · opponent mulligan (#87) · own mulligan (#131) · opponent-has-clicks / opp-ended · engine `opponent-has-blocking-prompt?` (2de58a1fd) | ai-turn-boundary-test, ai-basic-actions-test | ✅ |
 | `end-phase-12` / `phase-12-pass-priority` | button: active ∧ phase-12 ∧ (consent ⇒ ¬already-passed); **space-bar sends plain `end-phase-12` even when consent is required** (UI inconsistency; engine `end-phase-12` does not check consent) | `close-phase-window! :phase-12`: owner / consent / already-passed — stricter than the keyboard path | game.ai-phase-windows-test, ai-phase-window-test | ✅ |
 | `end-post-discard` / `post-discard-pass-priority` | same shape for the post-discard window | `close-phase-window! :post-discard` | same | ✅ |
-| `start-next-phase` | run ∧ `:next-phase` ∧ phase ≠ initiation ∧ ¬`:no-action` | — | — | ➖ #112 item 1 (the one vocabulary gap that can wedge a game; unverified) |
+| `start-next-phase` | **Runner panel only** (`runner-run-div`); arm: run ∧ `:next-phase` ∧ phase ≠ initiation; enabled: `:next-phase` ∧ ¬`:no-action` | — | — | ➖ #112 item 1 (vocabulary gap). **Verified 2026-09-23** (#242): the UI condition above is exact, and the engine mirrors *neither* half — a **Corp**-authenticated `start-next-phase` runs the Runner-only command, and `:no-action` is ignored by either side. Guard belongs on the **dispatch entry**, not the fn: `upgrades.clj:477` (Code Replicator) and `agendas.clj`/`identities.clj` call it internally with `side` = `:corp`. |
 
 ## Basic actions
 
@@ -95,5 +95,9 @@ either do not send or compute locally. No enable condition to mirror.
   (we pre-check cost and verify in the log; a refused action never reports success).
 - `run` does not mirror `:runnable-list` (we never request `generate-runnable-zones`).
 - `start-next-phase` is the one vocabulary gap that can wedge a game (#112 item 1).
+  Its enable condition is now verified rather than assumed (#242). Note for whoever
+  implements the sender: the engine does **not** enforce Runner-only, so the sender is
+  the only gate — per the #107 policy above, that is the intended division of labour,
+  but it means a side check in the sender is load-bearing, not belt-and-braces.
 - Upstream UI inconsistencies noted above (space-bar end-turn ignores post-discard;
   space-bar `end-phase-12` ignores consent; card-menu fire/rez looser than the run panel).
