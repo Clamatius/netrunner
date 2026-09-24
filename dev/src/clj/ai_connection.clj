@@ -196,10 +196,11 @@
    have no precon, so both seats must do this before start-game).
    deck-id is the mongo id `dev/seed-decks.sh` prints.
 
-   The server refuses SILENTLY — an id it can't find for our username, or a
-   deck illegal for the lobby's format, just re-pushes the lobby unchanged
-   (handle-select-deck) — so success is our player carrying that deck's id in
-   the lobby state, not the send. Returns true/false."
+   A refusal is invisible to this client — an id it can't find for our
+   username, or a deck illegal for the lobby's format, just re-pushes the lobby
+   unchanged (handle-select-deck), and the server's ?reply-fn verdict never
+   reaches us (send-message! takes no callback) — so success is our player
+   carrying that deck's id in the lobby state, not the send. Returns true/false."
   [deck-id]
   (let [{:keys [gameid username]} @state/client-state
         my-deck (fn []

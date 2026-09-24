@@ -1,0 +1,24 @@
+;; System Gateway Constructed — Null Signal's official Shaper sample deck,
+;; "Planning Ahead" (40 cards, 15 influence).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Planning Ahead",
+ :format "system-gateway",
+ :identity {:title "Tāo Salonga: Telepresence Magician"},
+ :cards
+ [{:qty 3, :card "Creative Commission"}
+  {:qty 3, :card "Jailbreak"}
+  {:qty 3, :card "Sure Gamble"}
+  {:qty 2, :card "Tread Lightly"}
+  {:qty 3, :card "VRcation"}
+  {:qty 3, :card "DZMZ Optimizer"}
+  {:qty 2, :card "Pantograph"}
+  {:qty 3, :card "Smartware Distributor"}
+  {:qty 3, :card "Telework Contract"}
+  {:qty 2, :card "Verbal Plasticity"}
+  {:qty 2, :card "Cleaver"}
+  {:qty 2, :card "Echelon"}
+  {:qty 2, :card "Mayfly"}
+  {:qty 2, :card "Unity"}
+  {:qty 2, :card "Conduit"}
+  {:qty 3, :card "Tranquilizer"}]}
