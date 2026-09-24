@@ -108,7 +108,12 @@ fi
 # Check if AI client REPL is running
 if [ -f /tmp/ai-client-${CLIENT_NAME}.pid ]; then
     PID=$(cat /tmp/ai-client-${CLIENT_NAME}.pid)
-    if ! ps -p $PID > /dev/null 2>&1; then
+    # Only ps's own "no such process" (exit 1) means stale. In a sandboxed seat
+    # (codex workspace-write) ps is not permitted to run at all (126/127) — that
+    # says nothing about the REPL, and deleting the file on it made a live REPL
+    # look dead to the seat.
+    ps -p $PID > /dev/null 2>&1
+    if [ $? -eq 1 ]; then
         echo "❌ AI Client REPL '$CLIENT_NAME' not running (stale PID file)"
         echo "   Start it with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $REPL_PORT"
         rm /tmp/ai-client-${CLIENT_NAME}.pid

@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Null Signal's official Haas-Bioroid sample deck,
+;; "Discretion Advised" (44 cards, 18 agenda points, 15 influence).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Discretion Advised",
+ :format "system-gateway",
+ :identity {:title "Haas-Bioroid: Precision Design"},
+ :cards
+ [{:qty 1, :card "Luminal Transubstantiation"}
+  {:qty 3, :card "Offworld Office"}
+  {:qty 3, :card "Send a Message"}
+  {:qty 1, :card "Superconducting Hub"}
+  {:qty 3, :card "Nico Campaign"}
+  {:qty 3, :card "Urtica Cipher"}
+  {:qty 3, :card "Government Subsidy"}
+  {:qty 3, :card "Hedge Fund"}
+  {:qty 3, :card "Predictive Planogram"}
+  {:qty 2, :card "Seamless Launch"}
+  {:qty 2, :card "Sprint"}
+  {:qty 2, :card "Manegarm Skunkworks"}
+  {:qty 2, :card "Brân 1.0"}
+  {:qty 3, :card "Palisade"}
+  {:qty 1, :card "Pharos"}
+  {:qty 3, :card "Whitespace"}
+  {:qty 3, :card "Ansel 1.0"}
+  {:qty 3, :card "Tithe"}]}

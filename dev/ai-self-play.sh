@@ -7,13 +7,13 @@
 # - Both AI client REPLs running (use ./dev/start-ai-both.sh)
 #
 # Usage: ./dev/ai-self-play.sh
-#        CORP_DECK=dev/decks/sg-haas-bioroid.edn RUNNER_DECK=dev/decks/sg-shaper.edn ./dev/ai-self-play.sh
+#        CORP_DECK=dev/decks/sg-hb-discretion-advised.edn RUNNER_DECK=dev/decks/sg-shaper-planning-ahead.edn ./dev/ai-self-play.sh
 #
 # With BOTH deck vars set the lobby is System Gateway *Constructed* (no precon):
 # each deck file is seeded into mongo for its seat (dev/seed-decks.sh) and
 # selected before start. The env passes through reset.sh / `make reset`.
 
-set -e  # Exit on error
+set -eo pipefail  # Exit on error, including inside a pipeline (a failed seed piped to tail)
 
 echo "🎮 AI Self-Play Automation"
 echo ""

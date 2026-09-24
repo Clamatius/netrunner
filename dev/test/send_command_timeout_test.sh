@@ -394,7 +394,7 @@ declare -a FAST=(
     leave-game let-subs-fire list-game-ids list-lobbies list-playables log
     log-compact mulligan multi-choose nuke-state peer-status ping play
     play-index prompt purge remove-tag replay-clear replay-save replay-start
-    replay-status replay-stop resync rez score smart-end-turn snapshot
+    replay-status replay-stop resync rez score select-deck smart-end-turn snapshot
     start-game start-turn status status-compact take-credit tank trash
     trash-resource use-ability use-runner-ability draw
 )
