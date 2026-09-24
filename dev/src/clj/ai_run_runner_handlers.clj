@@ -152,8 +152,9 @@
 ;; ONCE and then wait for the Corp's priority pass, instead of re-sending every
 ;; loop iteration (which mislabelled fired subs as "broken" and tripped the
 ;; stuck-state guard). Keyed by the encountered CARD rather than :position
-;; because two forced encounters share :position 0 (#160). Like every key in this
-;; file it is a card, not an encounter — see signaled-fire-encounter above.
+;; because two forced encounters share :position 0 (#160). Per-ENCOUNTER since
+;; #197: core/encounter-key is the engine's encounter id when the wire has one,
+;; so a Sisyphus re-encounter of the same card no longer inherits this latch (#163).
 (defonce passed-ice-encounter (atom nil))
 
 (defn reset-state!
@@ -191,13 +192,15 @@
    stops.
 
    Getting there took four wrong latches, and the shape of the error was the same
-   every time: the latch was asked WHICH ENCOUNTER we last signalled, and no
-   primitive in this client can answer that (#197). Set BEFORE the send, a refused
+   every time: the latch was asked WHICH ENCOUNTER we last signalled, and at the
+   time no primitive in this client could answer that (#197). Set BEFORE the send, a refused
    send latched as sent. Set on socket ACCEPTANCE and read as delivery, an
    accepted-but-undelivered send latched as sent. A per-encounter re-send BUDGET
    keyed on core/encounter-key starved the second encounter of one physical card,
-   because that key is a card :cid its own docstring says is not an encounter
-   identity. Keyed on ice TITLE instead, it collapsed two DIFFERENT cards of the
+   because that key was then a card :cid, not an encounter identity. (Since
+   #197 the wire carries the engine's encounter id and encounter-key uses it, so
+   a bounded re-send is implementable again; this latch has not been moved onto
+   it and still keys on {:cid :title :mark}.) Keyed on ice TITLE instead, it collapsed two DIFFERENT cards of the
    same name — the second Whitespace was never signalled at all (guest panel
    CRITICAL, round 4).
 
@@ -758,10 +761,9 @@
               ;; to read. Re-send rather than wait for a reply to a pass the
               ;; engine never saw — the deadlock this issue exists to remove.
               ;;
-              ;; This is also what keeps #163 (encounter-key is a card cid, not
-              ;; an encounter identity) from being a hang on this path: a
-              ;; Sisyphus re-encounter of the same card inherits the stale key,
-              ;; but as soon as the Corp passes it, this override closes it.
+              ;; Before #197 this was also what kept #163 from being a hang on
+              ;; this path: encounter-key was a card cid, so a Sisyphus
+              ;; re-encounter inherited the stale key until the Corp passed.
               latch-is-stale? (core/opponent-passed-encounter? state side)]
           ;; The LEDGER naming us is as good as the latch, and better: the latch
           ;; is one slot, set by these two handlers only, so a pass sent by any

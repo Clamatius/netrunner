@@ -69,6 +69,7 @@ test:
 	  game.ai-ability-legality-test \
 	  game.ai-corp-pass-ledger-wire-test \
 	  game.ai-duplicate-continue-test \
+	  game.ai-encounter-id-wire-test \
 	  game.ai-end-turn-gate-test \
 	  game.ai-forced-encounter-wire-test \
 	  game.ai-hosted-card-ref-test \

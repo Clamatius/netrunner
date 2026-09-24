@@ -258,9 +258,9 @@
    Three rounds went into trying to tell those subroutines apart client-side —
    recording what the board looked like when the pass was observed — and each
    round found the bookkeeping wrong in a new way: retrospective baselines,
-   baselines outliving their encounter (`encounter-key` is a card cid, #163),
-   fired subs freeing capacity. The wire carries no encounter identity and no
-   subroutine identity (diffs/subroutine-keys is
+   baselines outliving their encounter (`encounter-key` was a card cid, #163),
+   fired subs freeing capacity. The wire now carries an encounter identity
+   (:encounter-id, #197) but still no subroutine identity (diffs/subroutine-keys is
    `[:broken :fired :label :msg :resolve]`), so the question is not answerable
    here at all; #177 tracks the engine-side fix.
 

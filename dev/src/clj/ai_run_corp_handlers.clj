@@ -559,8 +559,9 @@
                  ;; A --fire-unbroken seat normally never reaches here: handler
                  ;; 1.6 fires and stops the chain. It reaches here only when 1.6
                  ;; DECLINED an authorized fire — a stale :fired-at-encounter
-                 ;; latch after a re-encounter of the same card (#163) is the
-                 ;; known way — and surfacing that as a decision is better than
+                 ;; latch after a re-encounter of the same card (#163) was the
+                 ;; known way until the wire carried an encounter id (#197) —
+                 ;; and surfacing that as a decision is better than
                  ;; the silent idle it used to be. While the Runner is merely
                  ;; still deciding, the old silence is kept.
                  (or (not (:fire-unbroken strategy))
