@@ -100,8 +100,10 @@ while true; do
     echo "===== chunk $chunk $(date '+%H:%M:%S') status=$s idle=$idle ====="
   } >> "$LOG"
   if [ "$BACKEND" = codex ]; then
+    # `exec resume` has no -s (codex 0.156 rejects it: every chunk died on
+    # "unexpected argument '-s'" and the loop stalled out) — set it via config.
     timeout 3600 codex exec resume "$SESSION" "$NUDGE" \
-      -m "$MODEL" -s danger-full-access -c model_reasoning_effort="$CODEX_EFFORT" \
+      -m "$MODEL" -c sandbox_mode='"danger-full-access"' -c model_reasoning_effort="$CODEX_EFFORT" \
       >> "$LOG" 2>&1
     # A resume may be recorded under a fresh id; chain onto whatever it used.
     newest="$(codex_session_id "$LOG")"
