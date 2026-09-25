@@ -1155,6 +1155,6 @@
            (:zone (ai-core/find-selectable-card-by-cid "ts-1" gs))))))
 
 (deftest a-card-in-no-container-still-resolves
-  (testing "the whole-tree search stays as the fallback (face-down breach cards, #70)"
+  (testing "the whole-tree search stays as the fallback for a card in no container (e.g. :basic-action-card); a face-down breach card is in :servers, and resolves in the first tier"
     (let [gs {:somewhere {:cid "fd" :zone ["servers" "remote1" "content"] :side "Corp"}}]
       (is (= "fd" (:cid (ai-core/find-selectable-card-by-cid "fd" gs)))))))

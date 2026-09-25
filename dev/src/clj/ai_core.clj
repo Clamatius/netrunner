@@ -1312,9 +1312,10 @@
          first)))
 
 (def ^:private card-container-keys
-  "Where a card currently LIVES in a player's wire state: game.core.diffs
+  "Where a card currently LIVES in a player's wire state: the game.core.diffs
    player-keys that hold cards, plus :servers (Corp) and :rig (Runner). Hosted
-   cards nest inside these."
+   cards nest inside these. (:basic-action-card is left to the whole-tree
+   fallback, which finds it.)"
   [:servers :rig :identity :hand :discard :deck :scored :rfg :play-area :current :set-aside :destroyed])
 
 (defn find-selectable-card-by-cid
@@ -1328,9 +1329,14 @@
    :host was added — that drift is the #113 bug in miniature). A
    title-less match must carry :zone AND :side — both present on a real board
    card and among the fields select-card! consumes — so non-card maps that merely
-   carry a :cid (effects-registry entries, log refs) are still skipped. When
-   several maps share the CID, a named (:title) match is preferred so behavior for
-   ordinary visible cards is unchanged. (issue #70)
+   carry a :cid (effects-registry entries, log refs) are still skipped. (issue #70)
+
+   Search order: the card's CURRENT container first (card-container-keys), then
+   the whole tree. Within each tier a named (:title) match is preferred; across
+   tiers a title-less container copy beats a titled copy elsewhere, because the
+   copies elsewhere (:last-revealed, :run :source-card, a prompt's :card) carry a
+   stale zone or none, and a ref built from them is dropped by the engine's
+   get-card (#244 polish, round-3 panel).
 
    Returns nil if no card-shaped map matches.
 
