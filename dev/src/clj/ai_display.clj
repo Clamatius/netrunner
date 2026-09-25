@@ -2650,6 +2650,26 @@
   (when (state/game-over? (:game-state state))
     (println "🏁 Game over — this prompt is a leftover from the final trigger. Nothing to resolve; the result stands (see game-over-status).")))
 
+(defn duplicate-choice-lines
+  "Notes for choices that print the same label (#244 friction, marquee fffee105:
+   the trigger-order prompt listed `0. Nico Campaign / 1. Nico Campaign` with
+   nothing to say whether the pick mattered).
+
+   Plain string values are the same option: the engine hands the choice's value
+   to the prompt's effect, so both indices give it the same target (the trigger
+   prompt then resolves a copy by title). Card values can print the same label and
+   still be different cards, and those must not be called interchangeable."
+  [choices]
+  (for [[label idxs] (->> (map-indexed vector choices)
+                          (group-by (comp core/format-choice second))
+                          (sort-by (comp ffirst val)))
+        :when (> (count idxs) 1)
+        :let [ns (str/join " and " (map first idxs))
+              strings? (every? (comp string? :value second) idxs)]]
+    (if strings?
+      (format "    ↳ %s are the same option (\"%s\"): either index does the same thing." ns label)
+      (format "    ↳ %s all show \"%s\" but are different cards; they differ only by position." ns label))))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices.
    1-arity: render from an already-captured state (snapshot, #139 guest panel —
@@ -2712,7 +2732,9 @@
           (when has-choices
             (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
             (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-              (println (str "    " idx ". " (core/format-choice choice))))))
+              (println (str "    " idx ". " (core/format-choice choice))))
+            (doseq [line (duplicate-choice-lines (:choices prompt))]
+              (println line))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")

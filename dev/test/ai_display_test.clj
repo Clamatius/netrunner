@@ -3774,3 +3774,36 @@
           (let [out (with-out-str (display/show-hand))]
             (is (str/includes? out "2MU") (str "the first listing must carry the MU, got: " out)))))
       (finally (reset! jinteki.cards/all-cards saved)))))
+
+;; ============================================================================
+;; Identical choice labels (#244 friction item 5, marquee fffee105): the
+;; trigger-order prompt listed "0. Nico Campaign / 1. Nico Campaign / 2. Done"
+;; with nothing to tell the seat whether the pick mattered.
+;; ============================================================================
+
+(def ^:private nico-trigger-prompt
+  {:msg "Choose a trigger to resolve" :prompt-type "other"
+   :choices [{:value "Nico Campaign" :uuid "u0"} {:value "Nico Campaign" :uuid "u1"}
+             {:value "Done" :uuid "u2"}]})
+
+(deftest identical-string-choices-are-called-interchangeable
+  (testing "string choices with one label hand the engine the same target, whichever index is picked"
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "corp" :turn 5
+                                   :corp {:click 3 :credit 5 :hand [] :prompt-state nico-trigger-prompt}
+                                   :runner {:click 0 :credit 5 :hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (re-find #"0 and 1 are the same option" out))
+        (is (re-find #"either" out))))))
+
+(deftest identical-card-labels-are-not-called-interchangeable
+  (testing "two different CARDS can print the same label; those are not the same option"
+    (let [lines (display/duplicate-choice-lines
+                 [{:value {:title "Nico Campaign" :cid "a"}} {:value {:title "Nico Campaign" :cid "b"}}])]
+      (is (seq lines))
+      (is (not-any? #(re-find #"same option|either" %) lines))
+      (is (some #(re-find #"different cards" %) lines)))))
+
+(deftest distinct-choices-get-no-note
+  (is (empty? (display/duplicate-choice-lines [{:value "HQ"} {:value "R&D"} {:value "Done"}]))))
