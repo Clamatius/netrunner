@@ -947,15 +947,21 @@
   [card-type]
   (contains? #{"Asset" "Agenda"} card-type))
 
+(defn root-card-in
+  "The asset or agenda installed in `server-name` (\"Server 2\"), read from a
+   given corp :servers map, or nil. Pure, so a renderer holding a captured state
+   (#139) can ask the same one-root-card-per-remote question install does."
+  [servers server-name]
+  (when-let [server-key (server-name->key server-name)]
+    (->> (get-in servers [server-key :content])
+         (filter #(root-card-type? (:type %)))
+         first)))
+
 (defn server-has-root-card?
   "Check if a server already has an asset or agenda installed.
    Returns the existing root card if found, nil otherwise."
   [server-name]
-  (when-let [server-key (server-name->key server-name)]
-    (let [content (state/server-cards server-key)]
-      (->> content
-           (filter #(root-card-type? (:type %)))
-           first))))
+  (root-card-in (state/corp-servers) server-name))
 
 (defn get-existing-remote-names
   "Returns a set of existing remote server names from game state.
@@ -1161,8 +1167,14 @@
    Duplicate titles with no [N] suffix: if one copy is the ICE at the current
    run position, that copy wins (#100 — run-scoped commands like fire-subs/rez
    shouldn't demand a suffix when the encounter already disambiguates).
-   Otherwise returns nil and prints the disambiguation list."
-  [card-name]
+   Otherwise returns nil and prints the disambiguation list.
+
+   :prefer-unrezzed? (for `rez`) breaks a tie in favour of the only unrezzed copy,
+   after the run context: with one copy rezzed and one not, only one CAN be
+   rezzed, so asking the seat to pick was a refusal with the answer in its own
+   list (#244 friction, marquee fffee105 Nico Campaign). It breaks ties only: an
+   explicit [N] still indexes the full list the disambiguation prints."
+  [card-name & {:keys [prefer-unrezzed?]}]
   (let [servers (state/corp-servers)
         ;; Get all ICE from all servers
         all-ice (mapcat :ices (vals servers))
@@ -1178,6 +1190,7 @@
       ;; find-installed-card above.
       explicit-index? (nth (vec matches) index nil)
       (= 1 match-count) (first matches)
+
       :else
       (let [cs @state/client-state
             ;; A FORCED encounter can put the Runner on an ICE that :position
@@ -1186,13 +1199,26 @@
             enc-ice (get-in cs [:game-state :encounters :ice])
             run-ice (or enc-ice (current-run-ice cs))
             run-match (when run-ice
-                        (first (filter #(= (:cid run-ice) (:cid %)) matches)))]
-        (if run-match
+                        (first (filter #(= (:cid run-ice) (:cid %)) matches)))
+            unrezzed (when prefer-unrezzed? (remove :rezzed matches))]
+        (cond
+          run-match
           (do
             (println (format "→ %d copies of '%s' installed — using the one in the active run (%s). Use \"%s [N]\" to target another."
                              match-count title
                              (or (card-server-location run-match) "?") title))
             run-match)
+
+          ;; After the run: at an approach the run names the copy (the rules
+          ;; allow rezzing only the approached ICE), so "the only unrezzed one"
+          ;; must not reach past it to a copy elsewhere.
+          (= 1 (count unrezzed))
+          (let [pick (first unrezzed)]
+            (println (format "→ %d copies of '%s' installed — using the only unrezzed one (%s). Use \"%s [N]\" to target another."
+                             match-count title (or (card-server-location pick) "?") title))
+            pick)
+
+          :else
           (do
             (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
             (println "   Specify which one:")
@@ -1285,6 +1311,13 @@
                        (:title %)))
          first)))
 
+(def ^:private card-container-keys
+  "Where a card currently LIVES in a player's wire state: the game.core.diffs
+   player-keys that hold cards, plus :servers (Corp) and :rig (Runner). Hosted
+   cards nest inside these. (:basic-action-card is left to the whole-tree
+   fallback, which finds it.)"
+  [:servers :rig :identity :hand :discard :deck :scored :rfg :play-area :current :set-aside :destroyed])
+
 (defn find-selectable-card-by-cid
   "Resolve a CID that came from a prompt's :selectable list to a card map.
 
@@ -1296,9 +1329,14 @@
    :host was added — that drift is the #113 bug in miniature). A
    title-less match must carry :zone AND :side — both present on a real board
    card and among the fields select-card! consumes — so non-card maps that merely
-   carry a :cid (effects-registry entries, log refs) are still skipped. When
-   several maps share the CID, a named (:title) match is preferred so behavior for
-   ordinary visible cards is unchanged. (issue #70)
+   carry a :cid (effects-registry entries, log refs) are still skipped. (issue #70)
+
+   Search order: the card's CURRENT container first (card-container-keys), then
+   the whole tree. Within each tier a named (:title) match is preferred; across
+   tiers a title-less container copy beats a titled copy elsewhere, because the
+   copies elsewhere (:last-revealed, :run :source-card, a prompt's :card) carry a
+   stale zone or none, and a ref built from them is dropped by the engine's
+   get-card (#244 polish, round-3 panel).
 
    Returns nil if no card-shaped map matches.
 
@@ -1306,13 +1344,21 @@
    #139 — the prompt renderer must not re-read the live atom mid-snapshot)."
   ([cid] (find-selectable-card-by-cid cid (state/get-game-state)))
   ([cid gs]
-  (let [matches (->> (tree-seq coll? seq gs)
-                     (filter #(and (map? %)
-                                   (= cid (:cid %))
-                                   (or (:title %) (and (:zone %) (:side %)))))
-                     seq)]
-    (or (some #(when (:title %) %) matches)
-        (first matches)))))
+  (let [pick (fn [tree]
+               (let [matches (->> (tree-seq coll? seq tree)
+                                  (filter #(and (map? %)
+                                                (= cid (:cid %))
+                                                (or (:title %) (and (:zone %) (:side %)))))
+                                  seq)]
+                 (or (some #(when (:title %) %) matches)
+                     (first matches))))]
+    ;; A card's CURRENT container first, then the whole tree as before. The
+    ;; wire also carries raw card maps with STALE zones (:last-revealed, :run
+    ;; :source-card), and which copy the whole-tree walk met first was hash
+    ;; order: two revealed-then-installed Team Sponsorships both printed "(in
+    ;; hand)" (#244 polish, round-3 panel, reproduced on the engine).
+    (or (pick (for [side [:corp :runner] k card-container-keys] (get-in gs [side k])))
+        (pick gs)))))
 
 (def ^:private credit-payment-prompt-re
   ;; game.core.pick-counters/pick-credit-providing-cards builds exactly:

@@ -92,6 +92,42 @@ runner_help="$("$SEND_CMD" runner help 2>&1)"
 assert_contains "runner help" "$runner_help" '"R&D"'
 assert_contains "runner help" "$runner_help" "command not found: D"
 
+# #244 friction (marquee fffee105): `help monitor-run` printed the general help,
+# and the command's flags were only in `help --full`. Per-command help is cut
+# from --full, so there is no second copy to drift.
+echo
+echo "Per-command help (help <command>)"
+mr="$("$SEND_CMD" corp help monitor-run 2>&1)"
+assert_no_shell_errors "help monitor-run" "$mr"
+assert_contains "help monitor-run" "$mr" "Alias for 'continue'"
+assert_contains "help monitor-run" "$mr" "--persistent"
+if [[ "$mr" == *"Card Actions:"* ]]; then
+    fail "help monitor-run: printed the general help, not the command"
+else
+    pass "help monitor-run: not the general help"
+fi
+# monitor-run IS continue, so the run flags a Corp needs (--no-rez) belong here too.
+assert_contains "help monitor-run" "$mr" "--no-rez"
+# Flags blocks are matched by whole command word: `run` is not `monitor-run`.
+rn="$("$SEND_CMD" runner help run 2>&1)"
+if [[ "$rn" == *"monitor-run Flags"* ]]; then
+    fail "help run: pulled in the monitor-run Flags block (substring match)"
+else
+    pass "help run: no monitor-run Flags block"
+fi
+# Aliases share their flags (panel): continue IS monitor-run, continue-run is continue --single.
+ct="$("$SEND_CMD" corp help continue 2>&1)"
+assert_contains "help continue" "$ct" "--persistent"
+cr="$("$SEND_CMD" corp help continue-run 2>&1)"
+assert_contains "help continue-run" "$cr" "--no-rez"
+# And the form is discoverable from the help a seat actually reads (panel).
+assert_contains "corp help" "$("$SEND_CMD" corp help 2>&1)" "help <command>"
+rz="$("$SEND_CMD" corp help rez 2>&1)"
+assert_contains "help rez" "$rz" "Rez installed Corp card"
+nope="$("$SEND_CMD" corp help no-such-command 2>&1)"
+assert_contains "help no-such-command" "$nope" "No help entry for 'no-such-command'"
+assert_contains "help no-such-command" "$nope" "help --full"
+
 echo
 echo "─────────────────────────────"
 echo "Passed: $PASS   Failed: $FAIL"

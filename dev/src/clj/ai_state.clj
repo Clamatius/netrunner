@@ -1344,13 +1344,19 @@
   [prompt]
   (reset! last-rendered-prompt (prompt-render-fingerprint prompt)))
 
+(defonce last-rendered-prompt-body
+  ;; The text of the last full prompt block (#244 friction): a repeat collapses
+  ;; to one line only when the eid matches AND the block would print identically.
+  (atom nil))
+
 (defn reset-rendered-prompt!
   "Forget the last rendered prompt (new game / cleared state).
 
    Wired into the same teardown as reset-seen-cards!: a render marker surviving
    into a fresh game would mark that game's first prompt as 'unchanged'."
   []
-  (reset! last-rendered-prompt nil))
+  (reset! last-rendered-prompt nil)
+  (reset! last-rendered-prompt-body nil))
 
 ;; ============================================================================
 ;; State Cursor (for race-condition-free waiting)

@@ -2650,13 +2650,91 @@
   (when (state/game-over? (:game-state state))
     (println "🏁 Game over — this prompt is a leftover from the final trigger. Nothing to resolve; the result stands (see game-over-status).")))
 
+(defn- board-card
+  "The card with `cid` where it is on the captured board, or nil. A :zone is
+   required: a choice's own value carries the cid and a title but no zone, and
+   used to resolve to itself (round-2 panel). The resolver looks in the card's
+   current container first (round 3: stale revealed copies)."
+  [cid gs]
+  (when (and cid gs)
+    (let [card (core/find-selectable-card-by-cid cid gs)]
+      (when (:zone card) card))))
+
+(defn duplicate-choice-lines
+  "Notes for choices that print the same label (#244 friction, marquee fffee105:
+   the trigger-order prompt listed `0. Nico Campaign / 1. Nico Campaign` with
+   nothing to tell the copies apart).
+
+   The engine sends that prompt's choices as CARD maps with distinct cids (panel,
+   reproduced on the engine), so each copy is resolved to where it is, in the
+   same words as the selectable block. String choices that share a label are NOT
+   claimed to be interchangeable: the engine keeps each choice's index, and Eli
+   1.0's two \"End the run\" choices break different subroutines (panel,
+   reproduced). They are only named as separate options.
+
+   `gs` is the captured game-state the rest of the block renders from (#139)."
+  [choices gs]
+  (for [[label idxs] (->> (map-indexed vector choices)
+                          (group-by (comp core/format-choice second))
+                          (sort-by (comp ffirst val)))
+        :when (> (count idxs) 1)
+        :let [where (for [[i c] idxs
+                          :let [cid (get-in c [:value :cid])
+                                card (board-card cid gs)]]
+                      (when card (str i ". " (core/format-selectable-card card))))]]
+    (if (every? some? where)
+      (str "    ↳ Same name, different cards: " (str/join " · " where))
+      (format "    ↳ %s share the label \"%s\" but are separate options; the engine takes the index you choose."
+              (str/join " and " (map first idxs)) label))))
+
+(defn install-overwrite-lines
+  "Warnings for install-location choices that already hold an asset or agenda
+   (#244 friction, marquee fffee105: Ansel's install sub offered `0. Server 2`,
+   which held the Corp's advanced Send a Message, with nothing said). Installing
+   an asset or agenda in a remote trashes the one already there; ICE and upgrades
+   do not. Corp only: a Runner never gets a Corp install-location prompt, and the
+   Runner's run-target prompts use the same words (panel: Dirty Laundry).
+
+   - \"Choose a location to install X\" is the engine's own install prompt
+     (corp-install), whose :card IS the card being installed. The wire strips
+     that card to cid/title (diffs/prompt-summary), so its type is read from the
+     Corp's own board copy (hand, archives), then the card database. A known
+     asset or agenda gets a definite warning; known ICE/upgrade gets none.
+   - An unknown type, or a bare \"Choose a server\" (Vaporframe Fabricator pairs
+     it with an install; many cards use it for a redirect), gets a CONDITIONAL
+     one. An empty card database must not turn an ICE install into a trash
+     claim (panel, reproduced)."
+  [state prompt]
+  (let [msg (str (:msg prompt))
+        installing (second (re-find #"^Choose a location to install (.+)$" msg))
+        installing-type (when installing
+                          (or (:type (board-card (get-in prompt [:card :cid]) (:game-state state)))
+                              (:type (get @jinteki.cards/all-cards installing))))
+        mode (cond
+               (not (core/side= "corp" (:side state)))                nil
+               (#{"ICE" "Upgrade"} installing-type)                   nil
+               (and installing (#{"Asset" "Agenda"} installing-type)) :definite
+               (or installing (= msg "Choose a server"))              :conditional)]
+    (when mode
+      (for [[i c] (map-indexed vector (:choices prompt))
+            :let [server (core/format-choice c)
+                  root (core/root-card-in (get-in state [:game-state :corp :servers]) server)]
+            :when root
+            :let [adv (or (:advance-counter root) 0)
+                  holds (format "%d. %s holds %s%s" i server (:title root)
+                                (if (pos? adv) (format " (%d advancement%s)" adv (if (= 1 adv) "" "s")) ""))]]
+        (if (= mode :definite)
+          (format "    ⚠️  %s: installing %s there trashes it." holds installing)
+          (format "    ⚠️  %s: if this installs an asset or agenda, that trashes it." holds))))))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices.
    1-arity: render from an already-captured state (snapshot, #139 guest panel —
    a live re-read mid-snapshot could print 'Not in a game' under a captured
    board)."
   ([] (show-prompt-detailed @state/client-state))
-  ([state]
+  ([state] (show-prompt-detailed state {}))
+  ([state {:keys [full?]}]
   (let [side (:side state)
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
@@ -2669,9 +2747,11 @@
             ;; matching :eid, so a stacked duplicate (#75) still reads as new.
             already-shown? (state/prompt-already-rendered? prompt)]
         (state/mark-prompt-rendered! prompt)
-        (println (if already-shown?
-                   "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
-                   "\n🔔 Current Prompt:"))
+        ;; The block is rendered to a string so the repeat test can be exact.
+        ;; A run prompt keeps one eid and message for the whole run while its
+        ;; guidance (whose move, what continue does) changes; the eid match alone
+        ;; would call a changed block "unchanged".
+        (let [body (with-out-str
         (post-game-prompt-banner! state)
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
@@ -2712,7 +2792,11 @@
           (when has-choices
             (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
             (doseq [[idx choice] (map-indexed vector (:choices prompt))]
-              (println (str "    " idx ". " (core/format-choice choice))))))
+              (println (str "    " idx ". " (core/format-choice choice))))
+            (doseq [line (duplicate-choice-lines (:choices prompt) (:game-state state))]
+              (println line))
+            (doseq [line (install-overwrite-lines state prompt)]
+              (println line))))
         (when has-selectable
           (let [selectable (:selectable prompt)
                 prompt-msg (or (:msg prompt) "")
@@ -2828,6 +2912,45 @@
                     (println "  Action: Paid ability window (no run active)")
                     (println "    → No choices required.")
                     (println "    → 'continue' is run-only here — take your next action, or 'wait'."))))))))
+              same-block? (and already-shown? (= body @state/last-rendered-prompt-body))]
+          (reset! state/last-rendered-prompt-body body)
+          (if (and same-block? (not full?))
+            ;; #244 friction: the #104 label alone left the whole block printed
+            ;; 2-3 times per decision (continue's auto-append, then the seat's own
+            ;; prompt/snapshot). The repeat keeps what a seat acts on — the message
+            ;; and the choice indices — and points at the full block.
+            (do
+              (println (format "\n🔔 Current Prompt: unchanged since shown above (not a second one) — \"%s\""
+                               (:msg prompt)))
+              ;; A state claim, not decoration: a seat must not act in a finished game.
+              (post-game-prompt-banner! state)
+              (when has-choices
+                (println (str "  Choices: "
+                              (str/join " · " (map-indexed (fn [i c] (str i ". " (core/format-choice c)))
+                                                           (:choices prompt))))))
+              ;; The index->card mapping is what `choose-card <N>` needs; a count
+              ;; alone was not actionable (panel).
+              ;; State claims like the post-game banner: the repeat must not drop
+              ;; them (round-2 and round-3 panels).
+              (doseq [line (duplicate-choice-lines (:choices prompt) (:game-state state))]
+                (println line))
+              (doseq [line (install-overwrite-lines state prompt)]
+                (println line))
+              (when has-selectable
+                (let [{:keys [pickable phantom]} (core/resolve-selectable (:selectable prompt) (:game-state state))]
+                  (println (str "  Selectable:"
+                                (when (seq pickable)
+                                  (str " " (str/join " · " (map (fn [{:keys [idx card]}]
+                                                                  (str idx ". " (core/format-selectable-card card)))
+                                                                pickable))))
+                                (when (seq phantom) (format " (+%d not selectable by you)" (count phantom)))))))
+              (println "  (`prompt --full` reprints the whole block.)"))
+            (do
+              (println (if already-shown?
+                         "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
+                         "\n🔔 Current Prompt:"))
+              (print body)
+              (flush)))))
       ;; No prompt object. "No active prompt" alone is technically true but
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next
@@ -2898,6 +3021,12 @@
 
           :else
           (println (format "ℹ️  %s" (:status-text ts)))))))))))
+
+(defn show-prompt-full
+  "`prompt --full`: the whole block even when it was just shown (a repeat
+   otherwise collapses to one line; see show-prompt-detailed)."
+  []
+  (show-prompt-detailed @state/client-state {:full? true}))
 
 (defn show-prompt-if-any
   "Append the current prompt to an action's output — or print NOTHING if there

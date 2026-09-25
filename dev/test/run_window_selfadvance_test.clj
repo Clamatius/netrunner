@@ -544,7 +544,10 @@
     (let [manegarm-rez {:user "__system__"
                         :text "ai-corp rezzes Manegarm Skunkworks protecting Server 2."
                         :timestamp "2026-08-04T04:21:00.000000Z"}
-          state {:game-state {:corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
+          ;; A MID-RUN rez, so a live :run (#244: with no window open the event
+          ;; is framed as the run's closing effect, not as a pause).
+          state {:game-state {:run {:server ["remote2"] :phase "movement" :position 0}
+                              :corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
                                                          :content [{:cid 7 :title "Manegarm Skunkworks"}]}}}}}
           out (with-out-str (runs/handle-events {:rez-event manegarm-rez
                                                  :state state
@@ -566,7 +569,10 @@
     (let [ice-rez {:user "__system__"
                    :text "ai-corp rezzes Palisade protecting Server 2."
                    :timestamp "2026-08-04T04:22:00.000000Z"}
-          state {:game-state {:corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
+          ;; A MID-RUN rez, so a live :run (#244: with no window open the event
+          ;; is framed as the run's closing effect, not as a pause).
+          state {:game-state {:run {:server ["remote2"] :phase "movement" :position 0}
+                              :corp {:servers {:remote2 {:ices [{:cid 9 :title "Palisade"}]
                                                          :content [{:cid 7 :title "Manegarm Skunkworks"}]}}}}}
           out (with-out-str (runs/handle-events {:rez-event ice-rez
                                                  :state state
@@ -876,3 +882,77 @@
       (let [done (mock-client-state :side "corp"
                                     :game-state {:run nil :active-player "runner"})]
         (is (false? (core/encounter-window? done)))))))
+
+;; ============================================================================
+;; #244 friction item 7a (marquee fffee105, Corp seat): after subs fired on Brân
+;; the output said "⚠️ Run paused - subroutines fired! → Use 'continue' again to
+;; proceed" and then, immediately, "ℹ️ That resolved after the run ended — not
+;; your decision, the run is over." One printer paused a run the other had
+;; already declared over. The pause framing belongs only to a window that is open.
+;; ============================================================================
+
+(def ^:private bran-fired
+  {:user "__system__" :text "ai-corp resolves 1 unbroken subroutine on Brân 1.0 (\"End the run.\")"
+   :timestamp "2026-09-24T10:00:00.000000Z"})
+
+(deftest an-event-after-the-run-is-not-framed-as-a-pause
+  (runs/reset-reported-events!)
+  (let [st (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
+        out (with-out-str (runs/handle-events {:fired-event bran-fired :state st :side "corp"}))]
+    (is (str/includes? out "Brân 1.0") "the event is still reported")
+    (is (not (str/includes? out "continue' again")) "no run to continue")
+    (is (not (str/includes? out "Run paused")) "and nothing to pause")
+    (is (str/includes? out "nothing to continue"))
+    (is (not (str/includes? out "run ended"))
+        "panel: a continue with no run at all reaches here too, so no claim that a run just ended")))
+
+(deftest an-event-inside-the-run-still-pauses
+  (runs/reset-reported-events!)
+  (let [st (runner-state :log [bran-fired])
+        out (with-out-str (runs/handle-events {:fired-event bran-fired :state st :side "runner"}))]
+    (is (str/includes? out "Run paused"))
+    (is (str/includes? out "continue' again"))))
+
+(deftest the-persistent-loop-does-not-say-it-twice
+  (testing "handle-events framed it as after-the-run, so the loop adds nothing"
+    (runs/reset-reported-events!)
+    (with-mock-state (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
+      (with-redefs [runs/continue-run! (fn [& _] (runs/handle-events {:fired-event bran-fired
+                                                                       :state @state/client-state
+                                                                       :side "corp"}))]
+        (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
+          (is (= 1 (count (re-seq #"not your decision" out))) out)
+          (is (not (str/includes? out "continue' again")) out))))))
+
+(deftest the-loop-corrects-a-pause-the-run-outlived
+  (testing "panel: handle-events read a state with the run open; the loop re-reads after the run closed and must say so"
+    (runs/reset-reported-events!)
+    (with-mock-state (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
+      (with-redefs [runs/continue-run! (fn [& _] (runs/handle-events {:fired-event bran-fired
+                                                                       :state (runner-state :log [bran-fired])
+                                                                       :side "corp"}))]
+        (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
+          (is (str/includes? out "the run is over") "the loop corrects it")
+          (is (not (str/includes? out "continue' again"))
+              "round 2: and never told the seat to continue in the first place — the persistent loop rides through events"))))))
+
+(deftest a-persistent-loop-never-says-continue-again
+  (testing "round-2 panel (reproduced): under --persistent a mid-run event printed 'Run paused … Use continue again' and the loop carried on by itself, so the seat's last instruction was to continue a finished run"
+    (runs/reset-reported-events!)
+    (let [calls (atom 0)]
+      (with-mock-state (runner-state :log [bran-fired])
+        (with-redefs [runs/continue-run! (fn [& _]
+                                           (if (= 1 (swap! calls inc))
+                                             (runs/handle-events {:fired-event bran-fired
+                                                                  :state @state/client-state
+                                                                  :side "runner"})
+                                             {:status :run-complete}))]
+          (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
+            (is (str/includes? out "Brân 1.0") "the event is reported")
+            (is (not (str/includes? out "continue' again")) out)
+            (is (not (str/includes? out "Run paused")) out)))))))
+
+(deftest a-single-step-still-pauses
+  (runs/reset-reported-events!)
+  (let [out (with-out-str (runs/handle-events {:fired-event bran-fired :state (runner-state :log [bran-fired]) :side "runner"}))]
+    (is (str/includes? out "continue' again") "outside the persistent loop the seat does drive the next step")))

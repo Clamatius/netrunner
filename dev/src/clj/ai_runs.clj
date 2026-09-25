@@ -1563,6 +1563,21 @@
       (some hit? (mapcat :content servers)) :non-ice
       :else nil)))
 
+(def ^:dynamic *riding-through-events*
+  "True while auto-continue-loop! --persistent owns the run: it rides through
+   notable events on its own (#36), so handle-events must not tell the seat to
+   'continue again' (round-2 panel: under --persistent a mid-run rez printed that
+   and the loop carried on, leaving the seat's last instruction wrong)."
+  false)
+
+(defn- run-window-open?
+  "Is there still a run window here — a run, or a run-less encounter (#164)?
+   One answer for both printers of a notable event (handle-events and the
+   persistent loop), which used to disagree in one output (#244 friction)."
+  [s]
+  (or (some? (get-in s [:game-state :run]))
+      (core/encounter-window? s)))
+
 (defn handle-events
   "Priority 4: Pause for important events (rez, subs, abilities, damage).
    Order is most-specific-first: a firing subroutine and its own 'uses <ice>
@@ -1606,6 +1621,22 @@
                (unreported? tag-damage-event) [:tag-or-damage "tag or damage!"    tag-damage-event])]
     (reported-set)  ; ensure the set belongs to the current game before adding
     (swap! reported-events update :events conj (event-key event))
+    (let [no-window? (boolean (and state (not (run-window-open? state))))]
+    (if no-window?
+      ;; #244 friction (marquee fffee105): "Run paused … Use 'continue' again"
+      ;; and then "the run is over" in one output. With no window open there is
+      ;; nothing to pause or continue. Worded so it does not claim a run just
+      ;; ended: a `continue` with no run at all reaches here too (panel).
+      (do
+        (println (format "ℹ️  %s" headline))
+        (println (format "   %s" (:text event)))
+        (println "   No run or encounter is open — not your decision, nothing to continue."))
+      (if *riding-through-events*
+        (do
+          (println (format "ℹ️  %s" headline))
+          (println (format "   %s" (:text event)))
+          (println "   (The run loop carries on by itself — nothing to do.)"))
+      (do
     (println (format "⚠️  Run paused - %s" headline))
     (println (format "   %s" (:text event)))
     ;; #110: ONE verb, and it is `continue`.
@@ -1623,8 +1654,12 @@
     ;; is `continue --single`). Offering a seat a choice between aliases of one
     ;; command is the ambiguity, not a service to it. The aliases stay reachable
     ;; and are now documented in `help --full`; runtime guidance names one.
-    (println "   → Use 'continue' again to proceed")
-    {:status status :wake-reason status :event event}))
+    (println "   → Use 'continue' again to proceed"))))
+    {:status status :wake-reason status :event event
+     ;; The persistent loop re-reads the state after this; if the run closed in
+     ;; between, it must say so itself, because the pause framing above went
+     ;; out (panel: two printers, two snapshots).
+     :framed-after-run? no-window?})))
 
 (defn handle-unexpected-state
   "Fallback: Unknown state - wait and retry rather than give up"
@@ -1988,12 +2023,10 @@
            :elapsed-ms (- (System/currentTimeMillis) start-time)})
 
         :else
-        (let [raw (continue-run!)
+        (let [raw (binding [*riding-through-events* persistent] (continue-run!))
               ;; "Is there still a window here?" — the #164 rule (run OR a
               ;; run-less encounter), read once for both persistent branches.
-              window-open? (let [s @state/client-state]
-                             (or (some? (get-in s [:game-state :run]))
-                                 (core/encounter-window? s)))
+              window-open? (run-window-open? @state/client-state)
               ;; #151 item 7: under --persistent a notable event is never a
               ;; decision (the #36 ride-through below), but that ride-through
               ;; was gated on the run object — and the events the Corp seats
@@ -2007,8 +2040,12 @@
               result (if (and persistent
                               (should-pause-for-event? (:status raw))
                               (not window-open?))
-                       (do (println "ℹ️  That resolved after the run ended — not your decision, the run is over.")
-                           (assoc raw :status :run-complete :absorbed-event (:status raw)))
+                       (do
+                         ;; handle-events says it with the event (#244) unless
+                         ;; the run closed after it read the state.
+                         (when-not (:framed-after-run? raw)
+                           (println "ℹ️  That resolved after the run ended — not your decision, the run is over."))
+                         (assoc raw :status :run-complete :absorbed-event (:status raw)))
                        raw)
               status (:status result)
               ;; The top-of-loop check read the state BEFORE continue-run!; the

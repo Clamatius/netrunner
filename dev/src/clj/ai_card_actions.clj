@@ -590,7 +590,7 @@
         before-credits (get-in client-state [:game-state :corp :credit])]
     (if (not (core/side= "Corp" side))
       (println "❌ Only Corp can rez cards")
-      (let [card (core/find-installed-corp-card card-name)]
+      (let [card (core/find-installed-corp-card card-name :prefer-unrezzed? true)]
         (if card
           (let [gameid (:gameid client-state)
                 card-ref (core/create-card-ref card)
