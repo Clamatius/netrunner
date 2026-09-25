@@ -313,17 +313,15 @@
 ;; ============================================================================
 
 (defn handle-runner-approach-ice
-  "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE."
+  "Priority 2: Runner waits for the Corp's rez decision after passing approach-ice."
   [{:keys [side run-phase state]}]
   (when (and (= side "runner")
              (= run-phase "approach-ice"))
     (let [run (get-in state [:game-state :run])
           position (:position run)
           current-ice (core/current-run-ice state)
-          no-action (:no-action run)
-          no-action-str (normalize-side no-action)
-          corp-already-declined? (= no-action-str "corp")]
-      (when (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))
+          runner-already-passed? (core/i-already-passed-run-window? state side)]
+      (when (and current-ice (not (:rezzed current-ice)) runner-already-passed?)
         (let [ice-title (:title current-ice "ICE")
               ice-count (count (get-in state [:game-state :corp :servers
                                               (keyword (last (:server run))) :ices]))

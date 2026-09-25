@@ -1788,9 +1788,19 @@
                   ;; Sits after every real-decision handler above (corp rez/fire,
                   ;; upgrade), so it can only fire when nothing else wants to act.
                   handle-stalled-window-self-advance
+                  ;; #244: unrezzed ICE gives the Corp a rez decision AFTER the
+                  ;; Runner's first pass. The old approach handler parked the
+                  ;; Runner before that pass, so both seats waited forever.
+                  (fn [{:keys [side run-phase state gameid my-prompt]}]
+                    (when (and (= side "runner")
+                               (= run-phase "approach-ice")
+                               (some-> (core/current-run-ice state) :rezzed not)
+                               (core/owns-run-window? state side)
+                               (not (has-real-decision? my-prompt)))
+                      (send-continue! gameid)))
+                  runner-handlers/handle-runner-approach-ice
                   corp-handlers/handle-paid-ability-window
                   runner-handlers/handle-auto-select-single-card
-                  runner-handlers/handle-runner-approach-ice
                   tactics/handle-runner-tactics
                   runner-handlers/handle-runner-full-break
                   runner-handlers/handle-runner-encounter-ice
