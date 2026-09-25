@@ -1161,8 +1161,14 @@
    Duplicate titles with no [N] suffix: if one copy is the ICE at the current
    run position, that copy wins (#100 — run-scoped commands like fire-subs/rez
    shouldn't demand a suffix when the encounter already disambiguates).
-   Otherwise returns nil and prints the disambiguation list."
-  [card-name]
+   Otherwise returns nil and prints the disambiguation list.
+
+   :prefer-unrezzed? (for `rez`) breaks a tie in favour of the only unrezzed copy,
+   after the run context: with one copy rezzed and one not, only one CAN be
+   rezzed, so asking the seat to pick was a refusal with the answer in its own
+   list (#244 friction, marquee fffee105 Nico Campaign). It breaks ties only: an
+   explicit [N] still indexes the full list the disambiguation prints."
+  [card-name & {:keys [prefer-unrezzed?]}]
   (let [servers (state/corp-servers)
         ;; Get all ICE from all servers
         all-ice (mapcat :ices (vals servers))
@@ -1178,6 +1184,7 @@
       ;; find-installed-card above.
       explicit-index? (nth (vec matches) index nil)
       (= 1 match-count) (first matches)
+
       :else
       (let [cs @state/client-state
             ;; A FORCED encounter can put the Runner on an ICE that :position
@@ -1186,13 +1193,26 @@
             enc-ice (get-in cs [:game-state :encounters :ice])
             run-ice (or enc-ice (current-run-ice cs))
             run-match (when run-ice
-                        (first (filter #(= (:cid run-ice) (:cid %)) matches)))]
-        (if run-match
+                        (first (filter #(= (:cid run-ice) (:cid %)) matches)))
+            unrezzed (when prefer-unrezzed? (remove :rezzed matches))]
+        (cond
+          run-match
           (do
             (println (format "→ %d copies of '%s' installed — using the one in the active run (%s). Use \"%s [N]\" to target another."
                              match-count title
                              (or (card-server-location run-match) "?") title))
             run-match)
+
+          ;; After the run: at an approach the run names the copy (the rules
+          ;; allow rezzing only the approached ICE), so "the only unrezzed one"
+          ;; must not reach past it to a copy elsewhere.
+          (= 1 (count unrezzed))
+          (let [pick (first unrezzed)]
+            (println (format "→ %d copies of '%s' installed — using the only unrezzed one (%s). Use \"%s [N]\" to target another."
+                             match-count title (or (card-server-location pick) "?") title))
+            pick)
+
+          :else
           (do
             (println (format "❓ Multiple copies of '%s' installed (%d found)" title match-count))
             (println "   Specify which one:")

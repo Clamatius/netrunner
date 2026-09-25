@@ -841,3 +841,59 @@
       (let [out (with-out-str (ai-actions/toggle-auto-no-action!))]
         (is (str/includes? out "NOT sent"))
         (is (not (str/includes? out "Sent auto-pass toggle")))))))
+
+;; ============================================================================
+;; rez "<name>" with copies installed: only an UNREZZED copy can be rezzed
+;; (#244 friction item 4, marquee fffee105: `rez "Nico Campaign"` refused with
+;; one copy rezzed in remote1 and the other unrezzed in remote3)
+;; ============================================================================
+
+(def ^:private nico-r1 {:cid "nico-r1" :title "Nico Campaign" :type "Asset" :rezzed true
+                        :zone [:servers :remote1 :content] :side "Corp"})
+(def ^:private nico-r3 {:cid "nico-r3" :title "Nico Campaign" :type "Asset" :rezzed false
+                        :zone [:servers :remote3 :content] :side "Corp"})
+
+(defn- corp-state-with-nicos [& nicos]
+  (mock-client-state
+   :side "corp"
+   :game-state {:corp {:servers (into {} (map (fn [n] [(get-in n [:zone 1]) {:content [n]}]) nicos))}}))
+
+(defn- rez-sends [cs card-name]
+  (let [sent (atom [])]
+    (with-mock-state cs
+      (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                    ai-core/action-timeout 0]
+        (let [out (with-out-str (ai-card-actions/rez-card! card-name))]
+          {:cids (mapv #(get-in % [:data :args :card :cid]) @sent) :out out})))))
+
+(deftest rez-picks-the-only-unrezzed-copy
+  (testing "one copy rezzed, one not: the rezzed one cannot be rezzed, so there is nothing to ask"
+    (let [{:keys [cids out]} (rez-sends (corp-state-with-nicos nico-r1 nico-r3) "Nico Campaign")]
+      (is (= ["nico-r3"] cids))
+      (is (str/includes? out "only unrezzed") "and it says why it picked that copy")
+      (is (not (str/includes? out "Multiple copies")) "rather than refusing"))))
+
+(deftest rez-stays-ambiguous-between-two-unrezzed-copies
+  (testing "the tiebreak is 'the only one that CAN be rezzed', not a guess between two that can"
+    (let [{:keys [cids out]} (rez-sends (corp-state-with-nicos (assoc nico-r1 :rezzed false) nico-r3)
+                                        "Nico Campaign")]
+      (is (empty? cids))
+      (is (str/includes? out "Multiple copies")))))
+
+(deftest rez-explicit-index-still-names-the-listed-copy
+  (testing "[N] indexes the list the disambiguation prints (all copies), not the narrowed one"
+    (let [{:keys [cids]} (rez-sends (corp-state-with-nicos nico-r1 nico-r3) "Nico Campaign [1]")]
+      (is (= ["nico-r3"] cids)))))
+
+(deftest rez-never-reaches-past-the-approached-copy
+  (testing "at an approach the run names the copy (#100); 'the only unrezzed one' must not pick an ICE elsewhere, which the rules do not let the Corp rez now"
+    (let [approached (assoc funhouse-rd :rezzed true)
+          elsewhere  (assoc funhouse-r3 :rezzed false)
+          {:keys [cids]} (rez-sends (mock-client-state
+                                     :side "corp"
+                                     :game-state {:corp {:servers {:rd {:ices [approached]}
+                                                                   :remote3 {:ices [elsewhere]}}}
+                                                  :run {:server ["servers" "rd"] :position 1
+                                                        :phase "approach-ice"}})
+                                    "Funhouse")]
+      (is (not= ["fun-r3"] cids)))))
