@@ -3814,18 +3814,19 @@
 
 (deftest identical-string-choices-are-not-called-interchangeable
   (testing "panel (reproduced): Eli 1.0's two 'End the run' choices break DIFFERENT subroutines — a shared label is not a shared option"
-    (let [lines (display/duplicate-choice-lines [{:value "End the run"} {:value "End the run"} {:value "Done"}])]
+    (let [lines (display/duplicate-choice-lines [{:value "End the run"} {:value "End the run"} {:value "Done"}] nil)]
       (is (= 1 (count lines)))
       (is (not-any? #(re-find #"same option|either|interchangeable" %) lines))
       (is (re-find #"separate options" (first lines))))))
 
 (deftest unresolvable-card-copies-fall-back-to-position
-  (let [lines (display/duplicate-choice-lines
-               [{:value {:title "Nico Campaign" :cid "gone-1"}} {:value {:title "Nico Campaign" :cid "gone-2"}}])]
-    (is (re-find #"separate options" (first lines)))))
+  (testing "round-2 panel: the choice values sit in the game-state tree themselves (under :prompt-state), carry cid and title, and used to resolve to THEMSELVES — 'Same name, different cards: 0. Nico Campaign · 1. Nico Campaign', a difference claim with nothing to tell them apart"
+    (let [gs {:corp {:servers {} :prompt-state nico-trigger-prompt}}
+          lines (display/duplicate-choice-lines (:choices nico-trigger-prompt) gs)]
+      (is (re-find #"separate options" (first lines)) (str lines)))))
 
 (deftest distinct-choices-get-no-note
-  (is (empty? (display/duplicate-choice-lines [{:value "HQ"} {:value "R&D"} {:value "Done"}]))))
+  (is (empty? (display/duplicate-choice-lines [{:value "HQ"} {:value "R&D"} {:value "Done"}] nil))))
 
 ;; ============================================================================
 ;; A prompt already shown is not reprinted in full (#244 friction item 3, both
@@ -3925,13 +3926,17 @@
     (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])]
       (is (empty? (display/install-overwrite-lines st prompt))))))
 
-(deftest the-prompts-own-card-decides-without-the-card-database
-  (testing "panel (reproduced): with an empty card DB an ICE install was told it would trash the agenda. corp-install's prompt carries the card being installed"
+(deftest the-installing-card-is-typed-from-the-board-not-the-prompt
+  (testing "round-2 panel: the wire strips a prompt's :card to cid/title (diffs/prompt-summary), so :type must come from the Corp's own copy of the card"
     (with-redefs [jinteki.cards/all-cards (atom {})]
-      (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])]
-        (is (empty? (display/install-overwrite-lines st (assoc prompt :card {:title "Ice Wall" :type "ICE"})))))
+      (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])
+            st (assoc-in st [:game-state :corp :hand] [{:cid "iw" :title "Ice Wall" :type "ICE"
+                                                         :zone ["hand"] :side "Corp"}])
+            wire-card {:cid "iw" :title "Ice Wall"}]
+        (is (empty? (display/install-overwrite-lines st (assoc prompt :card wire-card)))
+            "Ice Wall in hand is ICE: no warning, even with no card database"))
       (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Mystery" ["Server 2"])
-            lines (display/install-overwrite-lines st prompt)]
+            lines (display/install-overwrite-lines st (assoc prompt :card {:cid "nowhere" :title "Mystery"}))]
         (is (re-find #"if this installs an asset or agenda" (first lines))
             "an unknown type is not a trash claim, only a conditional warning")))))
 
@@ -3955,3 +3960,32 @@
                                                        :choices [{:value "Server 2"} {:value "New remote"}]}}
                                  :runner {:click 2 :credit 5 :hand []}})
     (is (re-find #"Server 2 holds Send a Message" (with-out-str (display/show-prompt-detailed))))))
+
+
+(deftest the-notes-read-the-captured-state-not-the-live-one
+  (testing "round-2 panel (#139): a snapshot renders a captured state; the new lookups read the live atom, so the note and the Selectable block in ONE render disagreed"
+    (ai-state/reset-rendered-prompt!)
+    (let [captured {:side "corp"
+                    :game-state {:active-player "corp" :turn 5
+                                 :corp {:click 3 :credit 5 :hand [] :servers nico-servers
+                                        :prompt-state (assoc nico-trigger-prompt :eid {:eid 95})}
+                                 :runner {:click 0 :credit 5 :hand []}}}]
+      (with-mock-state (mock-client-state :side "corp" :game-state {})
+        (let [out (with-out-str (display/show-prompt-detailed captured))]
+          (is (re-find #"Same name, different cards" out) out))))))
+
+(deftest the-repeat-keeps-the-install-warning
+  (testing "round-2 panel (Sol): the compact repeat printed the server choices without the warning"
+    (ai-state/reset-rendered-prompt!)
+    (with-mock-state (mock-client-state
+                      :side "corp"
+                      :game-state {:active-player "runner" :turn 5
+                                   :corp {:click 0 :credit 5 :hand []
+                                          :servers {:remote2 {:content [sam] :ices []}}
+                                          :prompt-state {:msg "Choose a server" :prompt-type "other" :eid {:eid 96}
+                                                         :choices [{:value "Server 2"} {:value "New remote"}]}}
+                                   :runner {:click 2 :credit 5 :hand []}})
+      (with-out-str (display/show-prompt-detailed))
+      (let [again (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? again "unchanged since shown above") "premise: this is the collapsed repeat")
+        (is (re-find #"Server 2 holds Send a Message" again))))))

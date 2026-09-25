@@ -925,12 +925,34 @@
           (is (not (str/includes? out "continue' again")) out))))))
 
 (deftest the-loop-corrects-a-pause-the-run-outlived
-  (testing "panel: handle-events read a state with the run open and printed the pause; the loop re-reads after the run closed and must say so, or the seat is left told to continue a finished run"
+  (testing "panel: handle-events read a state with the run open; the loop re-reads after the run closed and must say so"
     (runs/reset-reported-events!)
     (with-mock-state (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
       (with-redefs [runs/continue-run! (fn [& _] (runs/handle-events {:fired-event bran-fired
                                                                        :state (runner-state :log [bran-fired])
                                                                        :side "corp"}))]
         (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
-          (is (str/includes? out "Run paused") "premise: the pause went out")
-          (is (str/includes? out "the run is over") "and the loop corrects it"))))))
+          (is (str/includes? out "the run is over") "the loop corrects it")
+          (is (not (str/includes? out "continue' again"))
+              "round 2: and never told the seat to continue in the first place — the persistent loop rides through events"))))))
+
+(deftest a-persistent-loop-never-says-continue-again
+  (testing "round-2 panel (reproduced): under --persistent a mid-run event printed 'Run paused … Use continue again' and the loop carried on by itself, so the seat's last instruction was to continue a finished run"
+    (runs/reset-reported-events!)
+    (let [calls (atom 0)]
+      (with-mock-state (runner-state :log [bran-fired])
+        (with-redefs [runs/continue-run! (fn [& _]
+                                           (if (= 1 (swap! calls inc))
+                                             (runs/handle-events {:fired-event bran-fired
+                                                                  :state @state/client-state
+                                                                  :side "runner"})
+                                             {:status :run-complete}))]
+          (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
+            (is (str/includes? out "Brân 1.0") "the event is reported")
+            (is (not (str/includes? out "continue' again")) out)
+            (is (not (str/includes? out "Run paused")) out)))))))
+
+(deftest a-single-step-still-pauses
+  (runs/reset-reported-events!)
+  (let [out (with-out-str (runs/handle-events {:fired-event bran-fired :state (runner-state :log [bran-fired]) :side "runner"}))]
+    (is (str/includes? out "continue' again") "outside the persistent loop the seat does drive the next step")))

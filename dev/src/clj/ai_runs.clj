@@ -1563,6 +1563,13 @@
       (some hit? (mapcat :content servers)) :non-ice
       :else nil)))
 
+(def ^:dynamic *riding-through-events*
+  "True while auto-continue-loop! --persistent owns the run: it rides through
+   notable events on its own (#36), so handle-events must not tell the seat to
+   'continue again' (round-2 panel: under --persistent a mid-run rez printed that
+   and the loop carried on, leaving the seat's last instruction wrong)."
+  false)
+
 (defn- run-window-open?
   "Is there still a run window here — a run, or a run-less encounter (#164)?
    One answer for both printers of a notable event (handle-events and the
@@ -1624,6 +1631,11 @@
         (println (format "ℹ️  %s" headline))
         (println (format "   %s" (:text event)))
         (println "   No run or encounter is open — not your decision, nothing to continue."))
+      (if *riding-through-events*
+        (do
+          (println (format "ℹ️  %s" headline))
+          (println (format "   %s" (:text event)))
+          (println "   (The run loop carries on by itself — nothing to do.)"))
       (do
     (println (format "⚠️  Run paused - %s" headline))
     (println (format "   %s" (:text event)))
@@ -1642,7 +1654,7 @@
     ;; is `continue --single`). Offering a seat a choice between aliases of one
     ;; command is the ambiguity, not a service to it. The aliases stay reachable
     ;; and are now documented in `help --full`; runtime guidance names one.
-    (println "   → Use 'continue' again to proceed")))
+    (println "   → Use 'continue' again to proceed"))))
     {:status status :wake-reason status :event event
      ;; The persistent loop re-reads the state after this; if the run closed in
      ;; between, it must say so itself, because the pause framing above went
@@ -2011,7 +2023,7 @@
            :elapsed-ms (- (System/currentTimeMillis) start-time)})
 
         :else
-        (let [raw (continue-run!)
+        (let [raw (binding [*riding-through-events* persistent] (continue-run!))
               ;; "Is there still a window here?" — the #164 rule (run OR a
               ;; run-less encounter), read once for both persistent branches.
               window-open? (run-window-open? @state/client-state)

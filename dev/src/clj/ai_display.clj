@@ -2650,6 +2650,17 @@
   (when (state/game-over? (:game-state state))
     (println "🏁 Game over — this prompt is a leftover from the final trigger. Nothing to resolve; the result stands (see game-over-status).")))
 
+(defn- board-card
+  "The card with `cid` on the captured board, or nil. Prompt states are left out
+   of the search and a :zone is required: a choice's own value carries the cid
+   and a title, and used to resolve to itself (round-2 panel), which claimed
+   'different cards' with nothing to tell them apart."
+  [cid gs]
+  (when (and cid gs)
+    (let [card (core/find-selectable-card-by-cid
+                cid (-> gs (update :corp dissoc :prompt-state) (update :runner dissoc :prompt-state)))]
+      (when (:zone card) card))))
+
 (defn duplicate-choice-lines
   "Notes for choices that print the same label (#244 friction, marquee fffee105:
    the trigger-order prompt listed `0. Nico Campaign / 1. Nico Campaign` with
@@ -2660,15 +2671,17 @@
    same words as the selectable block. String choices that share a label are NOT
    claimed to be interchangeable: the engine keeps each choice's index, and Eli
    1.0's two \"End the run\" choices break different subroutines (panel,
-   reproduced). They are only named as separate options."
-  [choices]
+   reproduced). They are only named as separate options.
+
+   `gs` is the captured game-state the rest of the block renders from (#139)."
+  [choices gs]
   (for [[label idxs] (->> (map-indexed vector choices)
                           (group-by (comp core/format-choice second))
                           (sort-by (comp ffirst val)))
         :when (> (count idxs) 1)
         :let [where (for [[i c] idxs
                           :let [cid (get-in c [:value :cid])
-                                card (when cid (core/find-selectable-card-by-cid cid))]]
+                                card (board-card cid gs)]]
                       (when card (str i ". " (core/format-selectable-card card))))]]
     (if (every? some? where)
       (str "    ↳ Same name, different cards: " (str/join " · " where))
@@ -2684,8 +2697,10 @@
    Runner's run-target prompts use the same words (panel: Dirty Laundry).
 
    - \"Choose a location to install X\" is the engine's own install prompt
-     (corp-install), whose :card IS the card being installed. A known asset or
-     agenda gets a definite warning; known ICE/upgrade gets none.
+     (corp-install), whose :card IS the card being installed. The wire strips
+     that card to cid/title (diffs/prompt-summary), so its type is read from the
+     Corp's own board copy (hand, archives), then the card database. A known
+     asset or agenda gets a definite warning; known ICE/upgrade gets none.
    - An unknown type, or a bare \"Choose a server\" (Vaporframe Fabricator pairs
      it with an install; many cards use it for a redirect), gets a CONDITIONAL
      one. An empty card database must not turn an ICE install into a trash
@@ -2694,7 +2709,7 @@
   (let [msg (str (:msg prompt))
         installing (second (re-find #"^Choose a location to install (.+)$" msg))
         installing-type (when installing
-                          (or (:type (:card prompt))
+                          (or (:type (board-card (get-in prompt [:card :cid]) (:game-state state)))
                               (:type (get @jinteki.cards/all-cards installing))))
         mode (cond
                (not (core/side= "corp" (:side state)))                nil
@@ -2779,7 +2794,7 @@
             (println (str "  Choices:" (when has-selectable (str "  (use " choices-verb ")"))))
             (doseq [[idx choice] (map-indexed vector (:choices prompt))]
               (println (str "    " idx ". " (core/format-choice choice))))
-            (doseq [line (duplicate-choice-lines (:choices prompt))]
+            (doseq [line (duplicate-choice-lines (:choices prompt) (:game-state state))]
               (println line))
             (doseq [line (install-overwrite-lines state prompt)]
               (println line))))
@@ -2916,12 +2931,17 @@
                                                            (:choices prompt))))))
               ;; The index->card mapping is what `choose-card <N>` needs; a count
               ;; alone was not actionable (panel).
+              ;; A state claim like the post-game banner: the repeat must not drop it
+              ;; (round-2 panel).
+              (doseq [line (install-overwrite-lines state prompt)]
+                (println line))
               (when has-selectable
-                (let [{:keys [pickable phantom]} (core/resolve-selectable (:selectable prompt))]
-                  (println (str "  Selectable: "
-                                (str/join " · " (map (fn [{:keys [idx card]}]
-                                                       (str idx ". " (core/format-selectable-card card)))
-                                                     pickable))
+                (let [{:keys [pickable phantom]} (core/resolve-selectable (:selectable prompt) (:game-state state))]
+                  (println (str "  Selectable:"
+                                (when (seq pickable)
+                                  (str " " (str/join " · " (map (fn [{:keys [idx card]}]
+                                                                  (str idx ". " (core/format-selectable-card card)))
+                                                                pickable))))
                                 (when (seq phantom) (format " (+%d not selectable by you)" (count phantom)))))))
               (println "  (`prompt --full` reprints the whole block.)"))
             (do
