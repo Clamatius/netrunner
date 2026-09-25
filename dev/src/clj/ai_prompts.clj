@@ -455,7 +455,7 @@
                  ;; Report the credits, and say plainly whether more are owed.
                  (if-let [paid (payment-progress pay-before)]
                    (println paid)
-                   (println (format "📇 Selected card: %s (index %d)" (:title card) index)))
+                   (println (format "📇 Selected card: %s (index %d)" (core/format-selectable-card card) index)))
                  (maybe-auto-end-turn-after-prompt!)
                  (core/with-cursor {:status :success :card card}))
 
@@ -465,7 +465,7 @@
                select?
                (do
                  (println (format "📇 Toggled card: %s (index %d) — more selections needed"
-                                  (:title card) index))
+                                  (core/format-selectable-card card) index))
                  (core/with-cursor {:status :success :card card}))
 
                ;; Unchanged on a NON-select prompt: choose-card is the wrong verb
@@ -589,7 +589,7 @@
           (let [select? (state/select-prompt-type? (:prompt-type prompt))]
             (println (format "📇 Selecting %d card(s)..." (count cards-to-select)))
             (doseq [{:keys [card ref]} cards-to-select]
-              (println (format "   → %s" (:title card)))
+              (println (format "   → %s" (core/format-selectable-card card)))
               (ws/select-card! card eid)
               (Thread/sleep core/short-delay))
             ;; Don't claim completion before the prompt confirms it. Only report
@@ -926,7 +926,7 @@
                         (if (and wait (not= :registered wait))
                           (reduced {:sent sent :stop wait})
                           (do
-                            (println (format "   → %s" (:title card)))
+                            (println (format "   → %s" (core/format-selectable-card card)))
                             (ws/select-card! card eid)
                             {:sent (inc sent) :stop nil}))))
                     {:sent 0 :stop nil}

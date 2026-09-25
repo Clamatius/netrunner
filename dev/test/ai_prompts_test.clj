@@ -1251,3 +1251,36 @@
                                         ["Diesel"])]
     (is (empty? sent))
     (is (re-find #"status" out) (str "a stale cache must point at a resync: " out))))
+
+;; ============================================================================
+;; A face-down pick echoes as `null` (#244 friction item 6, marquee 10f7a727:
+;; "When a face-down card is one of the picks, multi-choose prints → null").
+;; The echo used (:title card), and a face-down card has none. The selectable
+;; LIST already names it via format-selectable-card (#70); the echo now does too.
+;; ============================================================================
+
+(defn- facedown-select-state []
+  (mock-client-state
+   :side "runner"
+   :game-state {:corp {:servers {:remote1 {:content
+                                           [{:cid "fd-1"
+                                             :zone ["servers" "remote1" "content"]
+                                             :side "Corp" :type "Card"}]}}}
+                :runner {:prompt-state {:prompt-type "select" :eid "brh-9"
+                                        :msg "Click a card to access it."
+                                        :selectable ["fd-1"]}}
+                :active-player "runner"}))
+
+(deftest a-face-down-pick-is-not-echoed-as-null
+  (doseq [[label f moved?] [["multi-choose" #(prompts/multi-choose! 0) true]
+                            ["choose-card (resolved)" #(prompts/choose-card! 0) true]
+                            ["choose-card (toggled)" #(prompts/choose-card! 0) false]]]
+    (testing label
+      (with-mock-state (facedown-select-state)
+        (with-redefs [ws/select-card! (fn [_card _eid & _] true)
+                      prompts/wait-for-prompt-change! (fn [_eid & _] moved?)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (let [out (with-out-str (f))]
+            (is (not (re-find #"\bnull\b" out)) (str label " printed: " out))
+            (is (re-find #"face-down card" out)
+                (str label ": name it the way the selectable list did, got: " out))))))))
