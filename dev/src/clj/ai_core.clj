@@ -2329,31 +2329,6 @@
    only reported once this has elapsed (#102 item 7)."
   5000)
 
-(defonce ^:private window-first-seen
-  ;; {[phase position no-action] first-seen-ms}: when did we first see this exact
-  ;; window decision-free and stalled? ONE clock for the #31 self-advance and for
-  ;; `wait`'s :opponent-owes-window (#102 item 7). Timing `wait` from its own call
-  ;; instead restarted the clock on every call, so short waits never got the wake
-  ;; and a long one fired the instant a stall BEGAN (round-2 panel). Reset per run.
-  (atom {}))
-
-(defn reset-window-grace!
-  "Forget stalled-window timings (new run / new game)."
-  []
-  (reset! window-first-seen {}))
-
-(defn window-stalled-for-ms
-  "Milliseconds since we FIRST saw this exact window in this exact state.
-   Records first sight on the way past, so the first call always returns 0.
-   Call it only once the window is known to be decision-free: that is the
-   moment the clock should start."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        k [(:phase run) (:position run) (some-> (:no-action run) name str/lower-case)]
-        now (System/currentTimeMillis)
-        first-seen (get (swap! window-first-seen update k #(or % now)) k now)]
-    (- now first-seen)))
-
 (defn- attacked-server
   "The server map for the server currently being run, or nil if we cannot resolve
    it. Distinguishing \"server not found\" (unknown) from \"server found, root
@@ -2441,6 +2416,49 @@
 
       ;; Anything else (encounter-ice, success, …): assume a real decision.
       true)))
+
+(defonce ^:private current-window
+  ;; {side-name {:key window-key :since ms}}: the window each seat is looking at
+  ;; NOW, and since when. ONE record per seat, not a map of every key ever seen:
+  ;; #102 item 7 round 3 found that a key map remembers old windows until a reset,
+  ;; and the resets were both too frequent (plain `continue` reset it mid-window,
+  ;; so the #31 recovery never fired) and too rare (a Cell Portal re-approach, or
+  ;; a Jailbreak run that skips run!'s reset, inherited a finished window's clock).
+  ;; Here any observed change of window restarts the clock, so there is nothing
+  ;; stale to inherit and no reset to get wrong.
+  (atom {}))
+
+(defn- window-key
+  "What makes a run window THIS window, for the abandon clock. It includes
+   whether the opponent holds a decision: a rez that makes the window
+   decision-free starts the grace (round-2 panel), and whether an encounter is
+   live (a forced encounter is its own window)."
+  [state side]
+  (let [run (get-in state [:game-state :run])
+        na (:no-action run)]
+    [(some? run) (:phase run) (:position run)
+     ;; :no-action is false on a fresh window, and (name false) throws.
+     (when (or (keyword? na) (string? na)) (str/lower-case (name na)))
+     (boolean (encounter-window? state))
+     (boolean (opponent-has-run-decision? state side (run-phase state)))]))
+
+(defn reset-window-grace!
+  "Forget the abandon clock (new game; tests)."
+  []
+  (reset! current-window {}))
+
+(defn window-stalled-for-ms
+  "Observe the window `side` is looking at, and return how long it has been
+   this same window. Call it on every poll or tick: the clock is only as good
+   as the observations that tell it the window changed."
+  [state side]
+  (let [k (window-key state side)
+        seat (str/lower-case (name (or side "?")))
+        now (System/currentTimeMillis)
+        rec (get (swap! current-window update seat
+                        (fn [r] (if (= (:key r) k) r {:key k :since now})))
+                 seat)]
+    (- now (:since rec))))
 
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
@@ -2753,9 +2771,9 @@
     ;; decision case sleeps instead). Not :my-turn: a run is live, and the
     ;; move here is the #31 recovery, not a turn action.
     :opponent-owes-window
-    ["   👉 You passed this run window. The Corp owes the pass, has no rez decision"
-     "      here, and has not answered for ~5s: `continue` advances the abandoned"
-     "      window (#31)."]
+    ["   👉 You passed this run window. The Corp owes the pass, has no rez decision here,"
+     (format "      and has not answered for ~%ds: `continue` advances the abandoned window (#31)."
+             (quot window-abandon-grace-ms 1000))]
 
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
@@ -2917,7 +2935,7 @@
            since-reason (when (and since-cursor (> current-cursor since-cursor))
                           (let [r (relevance-reason current-state side passed-live-window?)]
                             (if (= r :opponent-owes-window)
-                              (when (>= (window-stalled-for-ms current-state) window-abandon-grace-ms) r)
+                              (when (>= (window-stalled-for-ms current-state side) window-abandon-grace-ms) r)
                               r)))]
      (if since-reason
        (do
@@ -2956,6 +2974,7 @@
                  new-entries-raw (when (> current-log-count last-log-count)
                                    (take-last (- current-log-count last-log-count) current-log))
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
+                 stalled-ms (window-stalled-for-ms current-state side)   ; observe EVERY poll
                  raw-reason (relevance-reason current-state side initial-run-active? initial-run-phase)
                  ;; #102 item 7: a passed, decision-free window wakes the seat only
                  ;; once the WINDOW has been stalled for the abandon grace, on the
@@ -2964,7 +2983,7 @@
                  ;; spin under a new label (round-1 panel), and timing from this
                  ;; call instead of the window broke it both ways (round 2).
                  reason (if (and (= raw-reason :opponent-owes-window)
-                                 (< (window-stalled-for-ms current-state) window-abandon-grace-ms))
+                                 (< stalled-ms window-abandon-grace-ms))
                           nil
                           raw-reason)]
 

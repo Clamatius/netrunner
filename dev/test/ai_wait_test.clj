@@ -1168,3 +1168,30 @@
                                                   :no-action "runner"})))
         (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
           (is (not= :opponent-owes-window (:reason result)) (str result)))))))
+
+(deftest a-window-seen-again-after-another-starts-a-fresh-clock
+  (testing "round 3 (both seats, reproduced with Cell Portal): a re-approach to the same position in the same run inherited the finished window's clock, and was reported abandoned at 0 ms. Any observed change of window restarts it"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; the first window, observed
+      (Thread/sleep 300)
+      (with-mock-state (mock-game "runner" (assoc-in (decision-free-passed) [:run :no-action] false))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; a different window in between
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "the same key again is a NEW window: its grace starts now")))))
+
+(deftest a-new-run-does-not-inherit-the-last-runs-clock
+  (testing "round 3 (Astra, reproduced via Jailbreak, which skips run!'s reset): seen from `wait` alone"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))
+      (Thread/sleep 300)
+      (with-mock-state (mock-game "runner" (dissoc (decision-free-passed) :run))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; between runs
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))))))

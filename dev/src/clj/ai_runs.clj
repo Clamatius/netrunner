@@ -1344,7 +1344,7 @@
              (not (has-real-decision? my-prompt)))
     ;; Board says there's no rez decision here. Give the opponent the grace period
     ;; anyway (see docstring) — only an ABANDONED window gets advanced.
-    (let [stalled-ms (core/window-stalled-for-ms state)]
+    (let [stalled-ms (core/window-stalled-for-ms state side)]
       (when (>= stalled-ms self-advance-grace-ms)
         (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
                          (/ stalled-ms 1000.0)))
@@ -1676,6 +1676,9 @@
 
         client-state @state/client-state
         side (:side client-state)
+        ;; Observe the window every tick, so the abandon clock restarts on any
+        ;; change the seat saw (#102 item 7 round 3), whichever handler runs.
+        _ (when side (core/window-stalled-for-ms client-state side))
         gameid (:gameid client-state)
         run-phase (get-in client-state [:game-state :run :phase])
         my-prompt (get-in client-state [:game-state (keyword side) :prompt-state])
@@ -2277,11 +2280,12 @@
   "Own one active run: (re)apply the pre-committed strategy, then loop."
   [flags]
   (reset-strategy!)
-  ;; Per-run scratch state, same as run! — the CORP seat never calls run!, it
-  ;; only ever enters a run through here. NB reported-events is deliberately NOT
-  ;; reset here: it is game-scoped, and clearing it on each monitor-run re-issue
-  ;; would re-report the same event every time. (Guest review of #31.)
-  (reset-window-grace!)
+  ;; NO reset-window-grace! here (#102 item 7 round 3). A plain `continue` is
+  ;; this function, and resetting the abandon clock on entry mid-window meant
+  ;; the #31 self-advance saw every abandoned window as 0 ms old, so the recovery
+  ;; `wait` names never fired on the path it names. The clock now restarts
+  ;; itself whenever the observed window changes (core/window-stalled-for-ms).
+  ;; NB reported-events is deliberately NOT reset here either: it is game-scoped.
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal :rez-cids)]
     (when (seq strategy-flags)
       (set-strategy! strategy-flags)
