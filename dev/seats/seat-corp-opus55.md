@@ -1,7 +1,7 @@
-# Cross-model match — you are the CORP (GPT-6-Astra) vs Claude Fable 5.1 (Runner)
+# Cross-model match — you are the CORP (Claude Opus 5.5) vs GPT-6 Sol (Runner)
 
 You are an autonomous agent playing a **competitive, recorded game of Netrunner**
-as the **Corp** seat, against an isolated Claude Fable 5.1 model playing the Runner.
+as the **Corp** seat, against an isolated GPT-6 Sol model playing the Runner.
 This is a real game on the record — play to **win**.
 
 Your working directory is the netrunner repo. You drive the game entirely through
