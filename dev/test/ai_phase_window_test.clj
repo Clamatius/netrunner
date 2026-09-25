@@ -16,6 +16,7 @@
   (:require [clojure.test :refer :all]
             [test-helpers :refer :all]
             [ai-state :as state]
+            [ai-core :as core]
             [ai-basic-actions :as basic]
             [ai-websocket-client-v2 :as ws]))
 
@@ -278,17 +279,22 @@
           (str "announced a window that is not open — the engine closes an unheld one, got:\n" out))))
 
   (testing "and stays quiet when the open window is the OPPONENT's"
-    ;; Pins the OWNERSHIP half of the announcement guard, which nothing else
-    ;; reached. Executed (panel seat, then re-executed here): mutating
-    ;; `(= (:owner w) my-side)` to a constant true leaves every other assertion
-    ;; in this namespace green — an announcement for a window that is not ours
-    ;; is invisible to the suite without this case.
+    ;; Pins the OWNERSHIP guard on the announcement, which nothing reached.
+    ;; Executed: mutating `(= (:owner w) my-side)` to a constant true leaves
+    ;; every other assertion in this namespace green.
     ;;
-    ;; Latent rather than shipping, which is exactly why it was uncovered: the
-    ;; engine dissocs the window at end-phase-12 (game/core/turns.clj) and
-    ;; end-turn! refuses while one is open, so the opponent's window should not
-    ;; survive into our start. The guard is defensive — and an untested
-    ;; defensive guard is the thing #237 is about.
+    ;; This case is NOT sufficient on its own — see the Runner-seat mirror
+    ;; below. Every other start-turn! fixture here is Corp-seated, so a guard
+    ;; hardcoded to `(= (:owner w) :corp)` satisfies this one just as well as
+    ;; `my-side` does (executed: that mutation survived all 37 assertions until
+    ;; the mirror existed). Ownership is two-sided; it needs a fixture per side.
+    ;;
+    ;; Latent rather than shipping, which is why it was uncovered: the engine
+    ;; dissocs the window at end-phase-12 (game/core/turns.clj:53), and our own
+    ;; end-turn! and board.cljs both refuse while one is open. The ENGINE does
+    ;; not check it — process_actions.clj:78 keeps the phase-1.2 window "a
+    ;; client gate" per #107 — so this board shape is prevented by clients
+    ;; alone. That is exactly why the defensive guard is worth pinning.
     (let [{:keys [out result]}
           (start-turn-run
            {:connected true :side "corp"
@@ -304,4 +310,55 @@
                "reached and the assertion below cannot fail — got:\n" out))
       (is (not (clojure.string/includes? out "phase 1.2"))
           (str "announced the OPPONENT's window as if it were ours — only they "
-               "can close it, got:\n" out)))))
+               "can close it, got:\n" out))))
+
+  (testing "the mirror: Runner seat, and the open window is the CORP's"
+    ;; Kills the `:corp` hardcode the Corp-seat case above cannot see. Found by
+    ;; a fresh delta seat and executed: before this case, mutating the guard to
+    ;; `(= (:owner w) :corp)` survived all 37 assertions, because every
+    ;; start-turn! fixture in this namespace was Corp-seated.
+    (let [{:keys [out result]}
+          (start-turn-run
+           {:connected true :side "runner"
+            :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+            :game-state {:turn 4
+                         :runner {:click 0 :hand [] :user {:username "me"}}
+                         :corp {:click 0 :user {:username "ai-corp"}}
+                         :log [{:text "ai-corp is ending their turn 4"}]
+                         :corp-phase-12 {:active true}}}
+           true)]
+      (is (true? (:confirmed result))
+          (str "start was never confirmed, so the announcement branch was not "
+               "reached and the assertion below cannot fail — got:\n" out))
+      (is (not (clojure.string/includes? out "phase 1.2"))
+          (str "Runner seat was told about the CORP's window, got:\n" out)))))
+
+(deftest an-opponents-window-is-not-our-start-turn-acknowledgement
+  ;; BEYOND #237's stated ask, same class, kept because the fix is three lines
+  ;; of fixture. `started?` inside report-start-turn-sent! accepts a phase-12
+  ;; window as an acknowledgement in its own right — correct, since the engine
+  ;; only opens ours from our own start-turn. But that clause is
+  ;; ownership-sensitive and nothing pinned it: a fresh delta seat mutated it to
+  ;; `(some? (open-phase-window :phase-12))` and all 37 assertions stayed green.
+  ;;
+  ;; What that would cost: a send that never landed, with the OPPONENT's window
+  ;; still on the board, reported to the seat as a CONFIRMED start. That is the
+  ;; misleading-output class — the pre-action board narrated as the outcome —
+  ;; which is the whole reason wait-for-state! exists.
+  ;;
+  ;; No clicks are granted: the point is that the window alone must not confirm.
+  ;; action-timeout is redefed so the deliberate timeout costs 200ms, not 3s.
+  (testing "the opponent's phase-1.2 window must not confirm our start"
+    (let [{:keys [out result]}
+          (with-redefs [core/action-timeout 200]
+            (start-turn-run
+             {:connected true :side "corp"
+              :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+              :game-state {:turn 4
+                           :corp {:click 0 :hand [] :user {:username "me"}}
+                           :runner {:click 0 :user {:username "ai-runner"}}
+                           :log [{:text "ai-runner is ending their turn 4"}]
+                           :runner-phase-12 {:active true}}}))]
+      (is (false? (:confirmed result))
+          (str "the opponent's window was accepted as our acknowledgement, so "
+               "the seat would be told a start landed that never did, got:\n" out)))))
