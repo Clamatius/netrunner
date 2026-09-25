@@ -207,3 +207,17 @@
             "so the hint must not claim it passes (absence assertion: the true lines are present either way)")
         (is (re-find #"continue --single --no-rez" out) "name the one-window pass")
         (is (re-find #"continue --rez \"Ice Wall\"" out) "and the rez, with the card's name")))))
+
+(deftest a-closing-pass-is-not-mistaken-for-a-lost-one
+  (testing "the Corp passed FIRST, so the Runner's pass closes the window. A lagging wire still shows approach-ice with the Corp on the ledger, which is the lost-pass evidence only when the Corp's pass arrived AFTER ours"
+    (with-unrezzed-approach
+      (tick! state "corp" :flags ["--no-rez"])
+      (is (= :corp (get-in @state [:run :no-action])) "precondition: the Corp passed first")
+      (let [first  (tick! state "runner" :refresh? false)
+            _      (is (= ["continue"] (:sent first)))
+            phase  (get-in @state [:run :phase])
+            second (tick! state "runner" :refresh? false)]
+        (is (not= :approach-ice phase) "our pass closed the window")
+        (is (empty? (:sent second))
+            "a re-send here lands in the NEXT window as a pass nobody decided on")
+        (is (= phase (get-in @state [:run :phase])))))))

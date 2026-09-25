@@ -157,8 +157,9 @@
 ;; so a Sisyphus re-encounter of the same card no longer inherits this latch (#163).
 (defonce passed-ice-encounter (atom nil))
 
-;; [run-prompt-eid position ice-cid] of the approach to unrezzed ice where the
-;; Runner has sent its first pass (#244). See handle-runner-approach-ice.
+;; {:key [run-prompt-eid position ice-cid] :corp-first? bool} for the approach to
+;; unrezzed ice where the Runner has sent its pass, and whether the Corp had
+;; already passed when it did (#244). See handle-runner-approach-ice.
 (defonce passed-approach-ice (atom nil))
 
 (defn reset-state!
@@ -340,9 +341,12 @@
    latch. That is why this handler sits above it and owns both halves.
 
    The latch is evidence and the LEDGER outranks it, as with passed-ice-encounter
-   (#167): if the Corp's pass is on the ledger and the window is still open, ours
-   never landed (had it landed, theirs would have advanced the window), so the
-   pass is sent again.
+   (#167): if the Corp's pass reached the ledger AFTER we sent ours and the window
+   is still open, ours never landed (had it landed, theirs would have advanced the
+   window), so the pass is sent again. Only after: when the Corp passed first, our
+   pass is the one that closes the window, and a lagging wire still shows this
+   window with the Corp on the ledger. Re-sending on that lands a Runner pass in
+   the NEXT window.
 
    Unrezzed ice reaches the Runner through private-card, with no :rezzed key at
    all. Gate on (not (:rezzed ice)), never (some-> ice :rezzed not), which is nil
@@ -358,9 +362,11 @@
               ;; The run prompt's eid is per run, so a second run on the same
               ;; server this turn does not inherit the first run's latch.
               pass-key [(:eid my-prompt) position (:cid current-ice)]
-              latch-is-stale? (contains? #{:corp "corp"} (:no-action run))
-              passed? (and (not latch-is-stale?)
-                           (or (= @passed-approach-ice pass-key)
+              corp-on-ledger? (contains? #{:corp "corp"} (:no-action run))
+              latched (let [l @passed-approach-ice] (when (= (:key l) pass-key) l))
+              pass-lost? (and latched (not (:corp-first? latched)) corp-on-ledger?)
+              passed? (and (not pass-lost?)
+                           (or (some? latched)
                                (core/i-already-passed-run-window? state side)))]
           (cond
             passed?
@@ -392,7 +398,7 @@
               ;; pass never sent; #150: nothing printed that was not sent).
               (when (:sent result)
                 (println "   → Passed the unrezzed-ICE approach (the Corp's rez decision follows)")
-                (reset! passed-approach-ice pass-key))
+                (reset! passed-approach-ice {:key pass-key :corp-first? corp-on-ledger?}))
               result)))))))
 
 ;; ============================================================================
