@@ -47,7 +47,7 @@ GAME-OVER sooner, stop there. Do not play past 4 turns.
   name wrong, the client suggests the right one.
 - `dev/instructions/runner_play_structure.md` — credit floor, just-in-time rig,
   when to run.
-- This is the System Gateway tutorial matchup. You win at **7 agenda points**
+- This is System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points**
   (steal them off R&D / HQ / remotes), or by decking the Corp.
 - **Don't guess what a card does — look it up:**
   `./dev/send_command runner card-text "<name>"` for any visible card;
@@ -68,7 +68,7 @@ You have 4 clicks per turn; the turn auto-ends when clicks hit 0.
    discard-to-hand-size).
 
 Start with the mulligan: `./dev/send_command runner hand`, then
-`./dev/send_command runner decklist` (your own 40-card deck with full card text —
+`./dev/send_command runner decklist` (your own deck with full card text —
 judge the hand against *this* deck), then `./dev/send_command runner keep-hand`
 (or `mulligan`).
 

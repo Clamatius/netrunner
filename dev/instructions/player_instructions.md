@@ -17,7 +17,7 @@ Where `<side>` is `runner` or `corp`. The help text is the authoritative referen
 ### Game Structure
 - **Sides:** Corp (defending servers, plays first) vs Runner (attacking servers)
 - **Win conditions:** 
-- First to 7 agenda points (the default match format is System Gateway **Intermediate** — the 40-card booster decks — played to **7**; only the smaller Beginner base decks play to 6)
+- First to 7 agenda points (System Gateway is played to **7** — whether the tutorial decks or a Constructed faction deck; `decklist` shows yours. Only the smaller Beginner base decks play to 6)
 - Corp scores agenda points via advancing enough to pay cost then scoring after the last click (scoring does not require a click)
 - Runner wins if Corp must draw from empty R&D
 - Corp wins if Runner must discard but cannot (flatline)

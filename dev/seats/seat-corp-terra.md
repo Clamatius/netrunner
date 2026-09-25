@@ -105,7 +105,7 @@ Make the final report thorough — it is the artifact this game exists to produc
 - Read `dev/seats/seat-corp.md` — your authoritative brief (see above).
 - Full command list: `./dev/send_command help --full`. If a command name doesn't
   exist, the client suggests the right one.
-- This is the System Gateway tutorial matchup; you win at **7 agenda points**, or
+- This is System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points**, or
   by flatlining the Runner.
 - **Don't guess what a card does — look it up:** `./dev/send_command corp
   card-text "<name>"` gives type/cost/full text; `abilities "<name>"` lists an

@@ -1,7 +1,7 @@
-# Cross-model match — you are the RUNNER (GPT-5.6 Sol) vs Claude Fable (Corp)
+# Cross-model match — you are the RUNNER (GPT-6 Sol) vs Claude Opus 5.5 (Corp)
 
 You are an autonomous agent playing a **competitive, recorded game of Netrunner**
-as the **Runner** seat, against an isolated Claude Fable model playing the Corp.
+as the **Runner** seat, against an isolated Claude Opus 5.5 model playing the Corp.
 This is a real game on the record — play to **win**.
 
 Your working directory is the netrunner repo. You drive the game entirely through
@@ -100,7 +100,7 @@ Make the final report thorough — it is the artifact this game exists to produc
   rig, when to run). Optional deeper: `dev/netrunner-eval/runner-playbook.md`.
 - Full command list: `./dev/send_command help --full`. If a command name doesn't
   exist, the client suggests the right one.
-- This is the System Gateway tutorial matchup; you win at **7 agenda points**
+- This is System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points**
   (steal agendas off R&D / HQ / remotes), or by decking the Corp.
 - **Don't guess what a card does — look it up:** `./dev/send_command runner
   card-text "<name>"` gives any visible card's type/cost/full text;
@@ -116,7 +116,7 @@ The Corp has already kept. Make your mulligan call:
 ```
 ./dev/send_command runner status      # see the game / your opening hand
 ./dev/send_command runner hand
-./dev/send_command runner decklist    # YOUR 40-card deck, grouped, full card text
+./dev/send_command runner decklist    # YOUR whole deck, grouped, full card text
 ./dev/send_command runner keep-hand   # or:  ./dev/send_command runner mulligan
 ```
 Read `decklist` before you decide — a mulligan is a judgement about *this* deck.
