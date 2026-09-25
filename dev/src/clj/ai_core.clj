@@ -947,15 +947,21 @@
   [card-type]
   (contains? #{"Asset" "Agenda"} card-type))
 
+(defn root-card-in
+  "The asset or agenda installed in `server-name` (\"Server 2\"), read from a
+   given corp :servers map, or nil. Pure, so a renderer holding a captured state
+   (#139) can ask the same one-root-card-per-remote question install does."
+  [servers server-name]
+  (when-let [server-key (server-name->key server-name)]
+    (->> (get-in servers [server-key :content])
+         (filter #(root-card-type? (:type %)))
+         first)))
+
 (defn server-has-root-card?
   "Check if a server already has an asset or agenda installed.
    Returns the existing root card if found, nil otherwise."
   [server-name]
-  (when-let [server-key (server-name->key server-name)]
-    (let [content (state/server-cards server-key)]
-      (->> content
-           (filter #(root-card-type? (:type %)))
-           first))))
+  (root-card-in (state/corp-servers) server-name))
 
 (defn get-existing-remote-names
   "Returns a set of existing remote server names from game state.

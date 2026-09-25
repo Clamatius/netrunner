@@ -3867,3 +3867,55 @@
         (let [out (with-out-str (display/show-prompt-detailed))]
           (is (not (str/includes? out "unchanged since shown above"))
               (str "the Runner has passed since; the block says something new: " out)))))))
+
+;; ============================================================================
+;; An install-location choice that would trash an agenda (#244 friction item 7c,
+;; marquee fffee105): Ansel's install sub offered "0. Server 2", which held the
+;; Corp's advanced Send a Message, with no warning.
+;; ============================================================================
+
+(def ^:private sam {:cid "sam" :title "Send a Message" :type "Agenda" :advance-counter 2
+                    :zone [:servers :remote2 :content]})
+
+(defn- install-choice-state [msg choices]
+  {:side "corp"
+   :game-state {:corp {:servers {:remote2 {:content [sam] :ices []}
+                                 :remote3 {:content [] :ices [{:title "Whitespace" :type "ICE"}]}}}}
+   :prompt {:msg msg :choices (mapv (fn [v] {:value v}) choices)}})
+
+(deftest an-install-choice-that-would-trash-a-card-is-flagged
+  (let [{:keys [prompt] :as st} (install-choice-state "Choose a server" ["Server 2" "Server 3" "New remote"])
+        lines (display/install-overwrite-lines st prompt)]
+    (is (= 1 (count lines)) (str lines))
+    (is (re-find #"0\. Server 2" (first lines)))
+    (is (re-find #"Send a Message" (first lines)))
+    (is (re-find #"2 advancement" (first lines)) "an advanced agenda is the costly case; say so")
+    (is (re-find #"if this installs an asset or agenda" (first lines))
+        "a bare 'Choose a server' may be a redirect, so the claim is conditional")))
+
+(deftest the-engines-own-install-prompt-gets-a-definite-warning
+  (with-redefs [jinteki.cards/all-cards (atom {"Nico Campaign" {:title "Nico Campaign" :type "Asset"}})]
+    (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Nico Campaign" ["Server 2"])
+          lines (display/install-overwrite-lines st prompt)]
+      (is (re-find #"installing Nico Campaign there trashes it" (first lines)) (str lines)))))
+
+(deftest installing-ice-gets-no-overwrite-warning
+  (with-redefs [jinteki.cards/all-cards (atom {"Ice Wall" {:title "Ice Wall" :type "ICE"}})]
+    (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])]
+      (is (empty? (display/install-overwrite-lines st prompt))))))
+
+(deftest a-non-install-prompt-gets-no-overwrite-warning
+  (let [{:keys [prompt] :as st} (install-choice-state "Choose a server to run" ["Server 2"])]
+    (is (empty? (display/install-overwrite-lines st prompt)))))
+
+(deftest the-overwrite-warning-reaches-the-prompt-block
+  (ai-state/reset-rendered-prompt!)
+  (with-mock-state (mock-client-state
+                    :side "corp"
+                    :game-state {:active-player "runner" :turn 5
+                                 :corp {:click 0 :credit 5 :hand []
+                                        :servers {:remote2 {:content [sam] :ices []}}
+                                        :prompt-state {:msg "Choose a server" :prompt-type "other" :eid {:eid 91}
+                                                       :choices [{:value "Server 2"} {:value "New remote"}]}}
+                                 :runner {:click 2 :credit 5 :hand []}})
+    (is (re-find #"Server 2 holds Send a Message" (with-out-str (display/show-prompt-detailed))))))

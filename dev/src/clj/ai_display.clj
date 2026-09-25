@@ -2670,6 +2670,39 @@
       (format "    ↳ %s are the same option (\"%s\"): either index does the same thing." ns label)
       (format "    ↳ %s all show \"%s\" but are different cards; they differ only by position." ns label))))
 
+(defn install-overwrite-lines
+  "Warnings for install-location choices that already hold an asset or agenda
+   (#244 friction, marquee fffee105: Ansel's install sub offered `0. Server 2`,
+   which held the Corp's advanced Send a Message, with nothing said). Installing
+   an asset or agenda in a remote trashes the one already there; ICE and upgrades
+   do not.
+
+   Two confidence levels, because the prompt text is all there is:
+   - \"Choose a location to install X\" is the engine's own install prompt
+     (corp-install). Definite, unless X is ICE or an upgrade.
+   - A bare \"Choose a server\" is Ansel's install sub, but ~50 cards use the same
+     words for a run redirect (Bullfrog, Mind Game). So it is said conditionally
+     rather than claimed.
+   Anything else (\"Choose a server to run\", ...) gets nothing."
+  [state prompt]
+  (let [msg (str (:msg prompt))
+        installing (second (re-find #"^Choose a location to install (.+)$" msg))
+        installing-type (some-> installing (->> (get @jinteki.cards/all-cards)) :type)
+        mode (cond
+               (and installing (not (#{"ICE" "Upgrade"} installing-type))) :definite
+               (= msg "Choose a server") :conditional)]
+    (when mode
+      (for [[i c] (map-indexed vector (:choices prompt))
+            :let [server (core/format-choice c)
+                  root (core/root-card-in (get-in state [:game-state :corp :servers]) server)]
+            :when root
+            :let [adv (or (:advance-counter root) 0)
+                  holds (format "%d. %s holds %s%s" i server (:title root)
+                                (if (pos? adv) (format " (%d advancement%s)" adv (if (= 1 adv) "" "s")) ""))]]
+        (if (= mode :definite)
+          (format "    ⚠️  %s: installing %s there trashes it." holds installing)
+          (format "    ⚠️  %s: if this installs an asset or agenda, that trashes it." holds))))))
+
 (defn show-prompt-detailed
   "Show current prompt with detailed choices.
    1-arity: render from an already-captured state (snapshot, #139 guest panel —
@@ -2737,6 +2770,8 @@
             (doseq [[idx choice] (map-indexed vector (:choices prompt))]
               (println (str "    " idx ". " (core/format-choice choice))))
             (doseq [line (duplicate-choice-lines (:choices prompt))]
+              (println line))
+            (doseq [line (install-overwrite-lines state prompt)]
               (println line))))
         (when has-selectable
           (let [selectable (:selectable prompt)
