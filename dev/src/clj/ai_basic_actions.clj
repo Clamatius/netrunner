@@ -530,6 +530,8 @@
           (>= (System/currentTimeMillis) deadline) nil
           :else (do (Thread/sleep 50) (recur)))))))
 
+(declare phase-windows)   ; the window table, defined with the window commands below
+
 (defn- report-start-turn-sent!
   "After a start-turn has been SENT: wait for the engine to grant the clicks
    before describing the turn, then report the mandatory draw and any open
@@ -564,7 +566,11 @@
         (when-let [w (open-phase-window :phase-12)]
           (when (= (:owner w) my-side)
             (println "⏸️  Start-of-turn (phase 1.2) window is open — a card is holding it.")
-            (println "   Your mandatory draw and ALL start-of-turn triggers have NOT happened yet.")
+            ;; #243: from the phase table, per side. Only the Corp has a mandatory
+            ;; draw (game.core.turns gates it on (= side :corp)); a side-blind
+            ;; line told a Runner its draw was still to come.
+            (println (format "   Not happened yet: %s."
+                             (get-in phase-windows [:phase-12 :what-it-unblocks my-side])))
             (println "   Use any start-of-turn paid abilities now, then 'end-phase-12'.")))
         (core/with-cursor {:status :success :confirmed true}))
       (do
@@ -955,8 +961,9 @@
 (defn end-phase-12!
   "Close the start-of-turn (phase 1.2) window.
 
-   Until this is sent, the active player's mandatory draw and ALL start-of-turn
-   triggers have not happened, however many clicks have been spent."
+   Until this is sent, the active player's start-of-turn triggers (and, for the
+   Corp, its mandatory draw) have not happened, however many clicks have been
+   spent."
   []
   (close-phase-window! :phase-12))
 
