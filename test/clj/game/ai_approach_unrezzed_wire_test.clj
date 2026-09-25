@@ -18,14 +18,18 @@
             [game.test-framework :refer :all]
             [ai-display]
             [ai-runs :as runs]
+            [ai-run-runner-handlers :as runner-handlers]
             [ai-state :as ai-state]
             [ai-websocket-client-v2 :as ws]
             [cheshire.core :as json]
             [clojure.test :refer :all]))
 
 (use-fixtures :each (fn [t]
-                      (runs/reset-strategy!)   ; also clears both seats' handler latches
-                      (try (t) (finally (reset! ai-state/client-state {})))))
+                      (runs/reset-strategy!)
+                      ;; A lost or withheld send waits out the confirm bound; keep
+                      ;; it short. Lag tests stay well inside it.
+                      (with-redefs [runner-handlers/approach-pass-confirm-ms 600]
+                        (try (t) (finally (reset! ai-state/client-state {}))))))
 
 (def ^:private gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000244"))
 
@@ -46,11 +50,12 @@
    wire in client-state, its sends delivered to the engine as ITS actions.
 
    :deliver? false drops the send after the socket accepts it (a lost pass).
-   :refresh? false delivers it but withholds the diff, so the seat's wire stays
-   where it was (a slow transport); the seat still gets its wire if it had none. Strategy flags are per-seat in real life (two
-   REPLs), so only the strategy atom is cleared between ticks; the handlers' own
-   latches persist, as they do across one seat's loop."
-  [state side & {:keys [flags deliver? refresh?] :or {deliver? true refresh? true}}]
+   :refresh? false delivers it but never pushes the diff (the seat keeps its old
+   wire; it still gets one if it had none). :lag-ms N pushes the diff N ms after
+   the send, from another thread, the way a slow transport does. Strategy flags
+   are per-seat in real life (two REPLs), so the strategy atom is cleared between
+   ticks."
+  [state side & {:keys [flags deliver? refresh? lag-ms] :or {deliver? true refresh? true}}]
   (reset! runs/run-strategy {})
   (when (or refresh? (not= side (:side @ai-state/client-state)))
     (reset! ai-state/client-state (wire-state state side)))
@@ -60,8 +65,10 @@
                                              (swap! sent conj data)
                                              (when deliver?
                                                (core/process-action command state (keyword side) args))
-                                             (when refresh?
-                                               (reset! ai-state/client-state (wire-state state side)))
+                                             (cond
+                                               lag-ms (future (Thread/sleep lag-ms)
+                                                              (reset! ai-state/client-state (wire-state state side)))
+                                               refresh? (reset! ai-state/client-state (wire-state state side)))
                                              true)]
               (with-out-str (reset! result (apply runs/continue-run! flags))))]
     {:result @result :sent (mapv :command @sent) :out out}))
@@ -157,37 +164,39 @@
             (is (empty? sent) "an unrezzed approached ICE IS a Corp decision, however long it takes"))))
       (is (= :approach-ice (get-in @state [:run :phase]))))))
 
-(deftest a-stale-wire-does-not-send-the-pass-twice
-  (testing "two review seats: with the diff not yet delivered, the #98 guard still reads :no-action false, and a second continue from the Runner closes the window over the rez"
+(deftest a-lagging-wire-does-not-send-the-pass-twice
+  (testing "two review seats: until the diff arrives the #98 guard still reads :no-action false, and a second Runner continue closes the window over the rez. The handler waits for the wire to show its pass before the next tick reads it"
     (with-unrezzed-approach
-      (let [first  (tick! state "runner" :refresh? false)
+      (let [first  (tick! state "runner" :refresh? false :lag-ms 250)
             second (tick! state "runner" :refresh? false)]
         (is (= ["continue"] (:sent first)))
-        (is (empty? (:sent second)) "the latch holds while the wire lags")
+        (is (not (re-find #"No sign of that pass" (:out first))) "confirmed within the bound")
+        (is (empty? (:sent second)) "the next tick reads a wire that has seen the pass")
         (is (= :waiting-for-corp-rez (get-in second [:result :status])))
         (is (= :approach-ice (get-in @state [:run :phase]))
             "the window is still open for the Corp")))))
 
-(deftest a-lost-pass-is-sent-again-once-the-ledger-proves-it
-  (testing "the latch is evidence; the ledger outranks it (#167). The Corp's pass on the ledger with the window still open means ours never landed"
-    (with-unrezzed-approach
-      (is (= ["continue"] (:sent (tick! state "runner" :deliver? false))))
-      (is (not (get-in @state [:run :no-action])) "precondition: the engine never saw it")
-      (tick! state "corp" :flags ["--no-rez"])
-      (is (= :corp (get-in @state [:run :no-action])) "the Corp passed first after all")
-      (is (= ["continue"] (:sent (tick! state "runner")))
-          "so the Runner's pass is still owed, and sent")
-      (is (not= :approach-ice (get-in @state [:run :phase]))))))
+(deftest a-lost-pass-is-owed-again
+  (testing "a send the socket took but the engine never saw shows nothing on the wire, so the pass is still owed — whichever side passed first (round 2: a latch that remembered the ORDER left the Corp-first case waiting on both sides)"
+    (doseq [corp-first? [false true]]
+      (with-unrezzed-approach
+        (when corp-first? (tick! state "corp" :flags ["--no-rez"]))
+        (let [lost (tick! state "runner" :deliver? false)]
+          (is (= ["continue"] (:sent lost)))
+          (is (re-find #"No sign of that pass" (:out lost)) "and the seat is told it did not land"))
+        (when-not corp-first? (tick! state "corp" :flags ["--no-rez"]))
+        (is (= :corp (get-in @state [:run :no-action])) "precondition: only the Corp's pass is on the ledger")
+        (is (= ["continue"] (:sent (tick! state "runner")))
+            (str "corp-first " corp-first? ": the Runner's pass is still owed, and sent"))
+        (is (not= :approach-ice (get-in @state [:run :phase])))))))
 
-(deftest a-second-run-does-not-inherit-the-first-runs-latch
-  (testing "same server, same ICE, same position, same turn: the pass key carries the run prompt's eid"
+(deftest a-second-run-starts-owed
+  (testing "same server, same ICE, same position, same turn: nothing from the first run's pass carries over"
     (with-unrezzed-approach
       (drive! state "runner" ["--no-rez"] 8)
       (is (not= :approach-ice (get-in @state [:run :phase])) "first run got past")
       (core/process-action "jack-out" state :runner nil)
       (is (nil? (:run @state)) "precondition: the first run is over")
-      ;; No reset between runs: the seat's loop resets at run end, but a missed
-      ;; reset must not cost the next run its first pass.
       (run-on state "HQ")
       (is (= :approach-ice (get-in @state [:run :phase])))
       (is (= ["continue"] (:sent (tick! state "runner")))
@@ -209,15 +218,46 @@
         (is (re-find #"continue --rez \"Ice Wall\"" out) "and the rez, with the card's name")))))
 
 (deftest a-closing-pass-is-not-mistaken-for-a-lost-one
-  (testing "the Corp passed FIRST, so the Runner's pass closes the window. A lagging wire still shows approach-ice with the Corp on the ledger, which is the lost-pass evidence only when the Corp's pass arrived AFTER ours"
+  (testing "the Corp passed FIRST, so the Runner's pass closes the window, and until the diff arrives the wire still shows approach-ice with only the Corp on the ledger — the same picture as a lost pass (round 2). The handler returns only once the wire has moved on, so the next tick cannot read that picture"
     (with-unrezzed-approach
       (tick! state "corp" :flags ["--no-rez"])
       (is (= :corp (get-in @state [:run :no-action])) "precondition: the Corp passed first")
-      (let [first  (tick! state "runner" :refresh? false)
-            _      (is (= ["continue"] (:sent first)))
-            phase  (get-in @state [:run :phase])
-            second (tick! state "runner" :refresh? false)]
-        (is (not= :approach-ice phase) "our pass closed the window")
-        (is (empty? (:sent second))
-            "a re-send here lands in the NEXT window as a pass nobody decided on")
-        (is (= phase (get-in @state [:run :phase])))))))
+      (let [first (tick! state "runner" :refresh? false :lag-ms 250)]
+        (is (= ["continue"] (:sent first)))
+        (is (not (re-find #"No sign of that pass" (:out first)))
+            "a closing pass shows up as the window MOVING, not as our name on the ledger (set-phase resets it); waiting on the ledger alone would stall the full bound and then claim the pass was lost")
+        (is (not= :approach-ice (get-in @state [:run :phase])) "our pass closed the window")
+        (is (not= "approach-ice" (get-in @ai-state/client-state [:game-state :run :phase]))
+            "and the seat's wire has seen that before the handler returned")
+        (let [second (tick! state "runner" :refresh? false)]
+          (is (not (re-find #"Passed the unrezzed-ICE approach" (:out second)))
+              "so no tick passes the old approach again (whatever it does now, it does in the window it can see)"))))))
+
+(deftest a-re-approach-in-the-same-run-is-owed-again
+  (testing "round 2 (Astra, reproduced): Cell Portal sends the Runner back to the outer ICE in the SAME run — same run prompt, same position, same card. A pass remembered by window key deadlocked here; the ledger for the new window is fresh, and so is the obligation"
+    (do-game
+      (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Cell Portal" "Ice Wall"] :credits 20}
+                 :runner {:hand ["Bank Job"]}})
+      (play-from-hand state :corp "Cell Portal" "HQ")
+      (play-from-hand state :corp "Ice Wall" "HQ")
+      (take-credits state :corp)
+      (let [cp (get-ice state :hq 0)]
+        (rez state :corp cp)
+        (run-on state "HQ")
+        (is (= 2 (get-in @state [:run :position])) "precondition: approaching the unrezzed Ice Wall")
+        ;; First approach: the Corp passes first, the Runner's pass closes it.
+        (tick! state "corp" :flags ["--no-rez"])
+        (is (= ["continue"] (:sent (tick! state "runner"))))
+        ;; Engine-driven through Cell Portal and back out.
+        (run-continue-until state :encounter-ice cp)
+        (card-subroutine state :corp cp 0)
+        (click-prompt state :runner "No")
+        (when (core/get-current-encounter state)
+          (core/process-action "continue" state :corp nil)
+          (core/process-action "continue" state :runner nil))
+        (is (= :approach-ice (get-in @state [:run :phase])) "back at an approach")
+        (is (= 2 (get-in @state [:run :position])) "to the SAME outer ICE")
+        (is (not (:rezzed (get-ice state :hq 1))))
+        (let [trail (drive! state "corp" ["--no-rez"] 8)]
+          (is (not= [:approach-ice 2] [(get-in @state [:run :phase]) (get-in @state [:run :position])])
+              (str "the re-approach closes like any other. trail " trail)))))))
