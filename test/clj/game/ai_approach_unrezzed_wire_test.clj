@@ -16,6 +16,7 @@
   (:require [game.core :as core]
             [game.core.diffs :as diffs]
             [game.test-framework :refer :all]
+            [ai-display]
             [ai-runs :as runs]
             [ai-state :as ai-state]
             [ai-websocket-client-v2 :as ws]
@@ -23,7 +24,7 @@
             [clojure.test :refer :all]))
 
 (use-fixtures :each (fn [t]
-                      (runs/reset-strategy!)
+                      (runs/reset-strategy!)   ; also clears both seats' handler latches
                       (try (t) (finally (reset! ai-state/client-state {})))))
 
 (def ^:private gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000244"))
@@ -43,21 +44,27 @@
 (defn- tick!
   "One continue-run! step for `side`, as its own seat would take it: the seat's
    wire in client-state, its sends delivered to the engine as ITS actions.
-   Strategy is per-seat in real life (two REPLs), so it is reset around every
-   tick rather than shared between the two sides here."
-  [state side & flags]
-  (runs/reset-strategy!)
-  (reset! ai-state/client-state (wire-state state side))
+
+   :deliver? false drops the send after the socket accepts it (a lost pass).
+   :refresh? false delivers it but withholds the diff, so the seat's wire stays
+   where it was (a slow transport); the seat still gets its wire if it had none. Strategy flags are per-seat in real life (two
+   REPLs), so only the strategy atom is cleared between ticks; the handlers' own
+   latches persist, as they do across one seat's loop."
+  [state side & {:keys [flags deliver? refresh?] :or {deliver? true refresh? true}}]
+  (reset! runs/run-strategy {})
+  (when (or refresh? (not= side (:side @ai-state/client-state)))
+    (reset! ai-state/client-state (wire-state state side)))
   (let [sent (atom [])
-        result (atom nil)]
-    (with-redefs [ws/send-message! (fn [_evt {:keys [command args] :as data}]
-                                     (swap! sent conj data)
-                                     (core/process-action command state (keyword side) args)
-                                     ;; the transport would now push the new wire
-                                     (reset! ai-state/client-state (wire-state state side))
-                                     true)]
-      (with-out-str (reset! result (apply runs/continue-run! flags))))
-    {:result @result :sent (mapv :command @sent)}))
+        result (atom nil)
+        out (with-redefs [ws/send-message! (fn [_evt {:keys [command args] :as data}]
+                                             (swap! sent conj data)
+                                             (when deliver?
+                                               (core/process-action command state (keyword side) args))
+                                             (when refresh?
+                                               (reset! ai-state/client-state (wire-state state side)))
+                                             true)]
+              (with-out-str (reset! result (apply runs/continue-run! flags))))]
+    {:result @result :sent (mapv :command @sent) :out out}))
 
 (defmacro with-unrezzed-approach
   "Ice Wall installed unrezzed on HQ; the Runner runs HQ and is approaching it
@@ -84,16 +91,18 @@
         trail
         (let [side (nth order (mod i 2))
               {:keys [result sent]} (if (= side "corp")
-                                      (apply tick! state side corp-flags)
+                                      (tick! state side :flags corp-flags)
                                       (tick! state side))]
           (recur (inc i) (conj trail [side (:status result) sent])))))))
 
 (deftest the-runners-loop-sends-the-first-pass
   (testing "#244: nobody has passed an unrezzed approach, so the Runner owes the first pass — and must send it"
     (with-unrezzed-approach
-      (let [{:keys [result sent]} (tick! state "runner")]
+      (let [{:keys [result sent out]} (tick! state "runner")]
         (is (= ["continue"] sent)
             (str "the Runner owes this window; parking here was the deadlock. got " result))
+        (is (re-find #"Passed the unrezzed-ICE approach" out)
+            "and it is the approach handler that sent it, the one that latches. handle-auto-continue also passes here but with no latch, and the live wire has no :rezzed key for a some-> gate to read, which left a first version of this handler inert while the test stayed green")
         (is (= :runner (get-in @state [:run :no-action]))
             "and the engine records the Runner's pass")
         (is (= :approach-ice (get-in @state [:run :phase]))
@@ -147,3 +156,54 @@
           (let [{:keys [sent]} (tick! state "runner")]
             (is (empty? sent) "an unrezzed approached ICE IS a Corp decision, however long it takes"))))
       (is (= :approach-ice (get-in @state [:run :phase]))))))
+
+(deftest a-stale-wire-does-not-send-the-pass-twice
+  (testing "two review seats: with the diff not yet delivered, the #98 guard still reads :no-action false, and a second continue from the Runner closes the window over the rez"
+    (with-unrezzed-approach
+      (let [first  (tick! state "runner" :refresh? false)
+            second (tick! state "runner" :refresh? false)]
+        (is (= ["continue"] (:sent first)))
+        (is (empty? (:sent second)) "the latch holds while the wire lags")
+        (is (= :waiting-for-corp-rez (get-in second [:result :status])))
+        (is (= :approach-ice (get-in @state [:run :phase]))
+            "the window is still open for the Corp")))))
+
+(deftest a-lost-pass-is-sent-again-once-the-ledger-proves-it
+  (testing "the latch is evidence; the ledger outranks it (#167). The Corp's pass on the ledger with the window still open means ours never landed"
+    (with-unrezzed-approach
+      (is (= ["continue"] (:sent (tick! state "runner" :deliver? false))))
+      (is (not (get-in @state [:run :no-action])) "precondition: the engine never saw it")
+      (tick! state "corp" :flags ["--no-rez"])
+      (is (= :corp (get-in @state [:run :no-action])) "the Corp passed first after all")
+      (is (= ["continue"] (:sent (tick! state "runner")))
+          "so the Runner's pass is still owed, and sent")
+      (is (not= :approach-ice (get-in @state [:run :phase]))))))
+
+(deftest a-second-run-does-not-inherit-the-first-runs-latch
+  (testing "same server, same ICE, same position, same turn: the pass key carries the run prompt's eid"
+    (with-unrezzed-approach
+      (drive! state "runner" ["--no-rez"] 8)
+      (is (not= :approach-ice (get-in @state [:run :phase])) "first run got past")
+      (core/process-action "jack-out" state :runner nil)
+      (is (nil? (:run @state)) "precondition: the first run is over")
+      ;; No reset between runs: the seat's loop resets at run end, but a missed
+      ;; reset must not cost the next run its first pass.
+      (run-on state "HQ")
+      (is (= :approach-ice (get-in @state [:run :phase])))
+      (is (= ["continue"] (:sent (tick! state "runner")))
+          "the new run's first pass is owed and sent"))))
+
+(deftest the-corp-is-not-told-plain-continue-passes-here
+  (testing "#244: the marquee Corp re-ran `continue --single` because its hint said 'continue' passes priority; at an unrezzed approach the client answers plain continue with the same rez decision and sends nothing"
+    (with-unrezzed-approach
+      (tick! state "runner")
+      (let [w (wire-state state "corp")
+            run (get-in w [:game-state :run])
+            out (with-out-str (#'ai-display/print-run-window-priority! w run (:phase run) "corp"))
+            {:keys [sent result]} (tick! state "corp")]
+        (is (empty? sent) "premise: a flagless Corp continue sends nothing here…")
+        (is (= :decision-required (:status result)) "…and re-presents the decision")
+        (is (not (re-find #"'continue' passes priority" out))
+            "so the hint must not claim it passes (absence assertion: the true lines are present either way)")
+        (is (re-find #"continue --single --no-rez" out) "name the one-window pass")
+        (is (re-find #"continue --rez \"Ice Wall\"" out) "and the rez, with the card's name")))))

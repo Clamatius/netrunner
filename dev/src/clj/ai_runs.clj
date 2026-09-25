@@ -1430,32 +1430,6 @@
         ;; already-passed guard, which exists to stop accidental repeats.
         (send-continue! gameid :second-pass? true)))))
 
-(defn handle-runner-unrezzed-approach-first-pass
-  "Issue #244: the Runner sends the FIRST pass at an approach to UNREZZED ice.
-
-   The Corp's rez decision comes after the Runner's pass, not before: the engine
-   records the first `continue` from either side in [:run :no-action] and takes a
-   rez at any point in the window. The Runner used to park here with
-   :waiting-for-corp-rez before passing, while run-window-owner (so the Corp's
-   client and the Runner's own `wait`) said the Runner owed the window. A Corp that
-   meant to REZ broke the tie; a Corp that meant to pass waited forever (marquee
-   10f7a727 T9, cleared only by an umpire's `continue --raw`).
-
-   This is the approach-ice follow-on that handle-initiation-auto-pass left open,
-   but it cannot fall through to handle-auto-continue the way rezzed ice does: once
-   the Runner has passed, handle-runner-approach-ice must still claim the window
-   (a second Runner continue would advance it over the Corp's decision — the
-   engine's advance branch has no side check). So the first pass is its own
-   handler, gated on ownership, and the wait stays where it was."
-  [{:keys [side run-phase state gameid my-prompt]}]
-  (when (and (= side "runner")
-             (= run-phase "approach-ice")
-             (some-> (core/current-run-ice state) :rezzed not)
-             (core/owns-run-window? state side)
-             (not (has-real-decision? my-prompt)))
-    (println "   → Passing the unrezzed-ICE approach (the Corp's rez decision follows)")
-    (send-continue! gameid)))
-
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
   [{:keys [my-prompt]}]
@@ -1814,10 +1788,11 @@
                   ;; Sits after every real-decision handler above (corp rez/fire,
                   ;; upgrade), so it can only fire when nothing else wants to act.
                   handle-stalled-window-self-advance
-                  ;; #244: pass first, THEN wait for the Corp's rez decision.
-                  ;; The wait sits above handle-paid-ability-window only so the
-                  ;; Runner is told it is a rez decision, not a generic wait.
-                  handle-runner-unrezzed-approach-first-pass
+                  ;; #244: passes first, THEN waits for the Corp's rez decision.
+                  ;; Above handle-auto-continue, which would otherwise send the
+                  ;; first pass with no latch (a stale wire re-sends it and the
+                  ;; second continue closes the window over the rez), and above
+                  ;; handle-paid-ability-window so the wait names the rez.
                   runner-handlers/handle-runner-approach-ice
                   corp-handlers/handle-paid-ability-window
                   runner-handlers/handle-auto-select-single-card

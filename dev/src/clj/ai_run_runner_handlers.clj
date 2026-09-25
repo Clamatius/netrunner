@@ -157,6 +157,10 @@
 ;; so a Sisyphus re-encounter of the same card no longer inherits this latch (#163).
 (defonce passed-ice-encounter (atom nil))
 
+;; [run-prompt-eid position ice-cid] of the approach to unrezzed ice where the
+;; Runner has sent its first pass (#244). See handle-runner-approach-ice.
+(defonce passed-approach-ice (atom nil))
+
 (defn reset-state!
   "Reset all Runner handler state atoms (called when run ends)."
   []
@@ -165,7 +169,8 @@
   (reset! signaled-fire-encounter nil)
   (reset! reported-signal-diagnosis nil)
   (reset! failed-ability-attempts {})
-  (reset! passed-ice-encounter nil))
+  (reset! passed-ice-encounter nil)
+  (reset! passed-approach-ice nil))
 
 (defn- report-once!
   "True the FIRST time a given diagnosis is reported for a given send, false
@@ -312,31 +317,83 @@
 ;; Runner Approach Handlers
 ;; ============================================================================
 
+(declare has-real-decision?)
+
 (defn handle-runner-approach-ice
-  "Priority 2: Runner waits for the Corp's rez decision after passing approach-ice."
-  [{:keys [side run-phase state]}]
+  "Priority 2: the Runner's side of an approach to UNREZZED ice. Pass ONCE, then
+   wait for the Corp's rez decision (#244).
+
+   The Corp's decision comes after the Runner's pass, not before it. The engine
+   records the first `continue` from either side in [:run :no-action] and takes a
+   rez at any point in the window, so a Runner that passes first does not take the
+   rez away (game.ai-approach-unrezzed-wire-test drives it). This handler used to
+   wait BEFORE passing, while run-window-owner (and so the Corp's client and the
+   Runner's own `wait`) said the Runner owed the window. A Corp that meant to rez
+   broke the tie, and a Corp that meant to pass waited forever (marquee 10f7a727
+   T9, cleared only by an umpire's `continue --raw`).
+
+   The pass is latched, because the engine's advance branch has no side check: a
+   second Runner `continue` closes the window over the Corp's rez decision. The
+   #98 already-passed guard reads the wire, and a wire that has not caught up
+   with the first send lets the second one through (two review seats reproduced
+   the rez being skipped). handle-auto-continue would pass here too, but with no
+   latch. That is why this handler sits above it and owns both halves.
+
+   The latch is evidence and the LEDGER outranks it, as with passed-ice-encounter
+   (#167): if the Corp's pass is on the ledger and the window is still open, ours
+   never landed (had it landed, theirs would have advanced the window), so the
+   pass is sent again.
+
+   Unrezzed ice reaches the Runner through private-card, with no :rezzed key at
+   all. Gate on (not (:rezzed ice)), never (some-> ice :rezzed not), which is nil
+   on the absent key."
+  [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "approach-ice"))
-    (let [run (get-in state [:game-state :run])
-          position (:position run)
-          current-ice (core/current-run-ice state)
-          runner-already-passed? (core/i-already-passed-run-window? state side)]
-      (when (and current-ice (not (:rezzed current-ice)) runner-already-passed?)
-        (let [ice-title (:title current-ice "ICE")
-              ice-count (count (get-in state [:game-state :corp :servers
-                                              (keyword (last (:server run))) :ices]))
-              status-key [:waiting-for-corp-rez position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println "⏸️  Waiting for corp rez decision")
-            (println (format "   %s"
-                             (core/describe-approached-ice ice-title position ice-count))))
-          {:status :waiting-for-corp-rez
-           :wake-reason :rez-decision
-           :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
-           :ice ice-title
-           :position position})))))
+    (when-let [current-ice (core/current-run-ice state)]
+      (when-not (:rezzed current-ice)
+        (let [run (get-in state [:game-state :run])
+              position (:position run)
+              ice-title (:title current-ice "ICE")
+              ;; The run prompt's eid is per run, so a second run on the same
+              ;; server this turn does not inherit the first run's latch.
+              pass-key [(:eid my-prompt) position (:cid current-ice)]
+              latch-is-stale? (contains? #{:corp "corp"} (:no-action run))
+              passed? (and (not latch-is-stale?)
+                           (or (= @passed-approach-ice pass-key)
+                               (core/i-already-passed-run-window? state side)))]
+          (cond
+            passed?
+            (let [ice-count (count (get-in state [:game-state :corp :servers
+                                                  (keyword (last (:server run))) :ices]))
+                  status-key [:waiting-for-corp-rez position ice-title]]
+              (when-not (= @last-waiting-status status-key)
+                (reset! last-waiting-status status-key)
+                (println "⏸️  Waiting for corp rez decision")
+                (println (format "   %s"
+                                 (core/describe-approached-ice ice-title position ice-count))))
+              {:status :waiting-for-corp-rez
+               :wake-reason :rez-decision
+               :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
+               :ice ice-title
+               :position position})
+
+            ;; A real prompt, or a waiting prompt (the engine is mid-checkpoint on
+            ;; the Corp, and send-continue! would refuse): someone else's handler.
+            (or (has-real-decision? my-prompt)
+                (state/waiting-prompt-type? (:prompt-type my-prompt))
+                (not (core/owns-run-window? state side)))
+            nil
+
+            :else
+            (let [result (send-continue! gameid)]
+              ;; Latch and announce only a send that left the socket, never a
+              ;; suppressed or failed one (#167: latch-before-send waited on a
+              ;; pass never sent; #150: nothing printed that was not sent).
+              (when (:sent result)
+                (println "   → Passed the unrezzed-ICE approach (the Corp's rez decision follows)")
+                (reset! passed-approach-ice pass-key))
+              result)))))))
 
 ;; ============================================================================
 ;; Runner Breaking Handlers
