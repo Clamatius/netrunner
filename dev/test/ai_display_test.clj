@@ -3855,7 +3855,9 @@
         (is (str/includes? second-out "0. Nico Campaign") "and its choices, with their indices")
         (is (re-find #"Selectable: 0\. Nico Campaign[^·]*remote1[^·]*· 1\. Nico Campaign[^·]*remote3" second-out)
             "and the index->card mapping choose-card needs (panel: a count alone was not actionable)")
-        (is (str/includes? second-out "prompt --full") "and how to get the block back")))))
+        (is (str/includes? second-out "prompt --full") "and how to get the block back")
+        (is (str/includes? second-out "Same name, different cards")
+            "round 3: the duplicate note is a state claim too, and survives the collapse")))))
 
 (deftest prompt-full-always-reprints
   (ai-state/reset-rendered-prompt!)

@@ -1135,3 +1135,26 @@
       "Pay 3 [Credits] to continue?"
       ""
       nil)))
+
+;; ============================================================================
+;; find-selectable-card-by-cid prefers a card's CURRENT container (#244 polish,
+;; round-3 panel, reproduced on the engine): :last-revealed and :run :source-card
+;; hold raw card maps with STALE zones, so two Team Sponsorships revealed from
+;; hand and then installed in two remotes both resolved as "(in hand)". The
+;; Selectable block and the duplicate-choice note both named the wrong place.
+;; ============================================================================
+
+(deftest a-cards-current-home-beats-a-stale-copy
+  (let [installed {:cid "ts-1" :title "Team Sponsorship" :type "Asset" :side "Corp"
+                   :zone ["servers" "remote2" "content"]}
+        stale     (assoc installed :zone ["hand"])
+        gs {:last-revealed [stale]
+            :run {:source-card stale}
+            :corp {:servers {:remote2 {:content [installed]}}}}]
+    (is (= ["servers" "remote2" "content"]
+           (:zone (ai-core/find-selectable-card-by-cid "ts-1" gs))))))
+
+(deftest a-card-in-no-container-still-resolves
+  (testing "the whole-tree search stays as the fallback (face-down breach cards, #70)"
+    (let [gs {:somewhere {:cid "fd" :zone ["servers" "remote1" "content"] :side "Corp"}}]
+      (is (= "fd" (:cid (ai-core/find-selectable-card-by-cid "fd" gs)))))))

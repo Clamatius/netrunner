@@ -2651,14 +2651,13 @@
     (println "🏁 Game over — this prompt is a leftover from the final trigger. Nothing to resolve; the result stands (see game-over-status).")))
 
 (defn- board-card
-  "The card with `cid` on the captured board, or nil. Prompt states are left out
-   of the search and a :zone is required: a choice's own value carries the cid
-   and a title, and used to resolve to itself (round-2 panel), which claimed
-   'different cards' with nothing to tell them apart."
+  "The card with `cid` where it is on the captured board, or nil. A :zone is
+   required: a choice's own value carries the cid and a title but no zone, and
+   used to resolve to itself (round-2 panel). The resolver looks in the card's
+   current container first (round 3: stale revealed copies)."
   [cid gs]
   (when (and cid gs)
-    (let [card (core/find-selectable-card-by-cid
-                cid (-> gs (update :corp dissoc :prompt-state) (update :runner dissoc :prompt-state)))]
+    (let [card (core/find-selectable-card-by-cid cid gs)]
       (when (:zone card) card))))
 
 (defn duplicate-choice-lines
@@ -2931,8 +2930,10 @@
                                                            (:choices prompt))))))
               ;; The index->card mapping is what `choose-card <N>` needs; a count
               ;; alone was not actionable (panel).
-              ;; A state claim like the post-game banner: the repeat must not drop it
-              ;; (round-2 panel).
+              ;; State claims like the post-game banner: the repeat must not drop
+              ;; them (round-2 and round-3 panels).
+              (doseq [line (duplicate-choice-lines (:choices prompt) (:game-state state))]
+                (println line))
               (doseq [line (install-overwrite-lines state prompt)]
                 (println line))
               (when has-selectable

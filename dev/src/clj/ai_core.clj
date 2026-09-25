@@ -1311,6 +1311,12 @@
                        (:title %)))
          first)))
 
+(def ^:private card-container-keys
+  "Where a card currently LIVES in a player's wire state: game.core.diffs
+   player-keys that hold cards, plus :servers (Corp) and :rig (Runner). Hosted
+   cards nest inside these."
+  [:servers :rig :identity :hand :discard :deck :scored :rfg :play-area :current :set-aside :destroyed])
+
 (defn find-selectable-card-by-cid
   "Resolve a CID that came from a prompt's :selectable list to a card map.
 
@@ -1332,13 +1338,21 @@
    #139 — the prompt renderer must not re-read the live atom mid-snapshot)."
   ([cid] (find-selectable-card-by-cid cid (state/get-game-state)))
   ([cid gs]
-  (let [matches (->> (tree-seq coll? seq gs)
-                     (filter #(and (map? %)
-                                   (= cid (:cid %))
-                                   (or (:title %) (and (:zone %) (:side %)))))
-                     seq)]
-    (or (some #(when (:title %) %) matches)
-        (first matches)))))
+  (let [pick (fn [tree]
+               (let [matches (->> (tree-seq coll? seq tree)
+                                  (filter #(and (map? %)
+                                                (= cid (:cid %))
+                                                (or (:title %) (and (:zone %) (:side %)))))
+                                  seq)]
+                 (or (some #(when (:title %) %) matches)
+                     (first matches))))]
+    ;; A card's CURRENT container first, then the whole tree as before. The
+    ;; wire also carries raw card maps with STALE zones (:last-revealed, :run
+    ;; :source-card), and which copy the whole-tree walk met first was hash
+    ;; order: two revealed-then-installed Team Sponsorships both printed "(in
+    ;; hand)" (#244 polish, round-3 panel, reproduced on the engine).
+    (or (pick (for [side [:corp :runner] k card-container-keys] (get-in gs [side k])))
+        (pick gs)))))
 
 (def ^:private credit-payment-prompt-re
   ;; game.core.pick-counters/pick-credit-providing-cards builds exactly:
