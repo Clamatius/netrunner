@@ -1195,3 +1195,15 @@
         (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; between runs
       (with-mock-state (mock-game "runner" (decision-free-passed))
         (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))))))
+
+(deftest a-new-game-does-not-inherit-the-last-games-clock
+  (testing "round 4 (Sol, reasoned): a seat joining another game already at a same-key passed window inherited the old game's clock. The game is part of the key"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (assoc (mock-game "runner" (decision-free-passed)) :gameid "game-A")
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))
+      (Thread/sleep 300)
+      (with-mock-state (assoc (mock-game "runner" (decision-free-passed)) :gameid "game-B")
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "a different game's window gets its own grace")))))

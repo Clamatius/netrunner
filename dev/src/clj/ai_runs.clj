@@ -340,10 +340,9 @@
 
       ;; Reset and set strategy for this run
       (reset-strategy!)
-      ;; Per-run scratch state. reset-window-grace! had NO production caller at
-      ;; all — window-first-seen persisted across runs, so a repeat window
-      ;; ([phase position no-action] collides readily) could look instantly
-      ;; stale and self-advance without ever granting the grace period.
+      ;; Per-run scratch state. Since #102 item 7 round 3 the abandon clock
+      ;; restarts itself on any observed window change, so this reset is not
+      ;; load-bearing any more; it is kept as a clean start for a new run.
       ;; NB reported-events is deliberately NOT reset here: it is game-scoped,
       ;; and a per-run reset would re-report a previous run's tail event if it
       ;; were still inside the newest-3 window (a duplicate stale pause).
@@ -2043,12 +2042,9 @@
                 (corp-handlers/reset-state!)
                 ;; #198: a run that ended has no encounter; re-arm the one resync.
                 (reset! state/unnameable-resync-spent false)
-                ;; Same third-path hazard for the self-advance grace timer: a
-                ;; stale [phase position no-action] key (these collide readily)
-                ;; would make a card-initiated run's first window look instantly
-                ;; abandoned and self-advance with ZERO grace, skipping the
-                ;; fog-of-war paid-ability window the grace exists to protect.
-                ;; Run END is the boundary that covers every entry path.
+                ;; The abandon clock restarts itself on any observed window change
+                ;; since #102 item 7 round 3 (it used to be a map of keys that
+                ;; collided across runs). Kept as a clean start; not load-bearing.
                 (reset-window-grace!))
               (assoc result
                      :iterations (inc iteration)

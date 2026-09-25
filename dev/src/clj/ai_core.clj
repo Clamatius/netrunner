@@ -2424,19 +2424,26 @@
   ;; and the resets were both too frequent (plain `continue` reset it mid-window,
   ;; so the #31 recovery never fired) and too rare (a Cell Portal re-approach, or
   ;; a Jailbreak run that skips run!'s reset, inherited a finished window's clock).
-  ;; Here any observed change of window restarts the clock, so there is nothing
-  ;; stale to inherit and no reset to get wrong.
+  ;; Here any observed change of window-key restarts the clock, so there is
+  ;; nothing stale to inherit and no reset schedule to get wrong.
   (atom {}))
 
 (defn- window-key
   "What makes a run window THIS window, for the abandon clock. It includes
-   whether the opponent holds a decision: a rez that makes the window
-   decision-free starts the grace (round-2 panel), and whether an encounter is
-   live (a forced encounter is its own window)."
+   the game (a seat can join another game already at a same-shaped window;
+   round-4 panel), whether the opponent holds a decision (a rez that makes the
+   window decision-free starts the grace; round 2), and whether an encounter is
+   live (a forced encounter is its own window).
+
+   Limit, stated rather than hidden (round-4 panel): the key can only see what
+   the wire carries. A step the engine takes without changing any of these (the
+   Corp passes movement and the approach to the server pauses on a Corp-only
+   prompt; :approaching-server is not on the wire) keeps the old clock. No
+   System Gateway card does this, and the old key had the same blind spot."
   [state side]
   (let [run (get-in state [:game-state :run])
         na (:no-action run)]
-    [(some? run) (:phase run) (:position run)
+    [(str (:gameid state)) (some? run) (:phase run) (:position run)
      ;; :no-action is false on a fresh window, and (name false) throws.
      (when (or (keyword? na) (string? na)) (str/lower-case (name na)))
      (boolean (encounter-window? state))

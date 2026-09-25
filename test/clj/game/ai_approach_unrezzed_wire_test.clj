@@ -289,3 +289,30 @@
             (with-out-str (runs/monitor-run!)))
           (is (some #{"continue"} @sent) (str "plain continue must self-advance the abandoned window, sent " @sent))
           (is (not= :approach-ice (get-in @state [:run :phase]))))))))
+
+(deftest a-continue-only-seat-restarts-the-clock-at-a-re-approach
+  (testing "round 4 (Opus, reproduced by mutation): continue-run! observes the window every tick. Without that, a seat that only uses `continue` recorded nothing at a fresh re-approach (the self-advance records only PASSED windows), so the same key inherited the old clock and a second pass went out at 0 ms"
+    (core-ai/reset-window-grace!)
+    (with-redefs [runs/self-advance-grace-ms 200
+                  core-ai/window-abandon-grace-ms 200]
+      (do-game
+        (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"] :credits 10}
+                   :runner {:hand ["Bank Job"]}})
+        (play-from-hand state :corp "Ice Wall" "HQ")
+        (take-credits state :corp)
+        (run-on state "HQ")
+        (rez state :corp (get-ice state :hq 0))
+        (let [fresh (wire-state state "runner")]
+          (core/process-action "continue" state :runner nil)
+          (let [passed (wire-state state "runner")
+                sent (atom [])
+                tick (fn [w] (reset! ai-state/client-state w)
+                       (with-redefs [ws/send-message! (fn [_ d] (swap! sent conj (:command d)) true)]
+                         (with-out-str (runs/continue-run!))))]
+            (tick passed)                ; the passed window: clock starts
+            (Thread/sleep 300)
+            (tick fresh)                 ; a different (fresh) window at the same position
+            (reset! sent [])
+            (tick passed)                ; same key as the first, but a NEW window
+            (is (empty? @sent)
+                (str "a re-seen window gets its own grace; sent " @sent))))))))
