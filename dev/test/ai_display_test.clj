@@ -3782,28 +3782,47 @@
 ;; ============================================================================
 
 (def ^:private nico-trigger-prompt
+  ;; The wire shape the engine really sends for two Nico Campaign triggers
+  ;; (panel, captured from the engine): CARD-map choices with distinct cids and no
+  ;; zone, plus a :selectable of the same cids. The first version of this fixture
+  ;; used string values, a shape this prompt never has, so it pinned a branch the
+  ;; reported case never reached.
   {:msg "Choose a trigger to resolve" :prompt-type "other"
-   :choices [{:value "Nico Campaign" :uuid "u0"} {:value "Nico Campaign" :uuid "u1"}
-             {:value "Done" :uuid "u2"}]})
+   :choices [{:value {:cid "nico-a" :title "Nico Campaign"} :uuid "u0" :idx 0}
+             {:value {:cid "nico-b" :title "Nico Campaign"} :uuid "u1" :idx 1}
+             {:value "Done" :uuid "u2" :idx 2}]
+   :selectable ["nico-a" "nico-b"]})
 
-(deftest identical-string-choices-are-called-interchangeable
-  (testing "string choices with one label hand the engine the same target, whichever index is picked"
+(def ^:private nico-servers
+  {:remote1 {:content [{:cid "nico-a" :title "Nico Campaign" :type "Asset" :rezzed true :side "Corp"
+                        :zone ["servers" "remote1" "content"]}]}
+   :remote3 {:content [{:cid "nico-b" :title "Nico Campaign" :type "Asset" :rezzed true :side "Corp"
+                        :zone ["servers" "remote3" "content"]}]}})
+
+(deftest identical-card-choices-say-where-each-copy-is
+  (testing "#244 item 5: two copies of one card, told apart by where they are"
     (with-mock-state (mock-client-state
                       :side "corp"
                       :game-state {:active-player "corp" :turn 5
-                                   :corp {:click 3 :credit 5 :hand [] :prompt-state nico-trigger-prompt}
+                                   :corp {:click 3 :credit 5 :hand [] :servers nico-servers
+                                          :prompt-state nico-trigger-prompt}
                                    :runner {:click 0 :credit 5 :hand []}})
       (let [out (with-out-str (display/show-prompt-detailed))]
-        (is (re-find #"0 and 1 are the same option" out))
-        (is (re-find #"either" out))))))
+        (is (re-find #"Same name, different cards" out) out)
+        (is (re-find #"0\. Nico Campaign[^·]*remote1" out) "copy 0 is the one in Server 1")
+        (is (re-find #"1\. Nico Campaign[^·]*remote3" out) "copy 1 is the one in Server 3")))))
 
-(deftest identical-card-labels-are-not-called-interchangeable
-  (testing "two different CARDS can print the same label; those are not the same option"
-    (let [lines (display/duplicate-choice-lines
-                 [{:value {:title "Nico Campaign" :cid "a"}} {:value {:title "Nico Campaign" :cid "b"}}])]
-      (is (seq lines))
-      (is (not-any? #(re-find #"same option|either" %) lines))
-      (is (some #(re-find #"different cards" %) lines)))))
+(deftest identical-string-choices-are-not-called-interchangeable
+  (testing "panel (reproduced): Eli 1.0's two 'End the run' choices break DIFFERENT subroutines — a shared label is not a shared option"
+    (let [lines (display/duplicate-choice-lines [{:value "End the run"} {:value "End the run"} {:value "Done"}])]
+      (is (= 1 (count lines)))
+      (is (not-any? #(re-find #"same option|either|interchangeable" %) lines))
+      (is (re-find #"separate options" (first lines))))))
+
+(deftest unresolvable-card-copies-fall-back-to-position
+  (let [lines (display/duplicate-choice-lines
+               [{:value {:title "Nico Campaign" :cid "gone-1"}} {:value {:title "Nico Campaign" :cid "gone-2"}}])]
+    (is (re-find #"separate options" (first lines)))))
 
 (deftest distinct-choices-get-no-note
   (is (empty? (display/duplicate-choice-lines [{:value "HQ"} {:value "R&D"} {:value "Done"}]))))
@@ -3819,7 +3838,7 @@
   (mock-client-state
    :side "corp"
    :game-state {:active-player "corp" :turn 5
-                :corp {:click 3 :credit 5 :hand [] :prompt-state prompt}
+                :corp {:click 3 :credit 5 :hand [] :servers nico-servers :prompt-state prompt}
                 :runner {:click 0 :credit 5 :hand []}}))
 
 (deftest a-repeat-render-collapses-but-stays-actionable
@@ -3833,6 +3852,8 @@
         (is (str/includes? second-out "unchanged"))
         (is (str/includes? second-out "Choose a trigger to resolve") "still names the prompt")
         (is (str/includes? second-out "0. Nico Campaign") "and its choices, with their indices")
+        (is (re-find #"Selectable: 0\. Nico Campaign[^·]*remote1[^·]*· 1\. Nico Campaign[^·]*remote3" second-out)
+            "and the index->card mapping choose-card needs (panel: a count alone was not actionable)")
         (is (str/includes? second-out "prompt --full") "and how to get the block back")))))
 
 (deftest prompt-full-always-reprints
@@ -3903,6 +3924,21 @@
   (with-redefs [jinteki.cards/all-cards (atom {"Ice Wall" {:title "Ice Wall" :type "ICE"}})]
     (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])]
       (is (empty? (display/install-overwrite-lines st prompt))))))
+
+(deftest the-prompts-own-card-decides-without-the-card-database
+  (testing "panel (reproduced): with an empty card DB an ICE install was told it would trash the agenda. corp-install's prompt carries the card being installed"
+    (with-redefs [jinteki.cards/all-cards (atom {})]
+      (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Ice Wall" ["Server 2"])]
+        (is (empty? (display/install-overwrite-lines st (assoc prompt :card {:title "Ice Wall" :type "ICE"})))))
+      (let [{:keys [prompt] :as st} (install-choice-state "Choose a location to install Mystery" ["Server 2"])
+            lines (display/install-overwrite-lines st prompt)]
+        (is (re-find #"if this installs an asset or agenda" (first lines))
+            "an unknown type is not a trash claim, only a conditional warning")))))
+
+(deftest the-runner-is-never-warned-about-installs
+  (testing "panel (reproduced): Dirty Laundry's run-target prompt is also 'Choose a server'"
+    (let [{:keys [prompt] :as st} (install-choice-state "Choose a server" ["Server 2"])]
+      (is (empty? (display/install-overwrite-lines (assoc st :side "runner") prompt))))))
 
 (deftest a-non-install-prompt-gets-no-overwrite-warning
   (let [{:keys [prompt] :as st} (install-choice-state "Choose a server to run" ["Server 2"])]

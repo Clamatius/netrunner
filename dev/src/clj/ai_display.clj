@@ -2653,44 +2653,54 @@
 (defn duplicate-choice-lines
   "Notes for choices that print the same label (#244 friction, marquee fffee105:
    the trigger-order prompt listed `0. Nico Campaign / 1. Nico Campaign` with
-   nothing to say whether the pick mattered).
+   nothing to tell the copies apart).
 
-   Plain string values are the same option: the engine hands the choice's value
-   to the prompt's effect, so both indices give it the same target (the trigger
-   prompt then resolves a copy by title). Card values can print the same label and
-   still be different cards, and those must not be called interchangeable."
+   The engine sends that prompt's choices as CARD maps with distinct cids (panel,
+   reproduced on the engine), so each copy is resolved to where it is, in the
+   same words as the selectable block. String choices that share a label are NOT
+   claimed to be interchangeable: the engine keeps each choice's index, and Eli
+   1.0's two \"End the run\" choices break different subroutines (panel,
+   reproduced). They are only named as separate options."
   [choices]
   (for [[label idxs] (->> (map-indexed vector choices)
                           (group-by (comp core/format-choice second))
                           (sort-by (comp ffirst val)))
         :when (> (count idxs) 1)
-        :let [ns (str/join " and " (map first idxs))
-              strings? (every? (comp string? :value second) idxs)]]
-    (if strings?
-      (format "    ↳ %s are the same option (\"%s\"): either index does the same thing." ns label)
-      (format "    ↳ %s all show \"%s\" but are different cards; they differ only by position." ns label))))
+        :let [where (for [[i c] idxs
+                          :let [cid (get-in c [:value :cid])
+                                card (when cid (core/find-selectable-card-by-cid cid))]]
+                      (when card (str i ". " (core/format-selectable-card card))))]]
+    (if (every? some? where)
+      (str "    ↳ Same name, different cards: " (str/join " · " where))
+      (format "    ↳ %s share the label \"%s\" but are separate options; the engine takes the index you choose."
+              (str/join " and " (map first idxs)) label))))
 
 (defn install-overwrite-lines
   "Warnings for install-location choices that already hold an asset or agenda
    (#244 friction, marquee fffee105: Ansel's install sub offered `0. Server 2`,
    which held the Corp's advanced Send a Message, with nothing said). Installing
    an asset or agenda in a remote trashes the one already there; ICE and upgrades
-   do not.
+   do not. Corp only: a Runner never gets a Corp install-location prompt, and the
+   Runner's run-target prompts use the same words (panel: Dirty Laundry).
 
-   Two confidence levels, because the prompt text is all there is:
    - \"Choose a location to install X\" is the engine's own install prompt
-     (corp-install). Definite, unless X is ICE or an upgrade.
-   - A bare \"Choose a server\" is Ansel's install sub, but ~50 cards use the same
-     words for a run redirect (Bullfrog, Mind Game). So it is said conditionally
-     rather than claimed.
-   Anything else (\"Choose a server to run\", ...) gets nothing."
+     (corp-install), whose :card IS the card being installed. A known asset or
+     agenda gets a definite warning; known ICE/upgrade gets none.
+   - An unknown type, or a bare \"Choose a server\" (Vaporframe Fabricator pairs
+     it with an install; many cards use it for a redirect), gets a CONDITIONAL
+     one. An empty card database must not turn an ICE install into a trash
+     claim (panel, reproduced)."
   [state prompt]
   (let [msg (str (:msg prompt))
         installing (second (re-find #"^Choose a location to install (.+)$" msg))
-        installing-type (some-> installing (->> (get @jinteki.cards/all-cards)) :type)
+        installing-type (when installing
+                          (or (:type (:card prompt))
+                              (:type (get @jinteki.cards/all-cards installing))))
         mode (cond
-               (and installing (not (#{"ICE" "Upgrade"} installing-type))) :definite
-               (= msg "Choose a server") :conditional)]
+               (not (core/side= "corp" (:side state)))                nil
+               (#{"ICE" "Upgrade"} installing-type)                   nil
+               (and installing (#{"Asset" "Agenda"} installing-type)) :definite
+               (or installing (= msg "Choose a server"))              :conditional)]
     (when mode
       (for [[i c] (map-indexed vector (:choices prompt))
             :let [server (core/format-choice c)
@@ -2904,8 +2914,15 @@
                 (println (str "  Choices: "
                               (str/join " · " (map-indexed (fn [i c] (str i ". " (core/format-choice c)))
                                                            (:choices prompt))))))
+              ;; The index->card mapping is what `choose-card <N>` needs; a count
+              ;; alone was not actionable (panel).
               (when has-selectable
-                (println (format "  %d selectable card(s), listed above." (count (:selectable prompt)))))
+                (let [{:keys [pickable phantom]} (core/resolve-selectable (:selectable prompt))]
+                  (println (str "  Selectable: "
+                                (str/join " · " (map (fn [{:keys [idx card]}]
+                                                       (str idx ". " (core/format-selectable-card card)))
+                                                     pickable))
+                                (when (seq phantom) (format " (+%d not selectable by you)" (count phantom)))))))
               (println "  (`prompt --full` reprints the whole block.)"))
             (do
               (println (if already-shown?

@@ -902,7 +902,9 @@
     (is (str/includes? out "Brân 1.0") "the event is still reported")
     (is (not (str/includes? out "continue' again")) "no run to continue")
     (is (not (str/includes? out "Run paused")) "and nothing to pause")
-    (is (str/includes? out "run is over"))))
+    (is (str/includes? out "nothing to continue"))
+    (is (not (str/includes? out "run ended"))
+        "panel: a continue with no run at all reaches here too, so no claim that a run just ended")))
 
 (deftest an-event-inside-the-run-still-pauses
   (runs/reset-reported-events!)
@@ -912,11 +914,23 @@
     (is (str/includes? out "continue' again"))))
 
 (deftest the-persistent-loop-does-not-say-it-twice
-  (testing "the loop's own after-the-run line would now repeat handle-events'"
+  (testing "handle-events framed it as after-the-run, so the loop adds nothing"
     (runs/reset-reported-events!)
     (with-mock-state (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
       (with-redefs [runs/continue-run! (fn [& _] (runs/handle-events {:fired-event bran-fired
                                                                        :state @state/client-state
                                                                        :side "corp"}))]
         (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
-          (is (= 1 (count (re-seq #"run is over" out))) out))))))
+          (is (= 1 (count (re-seq #"not your decision" out))) out)
+          (is (not (str/includes? out "continue' again")) out))))))
+
+(deftest the-loop-corrects-a-pause-the-run-outlived
+  (testing "panel: handle-events read a state with the run open and printed the pause; the loop re-reads after the run closed and must say so, or the seat is left told to continue a finished run"
+    (runs/reset-reported-events!)
+    (with-mock-state (mock-client-state :side "corp" :game-state {:log [bran-fired] :corp {} :runner {}})
+      (with-redefs [runs/continue-run! (fn [& _] (runs/handle-events {:fired-event bran-fired
+                                                                       :state (runner-state :log [bran-fired])
+                                                                       :side "corp"}))]
+        (let [out (with-out-str (runs/auto-continue-loop! :persistent true :timeout-ms 2000))]
+          (is (str/includes? out "Run paused") "premise: the pause went out")
+          (is (str/includes? out "the run is over") "and the loop corrects it"))))))

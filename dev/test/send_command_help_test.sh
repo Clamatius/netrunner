@@ -115,6 +115,13 @@ if [[ "$rn" == *"monitor-run Flags"* ]]; then
 else
     pass "help run: no monitor-run Flags block"
 fi
+# Aliases share their flags (panel): continue IS monitor-run, continue-run is continue --single.
+ct="$("$SEND_CMD" corp help continue 2>&1)"
+assert_contains "help continue" "$ct" "--persistent"
+cr="$("$SEND_CMD" corp help continue-run 2>&1)"
+assert_contains "help continue-run" "$cr" "--no-rez"
+# And the form is discoverable from the help a seat actually reads (panel).
+assert_contains "corp help" "$("$SEND_CMD" corp help 2>&1)" "help <command>"
 rz="$("$SEND_CMD" corp help rez 2>&1)"
 assert_contains "help rez" "$rz" "Rez installed Corp card"
 nope="$("$SEND_CMD" corp help no-such-command 2>&1)"

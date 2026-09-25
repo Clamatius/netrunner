@@ -527,6 +527,7 @@ ${YELLOW}Examples:${NC}
 ${role_examples}
 
 ${BLUE}For full help:${NC} ./send_command help --full
+${BLUE}One command and its flags:${NC} ./send_command help <command>   (e.g. help monitor-run)
 
 EOF
 }
@@ -539,6 +540,7 @@ ${YELLOW}Multi-Client Usage:${NC}
   ./send_command runner <action> [args...]  - Send command to Runner client (port 7889)
   ./send_command corp <action> [args...]    - Send command to Corp client (port 7890)
   ./send_command <action> [args...]         - Send to default client (backward compatible)
+  ./send_command <side> help <command>      - Just that command's entry and flags
 
 ${YELLOW}Examples:${NC}
   ./send_command runner status              - Check Runner's game status
@@ -618,7 +620,7 @@ ${GREEN}Running:${NC}
                          passed: not at initiation, an approach, or an encounter)
   tank <ice-name>      - Authorize letting subs fire on ICE
 
-  ${BLUE}Run Flags:${NC} (usable with run, continue, monitor-run)
+  ${BLUE}Run Flags:${NC} (usable with run, continue, monitor-run, continue-run)
     --no-rez         Corp: don't rez any ICE
     --rez <name>     Corp: auto-rez the ICE or upgrade titled exactly <name> (case and
                      accents ignored; a near miss like "Bran" is rejected at once with
@@ -632,7 +634,7 @@ ${GREEN}Running:${NC}
     --no-continue    Don't auto-continue after run start
     --single         Take ONE step and return (what 'continue-run' is an alias for)
 
-  ${BLUE}monitor-run Flags:${NC} (Corp)
+  ${BLUE}monitor-run Flags:${NC} (Corp; usable with continue, monitor-run)
     --fire-if-asked  Sleep mode: auto-fire on a tank SIGNAL, auto-continue, wake
                      for rez/upgrade — a plain Runner pass wakes you to decide
     --persistent     Own the WHOLE Runner run with one command: sleep through
