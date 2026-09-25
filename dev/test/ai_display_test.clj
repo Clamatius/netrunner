@@ -1397,6 +1397,156 @@
         (is (str/includes? out "choose-card")
             (str "Selectable block keeps its choose-card verb:\n" out))))))
 
+;; ============================================================================
+;; #204: a numbered list does not tell the seat that naming is allowed
+;;
+;; Red Team's server prompt drops servers already run this turn, so the list
+;; renumbers between calls: index 1 meant R&D, then HQ. The Fable 5.1 Runner
+;; seat ran the wrong server, lost Jailbreak to a facechecked Diviner, and
+;; wrote up "naming the server would be safer than an index" as a REQUEST —
+;; `choose "R&D"` had already routed to the label matcher since #101, and
+;; press-choice! had echoed the resolved label since 2025-11. Both remedies
+;; the issue asks for were already shipped; what was missing was any way for
+;; the seat to find out. The Choices block advertised indices and nothing else.
+;; ============================================================================
+
+(deftest show-prompt-detailed-advertises-naming-for-a-numbered-choice-prompt
+  (testing "a non-select Choices block offers the label form, not indices alone"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 2
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "rt-1"
+                                            :msg "Choose a server to run"
+                                            :choices [{:value "HQ"} {:value "R&D"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "choose \"")
+            (str "must show the label form `choose \"<label>\"`, not indices alone:\n" out))
+        (is (str/includes? out "#204")
+            (str "cites the issue so the hazard is traceable:\n" out))
+        (is (str/includes? out "renumber")
+            (str "must say WHY a label is safer — the list can renumber between calls:\n" out))))))
+
+(deftest show-prompt-detailed-hint-quotes-no-real-option
+  ;; Panel (Sol 5.6), MAJOR: the first version substituted the FIRST ACTUAL
+  ;; choice into imperative text -- "Answer by NAME — `choose \"Take 1 tag\"`".
+  ;; The seats reading this are language models and that line is in their only
+  ;; sensory channel; it reads as tactical guidance, not as syntax. The first
+  ;; option is routinely the one that hurts the Runner: K. P. Lynn and Argus
+  ;; both lead with "Take 1 tag", Mr. Hendrik with "Suffer 1 core damage".
+  ;; The hint must teach the FORM and let the numbered list supply the labels.
+  (testing "the hint shows a placeholder, never one of the real options"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 2
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "kp-1"
+                                            :msg "Choose one"
+                                            :choices [{:value "Take 1 tag"}
+                                                      {:value "End the run"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            hint (first (filter #(str/includes? % "\u21b3") (str/split-lines out)))]
+        (is hint "still prints a hint line")
+        (is (str/includes? hint "<label>")
+            (str "the hint must use a placeholder:\n" out))
+        (is (not (str/includes? hint "Take 1 tag"))
+            (str "must not put a real game option inside an imperative:\n" out))
+        (is (not (str/includes? hint "End the run"))
+            (str "no real option belongs in the hint:\n" out))
+        (is (str/includes? out "Take 1 tag")
+            (str "the options themselves are still listed above:\n" out))))))
+
+(deftest show-prompt-detailed-hint-steers-digit-labels-to-choose-value
+  ;; Panel (Fable 5.1 MINOR-2 / Sol 5.6 CRITICAL, found independently): the CLI
+  ;; classifies a `choose` argument by ^[0-9]+$ AFTER the shell has eaten the
+  ;; quotes, so an all-digit label is indistinguishable from an index. Top Hat
+  ;; labels its choices "1".."5"; `choose "1"` presses index 1 and accesses the
+  ;; SECOND R&D card. choose-value takes the same string and resolves by name.
+  ;; Keyed on ANY label being all digits, not just the first -- the seat copies
+  ;; whichever label it wants, not the one we happened to sample.
+  (testing "a list containing a digit label names choose-value"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 3
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "th-1"
+                                            :msg "How deep?"
+                                            :choices [{:value "1"} {:value "2"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            hint (first (filter #(str/includes? % "\u21b3") (str/split-lines out)))]
+        (is (str/includes? hint "choose-value")
+            (str "digit labels must be steered to choose-value:\n" out))
+        (is (not (re-find #"`choose \"" hint))
+            (str "`choose \"1\"` would be read as an INDEX:\n" out)))))
+  (testing "an ordinary label list still names plain choose"
+    (with-mock-state
+      (mock-client-state
+       :side "runner"
+       :game-state {:active-player "runner" :turn 3
+                    :runner {:hand []
+                             :prompt-state {:prompt-type "other"
+                                            :eid "th-2"
+                                            :msg "Choose a server"
+                                            :choices [{:value "HQ"} {:value "R&D"}]}}
+                    :corp {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))
+            hint (first (filter #(str/includes? % "\u21b3") (str/split-lines out)))]
+        (is (str/includes? hint "`choose \"<label>\"`")
+            (str "a plain label list keeps the plain verb:\n" out))))))
+
+(deftest show-prompt-detailed-hint-is-silent-on-a-non-sequential-choices-map
+  ;; Panel (Sol 5.6), MINOR: "not a select prompt" does not imply "an ordinary
+  ;; label list". A :number prompt (Brain Rewiring, agendas.clj) carries
+  ;; :choices as a MAP {:number n}. map-indexed walks its entries, so the
+  ;; Choices block already renders a MapEntry -- pre-existing noise -- and the
+  ;; hint would go on to advertise naming for something that has no label and
+  ;; that neither `choose <N>` nor `choose-value` can resolve.
+  (testing "a map-valued :choices gets no naming hint"
+    (with-mock-state
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 4
+                    :corp {:hand []
+                           :prompt-state {:prompt-type "other"
+                                          :eid "br-1"
+                                          :msg "Choose a number"
+                                          :choices {:number 3}}}
+                    :runner {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "#204"))
+            (str "no naming hint for a non-sequential choices value:\n" out))))))
+
+(deftest show-prompt-detailed-does-not-advertise-naming-on-a-select-prompt
+  ;; On a select prompt `choose <N>` is refused outright and the :choices are
+  ;; meta-buttons. Adding a `choose "<label>"` line there would contradict the
+  ;; both-blocks steer immediately above it — the #38/#41 failure again.
+  (testing "a select prompt keeps its choose-value steer and gains no choose hint"
+    (with-mock-state
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 5
+                    :corp {:hand []
+                           :prompt-state {:prompt-type "select"
+                                          :eid "sel-204"
+                                          :msg "Select cards to trash"
+                                          :choices [{:value "Done"}]
+                                          :selectable [{:cid "c1" :title "Hedge Fund"}]}}
+                    :runner {:hand []}})
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (not (str/includes? out "#204"))
+            (str "the naming hint must not fire on a select prompt:\n" out))
+        (is (str/includes? out "choose-value")
+            (str "the existing choose-value steer survives:\n" out))))))
+
 (deftest show-prompt-detailed-select-both-blocks-uses-choose-value
   ;; Codex review of PR #41: on a "select"-typed prompt the :choices are
   ;; meta-buttons (e.g. Done) and `choose-option!` REJECTS `choose <N>` there,

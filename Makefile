@@ -80,6 +80,7 @@ test:
 	  game.ai-upgrade-rez-timing-test \
 	  game.ai-waiting-prompt-test \
 	  game.ai-zero-sub-encounter-wire-test \
+	  game.core.runs-test \
 	  game.core.turns-test \
 	  run-window-selfadvance-test \
 	  send-command-inventory-test \

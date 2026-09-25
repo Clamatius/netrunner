@@ -814,6 +814,21 @@ is_display_expr() {
 
 # Execute command via ai-eval.sh
 # Uses stdin mode to avoid shell escaping issues with ! in function names
+# Escape a shell value for use inside a Clojure STRING LITERAL.
+#
+# 28 card titles carry embedded quotes -- Cerberus "Lady" H1, Kate "Mac"
+# McCaffrey, Ele "Smoke" Scovak. Interpolated raw, the title closes the string
+# it was meant to fill and the REPL is handed broken code, so the command never
+# reaches its handler at all. The idiom was already written TWICE inline (for
+# draw-to-card and find-card, presumably by whoever hit it) and copied to none
+# of the other twenty sites; send_command_clj_string_test.sh now fails if a new
+# site interpolates a bare variable into a Clojure string. Backslash first, or
+# it would re-escape the backslashes this adds. (Panel, Sol 5.6.)
+clj_str() {
+    local s=${1//\\/\\\\}
+    printf '%s' "${s//\"/\\\"}"
+}
+
 execute() {
     local expr="$1"
     local wrapped=false
@@ -1180,7 +1195,7 @@ case "$COMMAND" in
     card-text)
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
-        execute "(ai-actions/show-card-text \"$CARD_NAME\")"
+        execute "(ai-actions/show-card-text \"$(clj_str "$CARD_NAME")\")"
         ;;
 
     decklist)
@@ -1196,7 +1211,7 @@ case "$COMMAND" in
     abilities)
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"
-        execute "(ai-actions/show-card-abilities \"$CARD_NAME\")"
+        execute "(ai-actions/show-card-abilities \"$(clj_str "$CARD_NAME")\")"
         ;;
 
     list-playables)
@@ -1323,7 +1338,7 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command discard-card \"Card Name\""
         info "Moving $CARD_NAME from hand to discard pile..."
-        execute "(ai-actions/discard-card! \"$CARD_NAME\")"
+        execute "(ai-actions/discard-card! \"$(clj_str "$CARD_NAME")\")"
         ;;
 
     draw-to-card)
@@ -1333,10 +1348,7 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command draw-to-card \"Card Name\""
         info "Drawing until $CARD_NAME appears in hand..."
-        # Titles carry quotes (Cerberus "Lady" H1); escape before embedding.
-        CARD_NAME_CLJ=${CARD_NAME//\\/\\\\}
-        CARD_NAME_CLJ=${CARD_NAME_CLJ//\"/\\\"}
-        execute "(ai-actions/draw-to-card! \"$CARD_NAME_CLJ\")"
+        execute "(ai-actions/draw-to-card! \"$(clj_str "$CARD_NAME")\")"
         ;;
 
     find-card)
@@ -1359,8 +1371,7 @@ case "$COMMAND" in
         # Real card titles carry quotes ("Pretty" Mary da Silva, Cerberus "Lady" H1),
         # and these names are interpolated into a Clojure string literal. Without
         # this the reader sees several forms and the search never runs (guest MAJOR).
-        CARD_NAME_CLJ=${CARD_NAME//\\/\\\\}
-        CARD_NAME_CLJ=${CARD_NAME_CLJ//\"/\\\"}
+        CARD_NAME_CLJ=$(clj_str "$CARD_NAME")
         # find-card is an ORCHESTRATOR, and the only one: its OWN budget is the
         # ambient TIMEOUT, but it hands REPL_BLOCKING_TIMEOUT to a CHILD
         # send_command further down. The child does validate it — after this loop
@@ -1593,10 +1604,10 @@ case "$COMMAND" in
         # Auto-upgrade to install if server argument provided
         if [[ -n "$SERVER" ]]; then
             info "Auto-upgrading 'play' to 'install' (server argument provided: $SERVER)"
-            execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+            execute "(ai-actions/install-card! \"$(clj_str "$CARD_NAME")\" \"$(clj_str "$SERVER")\")"
         else
             info "Playing card: $CARD_NAME"
-            execute "(ai-actions/play-card! \"$CARD_NAME\")"
+            execute "(ai-actions/play-card! \"$(clj_str "$CARD_NAME")\")"
         fi
         after_action
         ;;
@@ -1641,7 +1652,7 @@ case "$COMMAND" in
         done
 
         info "Running on $SERVER..."
-        execute "(ai-actions/run! \"$SERVER\"$FLAGS_ARGS)"
+        execute "(ai-actions/run! \"$(clj_str "$SERVER")\"$FLAGS_ARGS)"
         after_action
         ;;
 
@@ -1654,7 +1665,7 @@ case "$COMMAND" in
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
-        execute "(ai-actions/use-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        execute "(ai-actions/use-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
         ;;
 
@@ -1666,7 +1677,7 @@ case "$COMMAND" in
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
         info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
-        execute "(ai-actions/use-runner-ability! \"$CARD_NAME\" $ABILITY_INDEX)"
+        execute "(ai-actions/use-runner-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
         ;;
 
@@ -1676,7 +1687,7 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command trash <card-name>"
         info "Trashing $CARD_NAME..."
-        execute "(ai-actions/trash-installed! \"$CARD_NAME\")"
+        execute "(ai-actions/trash-installed! \"$(clj_str "$CARD_NAME")\")"
         after_action
         ;;
 
@@ -1686,7 +1697,7 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command rez <card-name>"
         info "Rezzing $CARD_NAME..."
-        execute "(ai-actions/rez-card! \"$CARD_NAME\")"
+        execute "(ai-actions/rez-card! \"$(clj_str "$CARD_NAME")\")"
         after_action
         ;;
 
@@ -1696,7 +1707,7 @@ case "$COMMAND" in
         ICE_NAME="${1:-}"
         [[ -z "$ICE_NAME" ]] && error "Usage: send_command fire-subs <ice-name>"
         info "Firing unbroken subroutines on $ICE_NAME..."
-        execute "(ai-actions/fire-unbroken-subs! \"$ICE_NAME\")"
+        execute "(ai-actions/fire-unbroken-subs! \"$(clj_str "$ICE_NAME")\")"
         ;;
 
     # Let ICE subroutines fire (Runner)
@@ -1705,7 +1716,7 @@ case "$COMMAND" in
         ICE_NAME="${1:-}"
         [[ -z "$ICE_NAME" ]] && error "Usage: send_command let-subs-fire <ice-name>"
         info "Signaling intent to let subs fire on $ICE_NAME..."
-        execute "(ai-actions/let-subs-fire! \"$ICE_NAME\")"
+        execute "(ai-actions/let-subs-fire! \"$(clj_str "$ICE_NAME")\")"
         ;;
 
     # Toggle auto-pass priority (Corp)
@@ -1734,13 +1745,13 @@ case "$COMMAND" in
         [[ "$OVERADVANCE" == "true" ]] && OPTS="{:overadvance true}"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Advancing $CARD_NAME x$COUNT..."
-            execute "(ai-actions/advance-card-times! \"$CARD_NAME\" $COUNT $OPTS)"
+            execute "(ai-actions/advance-card-times! \"$(clj_str "$CARD_NAME")\" $COUNT $OPTS)"
         elif [[ "$OVERADVANCE" == "true" ]]; then
             info "Advancing $CARD_NAME..."
-            execute "(ai-actions/advance-card! \"$CARD_NAME\" {:overadvance true})"
+            execute "(ai-actions/advance-card! \"$(clj_str "$CARD_NAME")\" {:overadvance true})"
         else
             info "Advancing $CARD_NAME..."
-            execute "(ai-actions/advance-card! \"$CARD_NAME\")"
+            execute "(ai-actions/advance-card! \"$(clj_str "$CARD_NAME")\")"
         fi
         after_action
         ;;
@@ -1751,7 +1762,7 @@ case "$COMMAND" in
         CARD_NAME="${1:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command score <card-name>"
         info "Scoring $CARD_NAME..."
-        execute "(ai-actions/score-agenda! \"$CARD_NAME\")"
+        execute "(ai-actions/score-agenda! \"$(clj_str "$CARD_NAME")\")"
         after_action
         ;;
 
@@ -1768,7 +1779,7 @@ case "$COMMAND" in
             # arg routes to the same matcher as choose-value instead of the
             # old 'Choice must be a number' refusal.
             info "Choosing option matching: $CHOICE..."
-            execute "(ai-actions/choose-by-value! \"$CHOICE\")"
+            execute "(ai-actions/choose-by-value! \"$(clj_str "$CHOICE")\")"
         fi
         after_action
         ;;
@@ -1778,7 +1789,7 @@ case "$COMMAND" in
         VALUE="${1:-}"
         [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
         info "Choosing option matching: $VALUE..."
-        execute "(ai-actions/choose-by-value! \"$VALUE\")"
+        execute "(ai-actions/choose-by-value! \"$(clj_str "$VALUE")\")"
         after_action
         ;;
 
@@ -2201,7 +2212,7 @@ case "$COMMAND" in
         SIDE="${2:-Runner}"
         [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
         info "Joining game $GAME_ID as $SIDE..."
-        execute "(ai-actions/connect-game! \"$GAME_ID\" \"$SIDE\")"
+        execute "(ai-actions/connect-game! \"$(clj_str "$GAME_ID")\" \"$(clj_str "$SIDE")\")"
         ;;
 
     resync)
@@ -2217,7 +2228,7 @@ case "$COMMAND" in
         [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
         info "Resyncing game $GAME_ID..."
         # Use reconnect-game! which waits for game-state to arrive
-        execute "(ai-connection/reconnect-game! \"$GAME_ID\")"
+        execute "(ai-connection/reconnect-game! \"$(clj_str "$GAME_ID")\")"
         ;;
 
     chat)
@@ -2242,7 +2253,7 @@ case "$COMMAND" in
             exit 1
         fi
         info "Sending chat message..."
-        execute "(ai-actions/send-chat! \"$MESSAGE\")"
+        execute "(ai-actions/send-chat! \"$(clj_str "$MESSAGE")\")"
         ;;
 
     ping)
@@ -2274,13 +2285,13 @@ case "$COMMAND" in
         if [[ -n "$SERVER" ]]; then
             info "Installing card: $CARD_NAME on $SERVER"
             if [[ -n "$OVERWRITE" ]]; then
-                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\" {$OVERWRITE})"
+                execute "(ai-actions/install-card! \"$(clj_str "$CARD_NAME")\" \"$(clj_str "$SERVER")\" {$OVERWRITE})"
             else
-                execute "(ai-actions/install-card! \"$CARD_NAME\" \"$SERVER\")"
+                execute "(ai-actions/install-card! \"$(clj_str "$CARD_NAME")\" \"$(clj_str "$SERVER")\")"
             fi
         else
             info "Installing card: $CARD_NAME"
-            execute "(ai-actions/install-card! \"$CARD_NAME\")"
+            execute "(ai-actions/install-card! \"$(clj_str "$CARD_NAME")\")"
         fi
         after_action
         ;;
@@ -2293,7 +2304,7 @@ case "$COMMAND" in
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
         if [[ -n "$SERVER" ]]; then
             info "Installing card at index $INDEX on $SERVER"
-            execute "(ai-actions/install-card! $INDEX \"$SERVER\")"
+            execute "(ai-actions/install-card! $INDEX \"$(clj_str "$SERVER")\")"
         else
             info "Installing card at index $INDEX"
             execute "(ai-actions/install-card! $INDEX)"

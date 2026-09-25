@@ -43,7 +43,8 @@ If you don't respond to break/access prompts, the game hangs.
 ./dev/send_command runner use-ability "Mayfly" 0   # Use breaker to break ICE
 
 # Respond to prompts
-./dev/send_command runner choose <N>         # Choose option N
+./dev/send_command runner choose "<label>"    # Choose by NAME (safer: lists renumber, #204)
+./dev/send_command runner choose <N>         # Choose option N (position in the LAST render)
 ./dev/send_command runner choose-value steal # Choose by text match
 ```
 

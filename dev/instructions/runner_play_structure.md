@@ -269,11 +269,25 @@ When you encounter ICE, use `abilities "<breaker>"` to see available actions:
 When you only want to break some subroutines:
 
 ```bash
-./dev/send_command runner use-ability "Mayfly" 0      # "Break 1 subroutine"
-./dev/send_command runner choose 0                     # Break first sub
-./dev/send_command runner choose 1                     # Done (let remaining fire)
-./dev/send_command runner continue                     # Pass priority
+./dev/send_command runner use-ability "Mayfly" 0          # "Break 1 subroutine"
+./dev/send_command runner choose "End the run"            # Break that sub, BY NAME
+./dev/send_command runner choose "Done"                   # Let the rest fire
+./dev/send_command runner continue                        # Pass priority
 ```
+
+**Name the option; don't count it.** `choose` takes a label as well as an index,
+and the label is resolved against the prompt as it stands right now. An index is
+only a position in the last render, and several prompts rebuild their list
+between calls:
+
+- a repeating break ability re-asks minus the sub you just broke (#96), so the
+  second `choose 1` is not the option `choose 1` just was;
+- Red Team's server list drops servers already run this turn — a marquee seat
+  read index 1 as R&D, got HQ, facechecked a rezzed Diviner and lost a card and
+  a turn to it (#204).
+
+Run `prompt` to see the exact labels. Fall back to an index only when the option
+has no usable label.
 
 ### If a run seems stuck at "priority / paid-ability window"
 

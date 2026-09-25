@@ -126,6 +126,245 @@
       (is (nil? (prompts/choice-match-index choices "")))
       (is (nil? (prompts/choice-match-index choices "[ ]"))))))
 
+;; ============================================================================
+;; choice-match-index — an EXACT label beats a substring (#204)
+;;
+;; #204's seat lost a turn to a positional index into a list that renumbers
+;; between calls, and asked for naming instead. Naming already existed (#101)
+;; -- but first-substring-wins makes it unsafe on exactly the prompt #204 is
+;; about: a server list carrying both "Server 1" and "Server 10" resolves
+;; `choose "Server 1"` to whichever appears FIRST. Same family as #212.
+;; An exact normalized match is never the wrong answer, so it wins outright.
+;; ============================================================================
+
+(deftest choice-match-index-prefers-an-exact-label-over-a-substring
+  (testing "a shorter name is not stolen by a longer one listed first"
+    (let [choices [{:uuid "a" :value "Server 10"}
+                   {:uuid "b" :value "Server 1"}]]
+      (is (= 1 (prompts/choice-match-index choices "Server 1"))
+          "exact 'Server 1' resolves to Server 1, not to the Server 10 above it")
+      (is (= 0 (prompts/choice-match-index choices "Server 10"))
+          "exact 'Server 10' still resolves to Server 10")))
+  (testing "the same hazard on the central servers #204 was actually run on"
+    (let [choices [{:uuid "a" :value "Archives"}
+                   {:uuid "b" :value "HQ"}
+                   {:uuid "c" :value "R&D"}]]
+      (is (= 2 (prompts/choice-match-index choices "R&D")))
+      (is (= 1 (prompts/choice-match-index choices "hq")))))
+  (testing "exact match wins regardless of position, and bracket-stripping still applies"
+    (let [choices [{:uuid "a" :value "Gain 3 [Credits] and draw"}
+                   {:uuid "b" :value "Gain 3 [Credits]"}]]
+      (is (= 1 (prompts/choice-match-index choices "Gain 3 credits"))
+          "the exact (bracket-stripped) label beats the longer one listed first")))
+  (testing "substring matching still works when nothing matches exactly"
+    (let [choices [{:uuid "a" :value "Gain 3 [Credits]"}
+                   {:uuid "b" :value "Draw 2 cards"}]]
+      (is (= 1 (prompts/choice-match-index choices "draw"))))))
+
+(deftest choice-match-index-matches-the-title-of-a-wire-shaped-card-choice
+  ;; Panel (Fable 5.1), MINOR-1: the exact-match pass above was INERT for the
+  ;; choices most likely to collide. diffs.clj/prompt-summary sends a card
+  ;; choice as {:value {:cid .. :title .. :printed-title ..}}, and
+  ;; normalize-choice-text stringified the whole map -- so (= text needle)
+  ;; could never be true and only the substring arm ever fired. Two titles
+  ;; where one prefixes the other (a deck-search prompt like Mutual Favor) is
+  ;; far likelier than the ten-remote "Server 10" case the fix was built
+  ;; around, and it was exactly the unprotected one. The fixtures missed it
+  ;; because every one of them used {:value "string"}, a shape the wire does
+  ;; not send for cards.
+  (testing "the wire's card-choice shape matches on :title, exactly"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Boomerang X"
+                                      :printed-title "Boomerang X"}}
+                   {:uuid "b" :value {:cid "c2" :title "Boomerang"
+                                      :printed-title "Boomerang"}}]]
+      (is (= 1 (prompts/choice-match-index choices "Boomerang"))
+          "exact title wins over the longer title listed first")
+      (is (= 0 (prompts/choice-match-index choices "Boomerang X"))
+          "the longer title is still reachable by its own exact name")))
+  (testing "substring still reaches a wire-shaped card when nothing is exact"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Hedge Fund"}}
+                   {:uuid "b" :value {:cid "c2" :title "Sure Gamble"}}]]
+      (is (= 1 (prompts/choice-match-index choices "gamble")))))
+  (testing "a card choice no longer matches on its :cid or the map's punctuation"
+    (let [choices [{:uuid "a" :value {:cid "c1" :title "Hedge Fund"}}]]
+      (is (nil? (prompts/choice-match-index choices "c1"))
+          "the :cid is not a name the seat should be able to address")
+      (is (nil? (prompts/choice-match-index choices "printed-title"))
+          "stringified map keys must not be matchable"))))
+
+;; ============================================================================
+;; An AMBIGUOUS label must refuse, not guess (#204's "erroring" ask)
+;;
+;; Panel (Fable 5.1), MINOR-3: exact-first stops a longer label stealing a
+;; shorter one, but it does nothing when NO label matches exactly. `choose
+;; "Server 1"` against ["Server 10" "Server 12"] still pressed Server 10 --
+;; silently, which is the whole complaint of #204 ("no echo of what was
+;; chosen ... the first sign of trouble was an ICE encounter on the wrong
+;; server"). The issue asks for the client to error when the named thing is
+;; not on offer. A needle that substring-matches several DISTINCT labels and
+;; none exactly has not named anything; say so and press nothing.
+;;
+;; Identical labels are not ambiguous in any way that matters -- pressing
+;; either is the same act -- so they still resolve.
+;; ============================================================================
+
+(defn- capture-choose-value-on
+  "choose-by-value! against an arbitrary mocked prompt."
+  [prompt value-text]
+  (let [sent (atom nil)]
+    (with-mock-state (mock-client-state :side "corp" :prompt prompt)
+      (with-redefs [ws/send-message! (fn [_evt data] (reset! sent data) true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (let [out (with-out-str (prompts/choose-by-value! value-text))]
+          {:sent @sent :out out})))))
+
+(deftest choose-by-value-refuses-an-ambiguous-substring-and-sends-nothing
+  (testing "a needle matching several distinct labels, none exactly, presses nothing"
+    (let [prompt {:prompt-type "other" :eid "amb-1" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}
+                            {:uuid "u2" :value "Server 12"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+      (is (nil? sent)
+          (str "must not send a wire message for an ambiguous label:\n" out))
+      (is (str/includes? out "Server 10")
+          (str "names the candidates it could not choose between:\n" out))
+      (is (str/includes? out "Server 12")
+          (str "names ALL the candidates, not just the first:\n" out))))
+  (testing "an exact match among the ambiguous ones still resolves"
+    (let [prompt {:prompt-type "other" :eid "amb-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}
+                            {:uuid "u2" :value "Server 1"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "Server 1")]
+      (is (= {:uuid "u2"} (:choice (:args sent)))
+          "the exact label is not ambiguous and still presses")))
+  (testing "identical labels are not ambiguous — pressing either is the same act"
+    (let [prompt {:prompt-type "other" :eid "amb-3" :msg "Pay 1 [Credits]"
+                  :choices [{:uuid "u1" :value "Ghost Runner"}
+                            {:uuid "u2" :value "Ghost Runner"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "ghost")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          "a substring hitting two identical labels still resolves")))
+  (testing "an unambiguous substring is untouched (#101's paraphrase path)"
+    (let [prompt {:prompt-type "other" :eid "amb-4" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}
+                            {:uuid "u2" :value "Draw 2 cards"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "draw")]
+      (is (= {:uuid "u2"} (:choice (:args sent)))
+          "one substring match is still a decision"))))
+
+(deftest choose-by-value-says-so-when-the-label-resolved-INEXACTLY
+  ;; Fresh delta seat (Astra), MAJOR: the ambiguity refusal only fires on TWO
+  ;; or more distinct substring matches. With exactly one, `choose "Server 1"`
+  ;; against ["Server 10"] still presses Server 10 and reports
+  ;; "✅ Chose: Server 10" as though that were what was asked for. #204's ask
+  ;; is that the client error "if that server isn't offered", and Server 1 is
+  ;; not offered.
+  ;;
+  ;; It cannot simply refuse: a needle that is a proper substring of exactly
+  ;; one label is structurally identical to #101's paraphrase path, where
+  ;; "draw" SHOULD reach "Draw 2 cards". The two are indistinguishable by
+  ;; shape. So the resolution stands and the INEXACTNESS is stated -- which is
+  ;; #204's other ask ("echo the resolved choice ... so a mis-indexed pick is
+  ;; visible immediately rather than three commands later").
+  ;; SUPERSEDED FIXTURE, round 3: this block used "Server 1" -> "Server 10",
+  ;; which round 3 turned into an outright REFUSAL (a named number that is not
+  ;; the label's number names something not on offer). Warning about it was the
+  ;; weaker behaviour and the test would now be asserting it. Changed to a WORD
+  ;; near-miss, which is still the warn-and-resolve path -- the block keeps
+  ;; testing what it was written to test.
+  (testing "a near-miss names what was asked and what was pressed"
+    (let [prompt {:prompt-type "other" :eid "ix-1" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Trash the top card"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Trash the top")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          "the paraphrase path still resolves — it is not a refusal")
+      (is (str/includes? out "not an exact")
+          (str "must say the label did not match exactly:\n" out))
+      (is (str/includes? out "Trash the top\"")
+          (str "must quote what the seat actually asked for:\n" out))
+      (is (str/includes? out "Trash the top card")
+          (str "must name what it pressed instead:\n" out))))
+  (testing "an EXACT label passes silently — no warning noise on the common path"
+    (let [prompt {:prompt-type "other" :eid "ix-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "HQ"} {:uuid "u2" :value "R&D"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "R&D")]
+      (is (= {:uuid "u2"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "an exact match must not be warned about:\n" out))))
+  (testing "bracket-stripping still counts as exact (#101)"
+    (let [prompt {:prompt-type "other" :eid "ix-3" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Gain 3 credits")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "the icon-token paraphrase is an exact label, not a near-miss:\n" out))))
+  (testing "a wire-shaped card resolves on its title and counts as exact"
+    (let [prompt {:prompt-type "other" :eid "ix-4" :msg "Choose a card"
+                  :choices [{:uuid "u1" :value {:cid "c1" :title "Hedge Fund"}}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Hedge Fund")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (not (str/includes? out "not an exact"))
+          (str "a card matched by its exact title is not a near-miss:\n" out)))))
+
+(deftest choose-by-value-refuses-a-name-whose-NUMBER-is-not-the-labels-number
+  ;; Round 3 (Fable 5.1, executed): round 2's comment claimed the near-miss
+  ;; "Server 1" -> "Server 10" is structurally indistinguishable from #101's
+  ;; paraphrase "draw" -> "Draw 2 cards". That claim is false, and the seat
+  ;; proved it rather than argued it: the Server match ends MID-TOKEN (the next
+  ;; character is a digit) while the paraphrase ends at a token boundary.
+  ;;
+  ;; Their rule -- refuse whenever the next character is alphanumeric -- is too
+  ;; broad to adopt: it would refuse "Gain 3 credit" against "Gain 3 [Credits]",
+  ;; a paraphrase a seat would plausibly type, on the letter 's'. Narrowed to
+  ;; the shape #204 is actually about: the seat named a NUMBER and the label's
+  ;; number is a different one. "Server 1" is not a sloppy spelling of
+  ;; "Server 10"; it names a server that is not on offer, which is precisely
+  ;; the ask ("erroring if that server isn't offered").
+  (testing "a numbered name that is not the label's number is refused, not resolved"
+    (let [prompt {:prompt-type "other" :eid "nb-1" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Server 1")]
+      (is (nil? sent)
+          (str "must press NOTHING — Server 1 is not on offer:\n" out))
+      (is (str/includes? out "Server 10")
+          (str "names what IS on offer:\n" out))))
+  (testing "the same server named exactly still resolves"
+    (let [prompt {:prompt-type "other" :eid "nb-2" :msg "Choose a server"
+                  :choices [{:uuid "u1" :value "Server 10"}]}
+          {:keys [sent]} (capture-choose-value-on prompt "Server 10")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))))
+  (testing "a WORD paraphrase ending mid-token is still resolved (#101)"
+    ;; The case Fable's broader rule would have broken. "credit" -> "credits".
+    (let [prompt {:prompt-type "other" :eid "nb-3" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Gain 3 [Credits]"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Gain 3 credit")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          (str "a letter-boundary paraphrase must still resolve:\n" out))
+      (is (str/includes? out "not an exact")
+          (str "...but it is still flagged as inexact:\n" out))))
+  (testing "a boundary paraphrase resolves and is flagged inexact"
+    (let [prompt {:prompt-type "other" :eid "nb-4" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Draw 2 cards"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "draw")]
+      (is (= {:uuid "u1"} (:choice (:args sent))))
+      (is (str/includes? out "not an exact") out)))
+  (testing "the seat must have named a NUMBER — a word followed by a digit resolves"
+    ;; This pins the half of number-mismatch? that asks whether the NEEDLE ends
+    ;; in a digit. Without it, a needle ending in a letter that the label
+    ;; continues with a digit ("Sandbox" -> "Sandbox2") would be refused as a
+    ;; wrong number, though the seat named no number at all -- that is an
+    ;; ordinary word near-miss and belongs on the warn-and-resolve path.
+    ;; Added because mutating that check away left the whole suite green: the
+    ;; restriction was unproven, which is not the same as unnecessary.
+    (let [prompt {:prompt-type "other" :eid "nb-5" :msg "Choose one"
+                  :choices [{:uuid "u1" :value "Sandbox2"}]}
+          {:keys [sent out]} (capture-choose-value-on prompt "Sandbox")]
+      (is (= {:uuid "u1"} (:choice (:args sent)))
+          (str "the seat named no number; this is a word near-miss:\n" out))
+      (is (str/includes? out "not an exact")
+          (str "...still flagged inexact:\n" out)))))
+
 (deftest choose-option-index-still-refuses-select-and-points-to-choose-value
   (testing "choose <N> on a select prompt is refused and steers to choose-value"
     (with-mock-state (mock-client-state :side "corp" :prompt select-prompt-with-done)

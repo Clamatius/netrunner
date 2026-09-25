@@ -291,22 +291,103 @@
       (clojure.string/lower-case)
       (clojure.string/replace #"[\[\]]" "")))
 
+(defn choice-match-text
+  "Pure: the text a seat may address this choice by.
+
+   A card-valued choice arrives from the wire as
+   {:value {:cid .. :title .. :printed-title ..}} (diffs.clj/prompt-summary),
+   and the title is the only part of that a seat can see or say. Stringifying
+   the whole map instead -- which is what happened before -- had two costs:
+   the exact-match pass could never fire on a card, leaving the collision it
+   exists to prevent unguarded on the choices most likely to collide; and the
+   :cid and the map's own key names became matchable text, so `choose \"c1\"`
+   or `choose \"printed-title\"` pressed a card. (Panel, Fable 5.1.)"
+  [choice]
+  (let [v (:value choice)]
+    (cond
+      (and (map? v) (:title v)) (:title v)
+      (some? v) v
+      :else (or (:label choice) ""))))
+
+(defn- match-candidates
+  "Pure: [index normalized-text] for every choice, or nil for a needle that
+   normalizes to blank. A blank needle would substring-match EVERY label and
+   silently press option 0 — no match is the honest answer (guest review)."
+  [choices needle]
+  (when-not (clojure.string/blank? needle)
+    (map-indexed
+     (fn [idx choice]
+       [idx (normalize-choice-text (choice-match-text choice))])
+     choices)))
+
 (defn choice-match-index
-  "Pure: index of the first choice whose :value/:label contains `value-text`,
-   comparing bracket-stripped lowercase text. nil when nothing matches."
+  "Pure: index of the choice whose :value/:label matches `value-text`,
+   comparing bracket-stripped lowercase text. An EXACT match wins outright,
+   wherever it sits in the list; only if none is exact does the first
+   SUBSTRING match answer. nil when nothing matches.
+
+   Exact-first is #204. Naming a choice is the cure for a list that renumbers
+   between calls, but first-substring-wins made naming unsafe on exactly that
+   prompt: a server list carrying both \"Server 10\" and \"Server 1\" resolved
+   `choose \"Server 1\"` to whichever the engine happened to list first. An
+   exact label is never the wrong answer, so it cannot be stolen by a longer
+   one above it. Substring stays as the fallback — it is what lets the
+   paraphrase \"draw\" reach \"Draw 2 cards\" (#101)."
   [choices value-text]
-  (let [needle (normalize-choice-text value-text)]
-    ;; A needle that normalizes to blank (e.g. "[]") would substring-match
-    ;; EVERY label and silently press option 0 — no match is the honest answer
-    ;; (guest review).
-    (when-not (clojure.string/blank? needle)
-      (first
-       (keep-indexed
-        (fn [idx choice]
-          (let [choice-val (or (:value choice) (:label choice) "")]
-            (when (clojure.string/includes? (normalize-choice-text choice-val) needle)
-              idx)))
-        choices)))))
+  (let [needle (normalize-choice-text value-text)
+        candidates (match-candidates choices needle)]
+    (when (seq candidates)
+      (or (first (for [[idx text] candidates :when (= text needle)] idx))
+          (first (for [[idx text] candidates
+                       :when (clojure.string/includes? text needle)]
+                   idx))))))
+
+(defn choice-match-ambiguity
+  "Pure: the DISTINCT labels `value-text` substring-matches when none matches
+   exactly, or nil when it resolves unambiguously (or not at all).
+
+   #204 asks the client to error when the named thing is not on offer.
+   Exact-first stops a longer label stealing a shorter one, but it is silent
+   when nothing matches exactly: `choose \"Server 1\"` against
+   [\"Server 10\" \"Server 12\"] pressed Server 10 and reported
+   `✅ Chose: Server 10` -- an honest echo of an act the seat did not ask
+   for, which is how #204's marquee turn was actually lost. A needle matching
+   several distinct labels and none of them exactly has named nothing.
+
+   Identical labels are excluded deliberately: two choices reading
+   \"Ghost Runner\" are the same act, so pressing either is not a guess."
+  [choices value-text]
+  (let [needle (normalize-choice-text value-text)
+        hits (->> (match-candidates choices needle)
+                  (filter (fn [[_ text]] (clojure.string/includes? text needle)))
+                  (map second))]
+    (when (and (seq hits)
+               (not-any? #(= % needle) hits)
+               (> (count (distinct hits)) 1))
+      (vec (distinct hits)))))
+
+(defn number-mismatch?
+  "Pure: true when `needle` matches inside `label` but the seat named a NUMBER
+   that is not the label's number -- the needle ends in a digit and the label
+   continues with one. \"Server 1\" against \"Server 10\" is true;
+   \"Server 10\" against \"Server 10\" is false.
+
+   Round 3 (Fable 5.1) disproved by execution the claim that this shape cannot
+   be told apart from #101's paraphrase path: the number match ends MID-TOKEN,
+   the paraphrase ends at a token boundary. Their rule -- refuse on any
+   alphanumeric successor -- is not adopted, because it also refuses
+   \"Gain 3 credit\" against \"Gain 3 [Credits]\" on the letter 's', which a
+   seat would plausibly type and mean. Restricted to digits, a false refusal
+   would need the seat to name a number it did not mean."
+  [label needle]
+  (let [l (normalize-choice-text label)
+        n (normalize-choice-text needle)]
+    (when-let [i (clojure.string/index-of l n)]
+      (boolean
+       (and (seq n)
+            (Character/isDigit ^char (last n))
+            (when-let [after (get l (+ i (count n)))]
+              (Character/isDigit ^char after)))))))
 
 (defn choose-by-value!
   "Choose from prompt by matching value/label text (case-insensitive substring
@@ -323,9 +404,65 @@
         side-kw (when side (keyword (clojure.string/lower-case side)))
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         choices (:choices prompt)
-        matching-idx (choice-match-index choices value-text)]
-    (if matching-idx
-      (press-choice! (nth choices matching-idx))
+        ambiguous (choice-match-ambiguity choices value-text)
+        candidate-idx (when-not ambiguous (choice-match-index choices value-text))
+        ;; A named number that is not the label's number is a server that is
+        ;; not on offer, not a misspelling of one. Refuse it. (Round 3.)
+        wrong-number (when candidate-idx
+                       (let [c (nth choices candidate-idx)]
+                         (when (number-mismatch? (choice-match-text c) value-text)
+                           c)))
+        matching-idx (when-not wrong-number candidate-idx)]
+    (cond
+      wrong-number
+      (do
+        (println (format "\u274c \"%s\" is not on offer here \u2014 nothing pressed."
+                         value-text))
+        (println "   The closest label names a different number:")
+        (println (str "      " (core/format-choice wrong-number)))
+        (println "   \u2192 Give the full label, or press by index with: choose <N>")
+        (core/with-cursor {:status :error :reason "Named number is not on offer"}))
+
+      ;; #204: press nothing rather than guess. Guessing here is how the
+      ;; marquee turn was lost -- the wrong server was run and the echo
+      ;; faithfully reported the wrong server.
+      ambiguous
+      (do
+        (println (str "❌ \"" value-text "\" matches " (count ambiguous)
+                      " different choices — nothing pressed."))
+        (println "   It could have meant:")
+        (doseq [[idx choice] (map-indexed vector choices)]
+          (when (some #(= % (normalize-choice-text (choice-match-text choice))) ambiguous)
+            (println (str "      " idx ". " (core/format-choice choice)))))
+        (println "   → Give the full label, or press by index with: choose <N>")
+        (core/with-cursor {:status :error :reason "Ambiguous choice label"}))
+
+      matching-idx
+      (let [chosen (nth choices matching-idx)
+            exact? (= (normalize-choice-text (choice-match-text chosen))
+                      (normalize-choice-text value-text))]
+        ;; #204, fresh delta seat: the ambiguity refusal above needs TWO or more
+        ;; candidates. With exactly one, `choose "Server 1"` against
+        ;; ["Server 10"] pressed Server 10 and reported it as a plain success.
+        ;; It cannot simply refuse ACROSS THE BOARD: for a word near-miss
+        ;; ("trash the top" -> "Trash the top card") this is #101's paraphrase
+        ;; path and refusing would break it, so the resolution stands and the
+        ;; inexactness is SAID -- #204's other ask, make a mis-pick visible
+        ;; immediately rather than three commands later.
+        ;;
+        ;; Round 2 of this review claimed here that the "Server 1" -> "Server
+        ;; 10" case was INDISTINGUISHABLE from that paraphrase. It is not, and
+        ;; a seat disproved it by execution rather than argument: the number
+        ;; match ends mid-token. That case is refused above by
+        ;; number-mismatch?, and only the genuinely ambiguous-by-shape
+        ;; near-miss reaches this warning.
+        (when-not exact?
+          (println (format "⚠️  \"%s\" is not an exact label here — resolving to \"%s\"."
+                           value-text (core/format-choice chosen)))
+          (println "   If that is not what you meant, the full labels are in `prompt`."))
+        (press-choice! chosen))
+
+      :else
       (do
         (println (str "❌ No choice matching \"" value-text "\" found"))
         (println "Available choices:")

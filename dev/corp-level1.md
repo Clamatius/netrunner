@@ -38,7 +38,8 @@ If you don't respond, the game hangs.
 # Respond to prompts
 ./dev/send_command corp continue    # Pass priority / continue run
 ./dev/send_command corp rez <name>  # Rez ICE when prompted
-./dev/send_command corp choose <N>  # Choose option N from prompt
+./dev/send_command corp choose "<label>"  # Choose by NAME (safer: lists renumber, #204)
+./dev/send_command corp choose <N>  # Choose option N (position in the LAST render)
 ```
 
 ## The Agent Loop
