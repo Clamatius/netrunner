@@ -445,7 +445,7 @@ ${GREEN}Essential Commands:${NC}
   status           Show game state (turn, credits, clicks)
   board            Show game board (servers, ICE, installed cards)
   hand             Show cards in hand
-  prompt           Show current prompt (if any)
+  prompt [--full]  Show current prompt (if any); a repeat of one just shown is one line, --full reprints it
 
 ${GREEN}Inspect (read-only — use these to decide):${NC}
   card-text <name>   Look up ANY card's type, cost, and full text
@@ -519,7 +519,7 @@ ${GREEN}Status Commands:${NC}
   status          - Show game state (turn, credits, clicks, hand size)
   board           - Show full game board (servers, ICE, rigs)
   hand            - Show cards in hand
-  prompt          - Show current prompt (if any)
+  prompt [--full] - Show current prompt (if any); --full reprints one just shown
   credits         - Show current credits
   clicks          - Show remaining clicks
   archives        - Show Corp's Archives (faceup/facedown cards)
@@ -1105,7 +1105,12 @@ case "$COMMAND" in
         ;;
 
     prompt)
-        execute '(ai-actions/show-prompt-detailed)'
+        # --full: the whole block even if it was just shown (a repeat collapses)
+        if [[ "${1:-}" == "--full" ]]; then
+            execute '(ai-actions/show-prompt-full)'
+        else
+            execute '(ai-actions/show-prompt-detailed)'
+        fi
         ;;
 
     credits)

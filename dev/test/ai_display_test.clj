@@ -3807,3 +3807,63 @@
 
 (deftest distinct-choices-get-no-note
   (is (empty? (display/duplicate-choice-lines [{:value "HQ"} {:value "R&D"} {:value "Done"}]))))
+
+;; ============================================================================
+;; A prompt already shown is not reprinted in full (#244 friction item 3, both
+;; marquee seats: "every prompt prints twice" / "each continue repeats the same
+;; prompt block 2-3 times"). #104 only LABELLED the repeat, and the seats still
+;; read the whole block again after every continue→prompt/snapshot.
+;; ============================================================================
+
+(defn- nico-state [prompt]
+  (mock-client-state
+   :side "corp"
+   :game-state {:active-player "corp" :turn 5
+                :corp {:click 3 :credit 5 :hand [] :prompt-state prompt}
+                :runner {:click 0 :credit 5 :hand []}}))
+
+(deftest a-repeat-render-collapses-but-stays-actionable
+  (ai-state/reset-rendered-prompt!)
+  (let [p (assoc nico-trigger-prompt :eid {:eid 77})]
+    (with-mock-state (nico-state p)
+      (let [first-out  (with-out-str (display/show-prompt-detailed))
+            second-out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? first-out "  Type:") "first render is the full block")
+        (is (not (str/includes? second-out "  Type:")) "the repeat is not")
+        (is (str/includes? second-out "unchanged"))
+        (is (str/includes? second-out "Choose a trigger to resolve") "still names the prompt")
+        (is (str/includes? second-out "0. Nico Campaign") "and its choices, with their indices")
+        (is (str/includes? second-out "prompt --full") "and how to get the block back")))))
+
+(deftest prompt-full-always-reprints
+  (ai-state/reset-rendered-prompt!)
+  (let [p (assoc nico-trigger-prompt :eid {:eid 78})]
+    (with-mock-state (nico-state p)
+      (with-out-str (display/show-prompt-detailed))
+      (is (str/includes? (with-out-str (display/show-prompt-full)) "  Type:")))))
+
+(deftest a-stacked-duplicate-is-never-collapsed
+  (testing "#75: same message, NEW eid, is a second prompt to answer"
+    (ai-state/reset-rendered-prompt!)
+    (with-mock-state (nico-state (assoc nico-trigger-prompt :eid {:eid 79}))
+      (with-out-str (display/show-prompt-detailed)))
+    (with-mock-state (nico-state (assoc nico-trigger-prompt :eid {:eid 80}))
+      (let [out (with-out-str (display/show-prompt-detailed))]
+        (is (str/includes? out "  Type:"))
+        (is (not (str/includes? out "unchanged")))))))
+
+(deftest a-prompt-whose-rendering-changed-is-reprinted
+  (testing "a run prompt keeps one eid and message for the whole run while its guidance (whose move, what continue does) changes — 'unchanged' must mean the BLOCK is unchanged"
+    (ai-state/reset-rendered-prompt!)
+    (let [p {:msg "You are running on HQ" :prompt-type "run" :eid {:eid 90} :choices []}
+          gs (fn [no-action]
+               {:active-player "runner" :turn 5
+                :runner {:click 3 :credit 5 :hand [] :prompt-state p}
+                :corp {:click 0 :credit 5 :hand [] :servers {:hq {:ices []}}}
+                :run {:server ["hq"] :phase "movement" :position 0 :no-action no-action}})]
+      (with-mock-state (mock-client-state :side "runner" :game-state (gs false))
+        (with-out-str (display/show-prompt-detailed)))
+      (with-mock-state (mock-client-state :side "runner" :game-state (gs "runner"))
+        (let [out (with-out-str (display/show-prompt-detailed))]
+          (is (not (str/includes? out "unchanged since shown above"))
+              (str "the Runner has passed since; the block says something new: " out)))))))

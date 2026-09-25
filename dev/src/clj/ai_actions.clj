@@ -85,6 +85,7 @@
 (def show-heap display/show-heap)
 (def show-prompt-detailed display/show-prompt-detailed)
 (def show-prompt-if-any display/show-prompt-if-any)
+(def show-prompt-full display/show-prompt-full)
 (def show-card-text display/show-card-text)
 (def show-cards display/show-cards)
 (def show-hand-cards display/show-hand-cards)

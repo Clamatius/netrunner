@@ -2676,7 +2676,8 @@
    a live re-read mid-snapshot could print 'Not in a game' under a captured
    board)."
   ([] (show-prompt-detailed @state/client-state))
-  ([state]
+  ([state] (show-prompt-detailed state {}))
+  ([state {:keys [full?]}]
   (let [side (:side state)
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
@@ -2689,9 +2690,11 @@
             ;; matching :eid, so a stacked duplicate (#75) still reads as new.
             already-shown? (state/prompt-already-rendered? prompt)]
         (state/mark-prompt-rendered! prompt)
-        (println (if already-shown?
-                   "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
-                   "\n🔔 Current Prompt:"))
+        ;; The block is rendered to a string so the repeat test can be exact.
+        ;; A run prompt keeps one eid and message for the whole run while its
+        ;; guidance (whose move, what continue does) changes; the eid match alone
+        ;; would call a changed block "unchanged".
+        (let [body (with-out-str
         (post-game-prompt-banner! state)
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
@@ -2850,6 +2853,31 @@
                     (println "  Action: Paid ability window (no run active)")
                     (println "    → No choices required.")
                     (println "    → 'continue' is run-only here — take your next action, or 'wait'."))))))))
+              same-block? (and already-shown? (= body @state/last-rendered-prompt-body))]
+          (reset! state/last-rendered-prompt-body body)
+          (if (and same-block? (not full?))
+            ;; #244 friction: the #104 label alone left the whole block printed
+            ;; 2-3 times per decision (continue's auto-append, then the seat's own
+            ;; prompt/snapshot). The repeat keeps what a seat acts on — the message
+            ;; and the choice indices — and points at the full block.
+            (do
+              (println (format "\n🔔 Current Prompt: unchanged since shown above (not a second one) — \"%s\""
+                               (:msg prompt)))
+              ;; A state claim, not decoration: a seat must not act in a finished game.
+              (post-game-prompt-banner! state)
+              (when has-choices
+                (println (str "  Choices: "
+                              (str/join " · " (map-indexed (fn [i c] (str i ". " (core/format-choice c)))
+                                                           (:choices prompt))))))
+              (when has-selectable
+                (println (format "  %d selectable card(s), listed above." (count (:selectable prompt)))))
+              (println "  (`prompt --full` reprints the whole block.)"))
+            (do
+              (println (if already-shown?
+                         "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
+                         "\n🔔 Current Prompt:"))
+              (print body)
+              (flush)))))
       ;; No prompt object. "No active prompt" alone is technically true but
       ;; misleads at a turn boundary (a reader concludes the game isn't waiting on
       ;; them when it's actually their turn to start). Append the turn-aware next
@@ -2920,6 +2948,12 @@
 
           :else
           (println (format "ℹ️  %s" (:status-text ts)))))))))))
+
+(defn show-prompt-full
+  "`prompt --full`: the whole block even when it was just shown (a repeat
+   otherwise collapses to one line; see show-prompt-detailed)."
+  []
+  (show-prompt-detailed @state/client-state {:full? true}))
 
 (defn show-prompt-if-any
   "Append the current prompt to an action's output — or print NOTHING if there
