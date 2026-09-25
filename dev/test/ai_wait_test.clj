@@ -1077,18 +1077,55 @@
                                       [{:cid "up" :zone ["servers" "archives" "content"] :side "Corp"}])))
       (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))))))
 
-(deftest a-passed-runner-at-a-decision-free-window-is-told-what-it-is
-  (testing "wakes (the #31 recovery needs the seat back), but not as :my-turn"
+(deftest a-passed-runner-at-a-decision-free-window-waits-out-the-grace
+  (testing "panel: waking at once only relabelled the spin, and before the grace a present Corp may simply be deciding"
     (with-redefs [state/get-cursor (fn [] 10)]
       (with-mock-state (mock-game "runner"
                           (-> approach-server-game-state
                               runner-passed
                               (assoc-in [:corp :servers :archives :content] [])))
-        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
-          (is (= :opponent-owes-window (:reason result)) (str result)))))))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "inside the grace: no wake")
+        (with-redefs [core/window-abandon-grace-ms 0]
+          (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+            (is (= :opponent-owes-window (:reason result))
+                (str "past the grace: wake, and not as :my-turn, got: " result))))))))
 
 (deftest opponent-owes-window-guidance-names-the-recovery
   (let [lines (core/wake-reason-guidance-lines :opponent-owes-window {})]
     (is (some #(re-find #"(?i)corp owes" %) lines))
     (is (some #(re-find #"continue" %) lines) "the #31 recovery verb")
     (is (not-any? #(re-find #"start-turn" %) lines))))
+
+(deftest wait-since-reaches-the-passed-window-arms
+  (testing "panel (both seats, reproduced): `wait --since` is the path seats use, and its fast path returned :run-started for any live run, before the new arms"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              runner-passed
+                              (assoc-in [:run :phase] "approach-ice")
+                              (assoc-in [:run :position] 1)
+                              (assoc-in [:corp :servers :archives :ices]
+                                        [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false})]
+          (is (not= :already-advanced (:status result)) (str result))
+          (is (= :timeout (:status result)) "a passed Runner with the Corp to decide sleeps on --since too"))))))
+
+(deftest wait-since-still-reports-a-run-to-a-seat-that-has-not-passed
+  (testing "the fast path keeps :run-started for the seat the run IS news to"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" (assoc-in approach-server-game-state [:corp :click] 0))
+        (is (= :run-started (:reason (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false}))))))))
+
+(deftest a-passed-forced-encounter-is-the-corps-decision
+  (testing "panel (Astra, reproduced with The Twins): the Runner passed a FORCED encounter opened at movement; the outer window's rezzed root said 'no decision', and wait offered a continue that cannot work"
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 0]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              (assoc-in [:runner :click] 2)
+                              (assoc-in [:corp :servers :archives :content] [])
+                              (assoc :encounters {:ice {:cid "iw" :title "Ice Wall" :rezzed true}
+                                                  :no-action "runner"})))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (not= :opponent-owes-window (:reason result)) (str result)))))))

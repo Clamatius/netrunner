@@ -2322,6 +2322,13 @@
                 (seq unbroken)
                 (not (i-already-passed-run-window? state side)))))))
 
+(def window-abandon-grace-ms
+  "How long an opponent gets to answer a decision-free run window before it
+   counts as ABANDONED. One number for both readers: the #31 self-advance
+   (ai-runs/self-advance-grace-ms) and `wait`'s :opponent-owes-window, which is
+   only reported once this has elapsed (#102 item 7)."
+  5000)
+
 (defn- attacked-server
   "The server map for the server currently being run, or nil if we cannot resolve
    it. Distinguishing \"server not found\" (unknown) from \"server found, root
@@ -2370,8 +2377,18 @@
   ;; side= and name, not (= side "runner"): relevance-reason hands over whatever
   ;; side it was given ("Corp", :runner, ...), and #127's ratchet forbids a new
   ;; hand-rolled keyword derivation to normalise it.
-  (if-not (and side (side= (name side) "runner"))
+  (cond
+    (not (and side (side= (name side) "runner")))
     true
+
+    ;; A live encounter is the Corp's fire/pass decision whatever [:run :phase]
+    ;; says: a FORCED encounter can open at movement (The Twins), and reading the
+    ;; outer window there answered 'no decision' about an encounter the Corp
+    ;; still owns (#102 item-7 panel, reproduced).
+    (encounter-window? state)
+    true
+
+    :else
     (case run-phase
       "initiation" false
 
@@ -2424,9 +2441,6 @@
                            nobody owes a start-turn, my-turn-to-act? is false for
                            BOTH sides, and `end-turn` is the only move. Fires for
                            the turn's OWNER only
-     :opponent-owes-window — we passed a live run window the opponent owes, and
-                           it holds no real decision there (#102 item 7). When it
-                           DOES hold one we sleep instead; its answer wakes us
      :my-run-window      — we own the un-passed pass at an active run window
                            (approach-ice / movement / approach-server, and the
                            encounter's own close once its subs are resolved,
@@ -2437,6 +2451,10 @@
                            live, an owed continue is the more specific fact, and
                            reporting :my-turn there sent the seat looking for a
                            turn to start instead of a run to finish.
+     :opponent-owes-window — we passed a live run window the opponent owes, it
+                           holds no real decision there, and it has not answered
+                           for window-abandon-grace-ms (#102 item 7). When it DOES
+                           hold a decision we sleep; its answer wakes us
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
@@ -2710,9 +2728,9 @@
     ;; decision case sleeps instead). Not :my-turn: a run is live, and the
     ;; move here is the #31 recovery, not a turn action.
     :opponent-owes-window
-    ["   👉 You passed this run window; the Corp owes the pass, and has no rez decision here."
-     "      If it has not answered after ~5s, `continue` advances the abandoned"
-     "      window (#31). Otherwise `wait` again."]
+    ["   👉 You passed this run window. The Corp owes the pass, has no rez decision"
+     "      here, and has not answered for ~5s: `continue` advances the abandoned"
+     "      window (#31)."]
 
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
@@ -2862,8 +2880,17 @@
      ;; derefs could classify :my-turn-end off the old state and then print
      ;; guidance from a board where the turn had already ended. (Review MAJOR.)
      (let [current-state @state/client-state
+           ;; #102 item 7: the fast path has no baseline, so a live run read
+           ;; as :run-started, even for a seat that has PASSED the current window
+           ;; and so cannot be learning of the run. That wake ran ahead of the
+           ;; passed-window arms on the path seats are told to use (`wait
+           ;; --since`). And :opponent-owes-window is never reported here: the
+           ;; polling loop holds it for the abandon grace.
+           passed-live-window? (and (run-active? current-state)
+                                    (i-already-passed-run-window? current-state side))
            since-reason (when (and since-cursor (> current-cursor since-cursor))
-                          (relevance-reason current-state side false))]
+                          (let [r (relevance-reason current-state side passed-live-window?)]
+                            (when-not (= r :opponent-owes-window) r)))]
      (if since-reason
        (do
          (when (:verbose opts)
@@ -2878,7 +2905,8 @@
           :has-prompt? (has-prompt? current-state side)})
 
        ;; Normal path: wait for state change
-       (let [deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
+       (let [wait-started-ms (System/currentTimeMillis)
+             deadline (+ wait-started-ms (* timeout-seconds 1000))
              initial-state @state/client-state
              initial-run-active? (run-active? initial-state)
              initial-run-phase (run-phase initial-state)
@@ -2888,7 +2916,7 @@
            (println (format "💤 Waiting for relevant events (timeout: %ds, cursor: %d)..."
                            timeout-seconds current-cursor))
            (when initial-run-active?
-             (println (format "   ⚡ Run is in progress (phase: %s) — will wake on prompt, phase-change, run-end, or my-turn"
+             (println (format "   ⚡ Run is in progress (phase: %s) — will wake on prompt, phase-change, run-end, a window you own, or my-turn"
                              (or initial-run-phase "unknown")))))
 
          (loop [last-log-count initial-log-count]
@@ -2901,7 +2929,16 @@
                  new-entries-raw (when (> current-log-count last-log-count)
                                    (take-last (- current-log-count last-log-count) current-log))
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
-                 reason (relevance-reason current-state side initial-run-active? initial-run-phase)]
+                 raw-reason (relevance-reason current-state side initial-run-active? initial-run-phase)
+                 ;; #102 item 7: a passed, decision-free window wakes the seat only
+                 ;; once the opponent has had the abandon grace to answer. Before
+                 ;; that it is the ordinary wait for a present opponent, and waking
+                 ;; at once just made `wait` spin under a new label (panel).
+                 reason (if (and (= raw-reason :opponent-owes-window)
+                                 (< (- (System/currentTimeMillis) wait-started-ms)
+                                    window-abandon-grace-ms))
+                          nil
+                          raw-reason)]
 
              ;; Calculate ALL entries since we started waiting (not just last poll)
              ;; Log is oldest-first, so take-last gets newest entries

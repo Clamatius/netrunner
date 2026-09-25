@@ -859,7 +859,12 @@
 ;; opponent-has-run-decision? lives in ai-core since #102 item 7: `wait`'s
 ;; relevance-reason needs the same gate the #31 self-advance uses, and ai-core
 ;; cannot require this namespace.
-(def opponent-has-run-decision? core/opponent-has-run-decision?)
+(defn opponent-has-run-decision?
+  "See core/opponent-has-run-decision?. A delegating fn, not a (def ... core/...)
+   alias: that captures the fn VALUE, so a reload or redef of the core fn would
+   leave the #31 self-advance on the old one (#102 item-7 panel)."
+  [state side run-phase]
+  (core/opponent-has-run-decision? state side run-phase))
 
 (defn waiting-for-opponent?
   "True if my side is waiting for opponent to make a decision during a run.
@@ -1289,8 +1294,9 @@
 
 (def self-advance-grace-ms
   "How long the opponent gets to answer a window before we treat it as ABANDONED
-   and advance it ourselves. See handle-stalled-window-self-advance."
-  5000)
+   and advance it ourselves. See handle-stalled-window-self-advance. The same
+   number `wait` holds :opponent-owes-window for (core/window-abandon-grace-ms)."
+  core/window-abandon-grace-ms)
 
 (defonce ^:private window-first-seen
   ;; {[phase position no-action] first-seen-ms} — when did we first observe this
