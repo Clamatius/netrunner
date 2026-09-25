@@ -362,3 +362,36 @@
       (is (false? (:confirmed result))
           (str "the opponent's window was accepted as our acknowledgement, so "
                "the seat would be told a start landed that never did, got:\n" out)))))
+
+;; ============================================================================
+;; #243: the announcement was side-unconditional, so a RUNNER was told "Your
+;; mandatory draw ... ha[s] NOT happened yet". Only the Corp has one
+;; (game.core.turns: the draw is gated on (= side :corp), and its event is
+;; :corp-mandatory-draw).
+;; ============================================================================
+
+(deftest a-runner-is-not-told-about-a-mandatory-draw
+  (let [out (start-turn-out
+             {:connected true :side "runner"
+              :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+              :game-state {:turn 4
+                           :runner {:click 0 :hand [] :user {:username "me"}}
+                           :corp {:click 0 :user {:username "ai-corp"}}
+                           :log [{:text "ai-corp is ending their turn 4"}]
+                           :runner-phase-12 {:active true}}})]
+    (is (clojure.string/includes? out "phase 1.2") (str "premise: the window was announced, got:\n" out))
+    (is (not (clojure.string/includes? out "mandatory draw"))
+        (str "the Runner has no mandatory draw, got:\n" out))
+    (is (clojure.string/includes? out "start-of-turn trigger")
+        "the part that IS held is still named")))
+
+(deftest the-corp-is-still-told-about-its-draw
+  (let [out (start-turn-out
+             {:connected true :side "corp"
+              :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+              :game-state {:turn 4
+                           :corp {:click 0 :hand [] :user {:username "me"}}
+                           :runner {:click 0 :user {:username "ai-runner"}}
+                           :log [{:text "ai-runner is ending their turn 4"}]
+                           :corp-phase-12 {:active true}}})]
+    (is (clojure.string/includes? out "mandatory draw") out)))
