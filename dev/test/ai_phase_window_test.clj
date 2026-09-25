@@ -189,17 +189,41 @@
 ;; engine opens 1.2 and closes it again in the same breath unless a card holds
 ;; it, and 105 card defs carry the flag.
 
+(defn- start-turn-run
+  "start-turn! with the wire stubbed; returns {:out printed :result returned}.
+
+   `confirm-start?` makes the send stub do what the engine does on start-turn —
+   grant the clicks — so report-start-turn-sent!'s confirmation wait is
+   satisfied. Without it that wait runs to its full timeout and returns
+   :confirmed false, and EVERYTHING after it — including the phase-1.2
+   announcement — is never reached.
+
+   A fixture that holds a window for us satisfies that wait on its own (the
+   window is an acknowledgement in its own right; see started?), which is why
+   the positive cases below do not need this. An ABSENCE assertion does: #237."
+  ([client-state] (start-turn-run client-state false))
+  ([client-state confirm-start?]
+   (let [original @state/client-state
+         my-side (keyword (:side client-state))
+         result (atom nil)]
+     (try
+       (reset! state/client-state client-state)
+       (let [out (with-out-str
+                   (with-redefs [ws/send-message!
+                                 (fn [_ _]
+                                   (when confirm-start?
+                                     (swap! state/client-state
+                                            assoc-in [:game-state my-side :click] 3))
+                                   true)
+                                 basic/get-my-username (constantly "me")]
+                     (reset! result (basic/start-turn!))))]
+         {:out out :result @result})
+       (finally (reset! state/client-state original))))))
+
 (defn- start-turn-out
   "start-turn! with the wire stubbed; returns printed output."
   [client-state]
-  (let [original @state/client-state]
-    (try
-      (reset! state/client-state client-state)
-      (with-out-str
-        (with-redefs [ws/send-message! (fn [_ _] true)
-                      basic/get-my-username (constantly "me")]
-          (basic/start-turn!)))
-      (finally (reset! state/client-state original)))))
+  (:out (start-turn-run client-state)))
 
 (deftest start-turn-announces-a-held-phase-12-window-at-both-send-sites
   (testing "turn 0 (Corp's opening turn) — the first send site"
@@ -230,12 +254,25 @@
           (str "and was not given the command that closes it, got:\n" out))))
 
   (testing "and stays quiet when no card is holding the window"
-    (let [out (start-turn-out
-               {:connected true :side "corp"
-                :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
-                :game-state {:turn 4
-                             :corp {:click 0 :hand [] :user {:username "me"}}
-                             :runner {:click 0 :user {:username "ai-runner"}}
-                             :log [{:text "ai-runner is ending their turn 4"}]}})]
+    ;; #237: this absence meant nothing, because control never REACHED the
+    ;; announcement branch. With no window and no clicks granted, started?
+    ;; never holds, the confirmation wait runs out its full timeout, and the
+    ;; branch is skipped. Executed proof: replacing the production window
+    ;; lookup with an unconditional "I have a window" left all five assertions
+    ;; in this deftest green. So the stub now grants the clicks the engine
+    ;; grants, and the confirmation is asserted FIRST — a precondition, not
+    ;; decoration. If it ever regresses to false this goes vacuous again.
+    (let [{:keys [out result]}
+          (start-turn-run
+           {:connected true :side "corp"
+            :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+            :game-state {:turn 4
+                         :corp {:click 0 :hand [] :user {:username "me"}}
+                         :runner {:click 0 :user {:username "ai-runner"}}
+                         :log [{:text "ai-runner is ending their turn 4"}]}}
+           true)]
+      (is (true? (:confirmed result))
+          (str "start was never confirmed, so the announcement branch was not "
+               "reached and the assertion below cannot fail — got:\n" out))
       (is (not (clojure.string/includes? out "phase 1.2"))
           (str "announced a window that is not open — the engine closes an unheld one, got:\n" out)))))
