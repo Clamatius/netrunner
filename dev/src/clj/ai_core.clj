@@ -2322,6 +2322,84 @@
                 (seq unbroken)
                 (not (i-already-passed-run-window? state side)))))))
 
+(defn- attacked-server
+  "The server map for the server currently being run, or nil if we cannot resolve
+   it. Distinguishing \"server not found\" (unknown) from \"server found, root
+   empty\" matters: the wire omits empty collections, so a missing :content on a
+   server we CAN see proves an empty root, whereas a server we cannot see at all
+   proves nothing."
+  [state]
+  (let [server (get-in state [:game-state :run :server])]
+    (get-in state [:game-state :corp :servers (keyword (last server))])))
+
+(defn opponent-has-run-decision?
+  "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
+
+   Board-derivable with NO hidden information (issue #31, §1). This is the
+   legitimacy test for self-advancing a stalled window: we may only advance past
+   the opponent when the board proves they have nothing to decide. Answering
+   'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
+   real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
+   So every case we cannot prove is conservatively `true`.
+
+   SCOPE — read this before widening the card pool. What is modelled here is
+   exactly ONE Corp decision: a REZ. That is the only run-window action the Corp
+   can take in the System Gateway pool we play. The engine permits more, and a
+   larger pool would break the equivalence: a rezzed Border Control's
+   `[trash]: End the run` is a live decision at movement even when every root card
+   is already rezzed, and this predicate would happily report 'no decision' and let
+   the Runner walk past it. That does not bite today, but it is a property of the
+   CARD POOL, not of this function, and it will not announce itself when the pool
+   changes. Widening the pool means extending this predicate (rezzed cards with
+   run-usable paid abilities) — not trusting it. The grace period in
+   `handle-stalled-window-self-advance` is what keeps the blast radius survivable
+   in the meantime: a Corp that is present still gets to take the action.
+
+   Runner-side only. As Corp the opponent is the Runner, who always has live
+   options at a window (jack out, break, paid abilities), so nothing is provable
+   and we never self-advance.
+
+   - initiation   : never a decision (no current ICE) — but that window is owned
+                    by `handle-initiation-auto-pass` (#62), not this predicate.
+   - approach-ice : a decision IFF the approached ICE is UNREZZED (Corp may rez).
+                    Rezzed ⇒ the rez choice for this ICE is already spent.
+   - movement     : at the server (position 0) a decision IFF an UNREZZED card
+                    sits in the attacked server's root (an upgrade Corp may rez).
+                    Mid-run movement (position > 0) is left conservative."
+  [state side run-phase]
+  ;; side= and name, not (= side "runner"): relevance-reason hands over whatever
+  ;; side it was given ("Corp", :runner, ...), and #127's ratchet forbids a new
+  ;; hand-rolled keyword derivation to normalise it.
+  (if-not (and side (side= (name side) "runner"))
+    true
+    (case run-phase
+      "initiation" false
+
+      ;; NOTE the nil handling in both branches. `current-run-ice` returns nil for
+      ;; "no run / position 0 / position out of bounds / no ICE on the server" —
+      ;; i.e. for every state in which we CANNOT SEE the approached ICE. Folding
+      ;; that into `false` would turn "I can't tell" into "the Corp has nothing to
+      ;; do", and we would skip a live rez window on the strength of a wire
+      ;; transient (a diff applied out of order, an ICE trashed mid-run: any
+      ;; disagreement between :position and the :ices vector). Absence of evidence
+      ;; is not evidence of absence: unknown ⇒ assume a decision ⇒ wait.
+      "approach-ice"
+      (let [ice (current-run-ice state)]
+        (if (nil? ice) true (not (:rezzed ice))))
+
+      "movement"
+      (if (zero? (or (get-in state [:game-state :run :position]) 0))
+        ;; Same asymmetry: if we cannot even resolve the attacked SERVER, we know
+        ;; nothing and must assume a decision. Only once the server is in hand does
+        ;; an empty/absent :content prove there is no root card to rez.
+        (if-let [server (attacked-server state)]
+          (boolean (some #(not (:rezzed %)) (:content server)))
+          true)
+        true)
+
+      ;; Anything else (encounter-ice, success, …): assume a real decision.
+      true)))
+
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
    Returns keyword indicating wake reason.
@@ -2346,6 +2424,9 @@
                            nobody owes a start-turn, my-turn-to-act? is false for
                            BOTH sides, and `end-turn` is the only move. Fires for
                            the turn's OWNER only
+     :opponent-owes-window — we passed a live run window the opponent owes, and
+                           it holds no real decision there (#102 item 7). When it
+                           DOES hold one we sleep instead; its answer wakes us
      :my-run-window      — we own the un-passed pass at an active run window
                            (approach-ice / movement / approach-server, and the
                            encounter's own close once its subs are resolved,
@@ -2473,6 +2554,25 @@
        ;; the opponent to pass.
        (my-run-window? state side)
        :my-run-window
+
+       ;; #102 item 7 (from #244): we PASSED a live run window and the opponent
+       ;; owes it. With clicks in hand my-turn-to-act? is true all run, so this
+       ;; fell through to :my-turn and `wait` returned at once, over and over: a
+       ;; seat that has passed could not block (marquee 10f7a727 T9, a hand-rolled
+       ;; poll loop). Split on the gate the #31 self-advance uses, so the two can
+       ;; never disagree:
+       ;; - the opponent holds a REAL decision → sleep. Its answer moves the
+       ;;   window, and that change is what wakes us (:run-phase-change,
+       ;;   :my-run-window, :run-ended). Self-advance refuses here too, so a woken
+       ;;   seat could do nothing anyway.
+       ;; - decision-free → wake, saying what it is: the recovery for an ABANDONED
+       ;;   window is our own `continue` after the grace (#31), so we must be back.
+       (and (run-active? state) (i-already-passed-run-window? state side)
+            (opponent-has-run-decision? state side (run-phase state)))
+       nil
+
+       (and (run-active? state) (i-already-passed-run-window? state side))
+       :opponent-owes-window
 
        ;; It's our turn. Distinguish a live actionable turn (:my-turn, we have
        ;; clicks) from a turn boundary where we must call start-turn first
@@ -2605,6 +2705,14 @@
     ;; #198: the same text every other surface prints for this state.
     :unnameable-encounter
     (unnameable-encounter-lines state)
+
+    ;; #102 item 7: we passed; the opponent owes a DECISION-FREE window (the
+    ;; decision case sleeps instead). Not :my-turn: a run is live, and the
+    ;; move here is the #31 recovery, not a turn action.
+    :opponent-owes-window
+    ["   👉 You passed this run window; the Corp owes the pass, and has no rez decision here."
+     "      If it has not answered after ~5s, `continue` advances the abandoned"
+     "      window (#31). Otherwise `wait` again."]
 
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."

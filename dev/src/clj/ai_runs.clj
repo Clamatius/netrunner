@@ -856,80 +856,10 @@
   [state side]
   (= (normalize-side (get-in state [:game-state :run :no-action])) side))
 
-(defn- attacked-server
-  "The server map for the server currently being run, or nil if we cannot resolve
-   it. Distinguishing \"server not found\" (unknown) from \"server found, root
-   empty\" matters: the wire omits empty collections, so a missing :content on a
-   server we CAN see proves an empty root, whereas a server we cannot see at all
-   proves nothing."
-  [state]
-  (let [server (get-in state [:game-state :run :server])]
-    (get-in state [:game-state :corp :servers (keyword (last server))])))
-
-(defn opponent-has-run-decision?
-  "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
-
-   Board-derivable with NO hidden information (issue #31, §1). This is the
-   legitimacy test for self-advancing a stalled window: we may only advance past
-   the opponent when the board proves they have nothing to decide. Answering
-   'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
-   real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
-   So every case we cannot prove is conservatively `true`.
-
-   SCOPE — read this before widening the card pool. What is modelled here is
-   exactly ONE Corp decision: a REZ. That is the only run-window action the Corp
-   can take in the System Gateway pool we play. The engine permits more, and a
-   larger pool would break the equivalence: a rezzed Border Control's
-   `[trash]: End the run` is a live decision at movement even when every root card
-   is already rezzed, and this predicate would happily report 'no decision' and let
-   the Runner walk past it. That does not bite today, but it is a property of the
-   CARD POOL, not of this function, and it will not announce itself when the pool
-   changes. Widening the pool means extending this predicate (rezzed cards with
-   run-usable paid abilities) — not trusting it. The grace period in
-   `handle-stalled-window-self-advance` is what keeps the blast radius survivable
-   in the meantime: a Corp that is present still gets to take the action.
-
-   Runner-side only. As Corp the opponent is the Runner, who always has live
-   options at a window (jack out, break, paid abilities), so nothing is provable
-   and we never self-advance.
-
-   - initiation   : never a decision (no current ICE) — but that window is owned
-                    by `handle-initiation-auto-pass` (#62), not this predicate.
-   - approach-ice : a decision IFF the approached ICE is UNREZZED (Corp may rez).
-                    Rezzed ⇒ the rez choice for this ICE is already spent.
-   - movement     : at the server (position 0) a decision IFF an UNREZZED card
-                    sits in the attacked server's root (an upgrade Corp may rez).
-                    Mid-run movement (position > 0) is left conservative."
-  [state side run-phase]
-  (if-not (= side "runner")
-    true
-    (case run-phase
-      "initiation" false
-
-      ;; NOTE the nil handling in both branches. `current-run-ice` returns nil for
-      ;; "no run / position 0 / position out of bounds / no ICE on the server" —
-      ;; i.e. for every state in which we CANNOT SEE the approached ICE. Folding
-      ;; that into `false` would turn "I can't tell" into "the Corp has nothing to
-      ;; do", and we would skip a live rez window on the strength of a wire
-      ;; transient (a diff applied out of order, an ICE trashed mid-run: any
-      ;; disagreement between :position and the :ices vector). Absence of evidence
-      ;; is not evidence of absence: unknown ⇒ assume a decision ⇒ wait.
-      "approach-ice"
-      (let [ice (core/current-run-ice state)]
-        (if (nil? ice) true (not (:rezzed ice))))
-
-      "movement"
-      (if (zero? (or (get-in state [:game-state :run :position]) 0))
-        ;; Same asymmetry: if we cannot even resolve the attacked SERVER, we know
-        ;; nothing and must assume a decision. Only once the server is in hand does
-        ;; an empty/absent :content prove there is no root card to rez.
-        (if-let [server (attacked-server state)]
-          (boolean (some #(not (:rezzed %)) (:content server)))
-          true)
-        true)
-
-      ;; Anything else (encounter-ice, success, …): assume a real decision.
-      true)))
+;; opponent-has-run-decision? lives in ai-core since #102 item 7: `wait`'s
+;; relevance-reason needs the same gate the #31 self-advance uses, and ai-core
+;; cannot require this namespace.
+(def opponent-has-run-decision? core/opponent-has-run-decision?)
 
 (defn waiting-for-opponent?
   "True if my side is waiting for opponent to make a decision during a run.

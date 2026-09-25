@@ -1036,3 +1036,59 @@
              (relevance (mock-game "corp" {:turn 0 :corp {:click 0} :runner {:click 0}})
                         "corp" false))
           "a false refusal here parks a seat that genuinely owes a start-turn"))))
+
+;; ============================================================================
+;; #102 item 7 (from #244): after the Runner PASSES a run window with clicks
+;; still in hand, `wait` returned :my-turn instantly. my-run-window? is false (the
+;; Corp owns the window now), so my-turn-to-act? won. The seat could not block,
+;; and hand-rolled a poll loop (marquee 10f7a727 T9).
+;;
+;; Two cases, split on the SAME gate the #31 self-advance uses
+;; (opponent-has-run-decision?), so wait and the recovery cannot disagree:
+;; - the Corp owes a REAL decision → sleep; its answer moves the window, which wakes us
+;; - decision-free window → wake, but say what it is: the Corp owes the pass, and
+;;   a `continue` after the grace advances an abandoned window (#31)
+;; ============================================================================
+
+(defn- runner-passed [gs]
+  (-> gs
+      (assoc-in [:runner :click] 2)
+      (assoc-in [:run :no-action] "runner")))
+
+(deftest a-passed-runner-sleeps-while-the-corp-owes-a-rez
+  (with-redefs [state/get-cursor (fn [] 10)]
+    (with-mock-state (mock-game "runner"
+                        (-> approach-server-game-state
+                            runner-passed
+                            (assoc-in [:run :phase] "approach-ice")
+                            (assoc-in [:run :position] 1)
+                            (assoc-in [:corp :servers :archives :ices]
+                                      [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+      (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+        (is (= :timeout (:status result))
+            (str "unrezzed ICE: the Corp owes a rez decision; nothing for the Runner to do, got: " result))))))
+
+(deftest a-passed-runner-sleeps-while-an-unrezzed-root-card-can-be-rezzed
+  (with-redefs [state/get-cursor (fn [] 10)]
+    (with-mock-state (mock-game "runner"
+                        (-> approach-server-game-state
+                            runner-passed
+                            (assoc-in [:corp :servers :archives :content]
+                                      [{:cid "up" :zone ["servers" "archives" "content"] :side "Corp"}])))
+      (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))))))
+
+(deftest a-passed-runner-at-a-decision-free-window-is-told-what-it-is
+  (testing "wakes (the #31 recovery needs the seat back), but not as :my-turn"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              runner-passed
+                              (assoc-in [:corp :servers :archives :content] [])))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (= :opponent-owes-window (:reason result)) (str result)))))))
+
+(deftest opponent-owes-window-guidance-names-the-recovery
+  (let [lines (core/wake-reason-guidance-lines :opponent-owes-window {})]
+    (is (some #(re-find #"(?i)corp owes" %) lines))
+    (is (some #(re-find #"continue" %) lines) "the #31 recovery verb")
+    (is (not-any? #(re-find #"start-turn" %) lines))))
