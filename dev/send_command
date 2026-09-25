@@ -367,8 +367,42 @@ show_help() {
     case "$mode" in
         --dev)  show_help_dev ;;
         --full) show_help_full ;;
-        *)      show_help_compact ;;
+        "")     show_help_compact ;;
+        -*)     show_help_compact ;;
+        *)      show_help_command "$mode" ;;
     esac
+}
+
+# `help <command>`: that command's entry and any Flags block naming it, cut from
+# `help --full` so there is no second copy to drift (#244 friction: `help
+# monitor-run` printed the general help and its flags were only in --full).
+# An entry is a two-space-indented line starting with the command, plus its
+# deeper-indented continuation lines. A miss says so rather than printing nothing.
+show_help_command() {
+    local cmd="$1" out
+    out="$( (RED= GREEN= YELLOW= BLUE= NC=; show_help_full) | awk -v cmd="$cmd" '
+        function starts_entry(line) { return line ~ ("^  " cmd "( |$)") }
+        # A Flags header names its commands as whole words ("Run Flags: (usable
+        # with run, continue, ...)"); a substring test would hand `help run` the
+        # monitor-run block.
+        function names_cmd(line,   w, n, i) {
+            n = split(line, w, /[ ,():]+/)
+            for (i = 1; i <= n; i++) if (w[i] == cmd) return 1
+            return 0 }
+        /^$/ { in_entry = 0; in_flags = 0; next }
+        in_flags { print; next }
+        $0 ~ /^  [A-Za-z -]*Flags:/ && names_cmd($0) {
+            print ""; print; in_flags = 1; in_entry = 0; next }
+        starts_entry($0) { print; in_entry = 1; next }
+        in_entry && /^   / { print; next }
+        { in_entry = 0 }')"
+    if [[ -n "${out//[[:space:]]/}" ]]; then
+        echo "$out"
+        echo
+        echo "(Every command: help --full)"
+    else
+        echo "No help entry for '$cmd'. 'help' lists your commands; 'help --full' documents every one."
+    fi
 }
 
 show_help_compact() {
@@ -584,7 +618,7 @@ ${GREEN}Running:${NC}
                          passed: not at initiation, an approach, or an encounter)
   tank <ice-name>      - Authorize letting subs fire on ICE
 
-  ${BLUE}Run Flags:${NC} (usable with run, continue)
+  ${BLUE}Run Flags:${NC} (usable with run, continue, monitor-run)
     --no-rez         Corp: don't rez any ICE
     --rez <name>     Corp: auto-rez the ICE or upgrade titled exactly <name> (case and
                      accents ignored; a near miss like "Bran" is rejected at once with
