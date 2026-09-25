@@ -2329,6 +2329,31 @@
    only reported once this has elapsed (#102 item 7)."
   5000)
 
+(defonce ^:private window-first-seen
+  ;; {[phase position no-action] first-seen-ms}: when did we first see this exact
+  ;; window decision-free and stalled? ONE clock for the #31 self-advance and for
+  ;; `wait`'s :opponent-owes-window (#102 item 7). Timing `wait` from its own call
+  ;; instead restarted the clock on every call, so short waits never got the wake
+  ;; and a long one fired the instant a stall BEGAN (round-2 panel). Reset per run.
+  (atom {}))
+
+(defn reset-window-grace!
+  "Forget stalled-window timings (new run / new game)."
+  []
+  (reset! window-first-seen {}))
+
+(defn window-stalled-for-ms
+  "Milliseconds since we FIRST saw this exact window in this exact state.
+   Records first sight on the way past, so the first call always returns 0.
+   Call it only once the window is known to be decision-free: that is the
+   moment the clock should start."
+  [state]
+  (let [run (get-in state [:game-state :run])
+        k [(:phase run) (:position run) (some-> (:no-action run) name str/lower-case)]
+        now (System/currentTimeMillis)
+        first-seen (get (swap! window-first-seen update k #(or % now)) k now)]
+    (- now first-seen)))
+
 (defn- attacked-server
   "The server map for the server currently being run, or nil if we cannot resolve
    it. Distinguishing \"server not found\" (unknown) from \"server found, root
@@ -2884,13 +2909,16 @@
            ;; as :run-started, even for a seat that has PASSED the current window
            ;; and so cannot be learning of the run. That wake ran ahead of the
            ;; passed-window arms on the path seats are told to use (`wait
-           ;; --since`). And :opponent-owes-window is never reported here: the
-           ;; polling loop holds it for the abandon grace.
+           ;; --since`). :opponent-owes-window is reported only once the window's
+           ;; own clock (window-stalled-for-ms) is past the grace, the same
+           ;; clock the polling loop and the #31 self-advance read.
            passed-live-window? (and (run-active? current-state)
                                     (i-already-passed-run-window? current-state side))
            since-reason (when (and since-cursor (> current-cursor since-cursor))
                           (let [r (relevance-reason current-state side passed-live-window?)]
-                            (when-not (= r :opponent-owes-window) r)))]
+                            (if (= r :opponent-owes-window)
+                              (when (>= (window-stalled-for-ms current-state) window-abandon-grace-ms) r)
+                              r)))]
      (if since-reason
        (do
          (when (:verbose opts)
@@ -2905,8 +2933,7 @@
           :has-prompt? (has-prompt? current-state side)})
 
        ;; Normal path: wait for state change
-       (let [wait-started-ms (System/currentTimeMillis)
-             deadline (+ wait-started-ms (* timeout-seconds 1000))
+       (let [deadline (+ (System/currentTimeMillis) (* timeout-seconds 1000))
              initial-state @state/client-state
              initial-run-active? (run-active? initial-state)
              initial-run-phase (run-phase initial-state)
@@ -2931,12 +2958,13 @@
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
                  raw-reason (relevance-reason current-state side initial-run-active? initial-run-phase)
                  ;; #102 item 7: a passed, decision-free window wakes the seat only
-                 ;; once the opponent has had the abandon grace to answer. Before
-                 ;; that it is the ordinary wait for a present opponent, and waking
-                 ;; at once just made `wait` spin under a new label (panel).
+                 ;; once the WINDOW has been stalled for the abandon grace, on the
+                 ;; clock the #31 self-advance reads. Before that it is the ordinary
+                 ;; wait for a present opponent; waking at once only made `wait`
+                 ;; spin under a new label (round-1 panel), and timing from this
+                 ;; call instead of the window broke it both ways (round 2).
                  reason (if (and (= raw-reason :opponent-owes-window)
-                                 (< (- (System/currentTimeMillis) wait-started-ms)
-                                    window-abandon-grace-ms))
+                                 (< (window-stalled-for-ms current-state) window-abandon-grace-ms))
                           nil
                           raw-reason)]
 

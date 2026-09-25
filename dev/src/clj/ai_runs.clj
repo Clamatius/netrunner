@@ -1298,25 +1298,11 @@
    number `wait` holds :opponent-owes-window for (core/window-abandon-grace-ms)."
   core/window-abandon-grace-ms)
 
-(defonce ^:private window-first-seen
-  ;; {[phase position no-action] first-seen-ms} — when did we first observe this
-  ;; exact stalled window? Reset per run by reset-window-grace!.
-  (atom {}))
-
 (defn reset-window-grace!
-  "Forget stalled-window timings (new run / new game)."
+  "Forget stalled-window timings (new run / new game). The clock lives in
+   ai-core since #102 item 7, shared with `wait`; this delegates."
   []
-  (reset! window-first-seen {}))
-
-(defn- window-stalled-for-ms
-  "Milliseconds since we FIRST saw this exact window in this exact state.
-   Records first sight on the way past, so the first call always returns 0."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        k [(:phase run) (:position run) (normalize-side (:no-action run))]
-        now (System/currentTimeMillis)
-        first-seen (get (swap! window-first-seen update k #(or % now)) k now)]
-    (- now first-seen)))
+  (core/reset-window-grace!))
 
 (defn handle-stalled-window-self-advance
   "Issue #31 §1: advance a both-must-pass window the opponent has ABANDONED —
@@ -1358,7 +1344,7 @@
              (not (has-real-decision? my-prompt)))
     ;; Board says there's no rez decision here. Give the opponent the grace period
     ;; anyway (see docstring) — only an ABANDONED window gets advanced.
-    (let [stalled-ms (window-stalled-for-ms state)]
+    (let [stalled-ms (core/window-stalled-for-ms state)]
       (when (>= stalled-ms self-advance-grace-ms)
         (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
                          (/ stalled-ms 1000.0)))

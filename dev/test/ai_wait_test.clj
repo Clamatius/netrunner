@@ -1077,19 +1077,57 @@
                                       [{:cid "up" :zone ["servers" "archives" "content"] :side "Corp"}])))
       (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))))))
 
+(defn- decision-free-passed []
+  (-> approach-server-game-state runner-passed (assoc-in [:corp :servers :archives :content] [])))
+
 (deftest a-passed-runner-at-a-decision-free-window-waits-out-the-grace
   (testing "panel: waking at once only relabelled the spin, and before the grace a present Corp may simply be deciding"
+    (core/reset-window-grace!)
     (with-redefs [state/get-cursor (fn [] 10)]
-      (with-mock-state (mock-game "runner"
-                          (-> approach-server-game-state
-                              runner-passed
-                              (assoc-in [:corp :servers :archives :content] [])))
+      (with-mock-state (mock-game "runner" (decision-free-passed))
         (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
             "inside the grace: no wake")
         (with-redefs [core/window-abandon-grace-ms 0]
           (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
             (is (= :opponent-owes-window (:reason result))
                 (str "past the grace: wake, and not as :my-turn, got: " result))))))))
+
+(deftest the-grace-clock-belongs-to-the-window-not-the-wait-call
+  (testing "round 2 (Sol): each wait restarted the clock, so short waits never got the recovery wake. The window's clock carries across calls"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))
+        (Thread/sleep 300)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false})]
+          (is (= :opponent-owes-window (:reason result))
+              (str "a later, separate wait sees the window has been stalled past the grace, got: " result)))))))
+
+(deftest the-grace-starts-when-the-window-goes-decision-free
+  (testing "round 2 (Opus, reproduced): a wait begun while the Corp held a rez decision woke the instant the Corp rezzed, claiming it had not answered for ~5s"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 600]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              runner-passed
+                              (assoc-in [:run :phase] "approach-ice")
+                              (assoc-in [:run :position] 1)
+                              (assoc-in [:corp :servers :archives :ices]
+                                        [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+        (let [started (System/currentTimeMillis)
+              rez-at (promise)
+              waiter (future (core/wait-for-relevant-diff {:timeout 3 :verbose false}))]
+          (Thread/sleep 800)                      ; past the grace, measured from the wait's start
+          (swap! state/client-state assoc-in [:game-state :corp :servers :archives :ices 0 :rezzed] true)
+          (deliver rez-at (System/currentTimeMillis))
+          (let [result @waiter
+                woke (System/currentTimeMillis)]
+            (is (= :opponent-owes-window (:reason result)) (str result))
+            (is (>= (- woke @rez-at) 500)
+                (str "woke " (- woke @rez-at) "ms after the rez; the grace is the window's, from the rez")))
+          (is (> (- (System/currentTimeMillis) started) 1000)))))))
 
 (deftest opponent-owes-window-guidance-names-the-recovery
   (let [lines (core/wake-reason-guidance-lines :opponent-owes-window {})]
@@ -1119,6 +1157,7 @@
 
 (deftest a-passed-forced-encounter-is-the-corps-decision
   (testing "panel (Astra, reproduced with The Twins): the Runner passed a FORCED encounter opened at movement; the outer window's rezzed root said 'no decision', and wait offered a continue that cannot work"
+    (core/reset-window-grace!)
     (with-redefs [state/get-cursor (fn [] 10)
                   core/window-abandon-grace-ms 0]
       (with-mock-state (mock-game "runner"
