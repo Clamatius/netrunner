@@ -275,4 +275,33 @@
           (str "start was never confirmed, so the announcement branch was not "
                "reached and the assertion below cannot fail — got:\n" out))
       (is (not (clojure.string/includes? out "phase 1.2"))
-          (str "announced a window that is not open — the engine closes an unheld one, got:\n" out)))))
+          (str "announced a window that is not open — the engine closes an unheld one, got:\n" out))))
+
+  (testing "and stays quiet when the open window is the OPPONENT's"
+    ;; Pins the OWNERSHIP half of the announcement guard, which nothing else
+    ;; reached. Executed (panel seat, then re-executed here): mutating
+    ;; `(= (:owner w) my-side)` to a constant true leaves every other assertion
+    ;; in this namespace green — an announcement for a window that is not ours
+    ;; is invisible to the suite without this case.
+    ;;
+    ;; Latent rather than shipping, which is exactly why it was uncovered: the
+    ;; engine dissocs the window at end-phase-12 (game/core/turns.clj) and
+    ;; end-turn! refuses while one is open, so the opponent's window should not
+    ;; survive into our start. The guard is defensive — and an untested
+    ;; defensive guard is the thing #237 is about.
+    (let [{:keys [out result]}
+          (start-turn-run
+           {:connected true :side "corp"
+            :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+            :game-state {:turn 4
+                         :corp {:click 0 :hand [] :user {:username "me"}}
+                         :runner {:click 0 :user {:username "ai-runner"}}
+                         :log [{:text "ai-runner is ending their turn 4"}]
+                         :runner-phase-12 {:active true}}}
+           true)]
+      (is (true? (:confirmed result))
+          (str "start was never confirmed, so the announcement branch was not "
+               "reached and the assertion below cannot fail — got:\n" out))
+      (is (not (clojure.string/includes? out "phase 1.2"))
+          (str "announced the OPPONENT's window as if it were ours — only they "
+               "can close it, got:\n" out)))))
