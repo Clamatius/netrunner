@@ -239,18 +239,23 @@
 ;; ============================================================================
 
 (deftest test-runner-waits-for-corp-rez-unrezzed-ice
-  (testing "Runner pauses at approach-ice when ICE is unrezzed (corp hasn't decided)"
-    (with-mock-state
-      (mock-state-with-run
-       :side "runner"
-       :run-phase "approach-ice"
-       :position 1
-       :ice [{:title "Ice Wall" :rezzed false}]
-       :no-action nil)  ;; Corp hasn't declined yet
-      (let [result (runs/continue-run!)]
-        (is (= :waiting-for-corp-rez (:status result)))
-        (is (= "Ice Wall" (:ice result)))
-        (is (= 1 (:position result)))))))
+  (testing "Runner first passes the unrezzed ICE approach, then waits for the Corp"
+    (doseq [[no-action expected-send?] [[nil true] [:corp true] [:runner false]]]
+      (let [sent (atom [])]
+        (with-mock-state
+          (mock-state-with-run
+           :side "runner"
+           :run-phase "approach-ice"
+           :position 1
+           :ice [{:title "Ice Wall" :rezzed false}]
+           :no-action no-action)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [result (runs/continue-run!)]
+              (is (= expected-send? (boolean (seq @sent))) (str no-action))
+              (if expected-send?
+                (is (= "continue" (get-in @sent [0 :data :command])))
+                (do (is (= :waiting-for-corp-rez (:status result)))
+                    (is (= "Ice Wall" (:ice result))))))))))))
 
 ;; DELETED: test-runner-continues-when-corp-declined-rez
 ;; Was a characterization test documenting internal status codes, not behavior.
@@ -684,17 +689,19 @@
 ;; ============================================================================
 
 (deftest test-runner-approach-unrezzed-ice
-  (testing "Runner at approach-ice with unrezzed ICE waits for corp"
-    (with-mock-state
-      (mock-state-with-run
-       :side "runner"
-       :run-phase "approach-ice"
-       :position 1
-       :ice [{:title "Enigma" :rezzed false}]
-       :no-action nil)  ; Corp hasn't acted yet
-      (let [result (runs/continue-run!)]
-        (is (= :waiting-for-corp-rez (:status result)))
-        (is (= "Enigma" (:ice result)))))))
+  (testing "Runner at a fresh unrezzed-ICE approach sends its own first pass"
+    (let [sent (atom [])]
+      (with-mock-state
+        (mock-state-with-run
+         :side "runner"
+         :run-phase "approach-ice"
+         :position 1
+         :ice [{:title "Enigma" :rezzed false}]
+         :no-action nil)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+          (let [result (runs/continue-run!)]
+            (is (= :action-taken (:status result)))
+            (is (= "continue" (get-in @sent [0 :data :command])))))))))
 
 (deftest test-runner-approach-rezzed-ice
   (testing "Runner at approach-ice with rezzed ICE does not wait"
@@ -1442,7 +1449,7 @@
     (runner-handlers/reset-state!)
     (let [state {:side "runner"
                  :game-state {:run {:phase "approach-ice" :position 2
-                                    :server ["rd"] :no-action false}
+                                    :server ["rd"] :no-action :runner}
                               :corp {:servers {:rd {:ices [{:title nil :rezzed false}
                                                            {:title nil :rezzed false}]}}}}}
           out (with-out-str

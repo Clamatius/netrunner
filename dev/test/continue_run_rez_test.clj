@@ -28,13 +28,14 @@
 ;; =============================================================================
 
 (deftest test-runner-waits-for-corp-rez-decision
-  (testing "Runner calls continue-run while corp has rez decision - must pause (not auto-continue)"
+  (testing "Runner passes first, then pauses while Corp has a rez decision"
     (with-mock-state
       (mock-client-state
        :side "runner"
        :prompt nil  ; Runner has NO prompt - just waiting
        :game-state
        {:run {:phase "approach-ice"
+              :no-action :runner
               :position 1  ; approaching outermost ICE (1 = first ICE, 0 = at server)
               :server [:hq]}
         :runner {:prompt-state nil}  ; No runner prompt

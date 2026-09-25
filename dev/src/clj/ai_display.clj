@@ -2441,6 +2441,21 @@
       (doseq [line corp-encounter-lines]
         (println line))
 
+      ;; Approach to UNREZZED ice: the Corp's plain `continue` does NOT pass here.
+      ;; handle-corp-rez-decision answers it with this same decision and sends
+      ;; nothing, so "'continue' passes priority" is false at exactly this window.
+      ;; A Corp seat that believed it re-ran `continue --single` until an umpire
+      ;; stepped in (#244, marquee 10f7a727 T9).
+      (and (= my-side "corp")
+           (= run-phase "approach-ice")
+           (some? (core/current-run-ice state))
+           (not (:rezzed (core/current-run-ice state))))
+      (let [title (:title (core/current-run-ice state) "<ice>")]
+        (println (format "    → ICE rez window for %s. A plain 'continue' only re-shows this decision:" title))
+        (println (format "      continue --rez \"%s\"      rez it" title))
+        (println "      continue --single --no-rez    pass this ICE unrezzed")
+        (println "      continue --no-rez             decline this and the rest of the run"))
+
       (= my-side "corp")
       (do
         (println "    → 'continue' passes priority here (you DECLINE to act this window).")

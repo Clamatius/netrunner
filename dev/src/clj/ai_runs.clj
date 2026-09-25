@@ -1788,9 +1788,14 @@
                   ;; Sits after every real-decision handler above (corp rez/fire,
                   ;; upgrade), so it can only fire when nothing else wants to act.
                   handle-stalled-window-self-advance
+                  ;; #244: passes first, THEN waits for the Corp's rez decision.
+                  ;; Above handle-auto-continue, which would otherwise send the
+                  ;; first pass with no latch (a stale wire re-sends it and the
+                  ;; second continue closes the window over the rez), and above
+                  ;; handle-paid-ability-window so the wait names the rez.
+                  runner-handlers/handle-runner-approach-ice
                   corp-handlers/handle-paid-ability-window
                   runner-handlers/handle-auto-select-single-card
-                  runner-handlers/handle-runner-approach-ice
                   tactics/handle-runner-tactics
                   runner-handlers/handle-runner-full-break
                   runner-handlers/handle-runner-encounter-ice

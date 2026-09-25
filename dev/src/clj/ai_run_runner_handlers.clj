@@ -312,33 +312,120 @@
 ;; Runner Approach Handlers
 ;; ============================================================================
 
+;; An approach window's identity on the wire, for telling "the window we passed
+;; has moved on" from "still the same window". :encounters is included because a
+;; forced encounter can open without the run phase changing (#160).
+(defn- approach-window-id
+  [state]
+  (let [run (get-in state [:game-state :run])]
+    [(some? run) (:phase run) (:position run)
+     (some? (get-in state [:game-state :encounters]))]))
+
+(def approach-pass-confirm-ms
+  "How long handle-runner-approach-ice waits for the wire to show its pass landed.
+   The residual double-pass risk is a wire lagging longer than this; see the handler."
+  5000)
+
+(defn- await-approach-pass!
+  "Poll the LIVE client-state until it shows our pass landed: the ledger names us,
+   or the window we passed is no longer the current one. Returns true when
+   confirmed, false on timeout (lost, or a wire lagging past the bound)."
+  [window-before side]
+  (let [deadline (+ (System/currentTimeMillis) approach-pass-confirm-ms)]
+    (loop []
+      (let [now @state/client-state]
+        (cond
+          (or (core/i-already-passed-run-window? now side)
+              (not= window-before (approach-window-id now)))
+          true
+
+          (>= (System/currentTimeMillis) deadline)
+          false
+
+          :else (do (Thread/sleep 50) (recur)))))))
+
+(declare has-real-decision?)
+
 (defn handle-runner-approach-ice
-  "Priority 2: Runner waiting for corp rez decision at approach-ice with unrezzed ICE."
-  [{:keys [side run-phase state]}]
+  "Priority 2: the Runner's side of an approach to UNREZZED ice. Pass, confirm the
+   pass landed, then wait for the Corp's rez decision (#244).
+
+   The Corp's decision comes after the Runner's pass, not before it. The engine
+   records the first `continue` from either side in [:run :no-action] and takes a
+   rez at any point in the window, so a Runner that passes first does not take the
+   rez away (game.ai-approach-unrezzed-wire-test drives it). This handler used to
+   wait BEFORE passing, while run-window-owner (and so the Corp's client and the
+   Runner's own `wait`) said the Runner owed the window. A Corp that meant to rez
+   broke the tie, and a Corp that meant to pass waited forever (marquee 10f7a727
+   T9, cleared only by an umpire's `continue --raw`).
+
+   The engine's advance branch has no side check, so a second Runner `continue`
+   closes the window over the Corp's rez decision. The #98 already-passed guard
+   reads the wire, and a wire that has not caught up with the first send lets a
+   second one through. So after sending, this handler waits (bounded) until the
+   live wire shows the pass landed: the ledger names us, or the window moved on.
+   The next tick therefore reads a wire that has seen the pass. A pass that was
+   lost shows neither, times out, and is simply owed again on the next tick,
+   whichever side passed first.
+
+   This replaced a client-side latch, and why matters. Two review rounds broke
+   it four ways (#244 rounds 1-2). The latch had to infer ENGINE order from the
+   order diffs were observed, and could not: a Corp pass seen after ours does not
+   mean it was processed after ours. Its reset at every monitor-run! entry
+   dropped the protection across CLI calls, and a re-approach of the same ICE
+   (Cell Portal) inherited a finished window's latch and deadlocked. Confirming
+   against the wire keeps no state, so there is nothing to infer, reset or inherit.
+
+   Residual, stated rather than hidden: a wire lagging longer than
+   approach-pass-confirm-ms still lets the next tick pass again. Every
+   handle-auto-continue window has the same shape with no bound at all (a
+   rezzed approach passes the ENCOUNTER on a ~300ms lag), which is its own issue.
+
+   Unrezzed ice reaches the Runner through private-card, with no :rezzed key at
+   all. Gate on (not (:rezzed ice)), never (some-> ice :rezzed not), which is nil
+   on the absent key."
+  [{:keys [side run-phase state gameid my-prompt]}]
   (when (and (= side "runner")
              (= run-phase "approach-ice"))
-    (let [run (get-in state [:game-state :run])
-          position (:position run)
-          current-ice (core/current-run-ice state)
-          no-action (:no-action run)
-          no-action-str (normalize-side no-action)
-          corp-already-declined? (= no-action-str "corp")]
-      (when (and current-ice (not (:rezzed current-ice)) (not corp-already-declined?))
-        (let [ice-title (:title current-ice "ICE")
-              ice-count (count (get-in state [:game-state :corp :servers
-                                              (keyword (last (:server run))) :ices]))
-              status-key [:waiting-for-corp-rez position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println "⏸️  Waiting for corp rez decision")
-            (println (format "   %s"
-                             (core/describe-approached-ice ice-title position ice-count))))
-          {:status :waiting-for-corp-rez
-           :wake-reason :rez-decision
-           :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
-           :ice ice-title
-           :position position})))))
+    (when-let [current-ice (core/current-run-ice state)]
+      (when-not (:rezzed current-ice)
+        (let [run (get-in state [:game-state :run])
+              position (:position run)
+              ice-title (:title current-ice "ICE")]
+          (cond
+            (core/i-already-passed-run-window? state side)
+            (let [ice-count (count (get-in state [:game-state :corp :servers
+                                                  (keyword (last (:server run))) :ices]))
+                  status-key [:waiting-for-corp-rez position ice-title]]
+              (when-not (= @last-waiting-status status-key)
+                (reset! last-waiting-status status-key)
+                (println "⏸️  Waiting for corp rez decision")
+                (println (format "   %s"
+                                 (core/describe-approached-ice ice-title position ice-count))))
+              {:status :waiting-for-corp-rez
+               :wake-reason :rez-decision
+               :message (format "Waiting for corp to decide: rez %s or continue" ice-title)
+               :ice ice-title
+               :position position})
+
+            ;; A real prompt, or a waiting prompt (the engine is mid-checkpoint on
+            ;; the Corp, and send-continue! would refuse): someone else's handler.
+            (or (has-real-decision? my-prompt)
+                (state/waiting-prompt-type? (:prompt-type my-prompt))
+                (not (core/owns-run-window? state side)))
+            nil
+
+            :else
+            (let [window (approach-window-id state)
+                  result (send-continue! gameid)]
+              ;; Announce only a send that left the socket (#150: nothing
+              ;; printed that was not sent).
+              (when (:sent result)
+                (println "   → Passed the unrezzed-ICE approach (the Corp's rez decision follows)")
+                (when-not (await-approach-pass! window side)
+                  (println (format "   ⚠️  No sign of that pass on the wire after %.1fs; it is owed again if the window has not moved."
+                                   (/ approach-pass-confirm-ms 1000.0)))))
+              result)))))))
 
 ;; ============================================================================
 ;; Runner Breaking Handlers

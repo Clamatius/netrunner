@@ -67,6 +67,7 @@ test:
 	  check-ai-sweep-test \
 	  continue-run-rez-test \
 	  game.ai-ability-legality-test \
+	  game.ai-approach-unrezzed-wire-test \
 	  game.ai-corp-pass-ledger-wire-test \
 	  game.ai-duplicate-continue-test \
 	  game.ai-encounter-id-wire-test \
