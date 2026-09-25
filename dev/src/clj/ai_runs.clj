@@ -1563,6 +1563,14 @@
       (some hit? (mapcat :content servers)) :non-ice
       :else nil)))
 
+(defn- run-window-open?
+  "Is there still a run window here — a run, or a run-less encounter (#164)?
+   One answer for both printers of a notable event (handle-events and the
+   persistent loop), which used to disagree in one output (#244 friction)."
+  [s]
+  (or (some? (get-in s [:game-state :run]))
+      (core/encounter-window? s)))
+
 (defn handle-events
   "Priority 4: Pause for important events (rez, subs, abilities, damage).
    Order is most-specific-first: a firing subroutine and its own 'uses <ice>
@@ -1606,6 +1614,15 @@
                (unreported? tag-damage-event) [:tag-or-damage "tag or damage!"    tag-damage-event])]
     (reported-set)  ; ensure the set belongs to the current game before adding
     (swap! reported-events update :events conj (event-key event))
+    (if (and state (not (run-window-open? state)))
+      ;; #244 friction (marquee fffee105): "Run paused … Use 'continue' again"
+      ;; and then "the run is over" in one output. With no window left there is
+      ;; nothing to pause or continue; the event was the run's closing effect.
+      (do
+        (println (format "ℹ️  As the run ended: %s" headline))
+        (println (format "   %s" (:text event)))
+        (println "   That resolved after the run ended — not your decision, the run is over."))
+      (do
     (println (format "⚠️  Run paused - %s" headline))
     (println (format "   %s" (:text event)))
     ;; #110: ONE verb, and it is `continue`.
@@ -1623,7 +1640,7 @@
     ;; is `continue --single`). Offering a seat a choice between aliases of one
     ;; command is the ambiguity, not a service to it. The aliases stay reachable
     ;; and are now documented in `help --full`; runtime guidance names one.
-    (println "   → Use 'continue' again to proceed")
+    (println "   → Use 'continue' again to proceed")))
     {:status status :wake-reason status :event event}))
 
 (defn handle-unexpected-state
@@ -1991,9 +2008,7 @@
         (let [raw (continue-run!)
               ;; "Is there still a window here?" — the #164 rule (run OR a
               ;; run-less encounter), read once for both persistent branches.
-              window-open? (let [s @state/client-state]
-                             (or (some? (get-in s [:game-state :run]))
-                                 (core/encounter-window? s)))
+              window-open? (run-window-open? @state/client-state)
               ;; #151 item 7: under --persistent a notable event is never a
               ;; decision (the #36 ride-through below), but that ride-through
               ;; was gated on the run object — and the events the Corp seats
@@ -2007,8 +2022,8 @@
               result (if (and persistent
                               (should-pause-for-event? (:status raw))
                               (not window-open?))
-                       (do (println "ℹ️  That resolved after the run ended — not your decision, the run is over.")
-                           (assoc raw :status :run-complete :absorbed-event (:status raw)))
+                       ;; handle-events already said so, with the event (#244).
+                       (assoc raw :status :run-complete :absorbed-event (:status raw))
                        raw)
               status (:status result)
               ;; The top-of-loop check read the state BEFORE continue-run!; the
