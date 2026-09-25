@@ -340,10 +340,9 @@
 
       ;; Reset and set strategy for this run
       (reset-strategy!)
-      ;; Per-run scratch state. reset-window-grace! had NO production caller at
-      ;; all — window-first-seen persisted across runs, so a repeat window
-      ;; ([phase position no-action] collides readily) could look instantly
-      ;; stale and self-advance without ever granting the grace period.
+      ;; Per-run scratch state. Since #102 item 7 round 3 the abandon clock
+      ;; restarts itself on any observed window change, so this reset is not
+      ;; load-bearing any more; it is kept as a clean start for a new run.
       ;; NB reported-events is deliberately NOT reset here: it is game-scoped,
       ;; and a per-run reset would re-report a previous run's tail event if it
       ;; were still inside the newest-3 window (a duplicate stale pause).
@@ -856,80 +855,15 @@
   [state side]
   (= (normalize-side (get-in state [:game-state :run :no-action])) side))
 
-(defn- attacked-server
-  "The server map for the server currently being run, or nil if we cannot resolve
-   it. Distinguishing \"server not found\" (unknown) from \"server found, root
-   empty\" matters: the wire omits empty collections, so a missing :content on a
-   server we CAN see proves an empty root, whereas a server we cannot see at all
-   proves nothing."
-  [state]
-  (let [server (get-in state [:game-state :run :server])]
-    (get-in state [:game-state :corp :servers (keyword (last server))])))
-
+;; opponent-has-run-decision? lives in ai-core since #102 item 7: `wait`'s
+;; relevance-reason needs the same gate the #31 self-advance uses, and ai-core
+;; cannot require this namespace.
 (defn opponent-has-run-decision?
-  "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
-
-   Board-derivable with NO hidden information (issue #31, §1). This is the
-   legitimacy test for self-advancing a stalled window: we may only advance past
-   the opponent when the board proves they have nothing to decide. Answering
-   'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
-   real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
-   So every case we cannot prove is conservatively `true`.
-
-   SCOPE — read this before widening the card pool. What is modelled here is
-   exactly ONE Corp decision: a REZ. That is the only run-window action the Corp
-   can take in the System Gateway pool we play. The engine permits more, and a
-   larger pool would break the equivalence: a rezzed Border Control's
-   `[trash]: End the run` is a live decision at movement even when every root card
-   is already rezzed, and this predicate would happily report 'no decision' and let
-   the Runner walk past it. That does not bite today, but it is a property of the
-   CARD POOL, not of this function, and it will not announce itself when the pool
-   changes. Widening the pool means extending this predicate (rezzed cards with
-   run-usable paid abilities) — not trusting it. The grace period in
-   `handle-stalled-window-self-advance` is what keeps the blast radius survivable
-   in the meantime: a Corp that is present still gets to take the action.
-
-   Runner-side only. As Corp the opponent is the Runner, who always has live
-   options at a window (jack out, break, paid abilities), so nothing is provable
-   and we never self-advance.
-
-   - initiation   : never a decision (no current ICE) — but that window is owned
-                    by `handle-initiation-auto-pass` (#62), not this predicate.
-   - approach-ice : a decision IFF the approached ICE is UNREZZED (Corp may rez).
-                    Rezzed ⇒ the rez choice for this ICE is already spent.
-   - movement     : at the server (position 0) a decision IFF an UNREZZED card
-                    sits in the attacked server's root (an upgrade Corp may rez).
-                    Mid-run movement (position > 0) is left conservative."
+  "See core/opponent-has-run-decision?. A delegating fn, not a (def ... core/...)
+   alias: that captures the fn VALUE, so a reload or redef of the core fn would
+   leave the #31 self-advance on the old one (#102 item-7 panel)."
   [state side run-phase]
-  (if-not (= side "runner")
-    true
-    (case run-phase
-      "initiation" false
-
-      ;; NOTE the nil handling in both branches. `current-run-ice` returns nil for
-      ;; "no run / position 0 / position out of bounds / no ICE on the server" —
-      ;; i.e. for every state in which we CANNOT SEE the approached ICE. Folding
-      ;; that into `false` would turn "I can't tell" into "the Corp has nothing to
-      ;; do", and we would skip a live rez window on the strength of a wire
-      ;; transient (a diff applied out of order, an ICE trashed mid-run: any
-      ;; disagreement between :position and the :ices vector). Absence of evidence
-      ;; is not evidence of absence: unknown ⇒ assume a decision ⇒ wait.
-      "approach-ice"
-      (let [ice (core/current-run-ice state)]
-        (if (nil? ice) true (not (:rezzed ice))))
-
-      "movement"
-      (if (zero? (or (get-in state [:game-state :run :position]) 0))
-        ;; Same asymmetry: if we cannot even resolve the attacked SERVER, we know
-        ;; nothing and must assume a decision. Only once the server is in hand does
-        ;; an empty/absent :content prove there is no root card to rez.
-        (if-let [server (attacked-server state)]
-          (boolean (some #(not (:rezzed %)) (:content server)))
-          true)
-        true)
-
-      ;; Anything else (encounter-ice, success, …): assume a real decision.
-      true)))
+  (core/opponent-has-run-decision? state side run-phase))
 
 (defn waiting-for-opponent?
   "True if my side is waiting for opponent to make a decision during a run.
@@ -1359,28 +1293,15 @@
 
 (def self-advance-grace-ms
   "How long the opponent gets to answer a window before we treat it as ABANDONED
-   and advance it ourselves. See handle-stalled-window-self-advance."
-  5000)
-
-(defonce ^:private window-first-seen
-  ;; {[phase position no-action] first-seen-ms} — when did we first observe this
-  ;; exact stalled window? Reset per run by reset-window-grace!.
-  (atom {}))
+   and advance it ourselves. See handle-stalled-window-self-advance. The same
+   number `wait` holds :opponent-owes-window for (core/window-abandon-grace-ms)."
+  core/window-abandon-grace-ms)
 
 (defn reset-window-grace!
-  "Forget stalled-window timings (new run / new game)."
+  "Forget stalled-window timings (new run / new game). The clock lives in
+   ai-core since #102 item 7, shared with `wait`; this delegates."
   []
-  (reset! window-first-seen {}))
-
-(defn- window-stalled-for-ms
-  "Milliseconds since we FIRST saw this exact window in this exact state.
-   Records first sight on the way past, so the first call always returns 0."
-  [state]
-  (let [run (get-in state [:game-state :run])
-        k [(:phase run) (:position run) (normalize-side (:no-action run))]
-        now (System/currentTimeMillis)
-        first-seen (get (swap! window-first-seen update k #(or % now)) k now)]
-    (- now first-seen)))
+  (core/reset-window-grace!))
 
 (defn handle-stalled-window-self-advance
   "Issue #31 §1: advance a both-must-pass window the opponent has ABANDONED —
@@ -1422,7 +1343,7 @@
              (not (has-real-decision? my-prompt)))
     ;; Board says there's no rez decision here. Give the opponent the grace period
     ;; anyway (see docstring) — only an ABANDONED window gets advanced.
-    (let [stalled-ms (window-stalled-for-ms state)]
+    (let [stalled-ms (core/window-stalled-for-ms state side)]
       (when (>= stalled-ms self-advance-grace-ms)
         (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
                          (/ stalled-ms 1000.0)))
@@ -1754,6 +1675,9 @@
 
         client-state @state/client-state
         side (:side client-state)
+        ;; Observe the window every tick, so the abandon clock restarts on any
+        ;; change the seat saw (#102 item 7 round 3), whichever handler runs.
+        _ (when side (core/window-stalled-for-ms client-state side))
         gameid (:gameid client-state)
         run-phase (get-in client-state [:game-state :run :phase])
         my-prompt (get-in client-state [:game-state (keyword side) :prompt-state])
@@ -2118,12 +2042,9 @@
                 (corp-handlers/reset-state!)
                 ;; #198: a run that ended has no encounter; re-arm the one resync.
                 (reset! state/unnameable-resync-spent false)
-                ;; Same third-path hazard for the self-advance grace timer: a
-                ;; stale [phase position no-action] key (these collide readily)
-                ;; would make a card-initiated run's first window look instantly
-                ;; abandoned and self-advance with ZERO grace, skipping the
-                ;; fog-of-war paid-ability window the grace exists to protect.
-                ;; Run END is the boundary that covers every entry path.
+                ;; The abandon clock restarts itself on any observed window change
+                ;; since #102 item 7 round 3 (it used to be a map of keys that
+                ;; collided across runs). Kept as a clean start; not load-bearing.
                 (reset-window-grace!))
               (assoc result
                      :iterations (inc iteration)
@@ -2355,11 +2276,12 @@
   "Own one active run: (re)apply the pre-committed strategy, then loop."
   [flags]
   (reset-strategy!)
-  ;; Per-run scratch state, same as run! — the CORP seat never calls run!, it
-  ;; only ever enters a run through here. NB reported-events is deliberately NOT
-  ;; reset here: it is game-scoped, and clearing it on each monitor-run re-issue
-  ;; would re-report the same event every time. (Guest review of #31.)
-  (reset-window-grace!)
+  ;; NO reset-window-grace! here (#102 item 7 round 3). A plain `continue` is
+  ;; this function, and resetting the abandon clock on entry mid-window meant
+  ;; the #31 self-advance saw every abandoned window as 0 ms old, so the recovery
+  ;; `wait` names never fired on the path it names. The clock now restarts
+  ;; itself whenever the observed window changes (core/window-stalled-for-ms).
+  ;; NB reported-events is deliberately NOT reset here either: it is game-scoped.
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal :rez-cids)]
     (when (seq strategy-flags)
       (set-strategy! strategy-flags)

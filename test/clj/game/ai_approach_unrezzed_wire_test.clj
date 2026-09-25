@@ -17,6 +17,7 @@
             [game.core.diffs :as diffs]
             [game.test-framework :refer :all]
             [ai-display]
+            [ai-core :as core-ai]
             [ai-runs :as runs]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-state :as ai-state]
@@ -261,3 +262,57 @@
         (let [trail (drive! state "corp" ["--no-rez"] 8)]
           (is (not= [:approach-ice 2] [(get-in @state [:run :phase]) (get-in @state [:run :position])])
               (str "the re-approach closes like any other. trail " trail)))))))
+
+(deftest plain-continue-can-advance-an-abandoned-window
+  (testing "#102 item 7 round 3 (Fable, reproduced): `wait` tells a passed Runner that `continue` advances an abandoned decision-free window, but plain `continue` is monitor-run!, which RESET the abandon clock on entry, so the #31 self-advance always saw 0 ms and never fired"
+    (core-ai/reset-window-grace!)
+    (with-redefs [runs/self-advance-grace-ms 200
+                  core-ai/window-abandon-grace-ms 200]
+      (do-game
+        (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"] :credits 10}
+                   :runner {:hand ["Bank Job"]}})
+        (play-from-hand state :corp "Ice Wall" "HQ")
+        (take-credits state :corp)
+        (run-on state "HQ")
+        (rez state :corp (get-ice state :hq 0))
+        (core/process-action "continue" state :runner nil)     ; the Runner passes; the Corp never answers
+        (is (= :runner (get-in @state [:run :no-action])) "precondition: the Runner has passed")
+        (reset! ai-state/client-state (wire-state state "runner"))
+        (core-ai/wait-for-relevant-diff {:timeout 0 :verbose false})  ; the seat's wait observes the window
+        (Thread/sleep 300)
+        (let [sent (atom [])]
+          (with-redefs [ws/send-message! (fn [_evt {:keys [command args] :as data}]
+                                           (swap! sent conj command)
+                                           (core/process-action command state :runner args)
+                                           (reset! ai-state/client-state (wire-state state "runner"))
+                                           true)]
+            (with-out-str (runs/monitor-run!)))
+          (is (some #{"continue"} @sent) (str "plain continue must self-advance the abandoned window, sent " @sent))
+          (is (not= :approach-ice (get-in @state [:run :phase]))))))))
+
+(deftest a-continue-only-seat-restarts-the-clock-at-a-re-approach
+  (testing "round 4 (Opus, reproduced by mutation): continue-run! observes the window every tick. Without that, a seat that only uses `continue` recorded nothing at a fresh re-approach (the self-advance records only PASSED windows), so the same key inherited the old clock and a second pass went out at 0 ms"
+    (core-ai/reset-window-grace!)
+    (with-redefs [runs/self-advance-grace-ms 200
+                  core-ai/window-abandon-grace-ms 200]
+      (do-game
+        (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"] :credits 10}
+                   :runner {:hand ["Bank Job"]}})
+        (play-from-hand state :corp "Ice Wall" "HQ")
+        (take-credits state :corp)
+        (run-on state "HQ")
+        (rez state :corp (get-ice state :hq 0))
+        (let [fresh (wire-state state "runner")]
+          (core/process-action "continue" state :runner nil)
+          (let [passed (wire-state state "runner")
+                sent (atom [])
+                tick (fn [w] (reset! ai-state/client-state w)
+                       (with-redefs [ws/send-message! (fn [_ d] (swap! sent conj (:command d)) true)]
+                         (with-out-str (runs/continue-run!))))]
+            (tick passed)                ; the passed window: clock starts
+            (Thread/sleep 300)
+            (tick fresh)                 ; a different (fresh) window at the same position
+            (reset! sent [])
+            (tick passed)                ; same key as the first, but a NEW window
+            (is (empty? @sent)
+                (str "a re-seen window gets its own grace; sent " @sent))))))))

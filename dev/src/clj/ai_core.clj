@@ -2322,6 +2322,151 @@
                 (seq unbroken)
                 (not (i-already-passed-run-window? state side)))))))
 
+(def window-abandon-grace-ms
+  "How long an opponent gets to answer a decision-free run window before it
+   counts as ABANDONED. One number for both readers: the #31 self-advance
+   (ai-runs/self-advance-grace-ms) and `wait`'s :opponent-owes-window, which is
+   only reported once this has elapsed (#102 item 7)."
+  5000)
+
+(defn- attacked-server
+  "The server map for the server currently being run, or nil if we cannot resolve
+   it. Distinguishing \"server not found\" (unknown) from \"server found, root
+   empty\" matters: the wire omits empty collections, so a missing :content on a
+   server we CAN see proves an empty root, whereas a server we cannot see at all
+   proves nothing."
+  [state]
+  (let [server (get-in state [:game-state :run :server])]
+    (get-in state [:game-state :corp :servers (keyword (last server))])))
+
+(defn opponent-has-run-decision?
+  "Does the OPPONENT hold a REAL decision at this both-must-pass run window?
+
+   Board-derivable with NO hidden information (issue #31, §1). This is the
+   legitimacy test for self-advancing a stalled window: we may only advance past
+   the opponent when the board proves they have nothing to decide. Answering
+   'true' costs us nothing but a wait; answering 'false' wrongly would SKIP a
+   real decision — that is the blunt `corp-auto-no-action` behaviour we rejected.
+   So every case we cannot prove is conservatively `true`.
+
+   SCOPE — read this before widening the card pool. What is modelled here is
+   exactly ONE Corp decision: a REZ. That is the only run-window action the Corp
+   can take in the System Gateway pool we play. The engine permits more, and a
+   larger pool would break the equivalence: a rezzed Border Control's
+   `[trash]: End the run` is a live decision at movement even when every root card
+   is already rezzed, and this predicate would happily report 'no decision' and let
+   the Runner walk past it. That does not bite today, but it is a property of the
+   CARD POOL, not of this function, and it will not announce itself when the pool
+   changes. Widening the pool means extending this predicate (rezzed cards with
+   run-usable paid abilities) — not trusting it. The grace period in
+   `handle-stalled-window-self-advance` is what keeps the blast radius survivable
+   in the meantime: a Corp that is present still gets to take the action.
+
+   Runner-side only. As Corp the opponent is the Runner, who always has live
+   options at a window (jack out, break, paid abilities), so nothing is provable
+   and we never self-advance.
+
+   - initiation   : never a decision (no current ICE) — but that window is owned
+                    by `handle-initiation-auto-pass` (#62), not this predicate.
+   - approach-ice : a decision IFF the approached ICE is UNREZZED (Corp may rez).
+                    Rezzed ⇒ the rez choice for this ICE is already spent.
+   - movement     : at the server (position 0) a decision IFF an UNREZZED card
+                    sits in the attacked server's root (an upgrade Corp may rez).
+                    Mid-run movement (position > 0) is left conservative."
+  [state side run-phase]
+  ;; side= and name, not (= side "runner"): relevance-reason hands over whatever
+  ;; side it was given ("Corp", :runner, ...), and #127's ratchet forbids a new
+  ;; hand-rolled keyword derivation to normalise it.
+  (cond
+    (not (and side (side= (name side) "runner")))
+    true
+
+    ;; A live encounter is the Corp's fire/pass decision whatever [:run :phase]
+    ;; says: a FORCED encounter can open at movement (The Twins), and reading the
+    ;; outer window there answered 'no decision' about an encounter the Corp
+    ;; still owns (#102 item-7 panel, reproduced).
+    (encounter-window? state)
+    true
+
+    :else
+    (case run-phase
+      "initiation" false
+
+      ;; NOTE the nil handling in both branches. `current-run-ice` returns nil for
+      ;; "no run / position 0 / position out of bounds / no ICE on the server" —
+      ;; i.e. for every state in which we CANNOT SEE the approached ICE. Folding
+      ;; that into `false` would turn "I can't tell" into "the Corp has nothing to
+      ;; do", and we would skip a live rez window on the strength of a wire
+      ;; transient (a diff applied out of order, an ICE trashed mid-run: any
+      ;; disagreement between :position and the :ices vector). Absence of evidence
+      ;; is not evidence of absence: unknown ⇒ assume a decision ⇒ wait.
+      "approach-ice"
+      (let [ice (current-run-ice state)]
+        (if (nil? ice) true (not (:rezzed ice))))
+
+      "movement"
+      (if (zero? (or (get-in state [:game-state :run :position]) 0))
+        ;; Same asymmetry: if we cannot even resolve the attacked SERVER, we know
+        ;; nothing and must assume a decision. Only once the server is in hand does
+        ;; an empty/absent :content prove there is no root card to rez.
+        (if-let [server (attacked-server state)]
+          (boolean (some #(not (:rezzed %)) (:content server)))
+          true)
+        true)
+
+      ;; Anything else (encounter-ice, success, …): assume a real decision.
+      true)))
+
+(defonce ^:private current-window
+  ;; {side-name {:key window-key :since ms}}: the window each seat is looking at
+  ;; NOW, and since when. ONE record per seat, not a map of every key ever seen:
+  ;; #102 item 7 round 3 found that a key map remembers old windows until a reset,
+  ;; and the resets were both too frequent (plain `continue` reset it mid-window,
+  ;; so the #31 recovery never fired) and too rare (a Cell Portal re-approach, or
+  ;; a Jailbreak run that skips run!'s reset, inherited a finished window's clock).
+  ;; Here any observed change of window-key restarts the clock, so there is
+  ;; nothing stale to inherit and no reset schedule to get wrong.
+  (atom {}))
+
+(defn- window-key
+  "What makes a run window THIS window, for the abandon clock. It includes
+   the game (a seat can join another game already at a same-shaped window;
+   round-4 panel), whether the opponent holds a decision (a rez that makes the
+   window decision-free starts the grace; round 2), and whether an encounter is
+   live (a forced encounter is its own window).
+
+   Limit, stated rather than hidden (round-4 panel): the key can only see what
+   the wire carries. A step the engine takes without changing any of these (the
+   Corp passes movement and the approach to the server pauses on a Corp-only
+   prompt; :approaching-server is not on the wire) keeps the old clock. No
+   System Gateway card does this, and the old key had the same blind spot."
+  [state side]
+  (let [run (get-in state [:game-state :run])
+        na (:no-action run)]
+    [(str (:gameid state)) (some? run) (:phase run) (:position run)
+     ;; :no-action is false on a fresh window, and (name false) throws.
+     (when (or (keyword? na) (string? na)) (str/lower-case (name na)))
+     (boolean (encounter-window? state))
+     (boolean (opponent-has-run-decision? state side (run-phase state)))]))
+
+(defn reset-window-grace!
+  "Forget the abandon clock (new game; tests)."
+  []
+  (reset! current-window {}))
+
+(defn window-stalled-for-ms
+  "Observe the window `side` is looking at, and return how long it has been
+   this same window. Call it on every poll or tick: the clock is only as good
+   as the observations that tell it the window changed."
+  [state side]
+  (let [k (window-key state side)
+        seat (str/lower-case (name (or side "?")))
+        now (System/currentTimeMillis)
+        rec (get (swap! current-window update seat
+                        (fn [r] (if (= (:key r) k) r {:key k :since now})))
+                 seat)]
+    (- now (:since rec))))
+
 (defn- relevance-reason
   "Determine why we should wake up (or nil if not relevant).
    Returns keyword indicating wake reason.
@@ -2356,6 +2501,10 @@
                            live, an owed continue is the more specific fact, and
                            reporting :my-turn there sent the seat looking for a
                            turn to start instead of a run to finish.
+     :opponent-owes-window — we passed a live run window the opponent owes, it
+                           holds no real decision there, and it has not answered
+                           for window-abandon-grace-ms (#102 item 7). When it DOES
+                           hold a decision we sleep; its answer wakes us
 
    NB: there is intentionally no generic ':run-active' wake. A run merely
    being in progress is not a wake-worthy event for us — we wake when the
@@ -2473,6 +2622,25 @@
        ;; the opponent to pass.
        (my-run-window? state side)
        :my-run-window
+
+       ;; #102 item 7 (from #244): we PASSED a live run window and the opponent
+       ;; owes it. With clicks in hand my-turn-to-act? is true all run, so this
+       ;; fell through to :my-turn and `wait` returned at once, over and over: a
+       ;; seat that has passed could not block (marquee 10f7a727 T9, a hand-rolled
+       ;; poll loop). Split on the gate the #31 self-advance uses, so the two can
+       ;; never disagree:
+       ;; - the opponent holds a REAL decision → sleep. Its answer moves the
+       ;;   window, and that change is what wakes us (:run-phase-change,
+       ;;   :my-run-window, :run-ended). Self-advance refuses here too, so a woken
+       ;;   seat could do nothing anyway.
+       ;; - decision-free → wake, saying what it is: the recovery for an ABANDONED
+       ;;   window is our own `continue` after the grace (#31), so we must be back.
+       (and (run-active? state) (i-already-passed-run-window? state side)
+            (opponent-has-run-decision? state side (run-phase state)))
+       nil
+
+       (and (run-active? state) (i-already-passed-run-window? state side))
+       :opponent-owes-window
 
        ;; It's our turn. Distinguish a live actionable turn (:my-turn, we have
        ;; clicks) from a turn boundary where we must call start-turn first
@@ -2605,6 +2773,14 @@
     ;; #198: the same text every other surface prints for this state.
     :unnameable-encounter
     (unnameable-encounter-lines state)
+
+    ;; #102 item 7: we passed; the opponent owes a DECISION-FREE window (the
+    ;; decision case sleeps instead). Not :my-turn: a run is live, and the
+    ;; move here is the #31 recovery, not a turn action.
+    :opponent-owes-window
+    ["   👉 You passed this run window. The Corp owes the pass, has no rez decision here,"
+     (format "      and has not answered for ~%ds: `continue` advances the abandoned window (#31)."
+             (quot window-abandon-grace-ms 1000))]
 
     :my-run-window
     ["   👉 The run is stopped on YOU: you owe the pass at this run window."
@@ -2754,8 +2930,20 @@
      ;; derefs could classify :my-turn-end off the old state and then print
      ;; guidance from a board where the turn had already ended. (Review MAJOR.)
      (let [current-state @state/client-state
+           ;; #102 item 7: the fast path has no baseline, so a live run read
+           ;; as :run-started, even for a seat that has PASSED the current window
+           ;; and so cannot be learning of the run. That wake ran ahead of the
+           ;; passed-window arms on the path seats are told to use (`wait
+           ;; --since`). :opponent-owes-window is reported only once the window's
+           ;; own clock (window-stalled-for-ms) is past the grace, the same
+           ;; clock the polling loop and the #31 self-advance read.
+           passed-live-window? (and (run-active? current-state)
+                                    (i-already-passed-run-window? current-state side))
            since-reason (when (and since-cursor (> current-cursor since-cursor))
-                          (relevance-reason current-state side false))]
+                          (let [r (relevance-reason current-state side passed-live-window?)]
+                            (if (= r :opponent-owes-window)
+                              (when (>= (window-stalled-for-ms current-state side) window-abandon-grace-ms) r)
+                              r)))]
      (if since-reason
        (do
          (when (:verbose opts)
@@ -2780,7 +2968,7 @@
            (println (format "💤 Waiting for relevant events (timeout: %ds, cursor: %d)..."
                            timeout-seconds current-cursor))
            (when initial-run-active?
-             (println (format "   ⚡ Run is in progress (phase: %s) — will wake on prompt, phase-change, run-end, or my-turn"
+             (println (format "   ⚡ Run is in progress (phase: %s) — will wake on prompt, phase-change, run-end, a window you own, or my-turn"
                              (or initial-run-phase "unknown")))))
 
          (loop [last-log-count initial-log-count]
@@ -2793,7 +2981,18 @@
                  new-entries-raw (when (> current-log-count last-log-count)
                                    (take-last (- current-log-count last-log-count) current-log))
                  new-entries (remove #(clojure.string/starts-with? (or (:text %) "") "🤖") new-entries-raw)
-                 reason (relevance-reason current-state side initial-run-active? initial-run-phase)]
+                 stalled-ms (window-stalled-for-ms current-state side)   ; observe EVERY poll
+                 raw-reason (relevance-reason current-state side initial-run-active? initial-run-phase)
+                 ;; #102 item 7: a passed, decision-free window wakes the seat only
+                 ;; once the WINDOW has been stalled for the abandon grace, on the
+                 ;; clock the #31 self-advance reads. Before that it is the ordinary
+                 ;; wait for a present opponent; waking at once only made `wait`
+                 ;; spin under a new label (round-1 panel), and timing from this
+                 ;; call instead of the window broke it both ways (round 2).
+                 reason (if (and (= raw-reason :opponent-owes-window)
+                                 (< stalled-ms window-abandon-grace-ms))
+                          nil
+                          raw-reason)]
 
              ;; Calculate ALL entries since we started waiting (not just last poll)
              ;; Log is oldest-first, so take-last gets newest entries

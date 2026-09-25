@@ -1036,3 +1036,174 @@
              (relevance (mock-game "corp" {:turn 0 :corp {:click 0} :runner {:click 0}})
                         "corp" false))
           "a false refusal here parks a seat that genuinely owes a start-turn"))))
+
+;; ============================================================================
+;; #102 item 7 (from #244): after the Runner PASSES a run window with clicks
+;; still in hand, `wait` returned :my-turn instantly. my-run-window? is false (the
+;; Corp owns the window now), so my-turn-to-act? won. The seat could not block,
+;; and hand-rolled a poll loop (marquee 10f7a727 T9).
+;;
+;; Two cases, split on the SAME gate the #31 self-advance uses
+;; (opponent-has-run-decision?), so wait and the recovery cannot disagree:
+;; - the Corp owes a REAL decision → sleep; its answer moves the window, which wakes us
+;; - decision-free window → wake, but say what it is: the Corp owes the pass, and
+;;   a `continue` after the grace advances an abandoned window (#31)
+;; ============================================================================
+
+(defn- runner-passed [gs]
+  (-> gs
+      (assoc-in [:runner :click] 2)
+      (assoc-in [:run :no-action] "runner")))
+
+(deftest a-passed-runner-sleeps-while-the-corp-owes-a-rez
+  (with-redefs [state/get-cursor (fn [] 10)]
+    (with-mock-state (mock-game "runner"
+                        (-> approach-server-game-state
+                            runner-passed
+                            (assoc-in [:run :phase] "approach-ice")
+                            (assoc-in [:run :position] 1)
+                            (assoc-in [:corp :servers :archives :ices]
+                                      [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+      (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+        (is (= :timeout (:status result))
+            (str "unrezzed ICE: the Corp owes a rez decision; nothing for the Runner to do, got: " result))))))
+
+(deftest a-passed-runner-sleeps-while-an-unrezzed-root-card-can-be-rezzed
+  (with-redefs [state/get-cursor (fn [] 10)]
+    (with-mock-state (mock-game "runner"
+                        (-> approach-server-game-state
+                            runner-passed
+                            (assoc-in [:corp :servers :archives :content]
+                                      [{:cid "up" :zone ["servers" "archives" "content"] :side "Corp"}])))
+      (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))))))
+
+(defn- decision-free-passed []
+  (-> approach-server-game-state runner-passed (assoc-in [:corp :servers :archives :content] [])))
+
+(deftest a-passed-runner-at-a-decision-free-window-waits-out-the-grace
+  (testing "panel: waking at once only relabelled the spin, and before the grace a present Corp may simply be deciding"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "inside the grace: no wake")
+        (with-redefs [core/window-abandon-grace-ms 0]
+          (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+            (is (= :opponent-owes-window (:reason result))
+                (str "past the grace: wake, and not as :my-turn, got: " result))))))))
+
+(deftest the-grace-clock-belongs-to-the-window-not-the-wait-call
+  (testing "round 2 (Sol): each wait restarted the clock, so short waits never got the recovery wake. The window's clock carries across calls"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))
+        (Thread/sleep 300)
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false})]
+          (is (= :opponent-owes-window (:reason result))
+              (str "a later, separate wait sees the window has been stalled past the grace, got: " result)))))))
+
+(deftest the-grace-starts-when-the-window-goes-decision-free
+  (testing "round 2 (Opus, reproduced): a wait begun while the Corp held a rez decision woke the instant the Corp rezzed, claiming it had not answered for ~5s"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 600]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              runner-passed
+                              (assoc-in [:run :phase] "approach-ice")
+                              (assoc-in [:run :position] 1)
+                              (assoc-in [:corp :servers :archives :ices]
+                                        [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+        (let [started (System/currentTimeMillis)
+              rez-at (promise)
+              waiter (future (core/wait-for-relevant-diff {:timeout 3 :verbose false}))]
+          (Thread/sleep 800)                      ; past the grace, measured from the wait's start
+          (swap! state/client-state assoc-in [:game-state :corp :servers :archives :ices 0 :rezzed] true)
+          (deliver rez-at (System/currentTimeMillis))
+          (let [result @waiter
+                woke (System/currentTimeMillis)]
+            (is (= :opponent-owes-window (:reason result)) (str result))
+            (is (>= (- woke @rez-at) 500)
+                (str "woke " (- woke @rez-at) "ms after the rez; the grace is the window's, from the rez")))
+          (is (> (- (System/currentTimeMillis) started) 1000)))))))
+
+(deftest opponent-owes-window-guidance-names-the-recovery
+  (let [lines (core/wake-reason-guidance-lines :opponent-owes-window {})]
+    (is (some #(re-find #"(?i)corp owes" %) lines))
+    (is (some #(re-find #"continue" %) lines) "the #31 recovery verb")
+    (is (not-any? #(re-find #"start-turn" %) lines))))
+
+(deftest wait-since-reaches-the-passed-window-arms
+  (testing "panel (both seats, reproduced): `wait --since` is the path seats use, and its fast path returned :run-started for any live run, before the new arms"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              runner-passed
+                              (assoc-in [:run :phase] "approach-ice")
+                              (assoc-in [:run :position] 1)
+                              (assoc-in [:corp :servers :archives :ices]
+                                        [{:cid "iw" :zone ["servers" "archives" "ices"] :side "Corp"}])))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false})]
+          (is (not= :already-advanced (:status result)) (str result))
+          (is (= :timeout (:status result)) "a passed Runner with the Corp to decide sleeps on --since too"))))))
+
+(deftest wait-since-still-reports-a-run-to-a-seat-that-has-not-passed
+  (testing "the fast path keeps :run-started for the seat the run IS news to"
+    (with-redefs [state/get-cursor (fn [] 10)]
+      (with-mock-state (mock-game "corp" (assoc-in approach-server-game-state [:corp :click] 0))
+        (is (= :run-started (:reason (core/wait-for-relevant-diff {:timeout 0 :since 5 :verbose false}))))))))
+
+(deftest a-passed-forced-encounter-is-the-corps-decision
+  (testing "panel (Astra, reproduced with The Twins): the Runner passed a FORCED encounter opened at movement; the outer window's rezzed root said 'no decision', and wait offered a continue that cannot work"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 0]
+      (with-mock-state (mock-game "runner"
+                          (-> approach-server-game-state
+                              (assoc-in [:runner :click] 2)
+                              (assoc-in [:corp :servers :archives :content] [])
+                              (assoc :encounters {:ice {:cid "iw" :title "Ice Wall" :rezzed true}
+                                                  :no-action "runner"})))
+        (let [result (core/wait-for-relevant-diff {:timeout 0 :verbose false})]
+          (is (not= :opponent-owes-window (:reason result)) (str result)))))))
+
+(deftest a-window-seen-again-after-another-starts-a-fresh-clock
+  (testing "round 3 (both seats, reproduced with Cell Portal): a re-approach to the same position in the same run inherited the finished window's clock, and was reported abandoned at 0 ms. Any observed change of window restarts it"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; the first window, observed
+      (Thread/sleep 300)
+      (with-mock-state (mock-game "runner" (assoc-in (decision-free-passed) [:run :no-action] false))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; a different window in between
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "the same key again is a NEW window: its grace starts now")))))
+
+(deftest a-new-run-does-not-inherit-the-last-runs-clock
+  (testing "round 3 (Astra, reproduced via Jailbreak, which skips run!'s reset): seen from `wait` alone"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))
+      (Thread/sleep 300)
+      (with-mock-state (mock-game "runner" (dissoc (decision-free-passed) :run))
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))   ; between runs
+      (with-mock-state (mock-game "runner" (decision-free-passed))
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false}))))))))
+
+(deftest a-new-game-does-not-inherit-the-last-games-clock
+  (testing "round 4 (Sol, reasoned): a seat joining another game already at a same-key passed window inherited the old game's clock. The game is part of the key"
+    (core/reset-window-grace!)
+    (with-redefs [state/get-cursor (fn [] 10)
+                  core/window-abandon-grace-ms 200]
+      (with-mock-state (assoc (mock-game "runner" (decision-free-passed)) :gameid "game-A")
+        (core/wait-for-relevant-diff {:timeout 0 :verbose false}))
+      (Thread/sleep 300)
+      (with-mock-state (assoc (mock-game "runner" (decision-free-passed)) :gameid "game-B")
+        (is (= :timeout (:status (core/wait-for-relevant-diff {:timeout 0 :verbose false})))
+            "a different game's window gets its own grace")))))
