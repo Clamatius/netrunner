@@ -45,11 +45,39 @@
 ;; ============================================================================
 ;; Action Synchronization
 ;; ============================================================================
-;; Prevents race conditions when multiple commands are sent rapidly.
-;; Only one :game/action can be in flight at a time.
-;; The lock is held while waiting for state update confirmation (cursor advance).
+;; Only one :game/action is in flight at a time, and it is not over until the
+;; engine has acknowledged it.
+;;
+;; The acknowledgement is the engine's own action id: game.main/handle-action
+;; bumps [side :aid] whenever it processes one of our commands, in the SAME diff
+;; that carries the command's effects. When our side's :aid has risen, the wire
+;; already shows what our action did. The web UI's lock waits on exactly this
+;; (nr.gameboard.state/check-lock?). The cursor is not an ack: any diff moves it,
+;; the opponent's included (#245).
+;;
+;; A send whose ack does not arrive within ack-wait-ms is left PENDING, and the
+;; next action waits for that ack before it goes out; if it still has not come,
+;; the next action is refused. Otherwise a lagging wire lets a loop re-read a
+;; board that does not show its last action and send it again (#245: a second
+;; continue closed the Corp's window, the next two passed an encounter unbroken).
+;; The pending ack is dropped on :game/error (the server rolled the action back,
+;; so it will never be acknowledged), for a different game, and after
+;; unacked-expiry-ms, so a lost ack is a bounded stall rather than a wedge.
 
 (def ^:private action-lock (Object.))
+
+(def ack-wait-ms
+  "How long a :game/action send waits for its own ack before reporting :unconfirmed."
+  1500)
+
+(def unacked-expiry-ms
+  "How long an unacknowledged send keeps blocking later ones."
+  10000)
+
+;; {:gameid :side :aid :at} of the last send whose ack has not been seen, or nil.
+(defonce ^:private unacked (atom nil))
+
+(defn clear-unacked! [] (reset! unacked nil))
 
 ;; ============================================================================
 ;; Configuration
@@ -227,6 +255,8 @@
       ;; local state may now diverge from the authoritative (rolled-back) state,
       ;; which can strand the autonomous loop grinding on a stale view. Re-fetch
       ;; authoritative state so the next decision is made against ground truth.
+      ;; A rolled-back action is never acknowledged; stop waiting for it.
+      (clear-unacked!)
       (when-let [gameid (:gameid @state/client-state)]
         (println "   ↻ Requesting resync to recover authoritative state")
         (state/clear-game-state!)
@@ -460,24 +490,74 @@
         (println "❌ Not connected (after ensure-connected!)")
         false))))
 
+(defn- own-aid
+  "Our side's action id as the wire shows it, or nil if there is no board."
+  []
+  (when-let [side (state/my-side-kw)]
+    (get-in @state/client-state [:game-state side :aid])))
+
+(defn- acked?
+  "Has the wire shown an ack for the action sent when our :aid read `before`?
+   A nil `before` (no board at send time) cannot be confirmed."
+  [before]
+  (let [now (own-aid)]
+    (boolean (and (number? before) (number? now) (> now before)))))
+
+(defn- await-ack
+  [before]
+  (let [deadline (+ (System/currentTimeMillis) ack-wait-ms)]
+    (loop []
+      (cond
+        (acked? before) true
+        (>= (System/currentTimeMillis) deadline) false
+        :else (do (Thread/sleep 25) (recur))))))
+
+(defn- pending-ack-cleared?
+  "Called under action-lock before a send. True when nothing we sent is still
+   waiting for its ack (clearing a stale, foreign, or acknowledged entry)."
+  []
+  (let [{:keys [gameid side aid at] :as p} @unacked]
+    (cond
+      (nil? p) true
+      (or (not= gameid (:gameid @state/client-state))
+          (not= side (state/my-side-kw))
+          (>= (- (System/currentTimeMillis) at) unacked-expiry-ms))
+      (do (clear-unacked!) true)
+      (await-ack aid) (do (clear-unacked!) true)
+      :else false)))
+
 (defn send-message!
   "Send a message to server.
    Auto-reconnects if disconnected or send fails.
-   For :game/action messages, uses locking to prevent race conditions."
+
+   A :game/action is sent under action-lock and then waits for the engine's
+   ack (see the section comment above action-lock). It returns :confirmed when
+   the wire shows the ack, :unconfirmed when the socket took it but no ack came
+   within ack-wait-ms, and false when it was not sent: the socket failed, or an
+   earlier action is still unacknowledged. Both keywords are truthy, so callers
+   that ask only whether it went out are unchanged. Other messages return the
+   socket's answer."
   [event-type data]
   (if (= event-type :game/action)
-    ;; Game actions need synchronization
     (locking action-lock
-      (let [cursor-before (state/get-cursor)
-            result (send-message-impl! event-type data)]
-        (when result
-          ;; Wait briefly for cursor to advance (state update received)
-          ;; This prevents the next action from starting before we get confirmation
-          (let [deadline (+ (System/currentTimeMillis) 1500)]
-            (while (and (= (state/get-cursor) cursor-before)
-                        (< (System/currentTimeMillis) deadline))
-              (Thread/sleep 50))))
-        result))
+      (if-not (pending-ack-cleared?)
+        (do
+          (println (str "⏳ Not sent: the engine has not acknowledged our previous action yet"
+                        " (the wire is lagging, or that action was lost). Sending now could repeat it;"
+                        " this clears when the ack arrives, or after " (quot unacked-expiry-ms 1000) "s."))
+          false)
+        (let [before (own-aid)]
+          (if-not (send-message-impl! event-type data)
+            false
+            (if (await-ack before)
+              :confirmed
+              (do
+                (when (number? before)
+                  (reset! unacked {:gameid (:gameid @state/client-state)
+                                   :side (state/my-side-kw)
+                                   :aid before
+                                   :at (System/currentTimeMillis)}))
+                :unconfirmed))))))
     ;; Non-action messages don't need synchronization
     (send-message-impl! event-type data)))
 

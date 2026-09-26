@@ -717,8 +717,8 @@
                                      :args nil})]
         (if-not sent?
           (do
-            (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
-            (println "   Check the game server is running, then retry")
+            (println "❌ ERROR: start-turn was not sent (the line above says why)")
+            (println "   Server down: start it. Previous action unacknowledged: wait, then retry")
             (core/with-cursor {:status :error :reason :send-failed}))
           (report-start-turn-sent! my-side before-hand)))
 
@@ -832,8 +832,8 @@
           ;; Send failed (e.g. server unreachable). Don't print the stale
           ;; "Ready to start your turn" indicator — that falsely looks like success.
           (do
-            (println "❌ ERROR: Failed to send start-turn (server unreachable?)")
-            (println "   Check the game server is running, then retry")
+            (println "❌ ERROR: start-turn was not sent (the line above says why)")
+            (println "   Server down: start it. Previous action unacknowledged: wait, then retry")
             (core/with-cursor {:status :error :reason :send-failed}))
           (report-start-turn-sent! my-side before-hand))))))))
 
@@ -934,7 +934,7 @@
                                     {:gameid gameid :command command :args nil})]
         (if-not sent?
           (do
-            (println "❌ ERROR: Failed to send (server unreachable?)")
+            (println "❌ ERROR: Not sent (the line above says why)")
             (core/with-cursor {:status :error :reason :send-failed}))
           (do
             (Thread/sleep core/standard-delay)
