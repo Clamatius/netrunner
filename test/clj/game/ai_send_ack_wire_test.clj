@@ -54,14 +54,16 @@
    main/handle-action, the path web/game.clj uses, so the :aid bump is real.
    `wire` says what the seat sees afterwards: :stale (nothing ever arrives),
    :lag N (the diff lands N ms later, from another thread), :now,
-   :lost (the socket took it and the engine never saw it), or :opponent (ours
-   is lost, but an opponent diff lands)."
+   :lost (the socket took it and the engine never saw it), :error N (lost, and
+   the server's :game/error frame lands N ms later, from another thread, while
+   the sender is still waiting), or :opponent (ours is lost, but an opponent
+   diff lands)."
   [state side wire f]
   (let [delivered (atom [])]
     (with-redefs-fn
       {#'ws/send-message-impl!
        (fn [_evt {:keys [command args]}]
-         (when-not (#{:opponent :lost} wire)
+         (when-not (or (#{:opponent :lost} wire) (and (vector? wire) (= :error (first wire))))
            (swap! delivered conj command)
            (main/handle-action state (keyword side) command args))
          (cond
@@ -69,7 +71,10 @@
            (= wire :opponent) (do (main/handle-action state (if (= side "runner") :corp :runner) "credit" nil)
                                   (push-wire! state side))
            (and (vector? wire) (= :lag (first wire)))
-           (future (Thread/sleep (second wire)) (push-wire! state side)))
+           (future (Thread/sleep (second wire)) (push-wire! state side))
+           (and (vector? wire) (= :error (first wire)))
+           (future (Thread/sleep (second wire))
+                   (with-out-str (ws/handle-message {:type :game/error :data nil}))))
          true)}
       (fn [] {:value (f) :delivered @delivered}))))
 
@@ -173,3 +178,37 @@
                                         #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil}))]
         (is (= ["credit"] delivered))
         (is (= :confirmed value))))))
+
+(deftest an-error-during-the-ack-wait-releases-the-gate
+  (testing "round 1 (both seats; one reproduced): the error frame lands while the sender is still waiting, which is the normal order. Clearing then and arming after the wait blocked the next action for the full expiry"
+    (with-rezzed-approach
+      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil})]
+        (is (= :unconfirmed (:value (with-socket state "runner" [:error 50] send!))))
+        (reset! ai-state/client-state (wire-state state "runner"))   ; the resync lands, rolled back
+        (is (not (ws/ack-pending?)))
+        (is (= ["continue"] (:delivered (with-socket state "runner" :now send!)))
+            "the rolled-back action is owed again, and sent")))))
+
+(deftest a-pending-ack-is-not-a-stuck-loop
+  (testing "round 1 (both seats; one reproduced): refused ticks reported :action-taken, and five of them on one board ended the persistent monitor as :stuck (a handler sending without progress) about 9s in, before the pending ack could expire"
+    (with-rezzed-approach
+      (with-redefs [ws/ack-wait-ms 100
+                    ws/unacked-expiry-ms 60000]
+        (let [{:keys [value delivered]}
+              (with-socket state "runner" :lost
+                #(let [r (atom nil)]
+                   (with-out-str (reset! r (runs/auto-continue-loop! :timeout-ms 2000 :persistent true)))
+                   @r))]
+          (is (empty? delivered) "precondition: the one send was lost")
+          (is (not= :stuck (:status value))
+              (str "an unacknowledged send is a wait, not a stuck handler. got " (select-keys value [:status :iterations]))))))))
+
+(deftest a-boardless-send-does-not-arm-the-gate
+  (testing "no board, no :aid to compare: the send cannot be confirmed, but it must not block the next one"
+    (do-game
+      (new-game {:corp {:hand ["Hedge Fund"]}})
+      (reset! ai-state/client-state {:side "corp" :gameid gameid})
+      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil})]
+        (is (= :unconfirmed (:value (with-socket state "corp" :stale send!))))
+        (is (not (ws/ack-pending?)))
+        (is (= ["credit"] (:delivered (with-socket state "corp" :stale send!))))))))

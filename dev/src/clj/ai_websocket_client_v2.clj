@@ -63,6 +63,8 @@
 ;; The pending ack is dropped on :game/error (the server rolled the action back,
 ;; so it will never be acknowledged), for a different game, and after
 ;; unacked-expiry-ms, so a lost ack is a bounded stall rather than a wedge.
+;; A diff lost to a dead socket does not reach the expiry unnoticed: reconnecting
+;; rejoins with a full resync, and its :aid settles the pending ack either way.
 
 (def ^:private action-lock (Object.))
 
@@ -512,6 +514,27 @@
         (>= (System/currentTimeMillis) deadline) false
         :else (do (Thread/sleep 25) (recur))))))
 
+(defn- await-any-diff
+  "The pre-#245 wait, kept for a send with no board to read :aid from (a resync
+   in flight): return on the first diff rather than burn the whole ack wait."
+  [cursor-before]
+  (let [deadline (+ (System/currentTimeMillis) ack-wait-ms)]
+    (while (and (= (state/get-cursor) cursor-before)
+                (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 25))))
+
+(defn ack-pending?
+  "Is an action we sent still waiting for its ack? While it is, the next
+   :game/action will be refused, so a loop that sees this is waiting on the
+   wire, not failing to make progress."
+  []
+  (let [{:keys [gameid side aid at] :as p} @unacked]
+    (boolean (and p
+                  (= gameid (:gameid @state/client-state))
+                  (= side (state/my-side-kw))
+                  (< (- (System/currentTimeMillis) at) unacked-expiry-ms)
+                  (not (acked? aid))))))
+
 (defn- pending-ack-cleared?
   "Called under action-lock before a send. True when nothing we sent is still
    waiting for its ack (clearing a stale, foreign, or acknowledged entry)."
@@ -546,18 +569,28 @@
                         " (the wire is lagging, or that action was lost). Sending now could repeat it;"
                         " this clears when the ack arrives, or after " (quot unacked-expiry-ms 1000) "s."))
           false)
-        (let [before (own-aid)]
-          (if-not (send-message-impl! event-type data)
-            false
-            (if (await-ack before)
-              :confirmed
-              (do
-                (when (number? before)
-                  (reset! unacked {:gameid (:gameid @state/client-state)
-                                   :side (state/my-side-kw)
-                                   :aid before
-                                   :at (System/currentTimeMillis)}))
-                :unconfirmed))))))
+        (let [before (own-aid)
+              cursor-before (state/get-cursor)]
+          ;; Armed BEFORE the write: a :game/error for this action normally lands
+          ;; while we are still waiting below, and its clear must have something
+          ;; to hit. Arming after the wait re-armed an ack the server had already
+          ;; told us will never come (review round 1).
+          (when (number? before)
+            (reset! unacked {:gameid (:gameid @state/client-state)
+                             :side (state/my-side-kw)
+                             :aid before
+                             :at (System/currentTimeMillis)}))
+          (cond
+            (not (send-message-impl! event-type data))
+            (do (clear-unacked!) false)
+
+            (not (number? before))
+            (do (await-any-diff cursor-before) :unconfirmed)
+
+            (await-ack before)
+            (do (clear-unacked!) :confirmed)
+
+            :else :unconfirmed))))
     ;; Non-action messages don't need synchronization
     (send-message-impl! event-type data)))
 
