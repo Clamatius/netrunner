@@ -67,10 +67,19 @@
      :stale     the engine applies it but its diff never arrives; a resync is answered
      :dead      the engine applies it and nothing ever comes back, resync included
      :lost      the engine never sees it; a resync is answered
-     :opponent  ours is lost, an opponent diff lands, and a resync is answered"
+     :opponent  ours is lost, an opponent diff lands, and a resync is answered
+     [:late N]  the diff lands N ms after the write, past the ack wait, and the
+                resync is never answered
+   A resync is answered 100ms after the request, from another thread, so the
+   send really waits for it (review round 3: an in-line answer let a send that
+   never waited pass every test)."
   [state side wire f]
   (let [delivered (atom [])
-        resyncs (atom 0)]
+        resyncs (atom 0)
+        ;; Joined before returning, so a delayed diff or resync never lands in
+        ;; the next test's board.
+        pending (atom [])
+        later! (fn [ms thunk] (swap! pending conj (future (Thread/sleep ms) (thunk))))]
     (with-redefs-fn
       {#'ws/send-message-impl!
        (fn [evt {:keys [command args]}]
@@ -84,14 +93,16 @@
                (= wire :now) (push-wire! state side)
                (= wire :opponent) (do (main/handle-action state (if (= side "runner") :corp :runner) "credit" nil)
                                       (push-wire! state side))
-               (vector? wire) (future (Thread/sleep (second wire)) (push-wire! state side))))
+               (vector? wire) (later! (second wire) #(push-wire! state side))))
            :game/resync
            (do (swap! resyncs inc)
-               (when-not (= wire :dead) (answer-resync! state side)))
+               (when-not (or (= wire :dead) (and (vector? wire) (= :late (first wire))))
+                 (later! 100 #(answer-resync! state side))))
            nil)
          true)}
       (fn [] (let [value (atom nil)
                    out (with-out-str (reset! value (f)))]
+               (doseq [p @pending] (deref p 5000 nil))
                {:value @value :delivered @delivered :resyncs @resyncs :out out})))))
 
 (defn- tick!
@@ -197,8 +208,24 @@
       (new-game {:corp {:hand ["Hedge Fund"]}})
       (reset! ai-state/client-state {:side "corp" :gameid gameid})
       (let [t0 (System/currentTimeMillis)
-            {:keys [value resyncs]} (with-socket state "corp" [:lag 50]
-                                      #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil}))]
+            cursor0 (ai-state/get-cursor)
+            {[value cursor-at-return] :value resyncs :resyncs}
+            (with-socket state "corp" [:lag 50]
+              #(vector (ws/send-message! :game/action {:gameid gameid :command "credit" :args nil})
+                       (ai-state/get-cursor)))]
         (is (= :unconfirmed value))
         (is (zero? resyncs))
+        (is (not= cursor0 cursor-at-return) "it waited for the diff")
         (is (< (- (System/currentTimeMillis) t0) 300) "not the whole ack wait")))))
+
+(deftest an-ack-during-the-resync-wait-ends-it
+  (testing "round 3: the wire was only slow. The ack that lands while we wait for the resync confirms the send; it does not sit out the resync wait or clear the board"
+    (with-rezzed-approach
+      (with-redefs [ws/resync-wait-ms 3000]
+        (let [t0 (System/currentTimeMillis)
+              {:keys [value resyncs]} (with-socket state "runner" [:late 600] send-continue!)]
+          (is (= :confirmed value))
+          (is (= 1 resyncs) "the silence past the ack wait still asked for the board")
+          (is (< (- (System/currentTimeMillis) t0) 1500) "and stopped waiting when the ack came")
+          (is (= "runner" (get-in @ai-state/client-state [:game-state :run :no-action]))
+              "on a board that shows the pass"))))))

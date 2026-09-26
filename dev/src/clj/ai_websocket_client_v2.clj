@@ -525,9 +525,14 @@
         seen @resyncs-received]
     (println (format "↻ No ack for '%s' within %dms; resyncing so the next decision reads the engine's board"
                      command ack-wait-ms))
+    ;; Our own ack arriving first also ends the wait: the wire was only slow,
+    ;; and waiting on the resync alone cost a lagging-but-alive wire an extra
+    ;; ack-wait-ms per action. It also narrows the one case where the resync we
+    ;; count is not ours: a reply to a resync someone requested BEFORE this
+    ;; action shows a pre-action board (review round 3).
     (if (and gameid
              (send-message-impl! :game/resync {:gameid gameid})
-             (await-until #(> @resyncs-received seen) resync-wait-ms))
+             (await-until #(or (acked? before) (> @resyncs-received seen)) resync-wait-ms))
       (if (acked? before) :confirmed :unconfirmed)
       (do
         (println "   ⚠️  No resync either. Clearing the board rather than act on a stale one; run `status` to fetch it.")
