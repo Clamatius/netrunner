@@ -64,12 +64,13 @@ check() {
 # that is part of what `choose` owes the seat (send_command:955-968). An
 # exported 1 in the CALLER's environment would otherwise silently put this test
 # back in that mode. SHOW_LAST_LOG is pinned for the same reason.
-run_choice() {
-    local side="$1" label="$2"
+run_command() {
+    local side="$1"
+    shift
     export ACTION_LOG="$TMP/actions.log"
     : > "$ACTION_LOG"
     NR_NO_AUTO_PROMPT=0 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
-        "$SEND_CMD" "$side" choose "$label" > "$TMP/output" 2>&1
+        "$SEND_CMD" "$side" "$@" > "$TMP/output" 2>&1
     code=$?
     # The WHOLE action log, not a filtered slice: an extra send of any shape
     # (`(ai-actions/end-turn!)`, a second choose, a send to the other seat, a
@@ -77,6 +78,7 @@ run_choice() {
     # expected value is multi-line, so it pins ORDER too.
     actions="$(cat "$ACTION_LOG")"
 }
+run_choice() { run_command "$1" choose "$2"; }
 # after_action's prompt read. execute() wraps a display-shaped expression in
 # with-out-str (the show-/list-/board capture heuristic), so this is the text
 # that actually reaches the backend, not the text at the call site.
@@ -95,6 +97,37 @@ runner 7889'"$PROMPT_READ"
 run_choice runner '1'
 check 'numeric-choice-exits' "$code" '0'
 check 'numeric-choice-keeps-index-path' "$actions" 'runner 7889|(ai-actions/choose-option! 1)
+runner 7889'"$PROMPT_READ"
+
+run_choice runner '010'
+check 'padded-choice-is-decimal' "$actions" 'runner 7889|(ai-actions/choose-option! 10)
+runner 7889'"$PROMPT_READ"
+run_choice runner '08'
+check 'padded-eight-is-valid-decimal' "$actions" 'runner 7889|(ai-actions/choose-option! 8)
+runner 7889'"$PROMPT_READ"
+run_choice runner '000'
+check 'all-zero-choice-is-zero' "$actions" 'runner 7889|(ai-actions/choose-option! 0)
+runner 7889'"$PROMPT_READ"
+
+run_command runner choose-card 010 --all
+check 'padded-card-index-is-decimal' "$actions" 'runner 7889|(ai-actions/choose-card! 10 true)
+runner 7889'"$PROMPT_READ"
+run_command runner play-index 010
+check 'padded-play-index-is-decimal' "$actions" 'runner 7889|(ai-actions/play-card! 10)
+runner 7889'"$PROMPT_READ"
+run_command corp install-index 010 'Server 1'
+check 'padded-install-index-is-decimal' "$actions" 'corp 7890|(ai-actions/install-card! 10 "Server 1")
+corp 7890'"$PROMPT_READ"
+run_command runner multi-choose 010 002
+check 'padded-multi-indices-are-decimal' "$actions" 'runner 7889|(ai-actions/multi-choose! 10 2)
+runner 7889'"$PROMPT_READ"
+run_command corp discard 010 002
+check 'padded-discard-indices-are-decimal' "$actions" 'corp 7890|(ai-actions/discard-specific-cards! [10 2])'
+run_command corp use-ability 'Nico Campaign' 010
+check 'padded-ability-index-is-decimal' "$actions" 'corp 7890|(ai-actions/use-ability! "Nico Campaign" 10)
+corp 7890'"$PROMPT_READ"
+run_command runner use-runner-ability 'Bioroid' 010
+check 'padded-runner-ability-index-is-decimal' "$actions" 'runner 7889|(ai-actions/use-runner-ability! "Bioroid" 10)
 runner 7889'"$PROMPT_READ"
 
 # The seat the expression is addressed to is part of the contract: the backend

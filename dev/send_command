@@ -829,6 +829,16 @@ clj_str() {
     printf '%s' "${s//\"/\\\"}"
 }
 
+# Bash accepts padded decimal indices, but the Clojure reader treats a leading
+# zero as octal. Strip padding without shell arithmetic (which can overflow).
+decimal_index() {
+    local digits="$1"
+    while [[ ${#digits} -gt 1 && "$digits" == 0* ]]; do
+        digits="${digits#0}"
+    done
+    printf '%s' "$digits"
+}
+
 execute() {
     local expr="$1"
     local wrapped=false
@@ -1575,7 +1585,8 @@ case "$COMMAND" in
 
             if [[ "$ALL_NUMERIC" == "true" ]]; then
                 # Discard by index
-                INDICES=("$@")
+                INDICES=()
+                for idx in "$@"; do INDICES+=("$(decimal_index "$idx")"); done
                 info "Discarding cards at indices: ${INDICES[*]}"
                 INDICES_VEC="[${INDICES[*]}]"
                 execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
@@ -1617,6 +1628,7 @@ case "$COMMAND" in
         INDEX="${1:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command play-index <0-4>"
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        INDEX="$(decimal_index "$INDEX")"
         info "Playing card at index $INDEX"
         execute "(ai-actions/play-card! $INDEX)"
         after_action
@@ -1664,6 +1676,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
+        ABILITY_INDEX="$(decimal_index "$ABILITY_INDEX")"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
         execute "(ai-actions/use-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
@@ -1676,6 +1689,7 @@ case "$COMMAND" in
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
         [[ ! "$ABILITY_INDEX" =~ ^[0-9]+$ ]] && error "Ability index must be a number"
+        ABILITY_INDEX="$(decimal_index "$ABILITY_INDEX")"
         info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
         execute "(ai-actions/use-runner-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
@@ -1772,6 +1786,7 @@ case "$COMMAND" in
         CHOICE="${1:-}"
         [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index-or-label>"
         if [[ "$CHOICE" =~ ^[0-9]+$ ]]; then
+            CHOICE="$(decimal_index "$CHOICE")"
             info "Choosing option $CHOICE..."
             execute "(ai-actions/choose-option! $CHOICE)"
         else
@@ -1803,6 +1818,7 @@ case "$COMMAND" in
         INDEX="${1:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index> [--all]"
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        INDEX="$(decimal_index "$INDEX")"
         shift
         # --all is the seat's shift-click: on the engine's per-credit payment
         # prompt it takes that source's FULL remaining amount in one call
@@ -1839,7 +1855,8 @@ case "$COMMAND" in
 
         if [[ "$ALL_NUMERIC" == "true" ]]; then
             # Select by index
-            INDICES=("$@")
+            INDICES=()
+            for idx in "$@"; do INDICES+=("$(decimal_index "$idx")"); done
             info "Multi-selecting cards at indices: ${INDICES[*]}"
             ARGS_STR=""
             for idx in "${INDICES[@]}"; do
@@ -2307,6 +2324,7 @@ case "$COMMAND" in
         SERVER="${2:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4> [server]"
         [[ ! "$INDEX" =~ ^[0-9]+$ ]] && error "Index must be a number"
+        INDEX="$(decimal_index "$INDEX")"
         if [[ -n "$SERVER" ]]; then
             info "Installing card at index $INDEX on $SERVER"
             execute "(ai-actions/install-card! $INDEX \"$(clj_str "$SERVER")\")"
