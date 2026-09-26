@@ -10,10 +10,11 @@
    the diff for that action, and the web UI's lock waits for exactly that
    (nr.gameboard.state/check-lock?).
 
-   These tests drive the REAL send-message! (lock, ack wait, gate). Only the
-   socket write (send-message-impl!) is stubbed, and it delivers to the real
-   engine as this seat's action. The seat reads the real serializer's output
-   after a JSON round trip."
+   These tests drive the REAL send-message! (lock, ack wait, resync). Only the
+   socket write (send-message-impl!) is stubbed: it delivers actions to the real
+   engine as this seat's, and answers :game/resync through the real
+   handle-message the way the server does. The seat reads the real serializer's
+   output after a JSON round trip."
   (:require [game.core :as core]
             [game.core.diffs :as diffs]
             [game.main :as main]
@@ -26,64 +27,81 @@
 
 (use-fixtures :each (fn [t]
                       (runs/reset-strategy!)
-                      (ws/clear-unacked!)
-                      ;; A withheld ack waits out the bound; keep it short. Lag
-                      ;; tests stay well inside it.
-                      (with-redefs [ws/ack-wait-ms 400]
-                        (try (t) (finally (reset! ai-state/client-state {})
-                                          (ws/clear-unacked!))))))
+                      ;; Keep the silent-wire waits short. Lag tests stay well
+                      ;; inside ack-wait-ms.
+                      (with-redefs [ws/ack-wait-ms 400
+                                    ws/resync-wait-ms 400]
+                        (try (t) (finally (reset! ai-state/client-state {}))))))
 
 (def ^:private gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000245"))
 
+(defn- side-state [state side]
+  (get (diffs/public-states state) (if (= side "corp") :corp-state :runner-state)))
+
 (defn- wire-state
   [state side]
-  (let [gs (get (diffs/public-states state) (if (= side "corp") :corp-state :runner-state))]
-    {:side side
-     :gameid gameid
-     :game-state (json/parse-string (json/generate-string gs) true)}))
+  {:side side
+   :gameid gameid
+   :game-state (json/parse-string (json/generate-string (side-state state side)) true)})
 
 (defn- push-wire!
-  "The diff lands: new wire, and the cursor moves the way handle-message's
+  "A diff lands: new wire, and the cursor moves the way handle-message's
    :game/diff branch moves it."
   [state side]
   (swap! ai-state/client-state merge (wire-state state side))
   (ai-state/bump-cursor!))
 
+(defn- answer-resync!
+  "The server's reply to :game/resync, through the real handler."
+  [state side]
+  (with-out-str
+    (ws/handle-message {:type :game/resync
+                        :data (json/generate-string (side-state state side))})))
+
 (defn- with-socket
-  "Run `f` with the socket write stubbed. The engine sees the action through
+  "Run `f` with the socket write stubbed. Actions reach the engine through
    main/handle-action, the path web/game.clj uses, so the :aid bump is real.
-   `wire` says what the seat sees afterwards: :stale (nothing ever arrives),
-   :lag N (the diff lands N ms later, from another thread), :now,
-   :lost (the socket took it and the engine never saw it), :error N (lost, and
-   the server's :game/error frame lands N ms later, from another thread, while
-   the sender is still waiting), or :opponent (ours is lost, but an opponent
-   diff lands)."
+   `wire` says what comes back:
+     :now       the action's diff lands before the write returns
+     [:lag N]   it lands N ms later, from another thread
+     :stale     the engine applies it but its diff never arrives; a resync is answered
+     :dead      the engine applies it and nothing ever comes back, resync included
+     :lost      the engine never sees it; a resync is answered
+     :opponent  ours is lost, an opponent diff lands, and a resync is answered"
   [state side wire f]
-  (let [delivered (atom [])]
+  (let [delivered (atom [])
+        resyncs (atom 0)]
     (with-redefs-fn
       {#'ws/send-message-impl!
-       (fn [_evt {:keys [command args]}]
-         (when-not (or (#{:opponent :lost} wire) (and (vector? wire) (= :error (first wire))))
-           (swap! delivered conj command)
-           (main/handle-action state (keyword side) command args))
-         (cond
-           (= wire :now) (push-wire! state side)
-           (= wire :opponent) (do (main/handle-action state (if (= side "runner") :corp :runner) "credit" nil)
-                                  (push-wire! state side))
-           (and (vector? wire) (= :lag (first wire)))
-           (future (Thread/sleep (second wire)) (push-wire! state side))
-           (and (vector? wire) (= :error (first wire)))
-           (future (Thread/sleep (second wire))
-                   (with-out-str (ws/handle-message {:type :game/error :data nil}))))
+       (fn [evt {:keys [command args]}]
+         (case evt
+           :game/action
+           (do
+             (when-not (#{:lost :opponent} wire)
+               (swap! delivered conj command)
+               (main/handle-action state (keyword side) command args))
+             (cond
+               (= wire :now) (push-wire! state side)
+               (= wire :opponent) (do (main/handle-action state (if (= side "runner") :corp :runner) "credit" nil)
+                                      (push-wire! state side))
+               (vector? wire) (future (Thread/sleep (second wire)) (push-wire! state side))))
+           :game/resync
+           (do (swap! resyncs inc)
+               (when-not (= wire :dead) (answer-resync! state side)))
+           nil)
          true)}
-      (fn [] {:value (f) :delivered @delivered}))))
+      (fn [] (let [value (atom nil)
+                   out (with-out-str (reset! value (f)))]
+               {:value @value :delivered @delivered :resyncs @resyncs :out out})))))
 
 (defn- tick!
   "One continue-run! step, output swallowed."
-  []
+  [& flags]
   (reset! runs/run-strategy {})
-  (let [out (with-out-str (runs/continue-run!))]
-    out))
+  (with-out-str (apply runs/continue-run! flags)))
+
+(defn- send-continue! []
+  (ws/send-message! :game/action {:gameid gameid :command "continue" :args nil}))
 
 (defmacro with-rezzed-approach
   [& body]
@@ -101,114 +119,86 @@
      ~@body))
 
 (deftest a-stale-wire-does-not-pass-the-encounter
-  (testing "#245 as reproduced: four ticks over a wire that never moves"
+  (testing "#245 as reproduced: four ticks, and the action's diff never arrives"
     (with-rezzed-approach
-      (let [{:keys [delivered]} (with-socket state "runner" :stale
-                                  #(dotimes [_ 4] (tick!)))]
+      (let [{:keys [delivered resyncs]} (with-socket state "runner" :stale
+                                          #(dotimes [_ 4] (tick!)))]
         (is (= ["continue"] delivered)
-            "one pass is owed; the rest went out over a wire that had not shown the first")
+            "one pass is owed; the rest went out over a board that did not show the first")
+        (is (= 1 resyncs) "the silence was answered by fetching the engine's board")
         (is (= :approach-ice (get-in @state [:run :phase]))
             "the Corp's approach window is still open")
         (is (= :runner (get-in @state [:run :no-action]))
             "with the Runner's pass on the ledger")))))
 
-(deftest a-lagging-wire-sends-one-pass
-  (testing "the review seat's 300ms: the send waits for its ack, so the next tick reads a wire that has it"
+(deftest a-dead-wire-does-not-pass-the-encounter
+  (testing "nothing comes back at all, not even the resync: the board is cleared, and nothing decides on it"
     (with-rezzed-approach
-      (let [{:keys [delivered]} (with-socket state "runner" [:lag 150]
+      (let [{:keys [delivered]} (with-socket state "runner" :dead
                                   #(dotimes [_ 4] (tick!)))]
         (is (= ["continue"] delivered))
+        (is (nil? (:game-state @ai-state/client-state)) "the stale board is gone")
+        (is (= :approach-ice (get-in @state [:run :phase])))))))
+
+(deftest a-lagging-wire-sends-one-pass
+  (testing "the review seat's 300ms: the send waits for its ack, so the next tick reads a board that has it"
+    (with-rezzed-approach
+      (let [{:keys [delivered resyncs]} (with-socket state "runner" [:lag 150]
+                                          #(dotimes [_ 4] (tick!)))]
+        (is (= ["continue"] delivered))
+        (is (zero? resyncs) "an ack inside the wait needs no resync")
         (is (= :approach-ice (get-in @state [:run :phase])))
         (is (= :runner (get-in @state [:run :no-action])))))))
 
 (deftest the-ack-is-our-aid-not-any-diff
   (with-rezzed-approach
     (testing "a diff arrives and the cursor moves, but it is the opponent's; ours was lost"
-      (let [{:keys [value]} (with-socket state "runner" :opponent
-                              #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil}))]
-        (is (= :unconfirmed value))))
+      (is (= :unconfirmed (:value (with-socket state "runner" :opponent send-continue!)))))
     (testing "the send that is acknowledged says so"
-      (ws/clear-unacked!)
-      (let [{:keys [value]} (with-socket state "runner" :now
-                              #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil}))]
-        (is (= :confirmed value))))))
+      (is (= :confirmed (:value (with-socket state "runner" :now send-continue!)))))))
 
-(deftest an-unacknowledged-send-blocks-the-next
+(deftest a-resync-that-shows-our-action-confirms-it
   (with-rezzed-approach
-    (let [send! #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil})]
-      (with-socket state "runner" :stale send!)
-      (testing "the engine has not answered the first action, so the second is refused, not sent"
-        (let [{:keys [value delivered]} (with-socket state "runner" :stale send!)]
-          (is (false? value))
-          (is (empty? delivered))))
-      (testing "once the wire shows the ack, sending resumes"
-        (push-wire! state "runner")
-        (let [{:keys [value delivered]} (with-socket state "runner" :now
-                                          #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil}))]
-          (is (= ["credit"] delivered))
-          (is (= :confirmed value)))))))
+    (is (= :confirmed (:value (with-socket state "runner" :stale send-continue!))))
+    (is (= "runner" (get-in @ai-state/client-state [:game-state :run :no-action]))
+        "and the board the seat reads next shows the pass")))
 
-(deftest a-server-error-releases-the-gate
-  (testing "the server rolled our action back, so its ack will never come"
+(deftest a-lost-action-is-owed-again
+  (testing "the engine never saw it: the resynced board says so, and the next tick sends it"
     (with-rezzed-approach
-      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil})]
-        (with-socket state "runner" :lost send!)
-        (is (false? (:value (with-socket state "runner" :now send!)))
-            "precondition: the lost action's ack is still pending and blocks")
-        (with-socket state "runner" :lost
-          #(with-out-str (ws/handle-message {:type :game/error :data nil})))
-        (reset! ai-state/client-state (wire-state state "runner"))
-        (is (= ["continue"] (:delivered (with-socket state "runner" :now send!))))))))
+      ;; Two ticks: the first pauses on the ICE-rezzed event, the second passes.
+      (let [lost (with-socket state "runner" :lost #(dotimes [_ 2] (tick!)))]
+        (is (= [] (:delivered lost)))
+        (is (= 1 (:resyncs lost))))
+      (is (not (get-in @state [:run :no-action])) "precondition: nobody has passed")
+      (is (= ["continue"] (:delivered (with-socket state "runner" :now #(dotimes [_ 2] (tick!)))))
+          "the pass is still owed, and sent once")
+      (is (= :runner (get-in @state [:run :no-action]))))))
 
-(deftest an-old-pending-ack-expires
-  (testing "a bound, not a wedge: an ack that never comes stops blocking eventually"
-    (with-rezzed-approach
-      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil})]
-        (with-socket state "runner" :stale send!)
-        (with-redefs [ws/unacked-expiry-ms 0]
-          (is (= ["continue"] (:delivered (with-socket state "runner" :stale send!)))))))))
+(deftest a-corp-rez-over-a-silent-wire-still-rezzes
+  (testing "round 2 (reproduced by a seat against the gate design): a refused rez was latched as attempted and the ICE passed unrezzed. Nothing is refused now; the rez goes out and the resynced board shows it"
+    (do-game
+      (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"] :credits 12}
+                 :runner {:hand ["Bank Job"]}})
+      (play-from-hand state :corp "Ice Wall" "HQ")
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (core/process-action "continue" state :runner nil)
+      (is (= :runner (get-in @state [:run :no-action])) "precondition: the Runner passed; the rez is the Corp's")
+      (reset! ai-state/client-state (wire-state state "corp"))
+      (with-socket state "corp" :stale
+        #(dotimes [_ 3] (tick! "--rez" "Ice Wall")))
+      (is (:rezzed (get-ice state :hq 0)) "the Corp's rez landed")
+      (is (= :encounter-ice (get-in @state [:run :phase])) "and the run met a rezzed Ice Wall"))))
 
-(deftest a-late-ack-lets-the-next-send-through
-  (testing "the previous ack arrives while the next send is waiting on it: that send goes out, it is not refused"
-    (with-rezzed-approach
-      (with-socket state "runner" :stale
-        #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil}))
-      (future (Thread/sleep 150) (push-wire! state "runner"))
-      (let [{:keys [value delivered]} (with-socket state "runner" :now
-                                        #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil}))]
-        (is (= ["credit"] delivered))
-        (is (= :confirmed value))))))
-
-(deftest an-error-during-the-ack-wait-releases-the-gate
-  (testing "round 1 (both seats; one reproduced): the error frame lands while the sender is still waiting, which is the normal order. Clearing then and arming after the wait blocked the next action for the full expiry"
-    (with-rezzed-approach
-      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "continue" :args nil})]
-        (is (= :unconfirmed (:value (with-socket state "runner" [:error 50] send!))))
-        (reset! ai-state/client-state (wire-state state "runner"))   ; the resync lands, rolled back
-        (is (not (ws/ack-pending?)))
-        (is (= ["continue"] (:delivered (with-socket state "runner" :now send!)))
-            "the rolled-back action is owed again, and sent")))))
-
-(deftest a-pending-ack-is-not-a-stuck-loop
-  (testing "round 1 (both seats; one reproduced): refused ticks reported :action-taken, and five of them on one board ended the persistent monitor as :stuck (a handler sending without progress) about 9s in, before the pending ack could expire"
-    (with-rezzed-approach
-      (with-redefs [ws/ack-wait-ms 100
-                    ws/unacked-expiry-ms 60000]
-        (let [{:keys [value delivered]}
-              (with-socket state "runner" :lost
-                #(let [r (atom nil)]
-                   (with-out-str (reset! r (runs/auto-continue-loop! :timeout-ms 2000 :persistent true)))
-                   @r))]
-          (is (empty? delivered) "precondition: the one send was lost")
-          (is (not= :stuck (:status value))
-              (str "an unacknowledged send is a wait, not a stuck handler. got " (select-keys value [:status :iterations]))))))))
-
-(deftest a-boardless-send-does-not-arm-the-gate
-  (testing "no board, no :aid to compare: the send cannot be confirmed, but it must not block the next one"
+(deftest a-boardless-send-waits-only-for-a-diff
+  (testing "no board, no :aid to compare: the send returns on the first diff, as before #245, without resyncing"
     (do-game
       (new-game {:corp {:hand ["Hedge Fund"]}})
       (reset! ai-state/client-state {:side "corp" :gameid gameid})
-      (let [send! #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil})]
-        (is (= :unconfirmed (:value (with-socket state "corp" :stale send!))))
-        (is (not (ws/ack-pending?)))
-        (is (= ["credit"] (:delivered (with-socket state "corp" :stale send!))))))))
+      (let [t0 (System/currentTimeMillis)
+            {:keys [value resyncs]} (with-socket state "corp" [:lag 50]
+                                      #(ws/send-message! :game/action {:gameid gameid :command "credit" :args nil}))]
+        (is (= :unconfirmed value))
+        (is (zero? resyncs))
+        (is (< (- (System/currentTimeMillis) t0) 300) "not the whole ack wait")))))

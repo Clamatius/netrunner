@@ -2180,15 +2180,6 @@
               (Thread/sleep core/quick-delay)
               (recur (inc iteration) state-history))  ; Keep OLD history, don't add new entry
 
-            ;; An action we sent is still unacknowledged, so every send this
-            ;; tick was refused (#245). That is a wait on the wire, not a handler
-            ;; failing to make progress: idle like an opponent wait. Don't advance
-            ;; `iteration` or the stuck history; unacked-expiry-ms bounds it.
-            (and (= status :action-taken) (ws/ack-pending?))
-            (do
-              (Thread/sleep wait-delay-ms)
-              (recur iteration []))
-
             ;; Action taken - check for stuck state, then continue
             (= status :action-taken)
             (if (detect-stuck-state new-history stuck-threshold)
