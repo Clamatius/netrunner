@@ -1775,9 +1775,14 @@ case "$COMMAND" in
             info "Choosing option $CHOICE..."
             execute "(ai-actions/choose-option! $CHOICE)"
         else
-            # Labels are unambiguous within one prompt (#101): a non-numeric
-            # arg routes to the same matcher as choose-value instead of the
-            # old 'Choice must be a number' refusal.
+            # A non-numeric arg routes to choose-value's matcher instead of
+            # the old "Choice must be a number" refusal (#101). That matcher
+            # prefers an EXACT label (#204) and falls back to substring, which
+            # is what lets "draw" reach "Draw 2 cards" (#101). It REFUSES an
+            # ambiguous substring and REFUSES a number-prefix near miss rather
+            # than guessing - "Server 1" never presses "Server 10". See
+            # choice-match-index / choice-match-ambiguity / number-mismatch?
+            # in ai_prompts.clj.
             info "Choosing option matching: $CHOICE..."
             execute "(ai-actions/choose-by-value! \"$(clj_str "$CHOICE")\")"
         fi
