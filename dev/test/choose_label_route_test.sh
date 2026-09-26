@@ -7,7 +7,9 @@
 # engine accepts the choice, or that the seat is told the truth about the
 # result. `ai-actions/choose-by-value!` is an alias (ai_actions.clj:136) and
 # DELETING that alias leaves this test green - symbol boundness is not covered
-# here, and no test covers it for any of the symbols send_command names.
+# here. Some symbols send_command names are called from Clojure tests too
+# (ai-actions/take-credit! at ai_actions_test.clj:111), so they are covered by
+# accident; nothing covers the set of symbols the DISPATCHER names, as a set.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
@@ -57,15 +59,17 @@ check() {
         fail=$((fail + 1))
     fi
 }
-# NR_NO_AUTO_PROMPT is deliberately NOT set: a real seat never runs in that
-# mode, and suppressing after_action hides the follow-up prompt read that is
-# part of what `choose` owes the seat (send_command:955-968). SHOW_LAST_LOG is
-# pinned so an exported 1 in the caller's environment cannot change the log.
+# NR_NO_AUTO_PROMPT is pinned to 0, not merely left unset: a real seat never
+# runs with it on, and suppressing after_action hides the follow-up prompt read
+# that is part of what `choose` owes the seat (send_command:955-968). An
+# exported 1 in the CALLER's environment would otherwise silently put this test
+# back in that mode. SHOW_LAST_LOG is pinned for the same reason.
 run_choice() {
     local side="$1" label="$2"
     export ACTION_LOG="$TMP/actions.log"
     : > "$ACTION_LOG"
-    SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" "$SEND_CMD" "$side" choose "$label" > "$TMP/output" 2>&1
+    NR_NO_AUTO_PROMPT=0 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
+        "$SEND_CMD" "$side" choose "$label" > "$TMP/output" 2>&1
     code=$?
     # The WHOLE action log, not a filtered slice: an extra send of any shape
     # (`(ai-actions/end-turn!)`, a second choose, a send to the other seat, a
@@ -103,9 +107,14 @@ corp 7890'"$PROMPT_READ"
 
 # A backend that REFUSES the choose must not be reported as success. This is
 # the only mutation the exit-status assertions above can catch on their own.
+# The action log is asserted here too: a refusal is exactly when a dispatcher
+# is most tempted to "recover" by sending something else, and a status-only
+# check cannot see that. Note there is no prompt read - after_action does not
+# run on the refusal path.
 STUB_CHOOSE_STATUS=1 run_choice runner 'R&D'
 [[ "$code" -ne 0 ]] && code=nonzero
 check 'backend-refusal-exits-nonzero' "$code" 'nonzero'
+check 'backend-refusal-sends-nothing-else' "$actions" 'runner 7889|(ai-actions/choose-by-value! "R&D")'
 
 if ((fail)); then
     printf 'FAIL: %d choice routing assertion(s)\n' "$fail"
