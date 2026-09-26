@@ -1775,8 +1775,12 @@ case "$COMMAND" in
             info "Choosing option $CHOICE..."
             execute "(ai-actions/choose-option! $CHOICE)"
         else
-            # A non-numeric arg routes to choose-value's matcher, which handles
-            # exact labels, ambiguity, and unsafe number-prefix near misses.
+            # A non-numeric arg routes to choose-value's matcher instead of
+            # the old "Choice must be a number" refusal (#101). That matcher
+            # prefers an EXACT label and falls back to substring (#101); it
+            # REFUSES an ambiguous substring and REFUSES a number-prefix near
+            # miss rather than guessing (#204). See choice-match-index /
+            # choice-match-ambiguity / number-mismatch? in ai_prompts.clj.
             info "Choosing option matching: $CHOICE..."
             execute "(ai-actions/choose-by-value! \"$(clj_str "$CHOICE")\")"
         fi
