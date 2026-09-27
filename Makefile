@@ -76,8 +76,8 @@ test:
 	  game.ai-hosted-card-ref-test \
 	  game.ai-hosted-rig-wire-test \
 	  game.ai-pay-all-test \
-	  game.ai-send-ack-wire-test \
 	  game.ai-phase-windows-test \
+	  game.ai-send-ack-wire-test \
 	  game.ai-upgrade-rez-timing-test \
 	  game.ai-waiting-prompt-test \
 	  game.ai-zero-sub-encounter-wire-test \
