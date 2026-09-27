@@ -739,7 +739,7 @@ ${GREEN}Heuristic Bot (Corp infra / self-play):${NC}
   bot-loop-stop    - Stop the autonomous loop
 
 ${GREEN}Debug & Dev:${NC}
-  fix-credits <N>     - CHEATING: Manually set credits
+  fix-credits <N>     - CHEATING: Manually set credits (+N/-N adjusts instead)
   discard-card <name> - Move card to discard (for testing)
   draw-to-card <name> - Draw until card appears in hand
   find-card <name> [turns] - Multi-turn search; the opponent heuristic bot plays between (default 10)
