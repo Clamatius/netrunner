@@ -130,6 +130,57 @@ run_command runner use-runner-ability 'Bioroid' 010
 check 'padded-runner-ability-index-is-decimal' "$actions" 'runner 7889|(ai-actions/use-runner-ability! "Bioroid" 10)
 runner 7889'"$PROMPT_READ"
 
+# #251's class is "a digit string reaching a bare Clojure literal", not just the
+# index commands. A COUNT is the same shape with a worse payload: `draw 010`
+# would draw 8 cards and spend 8 clicks while printing "Drawing 010 cards", and
+# `draw 08` dies in the reader after the click has been committed to. The
+# display counts and `wait`'s budget are the same literal, one severity down.
+run_command runner draw 010
+check 'padded-draw-count-is-decimal' "$actions" 'runner 7889|(ai-actions/draw-card! 10)
+runner 7889'"$PROMPT_READ"
+run_command runner draw 08
+check 'padded-draw-eight-is-decimal' "$actions" 'runner 7889|(ai-actions/draw-card! 8)
+runner 7889'"$PROMPT_READ"
+run_command corp take-credit 010
+check 'padded-credit-count-is-decimal' "$actions" 'corp 7890|(ai-actions/take-credit! 10)
+corp 7890'"$PROMPT_READ"
+
+# A padded count of ONE must still take the no-argument branch: the arms switch
+# on `-gt 1`, and bash reads `01` as octal too, so normalizing only inside the
+# branch would leave the switch itself deciding on the wrong number.
+run_command corp take-credit 01
+check 'padded-one-credit-takes-the-bare-branch' "$actions" 'corp 7890|(ai-actions/take-credit!)
+corp 7890'"$PROMPT_READ"
+
+run_command runner wait 010
+check 'padded-wait-budget-is-decimal' "$actions" 'runner 7889|(ai-actions/wait-for-relevant-diff 10)'
+run_command runner wait 010 --since 020
+check 'padded-wait-since-is-decimal' "$actions" 'runner 7889|(ai-actions/wait-for-relevant-diff {:timeout 10 :since 20})'
+
+# Display counts: a reader error here costs the seat its read of the board, and
+# `08` is not valid octal at all.
+# `advance` matches its count with a GLOB (`[0-9]*`), not an anchored regex, so
+# the sweep that found the other arms could not see it - the #242 shape. Its
+# payload is the expensive one: `advance <agenda> 010` spends 8 clicks.
+run_command corp advance 'Offworld Office' 010
+check 'padded-advance-count-is-decimal' "$actions" 'corp 7890|(ai-actions/advance-card-times! "Offworld Office" 10 {})
+corp 7890'"$PROMPT_READ"
+run_command corp advance 'Offworld Office' 08 --overadvance
+check 'padded-advance-eight-is-decimal' "$actions" 'corp 7890|(ai-actions/advance-card-times! "Offworld Office" 8 {:overadvance true})
+corp 7890'"$PROMPT_READ"
+# A padded ONE must still take the single-advance branch, and `--overadvance`
+# must survive that branch choice.
+run_command corp advance 'Offworld Office' 01 --overadvance
+check 'padded-one-advance-keeps-overadvance' "$actions" 'corp 7890|(ai-actions/advance-card! "Offworld Office" {:overadvance true})
+corp 7890'"$PROMPT_READ"
+
+run_command runner log 010
+check 'padded-log-count-is-decimal' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log 10))'
+run_command runner log-compact 08
+check 'padded-log-compact-count-is-decimal' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log-compact 8))'
+run_command runner snapshot 010
+check 'padded-snapshot-count-is-decimal' "$actions" 'runner 7889|(with-out-str (ai-actions/show-snapshot 10))'
+
 # The seat the expression is addressed to is part of the contract: the backend
 # selects a REPL by this name/port pair, so a label reaching the wrong seat
 # presses a button in the opponent's client.
