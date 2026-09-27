@@ -132,8 +132,10 @@ runner 7889'"$PROMPT_READ"
 
 # #251's class is "a digit string reaching a bare Clojure literal", not just the
 # index commands. A COUNT is the same shape with a worse payload: `draw 010`
-# would draw 8 cards and spend 8 clicks while printing "Drawing 010 cards", and
-# `draw 08` dies in the reader after the click has been committed to. The
+# would draw 8 cards and spend 8 clicks while printing "Drawing 010 cards".
+# `draw 08` never reached the reader at all - bash's OWN arithmetic has the same
+# base rule, so `[[ 08 -gt 1 ]]` printed "value too great for base" and
+# evaluated FALSE, and the arm drew ONE card saying "Drawing card...". The
 # display counts and `wait`'s budget are the same literal, one severity down.
 run_command runner draw 010
 check 'padded-draw-count-is-decimal' "$actions" 'runner 7889|(ai-actions/draw-card! 10)
@@ -200,6 +202,64 @@ run_command runner log-compact 08
 check 'padded-log-compact-count-is-decimal' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log-compact 8))'
 run_command runner snapshot 010
 check 'padded-snapshot-count-is-decimal' "$actions" 'runner 7889|(with-out-str (ai-actions/show-snapshot 10))'
+
+# --- Round 2: what the review panel found that the sweep above missed. ---
+
+# Both seats found these two independently. Their guard is spelled `^-?[0-9]+$`,
+# and the optional SIGN is why a sweep anchored on `^[0-9]+$` went blind to them
+# - the #242 shape a second time in one change. Dev backdoors, so no seat hits
+# them in play, but they are the SCENARIO-STAGING commands: a board staged with
+# 8 credits instead of 10 is corrupt test state with a truthful-looking echo.
+run_command corp change tag 010
+check 'padded-change-delta-is-decimal' "$actions" 'corp 7890|(ai-actions/change! :tag 10)'
+run_command corp change credit -010
+check 'padded-negative-delta-keeps-its-sign' "$actions" 'corp 7890|(ai-actions/change! :credit -10)'
+run_command corp fix-credits 010
+check 'padded-fix-credits-is-decimal' "$actions" 'corp 7890|(ai-actions/fix-credits! 10)'
+# `+5` is documented usage for this arm, and Clojure reads `+5` as 5.
+run_command corp fix-credits +05
+check 'padded-plus-amount-keeps-its-sign' "$actions" 'corp 7890|(ai-actions/fix-credits! +5)'
+
+# fix-credits had NO numeric guard at all, so its argument was interpolated into
+# the eval verbatim: this one ENDED THE TURN. `wait --since` was the same hole,
+# and the deferral that left it open was wrong - a non-numeric cursor is not a
+# symbol that fails loudly, it is an expression the eval RUNS.
+run_command corp fix-credits '(do (ai-actions/end-turn!) 0)'
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'expression-as-amount-refuses' "$code" 'nonzero'
+check 'expression-as-amount-sends-nothing' "$actions" ''
+run_command runner wait 1 --since '(do (ai-actions/choose-option! 8) 0)'
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'expression-as-cursor-refuses' "$code" 'nonzero'
+check 'expression-as-cursor-sends-nothing' "$actions" ''
+
+# `advance` must REFUSE what its glob catches but the gate rejects. Defaulting
+# to 1 turned `0x2` - which the old code advanced TWICE on, via bash's own hex
+# reading - into a silent single advance. Refusing loudly is the honest answer.
+run_command corp advance 'Offworld Office' 0x2
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'hex-advance-count-refuses' "$code" 'nonzero'
+check 'hex-advance-count-sends-nothing' "$actions" ''
+
+# The digit-LENGTH cap. Stripping zeroes as a string protects the LITERAL, but
+# the `-gt 1` switch after it is still bash arithmetic and wraps silently at 64
+# bits, so a 19-digit count went negative, failed `-gt 1`, and drew ONE card.
+run_command runner draw 9999999999999999999
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'overlong-count-refuses' "$code" 'nonzero'
+check 'overlong-count-sends-nothing' "$actions" ''
+
+# Two arms whose fix was unpinned: both mutations survived the round-1 battery.
+run_command corp dashboard-compact 010
+check 'padded-dashboard-count-is-decimal' "$actions" 'corp 7890|(do
+                   (require (quote [ai-heuristic-corp :as bot]))
+                   (println (bot/dashboard-compact 10)))'
+# bot-loop's minutes go through bash MULTIPLICATION, so the whole-log form would
+# pin an unrelated 7-line expression. Pin the computed value, and that exactly
+# one expression was sent.
+run_command corp bot-loop --patient 010
+check 'padded-patient-minutes-are-decimal' "$(grep -c ':patient-ms 600000' "$ACTION_LOG")" '1'
+check 'patient-loop-sends-one-expression' "$(grep -c '^corp 7890|' "$ACTION_LOG")" '1'
 
 # The seat the expression is addressed to is part of the contract: the backend
 # selects a REPL by this name/port pair, so a label reaching the wrong seat

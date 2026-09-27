@@ -843,25 +843,77 @@ decimal_index() {
     printf '%s' "$digits"
 }
 
-# The gate for a digit argument that is going to reach a bare Clojure literal:
-# it VALIDATES and NORMALIZES in one call, so a new numeric arm cannot acquire
-# the guard without the conversion. That split is how #251's first pass came to
-# cover nine arms and miss seven - every missed one had the `^[0-9]+$` regex.
+# >>> NUMERIC GATE >>> (numeric_gate_sweep_test delimits the block on these two
+# sentinels, not on line numbers or brace counting - a window that drifted off
+# the block would report a clean sweep over the whole file.)
+# Longest digit string any of these accept. Not cosmetic, and the precedent is
+# in the house already (`ai-eval.sh` caps the same shape): bash 3.2's arithmetic
+# wraps SILENTLY at 64 bits, and the `-gt 1` switch in draw/take-credit/advance
+# is bash arithmetic, so `draw 9999999999999999999` wrapped negative, failed
+# `-gt 1` and drew ONE card with no warning. Capping the LENGTH is what makes
+# string-stripping versus `$((10#$x))` stop mattering - with the cap, nothing
+# downstream can overflow either way.
+NUM_MAX_DIGITS=7
+
+# THE ONE PLACE A NUMERIC ARGUMENT'S SHAPE IS SPELLED. Every command argument in
+# this file that is a number goes through one of the wrappers below, and
+# `dev/test/numeric_gate_sweep_test.sh` asserts this stays the only spelling - a
+# new arm that rolls its own digit check fails that test rather than shipping
+# #251 again.
 #
-# Sets NUM_ARG instead of printing its answer: `error` inside `$(...)` exits
-# only the subshell, so a printing form would leave a REJECTED value as the
-# empty string and carry on into the eval. /bin/bash here is 3.2 - no namerefs.
-num_arg() {
-    [[ "$1" =~ ^[0-9]+$ ]] || error "${2:-Argument must be a number}"
+# The one exemption, marked at its site: `find-card`'s FIND-CARD-CLICKS parse is
+# a sanity check on a value the REPL generated, not a check on an argument, and
+# it has its own two-branch error handling. It is not an argument gate.
+#
+# The predicate form, for arms that SWITCH on "is this a number?" rather than
+# refusing (`choose` falls through to a label, `wait` ignores a stray
+# positional). Sets NUM_ARG on success.
+is_num() {
+    [[ "$1" =~ ^[0-9]+$ && ${#1} -le $NUM_MAX_DIGITS ]] || return 1
     NUM_ARG="$(decimal_index "$1")"
 }
 
-# The defaulting form, for the display arms: a malformed count falls back to the
-# default rather than refusing (their existing behaviour, deliberately kept - a
-# bad `log` argument should still show the seat a log).
-num_or() {
-    if [[ "$1" =~ ^[0-9]+$ ]]; then NUM_ARG="$(decimal_index "$1")"; else NUM_ARG="$2"; fi
+# The strict form. Takes the variable NAME and rewrites it in place, so there is
+# no second line for a future arm to forget - the earlier two-line shape
+# (`num_arg "$X" msg; X="$NUM_ARG"`) left the padded value in use when the
+# second line was missed, which IS the #251 bug.
+#
+#     num_arg COUNT "Usage: send_command draw [count]"
+num_arg() {
+    is_num "${!1}" || error "${2:-Argument must be a number}"
+    printf -v "$1" '%s' "$NUM_ARG"
 }
+
+# The defaulting form, for the display arms: a malformed count falls back rather
+# than refusing, because a bad `log` argument should still show the seat a log.
+#
+#     num_or N 20
+num_or() {
+    is_num "${!1}" || NUM_ARG="$2"
+    printf -v "$1" '%s' "$NUM_ARG"
+}
+
+# The minimum-value form, for an argument whose contract is "1 or more"
+# (`find-card`'s max-turns). Its old regex was `^[1-9][0-9]*$`, which refuses a
+# leading zero instead of reading it - so it never had #251's bug, but it also
+# never had the length cap, and it fed a bash `for ((...))` loop.
+#
+#     num_arg_min MAX_TURNS 1 "max-turns must be ..."
+num_arg_min() {
+    num_arg "$1" "$3"
+    [[ "${!1}" -ge "$2" ]] || error "$3"
+}
+
+# The signed form, for the two dev backdoors whose contract includes a sign
+# (`change <key> -3`, `fix-credits +5`). The sign is split off and reattached so
+# the padding strip cannot eat it; Clojure reads `+5` as 5.
+num_arg_signed() {
+    local v="${!1}" sign=""
+    case "$v" in -*) sign=-; v="${v#-}" ;; +*) sign=+; v="${v#+}" ;; esac
+    is_num "$v" || error "${2:-Argument must be a number}"
+    printf -v "$1" '%s' "$sign$NUM_ARG"
+}
+# <<< NUMERIC GATE <<<
 
 execute() {
     local expr="$1"
@@ -1170,8 +1222,8 @@ case "$COMMAND" in
         ensure_connection --allow-decided
         # Bundled per-decision read-loop in one round-trip:
         # status-compact + prompt(if any) + board-compact + hand + last-N log + cursor.
-        num_or "${1:-5}" 5
-        N="$NUM_ARG"
+        N="${1:-5}"
+        num_or N 5
         execute "(ai-actions/show-snapshot $N)"
         ;;
 
@@ -1215,14 +1267,14 @@ case "$COMMAND" in
         ;;
 
     log)
-        num_or "${1:-20}" 20
-        N="$NUM_ARG"
+        N="${1:-20}"
+        num_or N 20
         execute "(ai-actions/show-log $N)"
         ;;
 
     log-compact)
-        num_or "${1:-5}" 5
-        N="$NUM_ARG"
+        N="${1:-5}"
+        num_or N 5
         execute "(ai-actions/show-log-compact $N)"
         ;;
 
@@ -1289,8 +1341,8 @@ case "$COMMAND" in
 
     take-credit)
         ensure_connection
-        num_arg "${1:-1}" "Usage: send_command take-credit [count]"
-        COUNT="$NUM_ARG"
+        COUNT="${1:-1}"
+        num_arg COUNT "Usage: send_command take-credit [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Taking $COUNT credits..."
             execute "(ai-actions/take-credit! $COUNT)"
@@ -1303,8 +1355,8 @@ case "$COMMAND" in
 
     draw)
         ensure_connection
-        num_arg "${1:-1}" "Usage: send_command draw [count]"
-        COUNT="$NUM_ARG"
+        COUNT="${1:-1}"
+        num_arg COUNT "Usage: send_command draw [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Drawing $COUNT cards..."
             execute "(ai-actions/draw-card! $COUNT)"
@@ -1362,6 +1414,10 @@ case "$COMMAND" in
         ensure_connection
         AMOUNT="${1:-}"
         [[ -z "$AMOUNT" ]] && error "Usage: send_command fix-credits <amount>\n  Example: fix-credits 10 (set to 10)\n  Example: fix-credits +5 (add 5)\n  Example: fix-credits -3 (subtract 3)"
+        # This arm had NO numeric guard, so the amount was interpolated into the
+        # eval verbatim: `fix-credits '(do (ai-actions/end-turn!) 0)'` ENDED THE
+        # TURN. The sign is part of its documented contract (`+5`, `-3`).
+        num_arg_signed AMOUNT "Amount must be a number (optionally signed)"
         warn "CHEATING: This is ONLY for fixing broken game states!"
         execute "(ai-actions/fix-credits! $AMOUNT)"
         ;;
@@ -1401,7 +1457,7 @@ case "$COMMAND" in
             corp)   OPPONENT="runner" ;;
             *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;
         esac
-        [[ "$MAX_TURNS" =~ ^[1-9][0-9]*$ ]] || error "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
+        num_arg_min MAX_TURNS 1 "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
         # Real card titles carry quotes ("Pretty" Mary da Silva, Cerberus "Lady" H1),
         # and these names are interpolated into a Clojure string literal. Without
         # this the reader sees several forms and the search never runs (guest MAJOR).
@@ -1556,7 +1612,11 @@ case "$COMMAND" in
             CLICKS=$(NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
                 "(loop [i 0] (let [c (or (get-in @ai-state/client-state [:game-state (ai-state/my-side-kw @ai-state/client-state) :click]) 0)] (if (or (pos? c) (>= i 40)) (println (str \"FIND-CARD-CLICKS \" c)) (do (Thread/sleep 250) (recur (inc i))))))" \
                 | sed -n 's/^FIND-CARD-CLICKS //p' | tail -n 1) || true
-            if [[ ! "$CLICKS" =~ ^[1-9][0-9]*$ ]]; then
+            # Not an argument: this validates the value the REPL just printed,
+            # and its failure branch reports a turn that did not start, not a
+            # malformed argument. The marker is on the LINE, not in this comment,
+            # so numeric_gate_sweep_test can see it where it checks.
+            if [[ ! "$CLICKS" =~ ^[1-9][0-9]*$ ]]; then # NUMERIC-GATE-EXEMPT
                 [[ "$START_CODE" -gt 1 ]] && { echo "❌ Error: start-turn was refused (exit $START_CODE, see above); find-card stopped." >&2; exit "$START_CODE"; }
                 error "your turn did not start after the $OPPONENT's turn (clicks: ${CLICKS:-unknown}, start-turn exit $START_CODE); find-card stopped. Check: send_command $CLIENT_NAME status"
             fi
@@ -1572,7 +1632,9 @@ case "$COMMAND" in
         DELTA="${2:-}"
         [[ -z "$KEY" ]] && error "Usage: send_command change <key> <delta>"
         [[ -z "$DELTA" ]] && error "Usage: send_command change <key> <delta>"
-        [[ ! "$DELTA" =~ ^-?[0-9]+$ ]] && error "Delta must be a number"
+        # `^-?[0-9]+$` - the optional SIGN is why a sweep anchored on
+        # `^[0-9]+$` could not see this arm (both review seats found it there).
+        num_arg_signed DELTA "Delta must be a number"
         info "Changing $KEY by $DELTA (dev backdoor)..."
         execute "(ai-actions/change! :$KEY $DELTA)"
         ;;
@@ -1599,18 +1661,16 @@ case "$COMMAND" in
             execute '(ai-actions/discard-to-hand-size!)'
         else
             # Check if all args are numeric (indices) or text (card names)
+            # ONE pass: classify and normalize together. Two passes (a regex
+            # loop, then a decimal_index loop) is the split #251 came from.
             ALL_NUMERIC=true
+            INDICES=()
             for arg in "$@"; do
-                if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
-                    ALL_NUMERIC=false
-                    break
-                fi
+                if is_num "$arg"; then INDICES+=("$NUM_ARG"); else ALL_NUMERIC=false; break; fi
             done
 
             if [[ "$ALL_NUMERIC" == "true" ]]; then
                 # Discard by index
-                INDICES=()
-                for idx in "$@"; do INDICES+=("$(decimal_index "$idx")"); done
                 info "Discarding cards at indices: ${INDICES[*]}"
                 INDICES_VEC="[${INDICES[*]}]"
                 execute "(ai-actions/discard-specific-cards! $INDICES_VEC)"
@@ -1651,8 +1711,7 @@ case "$COMMAND" in
         ensure_connection
         INDEX="${1:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command play-index <0-4>"
-        num_arg "$INDEX" "Index must be a number"
-        INDEX="$NUM_ARG"
+        num_arg INDEX "Index must be a number"
         info "Playing card at index $INDEX"
         execute "(ai-actions/play-card! $INDEX)"
         after_action
@@ -1699,8 +1758,7 @@ case "$COMMAND" in
         ABILITY_INDEX="${2:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
-        num_arg "$ABILITY_INDEX" "Ability index must be a number"
-        ABILITY_INDEX="$NUM_ARG"
+        num_arg ABILITY_INDEX "Ability index must be a number"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
         execute "(ai-actions/use-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
@@ -1712,8 +1770,7 @@ case "$COMMAND" in
         ABILITY_INDEX="${2:-}"
         [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
         [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
-        num_arg "$ABILITY_INDEX" "Ability index must be a number"
-        ABILITY_INDEX="$NUM_ARG"
+        num_arg ABILITY_INDEX "Ability index must be a number"
         info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
         execute "(ai-actions/use-runner-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
         after_action
@@ -1775,10 +1832,12 @@ case "$COMMAND" in
             case "$1" in
                 --overadvance) OVERADVANCE=true ;;
                 # A GLOB, not an anchored regex - which is why the #251 sweep of
-                # `^[0-9]+$` guards could not see this arm. num_or re-checks and
-                # normalizes: a padded count reaching the `-gt 1` switch below
-                # decides on the octal reading of itself.
-                [0-9]*) num_or "$1" 1; COUNT="$NUM_ARG" ;;
+                # `^[0-9]+$` guards could not see this arm. It matches tokens the
+                # gate then REFUSES (`0x2`, `3abc`): defaulting them to 1 would
+                # turn an input the old code acted on into a silent single
+                # advance, and a digit-initial token here is a typo, not a
+                # "still show the seat something" case.
+                [0-9]*) COUNT="$1"; num_arg COUNT "Advance count must be a number" ;;
             esac
             shift
         done
@@ -1813,8 +1872,8 @@ case "$COMMAND" in
         ensure_connection
         CHOICE="${1:-}"
         [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index-or-label>"
-        if [[ "$CHOICE" =~ ^[0-9]+$ ]]; then
-            CHOICE="$(decimal_index "$CHOICE")"
+        if is_num "$CHOICE"; then
+            CHOICE="$NUM_ARG"
             info "Choosing option $CHOICE..."
             execute "(ai-actions/choose-option! $CHOICE)"
         else
@@ -1845,8 +1904,7 @@ case "$COMMAND" in
         ensure_connection
         INDEX="${1:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index> [--all]"
-        num_arg "$INDEX" "Index must be a number"
-        INDEX="$NUM_ARG"
+        num_arg INDEX "Index must be a number"
         shift
         # --all is the seat's shift-click: on the engine's per-credit payment
         # prompt it takes that source's FULL remaining amount in one call
@@ -1873,18 +1931,15 @@ case "$COMMAND" in
         fi
 
         # Check if all args are numeric (indices) or text (card names)
+        # ONE pass: classify and normalize together (see the discard arm).
         ALL_NUMERIC=true
+        INDICES=()
         for arg in "$@"; do
-            if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
-                ALL_NUMERIC=false
-                break
-            fi
+            if is_num "$arg"; then INDICES+=("$NUM_ARG"); else ALL_NUMERIC=false; break; fi
         done
 
         if [[ "$ALL_NUMERIC" == "true" ]]; then
             # Select by index
-            INDICES=()
-            for idx in "$@"; do INDICES+=("$(decimal_index "$idx")"); done
             info "Multi-selecting cards at indices: ${INDICES[*]}"
             ARGS_STR=""
             for idx in "${INDICES[@]}"; do
@@ -2084,16 +2139,18 @@ case "$COMMAND" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --since)
-                    # Normalized, not validated: a non-numeric cursor reaching
-                    # the literal is a separate defect (filed), and refusing it
-                    # here would be a behaviour change beyond #251's class.
-                    SINCE="$2"
-                    [[ "$SINCE" =~ ^[0-9]+$ ]] && SINCE="$(decimal_index "$SINCE")"
+                    # VALIDATED, not merely normalized. A non-numeric cursor is
+                    # not a symbol that fails loudly - it is interpolated into
+                    # the map and EVALUATED, so
+                    # `--since '(do (ai-actions/choose-option! 8) 0)'` presses
+                    # option 8 before waiting. Refusing is the only safe answer.
+                    SINCE="${2:-}"
+                    num_arg SINCE "--since takes a cursor number"
                     shift 2
                     ;;
                 *)
-                    if [[ "$1" =~ ^[0-9]+$ ]]; then
-                        TIMEOUT="$(decimal_index "$1")"
+                    if is_num "$1"; then
+                        TIMEOUT="$NUM_ARG"
                     fi
                     shift
                     ;;
@@ -2355,8 +2412,7 @@ case "$COMMAND" in
         INDEX="${1:-}"
         SERVER="${2:-}"
         [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4> [server]"
-        num_arg "$INDEX" "Index must be a number"
-        INDEX="$NUM_ARG"
+        num_arg INDEX "Index must be a number"
         if [[ -n "$SERVER" ]]; then
             info "Installing card at index $INDEX on $SERVER"
             execute "(ai-actions/install-card! $INDEX \"$(clj_str "$SERVER")\")"
@@ -2459,8 +2515,8 @@ case "$COMMAND" in
 
     dashboard-compact)
         ensure_connection
-        num_or "${1:-5}" 5
-        N="$NUM_ARG"
+        N="${1:-5}"
+        num_or N 5
         execute "(do
                    (require (quote [ai-heuristic-corp :as bot]))
                    (println (bot/dashboard-compact $N)))"
@@ -2516,8 +2572,8 @@ case "$COMMAND" in
             if [[ "${loop_argv[li]}" == "--patient" ]]; then
                 LOOP_ARGS=":patient? true"
                 loop_next="${loop_argv[li+1]:-}"
-                if [[ "$loop_next" =~ ^[0-9]+$ ]]; then
-                    loop_next="$(decimal_index "$loop_next")"
+                if is_num "$loop_next"; then
+                    loop_next="$NUM_ARG"
                     LOOP_ARGS="$LOOP_ARGS :patient-ms $((loop_next * 60000))"
                 fi
                 info "Patient mode ON (${loop_next:-default} min wall-clock bail)"
