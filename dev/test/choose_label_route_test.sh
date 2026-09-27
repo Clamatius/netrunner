@@ -276,6 +276,19 @@ check 'overlong-count-sends-nothing' "$actions" ''
 run_command runner log 99999999
 check 'overlong-display-count-passes-through' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log 99999999))'
 
+# ...and the arithmetic consumers DO take the bound. Both of these mutations
+# survived round 3's battery: `--patient` multiplies its minutes by 60000 and
+# find-card's max-turns drives a `for ((...))` loop, so an unbounded value wraps
+# in bash rather than in the reader.
+run_command corp bot-loop --patient 99999999
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'overlong-patient-minutes-refuse' "$code" 'nonzero'
+check 'overlong-patient-minutes-send-nothing' "$actions" ''
+run_command corp find-card 'Offworld Office' 99999999
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'overlong-max-turns-refuses' "$code" 'nonzero'
+check 'overlong-max-turns-sends-nothing' "$actions" ''
+
 # Two arms whose fix was unpinned: both mutations survived the round-1 battery.
 run_command corp dashboard-compact 010
 check 'padded-dashboard-count-is-decimal' "$actions" 'corp 7890|(do
