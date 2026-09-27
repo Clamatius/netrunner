@@ -105,6 +105,15 @@ runner 7889'"$PROMPT_READ"
 run_choice runner '08'
 check 'padded-eight-is-valid-decimal' "$actions" 'runner 7889|(ai-actions/choose-option! 8)
 runner 7889'"$PROMPT_READ"
+# #251's own reading is "a seat that writes `010` means the tenth option". The
+# round-2 length cap counted the PADDING against itself, so `00000010` fell
+# through to the LABEL branch and #251's own example stopped working. The bound
+# now applies to the normalized value, and only where bash arithmetic consumes
+# it.
+run_choice runner '00000010'
+check 'heavily-padded-choice-is-still-an-index' "$actions" 'runner 7889|(ai-actions/choose-option! 10)
+runner 7889'"$PROMPT_READ"
+
 run_choice runner '000'
 check 'all-zero-choice-is-zero' "$actions" 'runner 7889|(ai-actions/choose-option! 0)
 runner 7889'"$PROMPT_READ"
@@ -216,9 +225,20 @@ run_command corp change credit -010
 check 'padded-negative-delta-keeps-its-sign' "$actions" 'corp 7890|(ai-actions/change! :credit -10)'
 run_command corp fix-credits 010
 check 'padded-fix-credits-is-decimal' "$actions" 'corp 7890|(ai-actions/fix-credits! 10)'
-# `+5` is documented usage for this arm, and Clojure reads `+5` as 5.
+# `fix-credits!` enters DELTA mode only for a signed STRING
+# (ai_basic_actions.clj:2211-2213). A bare Clojure `+5` is just 5 and takes the
+# ABSOLUTE branch, so this arm's own documented `+5 (add 5)` SET credits to 5 -
+# a pre-existing lie in its usage text, not something this change introduced.
+# Round 3 found it; the signed form is quoted so the documented behaviour works.
 run_command corp fix-credits +05
-check 'padded-plus-amount-keeps-its-sign' "$actions" 'corp 7890|(ai-actions/fix-credits! +5)'
+check 'signed-amount-is-a-string-so-delta-mode-fires' "$actions" 'corp 7890|(ai-actions/fix-credits! "+5")'
+run_command corp fix-credits -03
+check 'signed-negative-amount-is-also-a-string' "$actions" 'corp 7890|(ai-actions/fix-credits! "-3")'
+# An UNSIGNED amount stays a number: that is the absolute-set branch, and
+# quoting it would still work but by the string-number path, not the documented
+# one. `change!` takes a raw number either way, so its sign is NOT quoted.
+run_command corp fix-credits 010
+check 'unsigned-amount-stays-a-number' "$actions" 'corp 7890|(ai-actions/fix-credits! 10)'
 
 # fix-credits had NO numeric guard at all, so its argument was interpolated into
 # the eval verbatim: this one ENDED THE TURN. `wait --since` was the same hole,
@@ -241,13 +261,20 @@ run_command corp advance 'Offworld Office' 0x2
 check 'hex-advance-count-refuses' "$code" 'nonzero'
 check 'hex-advance-count-sends-nothing' "$actions" ''
 
-# The digit-LENGTH cap. Stripping zeroes as a string protects the LITERAL, but
+# The digit-LENGTH bound. Stripping zeroes as a string protects the LITERAL, but
 # the `-gt 1` switch after it is still bash arithmetic and wraps silently at 64
 # bits, so a 19-digit count went negative, failed `-gt 1`, and drew ONE card.
 run_command runner draw 9999999999999999999
 [[ "$code" -ne 0 ]] && code=nonzero
 check 'overlong-count-refuses' "$code" 'nonzero'
 check 'overlong-count-sends-nothing' "$actions" ''
+# ...and the bound is ONLY on the arithmetic consumers. A big DISPLAY count is a
+# big read, not an overflow, so it passes through: bounding it here made
+# `log 99999999` silently show 20 lines, and bounding `wait` made a refused
+# budget a silent 300-second park (send_command_timeout_test's wait-refusal
+# case, which relies on ai-eval.sh's own bound, went red on it).
+run_command runner log 99999999
+check 'overlong-display-count-passes-through' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log 99999999))'
 
 # Two arms whose fix was unpinned: both mutations survived the round-1 battery.
 run_command corp dashboard-compact 010

@@ -846,46 +846,68 @@ decimal_index() {
 # >>> NUMERIC GATE >>> (numeric_gate_sweep_test delimits the block on these two
 # sentinels, not on line numbers or brace counting - a window that drifted off
 # the block would report a clean sweep over the whole file.)
-# Longest digit string any of these accept. Not cosmetic, and the precedent is
-# in the house already (`ai-eval.sh` caps the same shape): bash 3.2's arithmetic
-# wraps SILENTLY at 64 bits, and the `-gt 1` switch in draw/take-credit/advance
-# is bash arithmetic, so `draw 9999999999999999999` wrapped negative, failed
-# `-gt 1` and drew ONE card with no warning. Capping the LENGTH is what makes
-# string-stripping versus `$((10#$x))` stop mattering - with the cap, nothing
-# downstream can overflow either way.
+#
+# THE ONE PLACE A NUMERIC ARGUMENT'S DIGIT SHAPE IS SPELLED. Every command
+# argument in this file that send_command itself validates as a number goes
+# through one of the wrappers below, and dev/test/numeric_gate_sweep_test.sh
+# asserts this stays the only spelling - a new arm that rolls its own digit check
+# fails there rather than shipping #251 again under a further spelling.
+#
+# Scope of that claim, precisely: it is a census of the digit CHECKS in this
+# file. It is NOT a proof that every number a seat can type reaches a wrapper.
+# `run`/`continue`/`continue-run`/`monitor-run` forward each of their flags as a
+# quoted Clojure STRING (`FLAGS_ARGS="$FLAGS_ARGS \"$1\""`), so a number among
+# them never becomes a bare literal and never needs this gate. One line is
+# exempt, marked at its site with NUMERIC-GATE-EXEMPT; the sweep pins that there
+# is exactly one.
+#
+# Why one call and not two: `010` is octal BOTH to the Clojure reader (-> 8) and
+# to bash arithmetic, so an arm that validated without normalizing decided its
+# own `-gt 1` switch on the wrong number. That split is what #251 was.
 NUM_MAX_DIGITS=7
 
-# THE ONE PLACE A NUMERIC ARGUMENT'S SHAPE IS SPELLED. Every command argument in
-# this file that is a number goes through one of the wrappers below, and
-# `dev/test/numeric_gate_sweep_test.sh` asserts this stays the only spelling - a
-# new arm that rolls its own digit check fails that test rather than shipping
-# #251 again.
-#
-# The one exemption, marked at its site: `find-card`'s FIND-CARD-CLICKS parse is
-# a sanity check on a value the REPL generated, not a check on an argument, and
-# it has its own two-branch error handling. It is not an argument gate.
-#
-# The predicate form, for arms that SWITCH on "is this a number?" rather than
-# refusing (`choose` falls through to a label, `wait` ignores a stray
-# positional). Sets NUM_ARG on success.
+# Normalize, and report the SHAPE only: 0 and NUM_ARG set to the base-10 value,
+# or 1 if this is not a digit string at all. Deliberately does NOT bound the
+# magnitude - the bound belongs to the CONSUMER, not to the shape check. Capping
+# here made `choose 00000010` fall through to the LABEL branch (padding counted
+# against the cap, so #251's own example stopped working) and made
+# `wait 10000000` a silent 300-second default instead of the refusal that
+# ai-eval.sh's own 7-digit bound already gives it.
 is_num() {
-    [[ "$1" =~ ^[0-9]+$ && ${#1} -le $NUM_MAX_DIGITS ]] || return 1
+    [[ "$1" =~ ^[0-9]+$ ]] || return 1
     NUM_ARG="$(decimal_index "$1")"
 }
 
+# The magnitude bound, for the consumers that feed the value to BASH ARITHMETIC,
+# which wraps silently at 64 bits in 3.2: the `-gt 1` switch in
+# draw/take-credit/advance (`draw 9999999999999999999` wrapped negative, failed
+# `-gt 1` and drew ONE card), `find-card`'s `for ((...))` loop, and `bot-loop
+# --patient`'s `* 60000`. Checked on the NORMALIZED value, so padding does not
+# count against it. Nothing that only becomes a Clojure literal is bounded here.
+num_bounded() {
+    [[ ${#1} -le $NUM_MAX_DIGITS ]] || error "${2:-Number is too large} (at most $NUM_MAX_DIGITS digits): $1"
+}
+
 # The strict form. Takes the variable NAME and rewrites it in place, so there is
-# no second line for a future arm to forget - the earlier two-line shape
-# (`num_arg "$X" msg; X="$NUM_ARG"`) left the padded value in use when the
-# second line was missed, which IS the #251 bug.
+# no second line for a future arm to forget - the two-line shape this replaced
+# (`num_arg "$X" msg; X="$NUM_ARG"`) left the padded value in use whenever the
+# second line was missed, which IS #251's bug.
 #
-#     num_arg COUNT "Usage: send_command draw [count]"
+#     num_arg INDEX "Index must be a number"
 num_arg() {
     is_num "${!1}" || error "${2:-Argument must be a number}"
     printf -v "$1" '%s' "$NUM_ARG"
 }
 
+# The strict-and-bounded form, for the arithmetic consumers above.
+num_arg_bounded() {
+    num_arg "$1" "$2"
+    num_bounded "${!1}" "$2"
+}
+
 # The defaulting form, for the display arms: a malformed count falls back rather
 # than refusing, because a bad `log` argument should still show the seat a log.
+# Unbounded on purpose - a large count is a large read, not an overflow.
 #
 #     num_or N 20
 num_or() {
@@ -894,24 +916,30 @@ num_or() {
 }
 
 # The minimum-value form, for an argument whose contract is "1 or more"
-# (`find-card`'s max-turns). Its old regex was `^[1-9][0-9]*$`, which refuses a
-# leading zero instead of reading it - so it never had #251's bug, but it also
-# never had the length cap, and it fed a bash `for ((...))` loop.
-#
-#     num_arg_min MAX_TURNS 1 "max-turns must be ..."
+# (`find-card`'s max-turns, which drives a bash `for ((...))` loop). Its old
+# regex was `^[1-9][0-9]*$`, which refuses a leading zero instead of reading it,
+# so it never had #251's bug - but it never had the bound either.
 num_arg_min() {
-    num_arg "$1" "$3"
+    num_arg_bounded "$1" "$3"
     [[ "${!1}" -ge "$2" ]] || error "$3"
 }
 
 # The signed form, for the two dev backdoors whose contract includes a sign
 # (`change <key> -3`, `fix-credits +5`). The sign is split off and reattached so
-# the padding strip cannot eat it; Clojure reads `+5` as 5.
+# the padding strip cannot eat it. NOTE the caller's job after this: `change!`
+# takes a raw number, but `fix-credits!` only enters DELTA mode for a signed
+# STRING (ai_basic_actions.clj:2213) - a bare `+5` is a Clojure 5 and SETS.
 num_arg_signed() {
-    local v="${!1}" sign=""
-    case "$v" in -*) sign=-; v="${v#-}" ;; +*) sign=+; v="${v#+}" ;; esac
-    is_num "$v" || error "${2:-Argument must be a number}"
-    printf -v "$1" '%s' "$sign$NUM_ARG"
+    # The locals are __-prefixed because `printf -v "$1"` writes the CALLER's
+    # variable by name: a caller whose variable was named `v` would have this
+    # function's local shadow it, and go home with its value still padded.
+    local __num_v="${!1}" __num_sign=""
+    case "$__num_v" in
+        -*) __num_sign=-; __num_v="${__num_v#-}" ;;
+        +*) __num_sign=+; __num_v="${__num_v#+}" ;;
+    esac
+    is_num "$__num_v" || error "${2:-Argument must be a number}"
+    printf -v "$1" '%s' "$__num_sign$NUM_ARG"
 }
 # <<< NUMERIC GATE <<<
 
@@ -1342,7 +1370,7 @@ case "$COMMAND" in
     take-credit)
         ensure_connection
         COUNT="${1:-1}"
-        num_arg COUNT "Usage: send_command take-credit [count]"
+        num_arg_bounded COUNT "Usage: send_command take-credit [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Taking $COUNT credits..."
             execute "(ai-actions/take-credit! $COUNT)"
@@ -1356,7 +1384,7 @@ case "$COMMAND" in
     draw)
         ensure_connection
         COUNT="${1:-1}"
-        num_arg COUNT "Usage: send_command draw [count]"
+        num_arg_bounded COUNT "Usage: send_command draw [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Drawing $COUNT cards..."
             execute "(ai-actions/draw-card! $COUNT)"
@@ -1418,6 +1446,13 @@ case "$COMMAND" in
         # eval verbatim: `fix-credits '(do (ai-actions/end-turn!) 0)'` ENDED THE
         # TURN. The sign is part of its documented contract (`+5`, `-3`).
         num_arg_signed AMOUNT "Amount must be a number (optionally signed)"
+        # `fix-credits!` enters DELTA mode only for a signed STRING
+        # (ai_basic_actions.clj:2211-2213); a bare Clojure `+5` is just 5 and
+        # takes the ABSOLUTE branch. So this arm's own documented `+5 (add 5)`
+        # has never added 5 - it set credits to 5. Quote the signed form.
+        case "$AMOUNT" in
+            [+-]*) AMOUNT="\"$AMOUNT\"" ;;
+        esac
         warn "CHEATING: This is ONLY for fixing broken game states!"
         execute "(ai-actions/fix-credits! $AMOUNT)"
         ;;
@@ -1837,7 +1872,7 @@ case "$COMMAND" in
                 # turn an input the old code acted on into a silent single
                 # advance, and a digit-initial token here is a typo, not a
                 # "still show the seat something" case.
-                [0-9]*) COUNT="$1"; num_arg COUNT "Advance count must be a number" ;;
+                [0-9]*) COUNT="$1"; num_arg_bounded COUNT "Advance count must be a number" ;;
             esac
             shift
         done
@@ -2574,6 +2609,9 @@ case "$COMMAND" in
                 loop_next="${loop_argv[li+1]:-}"
                 if is_num "$loop_next"; then
                     loop_next="$NUM_ARG"
+                    # A selector that then MULTIPLIES, so it takes the bound by
+                    # hand: `* 60000` is bash arithmetic and wraps at 64 bits.
+                    num_bounded "$loop_next" "--patient takes a number of minutes"
                     LOOP_ARGS="$LOOP_ARGS :patient-ms $((loop_next * 60000))"
                 fi
                 info "Patient mode ON (${loop_next:-default} min wall-clock bail)"
