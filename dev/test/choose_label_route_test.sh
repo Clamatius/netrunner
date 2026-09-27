@@ -159,6 +159,26 @@ check 'padded-wait-since-is-decimal' "$actions" 'runner 7889|(ai-actions/wait-fo
 
 # Display counts: a reader error here costs the seat its read of the board, and
 # `08` is not valid octal at all.
+# num_arg's whole claim is that validation and normalization travel TOGETHER.
+# Deleting the validation half left the padding assertions green (mutation
+# `num_arg-drops-validation` survived), so pin the refusal: a non-numeric index
+# must exit non-zero and send NOTHING - not reach the literal as a symbol.
+run_command runner play-index 3x
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'non-numeric-index-refuses' "$code" 'nonzero'
+check 'non-numeric-index-sends-nothing' "$actions" ''
+check 'non-numeric-index-says-why' "$(grep -c 'Index must be a number' "$TMP/output")" '1'
+run_command corp take-credit lots
+[[ "$code" -ne 0 ]] && code=nonzero
+check 'non-numeric-count-refuses' "$code" 'nonzero'
+check 'non-numeric-count-sends-nothing' "$actions" ''
+check 'non-numeric-count-says-why' "$(grep -c 'send_command take-credit' "$TMP/output")" '1'
+
+# num_or's other half: a malformed DISPLAY count falls back to the default
+# rather than refusing, because a bad `log` argument should still show a log.
+run_command runner log lots
+check 'non-numeric-log-count-falls-back' "$actions" 'runner 7889|(with-out-str (ai-actions/show-log 20))'
+
 # `advance` matches its count with a GLOB (`[0-9]*`), not an anchored regex, so
 # the sweep that found the other arms could not see it - the #242 shape. Its
 # payload is the expensive one: `advance <agenda> 010` spends 8 clicks.
