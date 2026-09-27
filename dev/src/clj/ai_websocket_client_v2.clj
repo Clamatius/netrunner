@@ -45,11 +45,44 @@
 ;; ============================================================================
 ;; Action Synchronization
 ;; ============================================================================
-;; Prevents race conditions when multiple commands are sent rapidly.
-;; Only one :game/action can be in flight at a time.
-;; The lock is held while waiting for state update confirmation (cursor advance).
+;; Only one :game/action is in flight at a time, and send-message! does not
+;; return until the board it leaves behind shows what that action did.
+;;
+;; The acknowledgement is the engine's own action id: game.main/handle-action
+;; bumps [side :aid] whenever it processes one of our commands, in the SAME diff
+;; that carries the command's effects. When our side's :aid has risen, the wire
+;; already shows what our action did. The web UI's lock waits on exactly this
+;; (nr.gameboard.state/check-lock?). The cursor is not an ack: any diff moves it,
+;; the opponent's included (#245).
+;;
+;; No ack within ack-wait-ms means the board may not show our action, and a loop
+;; that re-reads it would send the action again (#245: a second continue closed
+;; the Corp's window, the next two passed an encounter unbroken). So we resync.
+;; The server answers :game/resync on the same single-thread game pool that runs
+;; actions (web.lobby/game-thread), in arrival order, so the full state it sends
+;; already includes our action if the engine got it at all, and it arrives on the
+;; socket after that action's diff. Either way the board is then authoritative,
+;; and the :aid in it says whether our action landed. If the resync does not
+;; arrive either, the board is cleared, so nothing decides on a stale one.
+;;
+;; An earlier version refused the next send while an ack was pending instead.
+;; Every caller then had to handle a refusal: a refused rez was latched as
+;; attempted and the ICE passed unrezzed, the run loop called refused ticks
+;; :stuck, and waiting out a late ack released a send decided on the stale
+;; board (review rounds 1-2).
 
 (def ^:private action-lock (Object.))
+
+(def ack-wait-ms
+  "How long a :game/action send waits for its own ack before resyncing."
+  1500)
+
+(def resync-wait-ms
+  "How long it then waits for the resync before clearing the board."
+  5000)
+
+;; Bumped by every :game/resync that lands, so a send can wait for its own.
+(defonce ^:private resyncs-received (atom 0))
 
 ;; ============================================================================
 ;; Configuration
@@ -210,6 +243,7 @@
                   data)]
       (println "🔄 Game resync")
       (state/set-full-state! state)
+      (swap! resyncs-received inc)
       ;; Bump cursor for wait synchronization
       (state/bump-cursor!)
       ;; #114: the arm lives in the client atom, so it survives a reconnect. A
@@ -460,24 +494,80 @@
         (println "❌ Not connected (after ensure-connected!)")
         false))))
 
+(defn- own-aid
+  "Our side's action id as the wire shows it, or nil if there is no board."
+  []
+  (when-let [side (state/my-side-kw)]
+    (get-in @state/client-state [:game-state side :aid])))
+
+(defn- acked?
+  "Has the wire shown an ack for the action sent when our :aid read `before`?"
+  [before]
+  (let [now (own-aid)]
+    (boolean (and (number? before) (number? now) (> now before)))))
+
+(defn- await-until
+  "Poll `pred` until it holds or `ms` pass. Returns whether it held."
+  [pred ms]
+  (let [deadline (+ (System/currentTimeMillis) ms)]
+    (loop []
+      (cond
+        (pred) true
+        (>= (System/currentTimeMillis) deadline) false
+        :else (do (Thread/sleep 25) (recur))))))
+
+(defn- resync-after-silence!
+  "No ack came for the action sent at :aid `before`. Replace the board with the
+   engine's own (see the section comment above action-lock) and say whether the
+   action is in it."
+  [before command]
+  (let [gameid (:gameid @state/client-state)
+        seen @resyncs-received]
+    (println (format "↻ No ack for '%s' within %dms; resyncing so the next decision reads the engine's board"
+                     command ack-wait-ms))
+    ;; Wait for the resync even if our ack lands first. Returning on the ack
+    ;; left this reply in flight, and the NEXT send counted it as its own: a
+    ;; board from before that send, so the loop sent it again (review round 4,
+    ;; reproduced; round 3 had added the early return). Replies are counted,
+    ;; not matched, so a reply to a resync requested by someone else before
+    ;; this action can still stand in for ours: residual, needs lag past
+    ;; ack-wait-ms while such a request is in flight.
+    (if (and gameid
+             (send-message-impl! :game/resync {:gameid gameid})
+             (await-until #(> @resyncs-received seen) resync-wait-ms))
+      (if (acked? before) :confirmed :unconfirmed)
+      (do
+        (println "   ⚠️  No resync either. Clearing the board rather than act on a stale one; run `status` to fetch it.")
+        (state/clear-game-state!)
+        :unconfirmed))))
+
 (defn send-message!
   "Send a message to server.
    Auto-reconnects if disconnected or send fails.
-   For :game/action messages, uses locking to prevent race conditions."
+
+   A :game/action is sent under action-lock and does not return until the board
+   shows it (see the section comment above action-lock). It returns :confirmed
+   when our :aid shows the engine processed it, :unconfirmed when it did not (or
+   there was no board to tell), and false when the socket would not take it.
+   Both keywords are truthy, so callers that ask only whether it went out are
+   unchanged. Other messages return the socket's answer."
   [event-type data]
   (if (= event-type :game/action)
-    ;; Game actions need synchronization
     (locking action-lock
-      (let [cursor-before (state/get-cursor)
-            result (send-message-impl! event-type data)]
-        (when result
-          ;; Wait briefly for cursor to advance (state update received)
-          ;; This prevents the next action from starting before we get confirmation
-          (let [deadline (+ (System/currentTimeMillis) 1500)]
-            (while (and (= (state/get-cursor) cursor-before)
-                        (< (System/currentTimeMillis) deadline))
-              (Thread/sleep 50))))
-        result))
+      (let [before (own-aid)
+            cursor-before (state/get-cursor)]
+        (cond
+          (not (send-message-impl! event-type data)) false
+
+          ;; No board to read :aid from (a resync already in flight): the
+          ;; pre-#245 wait, which returns on the first diff.
+          (not (number? before))
+          (do (await-until #(not= (state/get-cursor) cursor-before) ack-wait-ms)
+              :unconfirmed)
+
+          (await-until #(acked? before) ack-wait-ms) :confirmed
+
+          :else (resync-after-silence! before (:command data)))))
     ;; Non-action messages don't need synchronization
     (send-message-impl! event-type data)))
 

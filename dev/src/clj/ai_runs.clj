@@ -64,10 +64,10 @@
         (reset! last-chat-debug msg)
         (let [gameid (:gameid @state/client-state)]
           (when gameid
-            (ws/send-message! :game/action
-                             {:gameid gameid
-                              :command "say"
-                              :args {:user "AI-debug" :msg full-msg}})))))))
+            ;; :game/say, not a :game/action "say": the engine has no such
+            ;; command, so that was dropped, and it would never be acknowledged
+            ;; either, which blocks the next real action (#245).
+            (ws/send-message! :game/say {:gameid gameid :msg full-msg})))))))
 
 (defn reset-strategy!
   "Clear run strategy (call when run ends)"
