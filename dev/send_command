@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # send_command - Simplified AI player control interface
 # Usage: ./send_command [client] <action> [args...]
 #   Single-client: ./send_command status
