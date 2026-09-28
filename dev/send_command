@@ -1689,10 +1689,14 @@ case "$COMMAND" in
         # $KEY is interpolated BARE, as a Clojure keyword - `:$KEY` - so it is
         # read as CODE, not as data, and nothing validated it (#255, census B).
         # `change 'credit) (ai-actions/end-turn!) (comment' 5` emitted TWO top
-        # level forms, the second of which ended the turn. An engine state key is
-        # a lowercase kebab keyword name (credit, click, agenda-point), so the
-        # shape is the gate; an unknown-but-well-shaped key is the engine's to
-        # refuse, not ours to guess.
+        # level forms, the second of which ended the turn.
+        #
+        # The shape is the gate, and it refuses nothing the engine accepts: the
+        # authority is game.core.change-vals/change, whose named keys are :memory
+        # :hand-size :tag :bad-publicity :agenda-point :link and whose else-branch
+        # takes any player property (:credit, :click) - every one of them a
+        # lowercase kebab name. An unknown-but-well-shaped key stays the engine's
+        # to refuse, not ours to guess.
         if [[ ! "$KEY" =~ ^[a-z][a-z0-9-]*$ ]]; then
             error "change takes a state key, which is a lowercase name like credit, click or agenda-point (got: $KEY)"
         fi

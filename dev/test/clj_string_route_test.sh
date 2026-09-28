@@ -192,6 +192,18 @@ echo "--- change: \$KEY is a BARE Clojure keyword, so it is gated by SHAPE ---"
 run corp change 'credit) (ai-actions/end-turn!) (comment' 5
 check 'change-key-injection-refused-exit' "$code" '1'
 check 'change-key-injection-sends-nothing' "$actions" ''
+# A refusal that does not say WHAT was wrong is a wedge: a loop gates on the
+# boolean and the seat never learns which argument to fix.
+case "$(cat "$TMP/output")" in
+    *'state key'*'credit) (ai-actions/end-turn!) (comment'*) echo "ok   [change-refusal-names-the-key$SHELL_LABEL]" ;;
+    *) printf 'NOT OK [change-refusal-names-the-key%s]\n got: %q\n' "$SHELL_LABEL" "$(cat "$TMP/output")"; fail=$((fail + 1)) ;;
+esac
+# Every key the engine dispatches on must still be accepted (authority:
+# game.core.change-vals/change).
+for k in credit click memory hand-size tag bad-publicity agenda-point link; do
+    run corp change "$k" 1
+    check "change-engine-key-$k" "$actions" "corp 7890|(ai-actions/change! :$k 1)"
+done
 run corp change credit 5
 check 'change-plain-key-bytes' "$actions" 'corp 7890|(ai-actions/change! :credit 5)'
 run corp change agenda-point -2

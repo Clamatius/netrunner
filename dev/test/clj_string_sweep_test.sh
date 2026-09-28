@@ -21,8 +21,11 @@
 # So this is not "are the known sites fixed" (clj_string_route_test.sh pins that,
 # per arm, by driving the real dispatcher). It is two censuses:
 #
-#   A. no `$` reaches the inside of a Clojure string literal unescaped, anywhere
-#      in the file - not only on a line that says `execute`.
+#   A. no `$` reaches the inside of a SHELL-ESCAPED Clojure string literal
+#      (`\"…\"`) unescaped, anywhere in the file - not only on a line that says
+#      `execute`. The qualifier is load-bearing: an expression assembled by
+#      printf or a heredoc has no `\"` for this to pair, and census B is what
+#      catches those (there are mutations for all four shapes I got past A).
 #   B. every BARE `$NAME` interpolated into an `execute` expression is one of a
 #      reviewed list. A bare interpolation is not a string at all: a new arm
 #      writing `execute "(f $ARG)"` puts seat text where Clojure reads CODE, and
@@ -169,7 +172,7 @@ census_b() {
         END {
             k = 0
             for (nm in seen) k++
-            if (k != expect_bare) printf "0: %d whitelisted bare name(s) actually used, expected %d - the list is stale or a new one slipped in\n", k, expect_bare
+            if (k != expect_bare) printf "0: %d whitelisted bare name(s) actually used, expected %d - a new bare name slipped in, or an arm that was the LAST user of one was deleted; either way bump the count deliberately\n", k, expect_bare
         }
     ' allowed_re="^($BARE_ALLOWED)$" expect_bare="${2:-$EXPECTED_BARE}" "$1"
 }
@@ -285,6 +288,24 @@ mutant 'mutation-bare-arg-in-multiline-execute' census_b \
 # The whitelist count is the contract in both directions: dropping a name that is
 # still used, or adding one that is not, is a review decision.
 mutant 'mutation-whitelisted-name-renamed' census_b 's|{\$OVERWRITE}|{$OVERWRITE_FLAG}|'
+
+echo "--- the two censuses are complementary, not redundant ---"
+# I tried to get an arm past census A and succeeded four ways; each one is caught
+# by census B instead, which is the argument for having both. Census A only ever
+# sees a Clojure string that was escaped FOR THE SHELL (\"), so an expression
+# assembled by printf or a heredoc has no \" for it to pair, and a keyword or
+# symbol interpolation is not a string at all.
+mutant 'mutation-printf-built-expression' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        E=\$(printf '(f \"%s\")' \"\$VAL\")\\n        execute \"\$E\"\\n        ;;\\n\\n    keep-hand)|"
+mutant 'mutation-bare-keyword-interpolation' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f :\$VAL)\"\\n        ;;\\n\\n    keep-hand)|"
+mutant 'mutation-bare-symbol-interpolation' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f (quote \$VAL))\"\\n        ;;\\n\\n    keep-hand)|"
+# ...and the converse: an interior interpolation inside a properly shell-escaped
+# string is census A's, and census B cannot see it (it strips string literals on
+# purpose, because their contents are A's job).
+clean_mutant 'clean-census-b-leaves-string-interiors-to-census-a' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \\\\\"pre \$VAL\\\\\")\"\\n        ;;\\n\\n    keep-hand)|"
 
 echo "--- neither census cries wolf (negative mutation tests) ---"
 clean_mutant 'clean-a-wrapped-site-is-not-flagged' census_a \
