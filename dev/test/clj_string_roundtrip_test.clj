@@ -45,7 +45,12 @@
        "case \"$expr\" in\n"
        "    *sync-verdict!*) printf '\"SYNC-VERDICT in-sync\"\\n' ;;\n"
        "    *ensure-connected!*) printf '\"ok\"\\n' ;;\n"
-       "    *) printf 'nil\\n' ;;\n"
+       ;; A POSITIONAL eval is an eval. The first version of this stub answered one
+       ;; with a bare `nil` and logged NOTHING, while the shell stub logs it and
+       ;; fails closed -- so the precise half of the enumeration was blind to any arm
+       ;; that calls "$AI_EVAL" positionally with seat text, and that shape is
+       ;; already in this file. A guest seat found it by diffing the two stubs.
+       "    *) printf '%s\\036' \"$expr\" >> \"$ACTION_LOG\"; printf 'nil\\n' ;;\n"
        "esac\n"))
 
 (defn- with-stub
@@ -200,8 +205,18 @@
 ;; captured executes and name reuse are all invisible to it, in the good sense —
 ;; it never looks at how the expression was built.
 ;;
-;; The command list is read from send_command's own `case` arms, so a NEW arm is
-;; covered the moment it is added; there is no table to forget to extend.
+;; The command list is read from send_command's own `case` arms, so a new arm is
+;; DISCOVERED the moment it is added, with no table to forget to extend.
+;;
+;; Discovery is not EXERCISE, and the first version of this comment conflated them
+;; -- an overclaim in the file that replaced an overclaiming census header, which is
+;; the same failure one mechanism over. The payload reaches an `execute` for 31 of
+;; the 99 commands. The rest either take no seat text (status, board, credits, ping)
+;; or are refused by a gate first (the #251 numeric gate; #255's own shape gate on
+;; `change`'s key), and for those a clean result witnesses the REFUSAL, not the
+;; escaping. clj_string_route_test.sh PINS that reach count, so a command that stops
+;; carrying a payload into an expression is a review decision rather than a silent
+;; loss of coverage.
 ;; ---------------------------------------------------------------------------
 
 (def ^:private marker "NRPAYLOAD")

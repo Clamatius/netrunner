@@ -90,22 +90,29 @@ EXPECTED_EXEMPTIONS=0
 # hole rather than a violation.
 census_a() {
     awk '
-        # A shell-escaped quote (\") is a Clojure string DELIMITER. A run of THREE
-        # backslashes before the quote is a Clojure-LEVEL escaped quote and is NOT
-        # a delimiter. A bare " belongs to the shell. The first version of this
-        # paired on the two-character text \" with a regex, which took the TAIL of
-        # a Clojure-level escape for a delimiter, mis-paired everything after it,
-        # and left an interpolation sitting in a gap it believed was outside a
-        # string. A guest seat reproduced that. So this counts the backslash RUN
-        # instead of matching a fixed string: a delimiter is a quote preceded by
-        # exactly ONE backslash.
+        # Inside a shell double-quoted string, each PAIR of backslashes becomes one
+        # literal backslash and a trailing lone backslash escapes the quote. So a
+        # quote is a Clojure string DELIMITER when the backslash run before it is
+        # 1 mod 4:
+        #   \"      run 1  -> "        a DELIMITER
+        #   \\"     run 2  -> \ + shell quote
+        #   \\\"    run 3  -> \"       a Clojure-level ESCAPED quote, not a delimiter
+        #   \\\\"   run 4  -> \\ + shell quote
+        #   \\\\\"  run 5  -> \\"      an escaped backslash then a DELIMITER
+        #
+        # Two wrong versions preceded this. The first paired on the two-character
+        # text \" with a regex, so it read the TAIL of a run-3 escape as a
+        # delimiter, mis-paired the rest of the line, and left an interpolation in a
+        # gap it believed was outside a string. The second - written to fix exactly
+        # that - said "exactly ONE backslash", which is wrong at run 5, and a guest
+        # seat ran the case. Hence the arithmetic, spelled out above.
         function clj_string_interps(line,    i, c, run, instr, n, seg) {
             n = 0; run = 0; instr = 0; seg = ""
             for (i = 1; i <= length(line); i++) {
                 c = substr(line, i, 1)
                 if (c == "\\") { run++; if (instr) seg = seg c; continue }
                 if (c == "\"") {
-                    if (run == 1) {
+                    if (run % 4 == 1) {
                         if (instr) { if (index(seg, "$")) n++; instr = 0; seg = "" }
                         else { instr = 1; seg = "" }
                     } else if (instr) seg = seg c
@@ -394,6 +401,25 @@ mutant 'mutation-captured-execute' census_b \
     "s|^    keep-hand)|$NEW_ARM\\n        R=\"\$(execute \"(f \$ARG)\")\"\\n        echo \"\$R\"\\n        ;;\\n\\n    keep-hand)|"
 # Census A's one: a Clojure-LEVEL escaped quote inside the string, which used to
 # mis-pair the walk and hide the interpolation after it.
+# A run of FIVE backslashes: an escaped backslash then a DELIMITER. The scanner's
+# first version said "exactly ONE backslash" and read this as not-a-delimiter, so
+# the interpolation after it sat in a gap believed to be outside a string. A guest
+# seat ran the case; this pins the arithmetic. The fixture is a FILE because the
+# quoting is the subject, and a sed expression inside a shell string is how a
+# fixture silently stops matching.
+R5="$TMP/run5"
+rm -f "$R5"
+if ! python3 "$SCRIPT_DIR/fixtures/run_five_backslashes.py" "$SEND_CMD" "$R5"; then
+    echo "NOT OK [mutation-run-of-five-backslashes] fixture is stale"
+    fail=$((fail + 1))
+elif [[ -n "$(census_a "$R5" 0)" ]]; then
+    echo "ok   [mutation-run-of-five-backslashes]"
+else
+    echo "NOT OK [mutation-run-of-five-backslashes] census A reported CLEAN over a string"
+    echo "       that really does open after five backslashes"
+    fail=$((fail + 1))
+fi
+
 mutant 'mutation-clojure-escaped-quote-interior' census_a \
     "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \\\\\"pre\\\\\\\\\\\\\"\$CHOICE\\\\\\\\\\\\\"post\\\\\")\"\\n        ;;\\n\\n    keep-hand)|"
 # The two neither census can ever see, which is why the enumeration exists: a

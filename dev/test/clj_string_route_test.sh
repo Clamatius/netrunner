@@ -253,54 +253,201 @@ MARKER='NRPAYLOAD'
 ENUM_PAYLOAD="$MARKER\" (ai-actions/end-turn!) \""
 
 dispatcher_commands() {   # FILE
-    # The MAIN case (the second one; the first is a two-line help shortcut), from
-    # `case "$COMMAND" in` to its `esac`. An extraction that matched nothing would
-    # report a clean sweep over no commands, so the caller checks the count.
+    # The MAIN case (the second `case "$COMMAND" in`; the first is a two-line help
+    # shortcut), from its `in` to its `esac`.
+    #
+    # Labels are found STRUCTURALLY, by position in the case, not by indentation.
+    # The first version matched `^    label)` - exactly four spaces - so an
+    # eight-space-indented arm was silently omitted and its leak left this guard
+    # green with the count check still passing (a guest seat reproduced that).
+    # Simply widening the indentation is worse: it starts matching Clojure source
+    # inside a multiline `execute`, and `gameid)` from a lobby form became a
+    # "command". So: an arm label is the first label-shaped line after the case's
+    # `in` or after an arm terminator `;;`. Clojure text never follows a `;;`.
     awk '
-        /^case "\$COMMAND" in$/ { n++; if (n == 2) { inmain = 1; next } }
-        inmain && /^esac$/ { inmain = 0 }
-        inmain && /^    [a-z][a-zA-Z0-9|?*_-]*\)$/ { gsub(/[ )]/, ""); print }
-    ' "$1" | tr '|' '\n' | grep -vE '^(help|eval)$' | sort -u
+        /^case "\$COMMAND" in$/ { n++; if (n == 2) { inmain = 1; depth = 1; expecting = 1; next } }
+        !inmain { next }
+        # Nested cases parse FLAGS (`--since)`, `--all)`) and values (`0)`, `off)`).
+        # Their arms end in `;;` too, so depth is tracked: only a depth-1 `;;` is a
+        # command-arm terminator. Without this, `0`, `false`, `off` and
+        # `out-of-clicks` were reported as commands.
+        /^[[:space:]]*case[[:space:]].*[[:space:]]in[[:space:]]*$/ { depth++; expecting = 0; next }
+        /^[[:space:]]*esac[[:space:]]*$/ {
+            depth--
+            if (depth == 0) { inmain = 0 }
+            else { expecting = 0 }
+            next
+        }
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*;;[[:space:]]*$/ { if (depth == 1) expecting = 1; next }
+        depth == 1 && expecting && /^[[:space:]]*[a-z*][a-zA-Z0-9|?*_-]*\)([[:space:]]|$)/ {
+            label = $0
+            sub(/^[[:space:]]*/, "", label); sub(/\).*$/, "", label)
+            print label
+            # An arm written on one line (`help|--help|-h)  ;;`) both opens and
+            # terminates here, so stay expecting; otherwise wait for its `;;`.
+            expecting = ($0 ~ /;;[[:space:]]*$/)
+            next
+        }
+        { if (depth == 1) expecting = 0 }
+    ' "$1" | tr '|' '\n' | grep -vE '^(help|eval|\*)$' | sort -u
 }
 
 # `eval` is excluded by NAME above: sending seat text as source is its entire
 # purpose. It is witnessed in the lein suite (eval-really-does-send-source), so
 # the exception cannot go stale into a hole.
 
+# Argument shapes to try, in order. The payload visits EVERY position, and the
+# other positions are filled with values the arms' own gates ACCEPT.
+#
+# Why this matters more than anything else here: the first version drove every
+# command with `PAYLOAD PAYLOAD`, so `use-ability`, `use-runner-ability`,
+# `install-index`, `advance`, `choose-card`, `fix-credits`, `find-card` and
+# `continue --single` - one of #255's own six sites - all refused on argument ONE
+# and never built their expression, yet counted as covered. A guest seat rewrote
+# `use-ability`'s site as a single-quoted concatenation, showed that
+# `use-ability 'x" (ai-actions/end-turn!) "' 0` ends the turn, and showed every
+# test in this family exiting 0 over it. Covering an arm means REACHING its
+# interpolation, not calling its name.
+#
+# `0` is the filler: every numeric gate in this file accepts it, and it is a legal
+# index, count, ability number and delta. `--single` and `--all` reach the two arms
+# whose interesting path is behind a flag.
+enum_arg_shapes() {   # PAYLOAD -> one TAB-separated argument vector per line
+    printf '%s\n' \
+        "$1" \
+        "$1	$1" \
+        "0	$1" \
+        "$1	0" \
+        "0	0	$1" \
+        "$1	0	0" \
+        "--single	$1" \
+        "0	--all"
+}
+
+# Run one command with one argument vector; print what the stub received.
+enum_run() {   # enum_run SEND_CMD LOGFILE COMMAND TAB_SEPARATED_ARGS
+    local sc="$1" log="$2" c="$3" shape="$4" oldifs="$IFS"
+    : > "$log"
+    IFS=$'\t'
+    # shellcheck disable=SC2206
+    set -- $shape
+    IFS="$oldifs"
+    ACTION_LOG="$log" NR_NO_AUTO_PROMPT=1 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
+        timeout 25 "$sc" corp "$c" "$@" >/dev/null 2>&1
+    return $?
+}
+
 enumerate() {   # enumerate SEND_CMD  -> prints one line per leaking command
-    local sc="$1" c out log
-    log="$TMP/enum.log"
+    local sc="$1" c shape log="$TMP/enum.log" rc
     for c in $(dispatcher_commands "$sc"); do
-        : > "$log"
-        ACTION_LOG="$log" NR_NO_AUTO_PROMPT=1 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
-            timeout 25 "$sc" corp "$c" "$ENUM_PAYLOAD" "$ENUM_PAYLOAD" >/dev/null 2>&1
-        [[ $? -eq 124 ]] && { printf '%s: TIMED OUT\n' "$c"; continue; }
-        if grep -q "$MARKER\"" "$log" 2>/dev/null; then
-            printf '%s: the argument reached the eval with its quote UNESCAPED\n' "$c"
-        fi
+        while IFS= read -r shape; do
+            enum_run "$sc" "$log" "$c" "$shape"; rc=$?
+            if [[ $rc -eq 124 ]]; then
+                printf '%s: TIMED OUT (args: %s)\n' "$c" "$(printf '%s' "$shape" | tr '\t' ' ')"
+                continue
+            fi
+            if grep -q "$MARKER\"" "$log" 2>/dev/null; then
+                printf '%s: the argument reached the eval with its quote UNESCAPED (args: %s)\n' \
+                    "$c" "$(printf '%s' "$shape" | tr '\t' ' ')"
+            fi
+        done < <(enum_arg_shapes "$ENUM_PAYLOAD")
     done
 }
 
 echo
-echo "--- every command in the dispatcher keeps a quoted argument as data ---"
-ENUM_COUNT="$(dispatcher_commands "$SEND_CMD" | wc -l | tr -d ' ')"
-if [[ "$ENUM_COUNT" -lt 80 ]]; then
-    echo "NOT OK [enumeration-found-the-commands] only $ENUM_COUNT commands extracted —"
-    echo "       a broken extraction reports a CLEAN sweep over nothing"
-    fail=$((fail + 1))
-else
-    echo "ok   [enumeration-found-the-commands] ($ENUM_COUNT commands)"
-fi
+# The enumeration runs once, not per interpreter, so clear the label the two
+# per-shell passes above left set - it would otherwise claim these ran @/bin/bash.
 SHELL_LABEL=""
+echo "--- every command in the dispatcher keeps a quoted argument as data ---"
+# PINNED, not a floor. A floor catches a total break in the extraction, but a
+# PARTIAL one - a third `case "$COMMAND" in` added above the main one, an arm
+# spelled in a shape the awk pattern does not match - would silently narrow the
+# enumeration while staying comfortably over any floor, and report a clean sweep
+# over the commands it still sees. Adding or removing a command is a review
+# decision here, which is one line in the same commit.
+EXPECTED_COMMANDS=99
+ENUM_COUNT="$(dispatcher_commands "$SEND_CMD" | wc -l | tr -d ' ')"
+check 'enumeration-command-count-is-pinned' "$ENUM_COUNT" "$EXPECTED_COMMANDS"
+if [[ "$ENUM_COUNT" != "$EXPECTED_COMMANDS" ]]; then
+    echo "   Extracted $ENUM_COUNT command labels from send_command's main case."
+    echo "   Added or removed an arm? Bump EXPECTED_COMMANDS in the same commit."
+    echo "   Did NOT add or remove one? The extraction is broken, and a broken"
+    echo "   extraction reports a clean sweep over whatever it can still see."
+fi
 LEAKS="$(enumerate "$SEND_CMD")"
 check 'enumeration-no-command-leaks' "$LEAKS" ''
+
+echo "--- how far the enumeration actually REACHES (coverage, pinned) ---"
+# The enumeration's claim is end-to-end and honest: driving any command with a
+# payload produces nothing unsafe. But for most commands the payload never gets
+# as far as an `execute` at all - they take no seat text (status, board, credits,
+# ping), or a gate refuses it first (the #251 numeric gate; #255's own shape gate
+# on `change`'s key). For those, a clean result proves the REFUSAL, not the
+# escaping, and saying otherwise would be the same overclaiming the censuses were
+# guilty of.
+#
+# So the reach is measured and PINNED. A command that used to carry a payload into
+# an expression and now does not means something changed upstream of the
+# interpolation; a new one that does is newly covered. Either way a review
+# decision, not a silent drift. The 72 that do not reach are covered by the source
+# censuses and by the per-arm assertions above.
+EXPECTED_REACH=31
+# 27 before the payload visited every argument POSITION; the four it gained are
+# use-ability, use-runner-ability, install-index and advance, whose interpolations
+# sit behind a numeric argument. The 68 that still do not reach are either
+# text-free (status, board, credits, ping) or refused by a gate that IS their
+# coverage (the #251 numeric gate on draw/fix-credits/play-index/choose-card, and
+# #255's own shape gate on change's key).
+reach_count() {   # reach_count SEND_CMD -> how many commands carried the payload in
+    local sc="$1" c shape n=0 hit log="$TMP/reach.log"
+    for c in $(dispatcher_commands "$sc"); do
+        hit=0
+        while IFS= read -r shape; do
+            enum_run "$sc" "$log" "$c" "$shape"
+            grep -q "$MARKER" "$log" 2>/dev/null && { hit=1; break; }
+        done < <(enum_arg_shapes "$ENUM_PAYLOAD")
+        n=$((n + hit))
+    done
+    printf '%s' "$n"
+}
+REACH="$(reach_count "$SEND_CMD")"
+check 'enumeration-reach-is-pinned' "$REACH" "$EXPECTED_REACH"
+if [[ "$REACH" != "$EXPECTED_REACH" ]]; then
+    echo "   $REACH of $ENUM_COUNT commands carried the payload into an expression"
+    echo "   (was $EXPECTED_REACH). If an arm gained a gate, that is progress - bump the"
+    echo "   number. If one LOST its argument handling, that is a bug in the arm."
+fi
 
 echo "--- and it sees the five shapes the source censuses cannot (mutation tests) ---"
 # Each of these was found by a code-review seat against clj_string_sweep_test.sh,
 # reproduced, and is clean on BOTH censuses there. The enumeration catches all
 # five, which is the whole argument for having it.
+# Where a mutant copy of send_command must live. AI_EVAL_DEFAULT is
+# "$SCRIPT_DIR/ai-eval.sh" and is deliberately not overridable (send_command:259
+# says why: the AI_EVAL seam is the one meant for a fake REPL). So a mutant in
+# $TMPDIR cannot pass require_valid_budget, every ensure_connection arm dies before
+# it sends, and a NEGATIVE assertion over such a mutant passes because nothing ran.
+# Mine did. Mutants go beside the real script, with a name nothing else matches,
+# and the EXIT trap removes them.
+MUTANT_DIR="$(dirname "$SEND_CMD")"
+MUTANT_PREFIX="$MUTANT_DIR/.clj-route-mutant-$$"
+cleanup_mutants() { rm -f "$MUTANT_PREFIX"*; }
+trap 'cleanup_mutants; rm -rf "$TMP"' EXIT
+
+# A mutant that cannot even reach its own dispatcher proves nothing, so every
+# mutant is smoke-tested first: a command known to send must still send.
+mutant_runs() {   # mutant_runs FILE
+    local f="$1" log="$TMP/smoke.log"
+    : > "$log"
+    ACTION_LOG="$log" NR_NO_AUTO_PROMPT=1 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
+        timeout 25 "$f" corp status >/dev/null 2>&1
+    [[ -s "$log" ]]
+}
+
 enum_mutant() {   # enum_mutant NAME ARM_BODY
-    local name="$1" arm="$2" f="$TMP/enum_mutant"
+    local name="$1" arm="$2" f="${MUTANT_PREFIX}-enum"
     rm -f "$f"
     if ! python3 - "$SEND_CMD" "$f" "$arm" <<'PYENUM'
 import sys
@@ -318,6 +465,11 @@ PYENUM
     chmod +x "$f"
     if cmp -s "$SEND_CMD" "$f"; then
         echo "NOT OK [$name] MUTATION DID NOT APPLY - assertion proves nothing"
+        fail=$((fail + 1)); return
+    fi
+    if ! mutant_runs "$f"; then
+        echo "NOT OK [$name] the mutant cannot send anything at all - the assertion"
+        echo "       below would pass for the wrong reason"
         fail=$((fail + 1)); return
     fi
     if [[ -n "$(enumerate "$f")" ]]; then
@@ -349,6 +501,33 @@ enum_mutant 'enum-mutation-single-quote-concatenation' \
         execute '"'"'(f "'"'"'"$1"'"'"'")'"'"'
         ;;
 '
+# The reproduction a guest seat used to break the FIRST version of this
+# enumeration, kept verbatim: rewrite use-ability's site as a single-quoted
+# concatenation. `use-ability '<payload>' 0` then emits
+# `(ai-actions/use-ability! "x" (ai-actions/end-turn!) "" 0)`, which ends the turn
+# - and every test in this family exited 0 over it, because the enumeration was
+# driving `PAYLOAD PAYLOAD` and num_arg refused the index first. This is the
+# assertion that would have caught that.
+USE_ABILITY_MUTANT="${MUTANT_PREFIX}-use-ability"
+rm -f "$USE_ABILITY_MUTANT"
+if ! python3 "$SCRIPT_DIR/fixtures/single_quote_use_ability.py" "$SEND_CMD" "$USE_ABILITY_MUTANT"; then
+    echo "NOT OK [enum-mutation-single-quoted-use-ability] fixture is stale"
+    fail=$((fail + 1))
+else
+    chmod +x "$USE_ABILITY_MUTANT"
+    if ! mutant_runs "$USE_ABILITY_MUTANT"; then
+        echo "NOT OK [enum-mutation-single-quoted-use-ability] the mutant cannot send"
+        fail=$((fail + 1))
+    elif [[ -n "$(enumerate "$USE_ABILITY_MUTANT")" ]]; then
+        echo "ok   [enum-mutation-single-quoted-use-ability]"
+    else
+        echo "NOT OK [enum-mutation-single-quoted-use-ability] the enumeration reported CLEAN"
+        echo "       over an arm that really does end the turn - the argument POSITIONS are"
+        echo "       not reaching it"
+        fail=$((fail + 1))
+    fi
+fi
+
 enum_mutant 'enum-mutation-reuse-of-a-whitelisted-name' \
     '    nr-probe)
         N="$1"
@@ -356,7 +535,7 @@ enum_mutant 'enum-mutation-reuse-of-a-whitelisted-name' \
         ;;
 '
 # ...and a correctly written new arm must NOT be reported.
-CLEAN_ARM="$TMP/enum_clean"
+CLEAN_ARM="${MUTANT_PREFIX}-clean"
 rm -f "$CLEAN_ARM"
 python3 - "$SEND_CMD" "$CLEAN_ARM" '    nr-probe)
         execute "(f \"$(clj_str "$1")\")"
@@ -368,8 +547,14 @@ s = open(src).read()
 open(dst, 'w').write(s.replace("    keep-hand)", arm + "\n    keep-hand)", 1))
 PYENUM2
 chmod +x "$CLEAN_ARM"
-CLEAN_LEAKS="$(enumerate "$CLEAN_ARM")"
-check 'enum-clean-arm-is-not-reported' "$CLEAN_LEAKS" ''
+if mutant_runs "$CLEAN_ARM"; then
+    CLEAN_LEAKS="$(enumerate "$CLEAN_ARM")"
+    check 'enum-clean-arm-is-not-reported' "$CLEAN_LEAKS" ''
+else
+    echo "NOT OK [enum-clean-arm-is-not-reported] the clean mutant cannot send anything,"
+    echo "       so 'no leaks' would mean nothing"
+    fail=$((fail + 1))
+fi
 
 if ((fail)); then
     printf 'FAIL: %d clj-string route assertion(s)\n' "$fail"
