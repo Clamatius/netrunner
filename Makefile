@@ -65,6 +65,7 @@ test:
 	  ai-wire-card-ref-test \
 	  check-ai-ns-order-test \
 	  check-ai-sweep-test \
+	  clj-string-roundtrip-test \
 	  continue-run-rez-test \
 	  game.ai-ability-legality-test \
 	  game.ai-approach-unrezzed-wire-test \

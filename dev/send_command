@@ -1686,6 +1686,16 @@ case "$COMMAND" in
         DELTA="${2:-}"
         [[ -z "$KEY" ]] && error "Usage: send_command change <key> <delta>"
         [[ -z "$DELTA" ]] && error "Usage: send_command change <key> <delta>"
+        # $KEY is interpolated BARE, as a Clojure keyword - `:$KEY` - so it is
+        # read as CODE, not as data, and nothing validated it (#255, census B).
+        # `change 'credit) (ai-actions/end-turn!) (comment' 5` emitted TWO top
+        # level forms, the second of which ended the turn. An engine state key is
+        # a lowercase kebab keyword name (credit, click, agenda-point), so the
+        # shape is the gate; an unknown-but-well-shaped key is the engine's to
+        # refuse, not ours to guess.
+        if [[ ! "$KEY" =~ ^[a-z][a-z0-9-]*$ ]]; then
+            error "change takes a state key, which is a lowercase name like credit, click or agenda-point (got: $KEY)"
+        fi
         # `^-?[0-9]+$` - the optional SIGN is why a sweep anchored on
         # `^[0-9]+$` could not see this arm (both review seats found it there).
         num_arg_signed DELTA "Delta must be a number"
