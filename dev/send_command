@@ -829,6 +829,26 @@ clj_str() {
     printf '%s' "${s//\"/\\\"}"
 }
 
+# ONE spelling, INLINE at the interpolation site. Two design rounds tried a
+# printf -v primitive instead, so that a value's trailing newline would survive
+# `$( )`; it produced four review findings (the census flagged the helper's own
+# body, and a misuse - `$(clj_str_v X "$V")` - prints NOTHING, emitting an EMPTY
+# argument that the census blessed). The mechanism was deleted rather than
+# patched. So: `$(clj_str "$X")` strips a TRAILING NEWLINE from the value, at
+# every site, deliberately. send_command_clj_string_test pins that. No card
+# title, server name, flag, deck id or replay filename has one, and an argument
+# that did would be a shell accident rather than a game object.
+#
+# A LIST of Clojure strings - varargs flags, a vector of card names. Five arms
+# hand-rolled the identical loop and every one of them interpolated `\"$1\"`
+# raw (#255). Space-SEPARATED, no leading space: `discard` emits
+# `["A" "B" ]` today and a space-prefixed helper would have changed those bytes.
+# Each call site adds its own separator via ${VAR:+ $VAR}.
+clj_str_args() {   # ARGS...
+    local a sep=""
+    for a in "$@"; do printf '%s"%s"' "$sep" "$(clj_str "$a")"; sep=" "; done
+}
+
 # Bash accepts padded decimal numbers, but the Clojure reader treats a leading
 # zero as OCTAL - `010` reads as 8 - and rejects `08`/`09` outright. Bash's own
 # arithmetic does the same to any `-gt` that switches on the value first, so
@@ -1451,7 +1471,7 @@ case "$COMMAND" in
         # takes the ABSOLUTE branch. So this arm's own documented `+5 (add 5)`
         # has never added 5 - it set credits to 5. Quote the signed form.
         case "$AMOUNT" in
-            [+-]*) AMOUNT="\"$AMOUNT\"" ;;
+            [+-]*) AMOUNT="\"$(clj_str "$AMOUNT")\"" ;;
         esac
         warn "CHEATING: This is ONLY for fixing broken game states!"
         execute "(ai-actions/fix-credits! $AMOUNT)"
@@ -1490,13 +1510,12 @@ case "$COMMAND" in
         case "$CLIENT_NAME" in
             runner) OPPONENT="corp" ;;
             corp)   OPPONENT="runner" ;;
-            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;
+            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card '$CARD_NAME'" ;;
         esac
         num_arg_min MAX_TURNS 1 "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
         # Real card titles carry quotes ("Pretty" Mary da Silva, Cerberus "Lady" H1),
         # and these names are interpolated into a Clojure string literal. Without
         # this the reader sees several forms and the search never runs (guest MAJOR).
-        CARD_NAME_CLJ=$(clj_str "$CARD_NAME")
         # find-card is an ORCHESTRATOR, and the only one: its OWN budget is the
         # ambient TIMEOUT, but it hands REPL_BLOCKING_TIMEOUT to a CHILD
         # send_command further down. The child does validate it — after this loop
@@ -1518,7 +1537,7 @@ case "$COMMAND" in
         # reaches this one as a diff. Prints "<active>/<end-turn>".
         find_card_boundary() {   # SIDE-THAT-SHOULD-HAVE-JUST-ENDED
             NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                "(loop [i 0] (let [gs (:game-state @ai-state/client-state) ap (some-> (:active-player gs) name clojure.string/lower-case) done (true? (:end-turn gs))] (if (or (and (= ap \"$1\") done) (>= i 40)) (println (str \"FIND-CARD-BOUNDARY \" ap \"/\" done)) (do (Thread/sleep 250) (recur (inc i))))))" \
+                "(loop [i 0] (let [gs (:game-state @ai-state/client-state) ap (some-> (:active-player gs) name clojure.string/lower-case) done (true? (:end-turn gs))] (if (or (and (= ap \"$(clj_str "$1")\") done) (>= i 40)) (println (str \"FIND-CARD-BOUNDARY \" ap \"/\" done)) (do (Thread/sleep 250) (recur (inc i))))))" \
                 | sed -n 's|^FIND-CARD-BOUNDARY ||p' | tail -n 1 || true
         }
         # What prompt, if any, is open on a side. Empty when there is none.
@@ -1557,7 +1576,7 @@ case "$COMMAND" in
             # Branch on draw-to-card!'s RETURNED :status, printed on a line of its
             # own, not on the wording of what it printed along the way.
             DRAW_OUT=$(TIMEOUT="$REPL_BLOCKING_TIMEOUT" NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                "(let [r (ai-actions/draw-to-card! \"$CARD_NAME_CLJ\")] (println (str \"FIND-CARD-STATUS \" (some-> (:status r) name))) nil)") \
+                "(let [r (ai-actions/draw-to-card! \"$(clj_str "$CARD_NAME")\")] (println (str \"FIND-CARD-STATUS \" (some-> (:status r) name))) nil)") \
                 || { printf '%s\n' "$DRAW_OUT"; error "draw-to-card did not complete on turn $turn; find-card stopped (nothing further was sent)."; }
             DRAW_STATUS=$(printf '%s\n' "$DRAW_OUT" | sed -n 's/^FIND-CARD-STATUS //p' | tail -n 1)
             printf '%s\n' "$DRAW_OUT" | grep -v '^FIND-CARD-STATUS ' || true
@@ -1714,11 +1733,7 @@ case "$COMMAND" in
                 CARD_NAMES=("$@")
                 info "Discarding cards by name: ${CARD_NAMES[*]}"
                 # Build Clojure vector of card name strings
-                NAMES_VEC="["
-                for name in "${CARD_NAMES[@]}"; do
-                    NAMES_VEC+="\"$name\" "
-                done
-                NAMES_VEC+="]"
+                NAMES_VEC="[$(clj_str_args "${CARD_NAMES[@]}") ]"
                 execute "(ai-actions/discard-by-names! $NAMES_VEC)"
             fi
         fi
@@ -1775,14 +1790,10 @@ case "$COMMAND" in
         ensure_connection
 
         # Build flag arguments for varargs call
-        FLAGS_ARGS=""
-        while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
-            shift
-        done
+        FLAGS_ARGS="$(clj_str_args "$@")"
 
         info "Running on $SERVER..."
-        execute "(ai-actions/run! \"$(clj_str "$SERVER")\"$FLAGS_ARGS)"
+        execute "(ai-actions/run! \"$(clj_str "$SERVER")\"${FLAGS_ARGS:+ $FLAGS_ARGS})"
         after_action
         ;;
 
@@ -1985,11 +1996,8 @@ case "$COMMAND" in
             # Select by card name
             CARD_NAMES=("$@")
             info "Multi-selecting cards by name: ${CARD_NAMES[*]}"
-            ARGS_STR=""
-            for name in "${CARD_NAMES[@]}"; do
-                ARGS_STR="$ARGS_STR \"$name\""
-            done
-            execute "(ai-actions/multi-choose!$ARGS_STR)"
+            ARGS_STR="$(clj_str_args "${CARD_NAMES[@]}")"
+            execute "(ai-actions/multi-choose!${ARGS_STR:+ $ARGS_STR})"
         fi
         after_action
         ;;
@@ -2002,12 +2010,8 @@ case "$COMMAND" in
         if [[ "${1:-}" == "--single" ]]; then
             shift
             info "Single-step mode..."
-            FLAGS_ARGS=""
-            while [[ $# -gt 0 ]]; do
-                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
-                shift
-            done
-            execute "(ai-actions/continue-run!$FLAGS_ARGS)"
+            FLAGS_ARGS="$(clj_str_args "$@")"
+            execute "(ai-actions/continue-run!${FLAGS_ARGS:+ $FLAGS_ARGS})"
         elif [[ "${1:-}" == "--raw" ]]; then
             info "Raw mode - direct WebSocket continue..."
             execute '(do
@@ -2026,13 +2030,9 @@ case "$COMMAND" in
             # Default: loop mode (auto-continue until decision)
             # Strip --loop if present (for backwards compat)
             [[ "${1:-}" == "--loop" ]] && shift
-            FLAGS_ARGS=""
-            while [[ $# -gt 0 ]]; do
-                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
-                shift
-            done
+            FLAGS_ARGS="$(clj_str_args "$@")"
             info "Continuing until decision required..."
-            execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
+            execute "(ai-actions/monitor-run!${FLAGS_ARGS:+ $FLAGS_ARGS})"
         fi
         after_action
         ;;
@@ -2040,13 +2040,9 @@ case "$COMMAND" in
     continue-run)
         # Alias for 'continue --single' (single-step mode)
         ensure_connection
-        FLAGS_ARGS=""
-        while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
-            shift
-        done
+        FLAGS_ARGS="$(clj_str_args "$@")"
         info "Single-step mode (continue-run is alias for 'continue --single')..."
-        execute "(ai-actions/continue-run!$FLAGS_ARGS)"
+        execute "(ai-actions/continue-run!${FLAGS_ARGS:+ $FLAGS_ARGS})"
         after_action
         ;;
 
@@ -2055,13 +2051,9 @@ case "$COMMAND" in
         # REPL side blocks (see REPL_BLOCKING_TIMEOUT at the top of this file)
         TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
-        FLAGS_ARGS=""
-        while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
-            shift
-        done
+        FLAGS_ARGS="$(clj_str_args "$@")"
         info "Loop mode (monitor-run is alias for 'continue')..."
-        execute "(ai-actions/monitor-run!$FLAGS_ARGS)"
+        execute "(ai-actions/monitor-run!${FLAGS_ARGS:+ $FLAGS_ARGS})"
         after_action
         # Peer-liveness footer: on a monitor-run timeout the seat must judge
         # whether the opponent is thinking or gone before re-issuing.
@@ -2131,11 +2123,9 @@ case "$COMMAND" in
         if [[ -z "$ICE_NAME" ]]; then
             error "tank requires ICE name. Usage: tank \"Ice Wall\""
         fi
-        # Escape quotes in ICE name for Clojure string
-        ICE_NAME_ESCAPED="${ICE_NAME//\"/\\\"}"
         execute "(do
                   (require (quote [ai-runs :as runs]))
-                  (let [ice-name \"$ICE_NAME_ESCAPED\"
+                  (let [ice-name \"$(clj_str "$ICE_NAME")\"
                         current-tank (get (runs/get-strategy) :tank #{})]
                     (runs/set-strategy! {:tank (conj current-tank ice-name)})
                     (println (format \"✅ Authorized tank on: %s\" ice-name))
@@ -2265,11 +2255,11 @@ case "$COMMAND" in
         info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
-                   (conn/create-lobby! {:title \"$TITLE\"
-                                        :side \"$SIDE\"
+                   (conn/create-lobby! {:title \"$(clj_str "$TITLE")\"
+                                        :side \"$(clj_str "$SIDE")\"
                                         :format \"system-gateway\"
-                                        :gateway-type \"$GATEWAY_TYPE\"
-                                        :precon \"$PRECON\"
+                                        :gateway-type \"$(clj_str "$GATEWAY_TYPE")\"
+                                        :precon \"$(clj_str "$PRECON")\"
                                         :room \"casual\"
                                         :allow-spectator true
                                         :spectatorhands true
@@ -2289,7 +2279,7 @@ case "$COMMAND" in
         info "Selecting deck $DECK_ID..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
-                   (conn/select-deck! \"$DECK_ID\")
+                   (conn/select-deck! \"$(clj_str "$DECK_ID")\")
                    nil)"
         ;;
 
@@ -2489,7 +2479,7 @@ case "$COMMAND" in
         if [[ -n "$FILENAME" ]]; then
             execute "(do
                       (require (quote [ai-state :as state]))
-                      (state/save-replay! \"$FILENAME\"))"
+                      (state/save-replay! \"$(clj_str "$FILENAME")\"))"
         else
             execute '(do
                       (require (quote [ai-state :as state]))
@@ -2628,11 +2618,11 @@ case "$COMMAND" in
         # require runs - inside this non-top-level let, giving "No such namespace".
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v) (not (future-done? (deref v))))
-                     (println \"⚠️  Autonomous loop already running for ${CLIENT_NAME} - use 'bot-loop-stop' first\")
+                     (println \"⚠️  Autonomous loop already running for $(clj_str "$CLIENT_NAME") - use 'bot-loop-stop' first\")
                      (do
                        (def ai-self-play-future
                          (future ((requiring-resolve (quote $BOT_NS/$LOOP_FN)) $LOOP_ARGS)))
-                       (println \"🔁 Autonomous loop launched for ${CLIENT_NAME}\"))))"
+                       (println \"🔁 Autonomous loop launched for $(clj_str "$CLIENT_NAME")\"))))"
         ;;
 
     bot-loop-status)
@@ -2653,7 +2643,7 @@ case "$COMMAND" in
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v))
                      (do (future-cancel (deref v))
-                         (println \"🛑 Autonomous loop cancelled for ${CLIENT_NAME}\"))
+                         (println \"🛑 Autonomous loop cancelled for $(clj_str "$CLIENT_NAME")\"))
                      (println \"No autonomous loop to stop.\")))"
         ;;
 
