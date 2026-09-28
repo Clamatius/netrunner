@@ -74,9 +74,14 @@
 
 (defn- read-forms
   "Read EVERY form in s. `read-string` would return only the first and hide an
-   extra executable one, which is the defect under test."
+   extra executable one, which is the defect under test.
+
+   *read-eval* is bound OFF. If escaping regressed and a payload carried `#=(…)`,
+   the reader would EVALUATE it inside this JVM — the test would die or be quietly
+   altered instead of failing with \"expected ONE form\". A guest seat found that."
   [s]
-  (read-string (str "[" s "]")))
+  (binding [*read-eval* false]
+    (read-string (str "[" s "]"))))
 
 (defn- sole-form
   "The one form s must consist of. Fails loudly if s holds more than one."
@@ -176,3 +181,142 @@
         "read-forms collapsed two top-level forms into one")
     (is (= 1 (count (read-forms "(ai-actions/run! \"HQ\" \"--x\\\" (ai-actions/end-turn!) \\\"\")")))
         "a correctly escaped payload must read as ONE form")))
+
+;; ---------------------------------------------------------------------------
+;; The enumeration. This is where the CLASS-CLOSURE claim lives now.
+;;
+;; Four review rounds in a row put their MAJORs on the source censuses in
+;; clj_string_sweep_test.sh, and the last round found five more shapes they
+;; cannot see: a bare positional (`$1`), a captured execute
+;; (`R="$(execute "(f $ARG)")"`), a Clojure-escaped quote inside a string, a
+;; single-quoted expression with shell concatenation (`execute '(f "'"$X"'")'`),
+;; and the reuse of an already-whitelisted variable NAME in a new ungated arm.
+;; Those are not one defect. They are five more members of an open set, because a
+;; per-line text scan of shell source is being asked a DATA-FLOW question.
+;;
+;; So the claim moves to a mechanism that cannot have that failure mode: drive
+;; EVERY command the dispatcher has with a payload argument and inspect what
+;; comes OUT. Quoting style, accumulators, heredocs, printf, positionals,
+;; captured executes and name reuse are all invisible to it, in the good sense —
+;; it never looks at how the expression was built.
+;;
+;; The command list is read from send_command's own `case` arms, so a NEW arm is
+;; covered the moment it is added; there is no table to forget to extend.
+;; ---------------------------------------------------------------------------
+
+(def ^:private marker "NRPAYLOAD")
+
+;; Two payloads, because the class has two shapes. The first closes a Clojure
+;; STRING and appends a form; the second needs no quote at all — it closes the
+;; enclosing FORM, which is how `change`'s `:$KEY` was broken.
+(def ^:private payloads
+  {:string-breaking (str marker "\" (ai-actions/end-turn!) \"")
+   :form-breaking   (str marker ") (ai-actions/end-turn!) (comment")})
+
+(defn- dispatcher-commands
+  "Every command label in send_command's main `case`, flattened over `a|b|c` arms.
+   Read from the file, not from a list here: a new arm must be covered, and the
+   only way to guarantee that is to take the dispatcher's own word for what exists."
+  []
+  (let [lines (str/split-lines (slurp send-command))
+        ;; The main case runs from `case "$COMMAND" in` (the SECOND one; the
+        ;; first is a two-line help shortcut) to its `esac`.
+        starts (keep-indexed (fn [i l] (when (re-find #"^case \"\$COMMAND\" in" l) i)) lines)
+        start  (second starts)
+        end    (first (keep-indexed (fn [i l] (when (and (> i start) (= l "esac")) i)) lines))]
+    (assert (and start end) "could not find send_command's main case statement")
+    (->> (subvec (vec lines) start end)
+         (keep #(second (re-find #"^    ([a-z][a-zA-Z0-9|?*_-]*)\)$" %)))
+         (mapcat #(str/split % #"\|"))
+         (remove #{"help"})
+         distinct
+         vec)))
+
+(defn- payload-survived-whole?
+  "Did `payload` arrive as ONE complete Clojure string?
+
+   This is the invariant, and it took a wrong turn to find. `outside a string` is
+   not enough: an arm emitting `(f \"PAYLOAD\")` with the string-breaking payload
+   emits `(f \"NRPAYLOAD\" (ai-actions/end-turn!) \"\")` — ONE readable form, and
+   the marker IS inside a string. What is wrong with it is that no string in it
+   EQUALS the payload: the value was split across two strings with a call between
+   them. So the test is identity of the value, not location of the marker."
+  [expr payload]
+  (let [forms (read-forms expr)
+        strings (->> forms (mapcat #(tree-seq coll? seq %)) (filter string?))]
+    (boolean (some #(= payload %) strings))))
+
+(defn- marker-appears? [expr] (str/includes? expr marker))
+
+;; The ONE command whose entire purpose is to send seat text as source. It is
+;; NAMED, not pattern-matched, and `eval-really-does-send-source` below asserts it
+;; still behaves that way — so this exception cannot go stale into a hole, and
+;; adding a second one is a review decision rather than an edit.
+(def ^:private source-by-design #{"eval"})
+
+(deftest every-dispatcher-command-keeps-a-payload-argument-as-data
+  (testing "no command turns a seat's argument into Clojure source"
+    (let [commands (remove source-by-design (dispatcher-commands))]
+      (is (> (count commands) 80)
+          (str "only " (count commands) " commands found — the case extraction is broken, "
+               "and a broken extraction reports a CLEAN sweep over nothing"))
+      (doseq [cmd commands
+              [shape payload] payloads]
+        (let [{:keys [sent]} (with-stub "corp" [cmd payload payload])]
+          (doseq [expr sent]
+            (testing (str cmd " / " (name shape))
+              ;; Each eval must be ONE form. A payload that closed the form would
+              ;; make a second one, which is arbitrary code in the seat's REPL.
+              (let [forms (try (read-forms expr)
+                               (catch Exception e
+                                 (is false (str cmd " / " (name shape)
+                                                " emitted unreadable source: " (.getMessage e)
+                                                "\n  " expr))
+                                 nil))]
+                (when forms
+                  (is (= 1 (count forms))
+                      (str cmd " / " (name shape) " emitted " (count forms)
+                           " top-level forms — the extra ones are arbitrary code in "
+                           "the seat's own REPL:\n  " expr))
+                  ;; Only arms that actually USE the argument are asked to have
+                  ;; kept it whole; one that ignores it (status, board, ping) never
+                  ;; mentions the marker and has nothing to answer for.
+                  (when (marker-appears? expr)
+                    (is (payload-survived-whole? expr payload)
+                        (str cmd " / " (name shape) " did not keep the argument as ONE "
+                             "Clojure string — it reached the reader as source:\n  " expr))))))))))))
+
+(deftest the-enumeration-can-actually-fail
+  (testing "the invariant rejects every leak shape and accepts the correct one"
+    (let [pay (:string-breaking payloads)
+          ;; What an UNESCAPED site emits: the value split across two strings with
+          ;; a call between them. Reads as ONE form, and the marker IS in a string
+          ;; — which is why "marker outside a string" was the wrong invariant.
+          broken (str "(f \"" marker "\" (ai-actions/end-turn!) \"\")")
+          ;; What an ESCAPED site emits.
+          good (str "(f " (pr-str pay) ")")]
+      (is (= 1 (count (read-forms broken))) "the leak shape reads as one form (that is the trap)")
+      (is (not (payload-survived-whole? broken pay))
+          "the invariant must REJECT a value split across two strings")
+      (is (payload-survived-whole? good pay)
+          "the invariant must ACCEPT a correctly escaped value"))
+    (let [pay (:form-breaking payloads)
+          bare (str "(f :" marker ") (ai-actions/end-turn!)")]
+      (is (= 2 (count (read-forms bare)))
+          "a payload interpolated as a KEYWORD closes the form and makes two")
+      (is (not (payload-survived-whole? bare pay))
+          "and it never arrived as a string at all"))
+    (testing "*read-eval* is off, so a #=(…) payload is data, not execution"
+      (is (thrown? Exception (read-forms "#=(inc 1)"))))))
+
+(deftest eval-really-does-send-source
+  (testing "the one exception is witnessed, so it cannot go stale into a hole"
+    ;; If `eval` were ever changed to quote its argument, this fails and the
+    ;; exception above must be removed — an unused exception silently exempts an
+    ;; arm nobody reviewed for it.
+    (let [{:keys [sent]} (with-stub "corp" ["eval" (:string-breaking payloads)])]
+      (is (= 1 (count sent)) "eval sends exactly one expression")
+      (is (str/includes? (first sent) marker))
+      (is (not (payload-survived-whole? (first sent) (:string-breaking payloads)))
+          (str "eval no longer sends its argument as raw source — it sent: "
+               (pr-str (first sent)) " — so `source-by-design` is stale and must go")))))

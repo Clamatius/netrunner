@@ -229,6 +229,148 @@ else
     echo "skip [/bin/bash run] (/bin/bash is not executable here)"
 fi
 
+# ---------------------------------------------------------------------------
+# The enumeration, shell half. Drive EVERY command the dispatcher has with a
+# quote-bearing payload and assert the payload's marker is never followed by an
+# UNESCAPED quote in anything sent.
+#
+# Why this exists alongside the source censuses in clj_string_sweep_test.sh: four
+# review rounds put their MAJORs on those censuses, and the last one found five
+# more shapes they cannot see (a bare positional, a captured execute, a
+# Clojure-escaped quote inside a string, a single-quoted expression with shell
+# concatenation, and reuse of an already-whitelisted variable name). Those are not
+# one defect; they are five members of an open set, because a per-line text scan
+# of shell source is being asked a data-flow question. This looks at the OUTPUT
+# instead, so quoting style, accumulators, heredocs, printf, positionals and name
+# reuse are all invisible to it — in the good sense.
+#
+# The command list comes from send_command's own `case` arms, so a NEW arm is
+# covered the moment it is added. The precise version of this (does the value
+# arrive as ONE Clojure string, by identity) lives in the lein suite, which has a
+# reader; this half is the fast one and carries the mutation battery.
+# ---------------------------------------------------------------------------
+MARKER='NRPAYLOAD'
+ENUM_PAYLOAD="$MARKER\" (ai-actions/end-turn!) \""
+
+dispatcher_commands() {   # FILE
+    # The MAIN case (the second one; the first is a two-line help shortcut), from
+    # `case "$COMMAND" in` to its `esac`. An extraction that matched nothing would
+    # report a clean sweep over no commands, so the caller checks the count.
+    awk '
+        /^case "\$COMMAND" in$/ { n++; if (n == 2) { inmain = 1; next } }
+        inmain && /^esac$/ { inmain = 0 }
+        inmain && /^    [a-z][a-zA-Z0-9|?*_-]*\)$/ { gsub(/[ )]/, ""); print }
+    ' "$1" | tr '|' '\n' | grep -vE '^(help|eval)$' | sort -u
+}
+
+# `eval` is excluded by NAME above: sending seat text as source is its entire
+# purpose. It is witnessed in the lein suite (eval-really-does-send-source), so
+# the exception cannot go stale into a hole.
+
+enumerate() {   # enumerate SEND_CMD  -> prints one line per leaking command
+    local sc="$1" c out log
+    log="$TMP/enum.log"
+    for c in $(dispatcher_commands "$sc"); do
+        : > "$log"
+        ACTION_LOG="$log" NR_NO_AUTO_PROMPT=1 SHOW_LAST_LOG=0 AI_EVAL="$TMP/eval" \
+            timeout 25 "$sc" corp "$c" "$ENUM_PAYLOAD" "$ENUM_PAYLOAD" >/dev/null 2>&1
+        [[ $? -eq 124 ]] && { printf '%s: TIMED OUT\n' "$c"; continue; }
+        if grep -q "$MARKER\"" "$log" 2>/dev/null; then
+            printf '%s: the argument reached the eval with its quote UNESCAPED\n' "$c"
+        fi
+    done
+}
+
+echo
+echo "--- every command in the dispatcher keeps a quoted argument as data ---"
+ENUM_COUNT="$(dispatcher_commands "$SEND_CMD" | wc -l | tr -d ' ')"
+if [[ "$ENUM_COUNT" -lt 80 ]]; then
+    echo "NOT OK [enumeration-found-the-commands] only $ENUM_COUNT commands extracted —"
+    echo "       a broken extraction reports a CLEAN sweep over nothing"
+    fail=$((fail + 1))
+else
+    echo "ok   [enumeration-found-the-commands] ($ENUM_COUNT commands)"
+fi
+SHELL_LABEL=""
+LEAKS="$(enumerate "$SEND_CMD")"
+check 'enumeration-no-command-leaks' "$LEAKS" ''
+
+echo "--- and it sees the five shapes the source censuses cannot (mutation tests) ---"
+# Each of these was found by a code-review seat against clj_string_sweep_test.sh,
+# reproduced, and is clean on BOTH censuses there. The enumeration catches all
+# five, which is the whole argument for having it.
+enum_mutant() {   # enum_mutant NAME ARM_BODY
+    local name="$1" arm="$2" f="$TMP/enum_mutant"
+    rm -f "$f"
+    if ! python3 - "$SEND_CMD" "$f" "$arm" <<'PYENUM'
+import sys
+src, dst, arm = sys.argv[1:4]
+s = open(src).read()
+anchor = "    keep-hand)"
+if anchor not in s:
+    sys.exit("anchor arm not found in send_command")
+open(dst, 'w').write(s.replace(anchor, arm + "\n" + anchor, 1))
+PYENUM
+    then
+        echo "NOT OK [$name] could not build the mutant"
+        fail=$((fail + 1)); return
+    fi
+    chmod +x "$f"
+    if cmp -s "$SEND_CMD" "$f"; then
+        echo "NOT OK [$name] MUTATION DID NOT APPLY - assertion proves nothing"
+        fail=$((fail + 1)); return
+    fi
+    if [[ -n "$(enumerate "$f")" ]]; then
+        echo "ok   [$name]"
+    else
+        echo "NOT OK [$name] the enumeration reported CLEAN over the injected defect"
+        fail=$((fail + 1))
+    fi
+}
+
+enum_mutant 'enum-mutation-bare-positional' \
+    '    nr-probe)
+        execute "(f $1)"
+        ;;
+'
+enum_mutant 'enum-mutation-captured-execute' \
+    '    nr-probe)
+        RESULT="$(execute "(f $1)")"
+        echo "$RESULT"
+        ;;
+'
+enum_mutant 'enum-mutation-clojure-escaped-quote' \
+    '    nr-probe)
+        execute "(f \"pre\\\"$1\\\"post\")"
+        ;;
+'
+enum_mutant 'enum-mutation-single-quote-concatenation' \
+    '    nr-probe)
+        execute '"'"'(f "'"'"'"$1"'"'"'")'"'"'
+        ;;
+'
+enum_mutant 'enum-mutation-reuse-of-a-whitelisted-name' \
+    '    nr-probe)
+        N="$1"
+        execute "(f $N)"
+        ;;
+'
+# ...and a correctly written new arm must NOT be reported.
+CLEAN_ARM="$TMP/enum_clean"
+rm -f "$CLEAN_ARM"
+python3 - "$SEND_CMD" "$CLEAN_ARM" '    nr-probe)
+        execute "(f \"$(clj_str "$1")\")"
+        ;;
+' <<'PYENUM2'
+import sys
+src, dst, arm = sys.argv[1:4]
+s = open(src).read()
+open(dst, 'w').write(s.replace("    keep-hand)", arm + "\n    keep-hand)", 1))
+PYENUM2
+chmod +x "$CLEAN_ARM"
+CLEAN_LEAKS="$(enumerate "$CLEAN_ARM")"
+check 'enum-clean-arm-is-not-reported' "$CLEAN_LEAKS" ''
+
 if ((fail)); then
     printf 'FAIL: %d clj-string route assertion(s)\n' "$fail"
     exit 1

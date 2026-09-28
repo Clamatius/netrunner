@@ -33,13 +33,25 @@
 #      independently and I had declined it twice; a pinned COUNT is what makes a
 #      whitelist a review decision instead of a list that goes stale in silence.
 #
-# What this does NOT prove: that `clj_str` is CORRECT (send_command_clj_string_test
-# does that), that the emitted expression READS as one form with its argument as
-# data (ai_clj_string_roundtrip_test.clj does that, in the lein suite, because
-# there is no clojure CLI on this box and the old reader round-trip has been
-# silently SKIPPING on every make verify), or that a value reaching an arm through
-# some shape neither census recognises is caught. Two spelling censuses, not a
-# proof.
+# WHERE THE COMPLETENESS CLAIM LIVES, and it is NOT here. Four review rounds put
+# their MAJORs on these censuses, and the last one found five more shapes they
+# cannot see: a bare positional (`$1`), a captured execute
+# (`R="$(execute "(f $ARG)")"`), a Clojure-level escaped quote inside a string, a
+# single-quoted expression with shell concatenation (`execute '(f "'"$X"'")'`), and
+# reuse of an already-whitelisted variable NAME in a new ungated arm. All five are
+# fixed below, but that is not the point: they were five members of an OPEN set,
+# because a per-line text scan of shell source is being asked a data-flow question.
+#
+# So the class-closure claim moved to the enumeration, which inspects the OUTPUT:
+#   clj_string_route_test.sh  - drives every command the dispatcher has with a
+#                               quote-bearing payload (fast; carries the mutation
+#                               battery for all five shapes above).
+#   clj_string_roundtrip_test.clj - the same, precisely: does the value arrive as
+#                               ONE Clojure string, by identity, with a reader.
+#
+# These censuses stay because they are cheap and they localise a defect to a LINE,
+# which the enumeration cannot. They are spelling censuses. They are not a proof,
+# and after four rounds of being treated as one, they say so here.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
@@ -78,25 +90,44 @@ EXPECTED_EXEMPTIONS=0
 # hole rather than a violation.
 census_a() {
     awk '
-        # A comment-only line is prose, not code: line 859-ish QUOTES the old raw
-        # accumulator shape as documentation of what #255 fixed.
+        # A shell-escaped quote (\") is a Clojure string DELIMITER. A run of THREE
+        # backslashes before the quote is a Clojure-LEVEL escaped quote and is NOT
+        # a delimiter. A bare " belongs to the shell. The first version of this
+        # paired on the two-character text \" with a regex, which took the TAIL of
+        # a Clojure-level escape for a delimiter, mis-paired everything after it,
+        # and left an interpolation sitting in a gap it believed was outside a
+        # string. A guest seat reproduced that. So this counts the backslash RUN
+        # instead of matching a fixed string: a delimiter is a quote preceded by
+        # exactly ONE backslash.
+        function clj_string_interps(line,    i, c, run, instr, n, seg) {
+            n = 0; run = 0; instr = 0; seg = ""
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "\\") { run++; if (instr) seg = seg c; continue }
+                if (c == "\"") {
+                    if (run == 1) {
+                        if (instr) { if (index(seg, "$")) n++; instr = 0; seg = "" }
+                        else { instr = 1; seg = "" }
+                    } else if (instr) seg = seg c
+                    run = 0
+                    continue
+                }
+                run = 0
+                if (instr) seg = seg c
+            }
+            return n
+        }
+        # A comment-only line is prose, not code: this file QUOTES the old raw
+        # accumulator shape in a comment, as documentation of what #255 fixed.
         /^[[:space:]]*#/ { next }
         {
             marked = ($0 ~ /CLJ-STR-EXEMPT/)
             line = $0
-            # The one safe form: clj_str, INLINE, printing its result. A helper
-            # that ASSIGNS instead of printing would emit an EMPTY argument here
-            # and must NOT be blessed by prefix, so this matches clj_str only.
+            # The one safe form: clj_str, INLINE, printing its result. A helper that
+            # ASSIGNS instead of printing would emit an EMPTY argument here and must
+            # NOT be blessed by prefix, so this matches clj_str only.
             gsub(/[$][(]clj_str "[^"]*"[)]/, "SAFE", line)
-            rest = line; bad = 0
-            while (match(rest, /\\"/)) {
-                rest = substr(rest, RSTART + RLENGTH)
-                if (!match(rest, /\\"/)) break
-                inner = substr(rest, 1, RSTART - 1)
-                rest = substr(rest, RSTART + RLENGTH)
-                if (index(inner, "$")) bad = 1
-            }
-            if (!bad) next
+            if (clj_string_interps(line) == 0) next
             if (marked) { exempt_used++; next }
             printf "%d: %s\n", NR, $0
         }
@@ -118,7 +149,7 @@ echo "--- every Clojure string literal opens and closes on ONE line ---"
 # Census A walks \" PAIRS, so an unterminated \" at end of line is ignored. That
 # is a hole, not a violation, unless this holds - so it is asserted, and a future
 # multi-line Clojure string fails HERE instead of quietly widening the blind spot.
-ODD="$(awk '!/^[[:space:]]*#/ { n = gsub(/\\"/, "&"); if (n % 2) printf "%d: %s\n", NR, $0 }' "$SEND_CMD")"
+ODD="$(awk '!/^[[:space:]]*#/ { line = $0; gsub(/\\\\\\\\"/, "Q", line); n = gsub(/\\"/, "&", line); if (n % 2) printf "%d: %s\n", NR, $0 }' "$SEND_CMD")"
 check 'no-multiline-clojure-string' "$ODD" ''
 
 # --- Census B: a BARE $NAME inside an execute expression --------------------
@@ -127,7 +158,12 @@ check 'no-multiline-clojure-string' "$ODD" ''
 # reason each name is allowed to be code:
 #
 #   numeric-gated (#251's gate validated the digit shape):
-#     INDEX COUNT N ABILITY_INDEX AMOUNT INDICES_VEC DELTA CHOICE
+#     INDEX COUNT N ABILITY_INDEX AMOUNT INDICES_VEC DELTA CHOICE TIMEOUT SINCE
+#     (TIMEOUT and SINCE are in `wait`, inside a CAPTURED execute. The first
+#     version of this census stripped a captured execute along with the
+#     interpolation inside it, so those two were invisible; unwrapping the capture
+#     surfaced them. Both are gated: `num_arg SINCE`, and TIMEOUT is reset to 300
+#     in the arm and only replaced from `is_num`/$NUM_ARG.)
 #   shape-gated to a lowercase keyword name, because it is interpolated as a
 #   Clojure KEYWORD (`:$KEY`) and so is read as code. Census B found this arm
 #   UNGATED on its first run: `change 'credit) (ai-actions/end-turn!) (comment' 5`
@@ -136,11 +172,23 @@ check 'no-multiline-clojure-string' "$ODD" ''
 #   built by clj_str_args, so already a list of escaped literals:
 #     FLAGS_ARGS ARGS_STR NAMES_VEC
 #   an internal literal this file writes, never a seat argument:
-#     OPTS OVERWRITE BOT_NS LOOP_FN LOOP_ARGS SELF_HB PAY_ALL
+#     OPTS OVERWRITE BOT_NS LOOP_FN LOOP_ARGS PAY_ALL
+#     (SELF_HB was listed here and is interpolated into NO execute at all - a dead
+#     entry in a reviewed whitelist is worse than a missing one, because it
+#     pre-authorises a name nobody reviewed for that use. Removed; a guest seat
+#     found it by counting listed against seen.)
+#
+# SCOPE OF THIS WHITELIST, precisely: it is keyed on the NAME, and a name is not a
+# value. A new arm writing `N="$1"; execute "(f $N)"` reuses an allowed name and
+# this census reports clean - a guest seat reproduced that. The stated reasons are
+# properties of today's SITES. What closes that hole is the enumeration in
+# clj_string_route_test.sh, which drives every command and looks at the OUTPUT;
+# there is a mutation there for exactly this shape. Do not read this list as a
+# proof that every bare interpolation is gated.
 #   the `eval` arm, whose entire purpose is to send seat text as source:
 #     EXPR
-BARE_ALLOWED='INDEX|COUNT|N|ABILITY_INDEX|AMOUNT|INDICES_VEC|DELTA|CHOICE|KEY|FLAGS_ARGS|ARGS_STR|NAMES_VEC|OPTS|OVERWRITE|BOT_NS|LOOP_FN|LOOP_ARGS|SELF_HB|PAY_ALL|EXPR'
-EXPECTED_BARE=19   # pinned: a NEW bare name is a review decision, and dropping one that is still used is too
+BARE_ALLOWED='INDEX|COUNT|N|ABILITY_INDEX|AMOUNT|INDICES_VEC|DELTA|CHOICE|KEY|TIMEOUT|SINCE|FLAGS_ARGS|ARGS_STR|NAMES_VEC|OPTS|OVERWRITE|BOT_NS|LOOP_FN|LOOP_ARGS|PAY_ALL|EXPR'
+EXPECTED_BARE=21   # pinned: a NEW bare name is a review decision, and dropping one that is still used is too
 
 census_b() {
     awk '
@@ -150,6 +198,12 @@ census_b() {
         # inside an expression that is SENT.
         {
             line = $0
+            # A CAPTURED execute - R="$(execute "(f $ARG)")" - is an execute too,
+            # and the command-substitution strip below used to remove it TOGETHER
+            # with the interpolation inside it, so the whole arm read clean. Unwrap
+            # the capture first. The shape is already in this file (send_command
+            # reads a prompt that way).
+            gsub(/[$][(][[:space:]]*execute[[:space:]]/, "execute ", line)
             if (!in_exec) { if (line !~ /execute [ '"'"'"]*"/ && line !~ /execute "/) next; in_exec = 1 }
             # Strip Clojure string literals: their contents are census A s job.
             work = line
@@ -157,10 +211,14 @@ census_b() {
             # Strip command substitutions (their own shell context).
             gsub(/[$][(][^)]*[)]/, "S", work)
             n = 0
-            while (match(work, /[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?/)) {
+            while (match(work, /[$][{]?([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#])[}]?/)) {
                 name = substr(work, RSTART, RLENGTH)
                 work = substr(work, RSTART + RLENGTH)
                 gsub(/[${}]/, "", name)
+                # A POSITIONAL is never allowed bare: it is raw seat text, and the
+                # name regex used to be [A-Za-z_]-only, which is the identical $1
+                # blind spot this file criticises in the guard it replaced.
+                if (name ~ /^[0-9@*#]+$/) { printf "%d: bare $%s (a positional - raw seat text) - %s\n", NR, name, $0; continue }
                 if (name ~ allowed_re) { seen[name] = 1; continue }
                 printf "%d: bare $%s - %s\n", NR, name, $0
             }
@@ -307,6 +365,18 @@ mutant 'mutation-bare-symbol-interpolation' census_b \
 clean_mutant 'clean-census-b-leaves-string-interiors-to-census-a' census_b \
     "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \\\\\"pre \$VAL\\\\\")\"\\n        ;;\\n\\n    keep-hand)|"
 
+echo "--- census B's COUNT check is not a mutation witness (mutation test) ---"
+# Forcing the expected count makes census_b print a diagnostic over ANY file,
+# including a clean one, so an assertion built on a forced count proves nothing.
+# This pins that, because one was shipped here and a guest seat had to find it.
+if [[ -n "$(census_b "$SEND_CMD" 18)" ]]; then
+    echo "ok   [census-b-count-is-not-a-witness] (a forced count flags the CLEAN file too)"
+else
+    echo "NOT OK [census-b-count-is-not-a-witness] a forced count no longer flags the clean"
+    echo "       file, so the warning above this check is stale"
+    fail=$((fail + 1))
+fi
+
 echo "--- neither census cries wolf (negative mutation tests) ---"
 clean_mutant 'clean-a-wrapped-site-is-not-flagged' census_a \
     "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \\\\\"\$(clj_str \"\$CARD_NAME\")\\\\\")\"\\n        ;;\\n\\n    keep-hand)|"
@@ -314,6 +384,22 @@ clean_mutant 'clean-a-commented-raw-line-is-not-flagged' census_a \
     "s|^    keep-hand)|        # execute \"(f \\\\\"\$1\\\\\")\" -- documented, not code\\n    keep-hand)|"
 clean_mutant 'clean-clj_str_args-list-is-not-flagged' census_b \
     "s|^    keep-hand)|$NEW_ARM\\n        FLAGS_ARGS=\"\$(clj_str_args \"\$@\")\"\\n        execute \"(f\${FLAGS_ARGS:+ \$FLAGS_ARGS})\"\\n        ;;\\n\\n    keep-hand)|"
+
+echo "--- the five shapes a code round found, now that they are fixed ---"
+# Census B's three: a bare positional, a captured execute, and reuse of an
+# already-whitelisted NAME in a new ungated arm.
+mutant 'mutation-bare-positional-parameter' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \$1)\"\\n        ;;\\n\\n    keep-hand)|"
+mutant 'mutation-captured-execute' census_b \
+    "s|^    keep-hand)|$NEW_ARM\\n        R=\"\$(execute \"(f \$ARG)\")\"\\n        echo \"\$R\"\\n        ;;\\n\\n    keep-hand)|"
+# Census A's one: a Clojure-LEVEL escaped quote inside the string, which used to
+# mis-pair the walk and hide the interpolation after it.
+mutant 'mutation-clojure-escaped-quote-interior' census_a \
+    "s|^    keep-hand)|$NEW_ARM\\n        execute \"(f \\\\\"pre\\\\\\\\\\\\\"\$CHOICE\\\\\\\\\\\\\"post\\\\\")\"\\n        ;;\\n\\n    keep-hand)|"
+# The two neither census can ever see, which is why the enumeration exists: a
+# single-quoted expression with shell concatenation, and an arm reusing a
+# whitelisted NAME. Both are mutation-tested in clj_string_route_test.sh, against
+# the enumeration. Asserting them here would be asserting a known blind spot.
 
 echo "--- reverting each real #255 fix goes red (mutation tests) ---"
 # The census's whole claim is that it would have caught #255. Put each site back
@@ -361,25 +447,23 @@ revert 'revert-draw-to-card-name' '(ai-actions/draw-to-card! \"$(clj_str "$CARD_
 revert 'revert-multi-choose-names' 'ARGS_STR="$(clj_str_args "${CARD_NAMES[@]}")"' 'ARGS_STR=" \"$name\""'
 revert 'revert-client-name-println' 'Autonomous loop launched for $(clj_str "$CLIENT_NAME")' 'Autonomous loop launched for ${CLIENT_NAME}'
 
-echo "--- and reverting the change-arm KEY gate goes red on census B ---"
-# The one census B found itself. Its fix is a SHAPE gate, not a clj_str call, so
-# the revert is the gate's removal and the evidence is that $KEY leaves the list.
-KEYLESS="$TMP/keyless"
-python3 - "$SEND_CMD" "$KEYLESS" <<'PYKEY'
-import sys, re
-src, dst = sys.argv[1:3]
-s = open(src).read()
-m = re.search(r'        if \[\[ ! "\$KEY" =~ \^\[a-z\]\[a-z0-9-\]\*\$ \]\]; then\n.*?\n        fi\n', s, re.S)
-assert m, "KEY gate fixture not found"
-open(dst, 'w').write(s[:m.start()] + s[m.end():])
-PYKEY
-if cmp -s "$SEND_CMD" "$KEYLESS"; then
-    echo "NOT OK [revert-change-key-gate] REVERT DID NOT APPLY"
-    fail=$((fail + 1))
-elif [[ -n "$(census_b "$KEYLESS" 18)" ]]; then
-    echo "ok   [revert-change-key-gate]"
+echo "--- the change-arm KEY gate is witnessed by the ROUTE test, not here ---"
+# What used to be here was a FALSE WITNESS, and a guest seat caught it: the
+# assertion removed the gate and then called census_b with an expected count of
+# 18, and `census_b send_command 18` prints the same 19-vs-18 diagnostic on the
+# UNMUTATED file. It passed because I forced the count, not because census B saw
+# anything. Census B cannot see that gate go: a shape gate is not an
+# interpolation, so it is not in either census's subject.
+#
+# The gate's witness is clj_string_route_test.sh (`change-key-injection-*`, which
+# goes red when the gate is replaced by `if false`) and the lein suite
+# (`a-bare-keyword-argument-is-refused-rather-than-read-as-code`). What census B
+# DID do is find the hole in the first place, which is a different job.
+if grep -q 'change takes a state key' "$SEND_CMD"; then
+    echo "ok   [change-key-gate-exists]"
 else
-    echo "NOT OK [revert-change-key-gate] census B reported CLEAN with the gate gone"
+    echo "NOT OK [change-key-gate-exists] the shape gate on change's \$KEY is gone;"
+    echo "       its behaviour is pinned in clj_string_route_test.sh"
     fail=$((fail + 1))
 fi
 
