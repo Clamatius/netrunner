@@ -13,7 +13,8 @@
             [ai-basic-actions :as basic]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
-            [ai-websocket-client-v2 :as ws]))
+            [ai-websocket-client-v2 :as ws]
+            [ai-display :as display]))
 
 ;; `handle-events` keeps a per-game memory of already-reported log entries
 ;; (#31), so it is no longer a pure function. Without this fixture the
@@ -2328,3 +2329,102 @@
         (is (re-find #"Cyberdex Virus Suite \[0\]" out) (str "the copies must be listed with [N]: " out))
         (is (not (re-find #"Card not found installed" out))
             (str "listing two copies and then denying either exists is a contradiction: " out))))))
+
+;; =============================================================================
+;; Game F (2026-10-08, ai-netrunner [277]): `tank` typed at the APPROACH step
+;; =============================================================================
+;;
+;; The Runner's `continue` stopped at "Run paused - ICE rezzed!" with the run
+;; still at approach-ice. It then typed `tank "Whitespace"`. `tank` in
+;; dev/send_command is set-strategy! plus ONE continue-run!; at approach that
+;; one step is the plain pass into the encounter (handle-auto-continue), and the
+;; only caller of signal-tank-once! is handle-runner-encounter-ice, which needs
+;; a step that STARTS at the encounter. Nothing called continue-run! again
+;; (`wait` is not a run loop), so no signal was ever sent — while the Runner's
+;; prompt, which reads the tank SET (state/tank-authorized?) and not the LOG,
+;; said "Tank stands … the Corp now owes you … re-sending `continue` or `tank`
+;; will not move it". The Corp's --fire-unbroken was right not to fire, and the
+;; game sat twenty minutes until the umpire pointed the Corp at `fire-subs`.
+;; Read from the replay and both seat transcripts; this is the reproduction.
+;;
+;; Two properties, from [277]. The first testing block records what happens
+;; today and is green; the second asserts the property and is red until fixed.
+
+(defn- runner-approach-rezzed-state
+  "The Runner at the APPROACH step of a Whitespace the Corp has just rezzed:
+   no encounter on the wire yet, an empty paid-ability window, and the Runner
+   holding priority (nobody has passed this window). The rez line itself was
+   already reported on the previous tick, which is why that tick stopped."
+  [subs]
+  (let [whitespace {:cid 55 :title "Whitespace" :rezzed true :subroutines subs}]
+    {:connected true
+     :uid "test-user"
+     :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+     :side "runner"
+     :game-state {:active-player "runner"
+                  :run {:phase "approach-ice" :position 1
+                        :server [:rd] :no-action false}
+                  :runner {:credit 5 :click 2
+                           :prompt-state {:msg "You may use paid abilities"
+                                          :prompt-type "run"
+                                          :choices [] :selectable []}}
+                  :corp {:credit 5
+                         :servers {:rd {:ices [whitespace]}}}
+                  :log []}}))
+
+(deftest tank-at-the-approach-step-sends-no-signal-game-f
+  (testing "what happened: `tank` at approach takes the plain approach pass and
+            sends NO tank signal, and nothing in its output says so"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-approach-rezzed-state two-unbroken-subs)
+          (runner-handlers/reset-state!)
+          ;; exactly what dev/send_command `tank "Whitespace"` does
+          (runs/set-strategy! {:tank #{"Whitespace"}})
+          (let [out (with-out-str (runs/continue-run!))]
+            (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+                (str "the one step is the approach pass, got: " @sent))
+            (is (empty? (filter #(= "system-msg" (:command %)) @sent))
+                (str "no signal reaches the Corp from the approach step, got: " @sent))
+            (is (not (clojure.string/includes? out "Signaling"))
+                (str "and `tank` does not claim to have signalled, got: " out))
+            ;; [277] property 1: after `tank`, either the signal has been sent
+            ;; or the output says it has not been sent yet. The wording is the
+            ;; fix's choice; an honest line must at least mention the signal.
+            (is (or (seq (filter #(= "system-msg" (:command %)) @sent))
+                    (re-find #"(?i)signal" out))
+                (str "RED (Game F): no signal was sent and the output does not"
+                     " say so — the seat is left believing it has tanked, got: " out)))
+          (runs/reset-strategy!)))))
+  (testing "the wedge: at the encounter that followed, with NO signal in the shared
+            log, the run-window guidance must not tell the Runner the Corp owes
+            the subs — that text is what kept the Runner at `wait`"
+    (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                               [:game-state :log] (signal-log false))
+      (runner-handlers/reset-state!)
+      (runs/set-strategy! {:tank #{"Whitespace"}})
+      (let [cs @state/client-state
+            out (with-out-str
+                  (display/print-run-window-priority!
+                   cs (get-in cs [:game-state :run]) "encounter-ice" "runner"))]
+        ;; [277] property 2: "Tank stands … the Corp owes you" only when the
+        ;; log holds a current signal for this encounter
+        ;; (corp-decisions/runner-signaled-let-fire?), which it does not here.
+        (is (not (clojure.string/includes? out "the Corp now owes you"))
+            (str "RED (Game F): the Corp has seen no signal, yet the Runner is"
+                 " told it is owed the subs, got: " out))
+        (is (not (clojure.string/includes? out "will not move it"))
+            (str "RED (Game F): the Runner is told nothing will move the window,"
+                 " when a `continue` at the encounter would send the signal, got: " out)))
+      (runs/reset-strategy!))
+    (testing "control: once the signal IS in the log, the same text is right"
+      (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                 [:game-state :log] (signal-log true))
+        (runs/set-strategy! {:tank #{"Whitespace"}})
+        (let [cs @state/client-state
+              out (with-out-str
+                    (display/print-run-window-priority!
+                     cs (get-in cs [:game-state :run]) "encounter-ice" "runner"))]
+          (is (clojure.string/includes? out "the Corp now owes you")
+              (str "with the signal landed, the tank does stand, got: " out)))
+        (runs/reset-strategy!)))))
