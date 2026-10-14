@@ -32,6 +32,72 @@ fails=0
 ok()   { echo "ok   [$1] $2"; }
 fail() { echo "FAIL [$1]: $2"; fails=$((fails+1)); }
 
+# Is the corp client REPL (port 7890, hardcoded in send_command) actually up?
+#
+# WHY THIS SUITE HAS TO ASK. The budget checks below live inside
+# ensure_connection, because that is the only point at which the budget is
+# final (seven arms assign TIMEOUT during dispatch — see send_command's
+# `require_valid_budget` comment for the placements that were tried and why
+# each one answered some case falsely). check_client's port probe runs BEFORE
+# any dispatch, so a malformed budget PLUS a stopped REPL reports "AI Client
+# REPL not running", exit 1, and the budget error only on the retry.
+# send_command documents that as a deliberately accepted cost: the message is
+# TRUE and actionable, where the alternatives were not.
+#
+# This suite asserted the 78/"did not run" contract unconditionally, so it went
+# red whenever the REPLs were off — and `make verify` is exactly what a fresh
+# session runs to establish a known-good baseline with nothing started. Six
+# failures that mean "your REPLs are down" read precisely like six code
+# defects, and the cost of that is a session learning to wave the suite
+# through. (The `wait` block below even carried a comment claiming it "needs no
+# live REPL"; it does, for this reason.)
+#
+# So branch, and assert in BOTH environments rather than skipping either:
+#   REPL up   — the 78 / "did not run" contract, budget before any network work.
+#   REPL down — the accepted cost itself: the honest REPL message, non-zero,
+#               and still NO false game/server diagnosis. That last half is the
+#               property the whole guard exists for, and it is checkable here.
+if lsof -i :7890 > /dev/null 2>&1; then
+    CORP_REPL_UP=1
+else
+    CORP_REPL_UP=0
+    echo "ℹ️  no client REPL on 7890 — budget-ordering checks assert the documented"
+    echo "   accepted cost (honest REPL message) instead of the 78 contract."
+fi
+
+# The markers that would mean a config typo got blamed on the game or server.
+# Shared by both branches: this is the misleading-output property, and it holds
+# whether or not a REPL is listening.
+assert_no_false_game_fault() {   # label, what, output
+    local bad=""
+    for marker in "GAME-GONE" "auto-resyncing" "NO BOARD" "NO STATE" \
+                  "Attempting to join" "lobby confirmation" "reset.sh"; do
+        [[ "$3" == *"$marker"* ]] && bad="$marker"
+    done
+    if [[ -n "$bad" ]]; then
+        fail "$1" "$2 did connection work before validating the budget: output
+       carries '$bad'. A config typo must not be reported as a game/server
+       fault (and must not send the seat to reset.sh)."
+        return 1
+    fi
+    return 0
+}
+
+# REPL-down arm: non-zero, honest about the REPL, and no false game fault.
+assert_accepted_cost() {         # label, what, exit code, output
+    if [[ "$3" -eq 0 ]]; then
+        fail "$1" "$2 exited 0 with no REPL and a malformed budget — an
+       un-babysat driver reads that as a completed command."
+    elif assert_no_false_game_fault "$1" "$2" "$4"; then
+        if [[ "$4" != *"not running on port"* ]]; then
+            fail "$1" "$2 exited $3 but named neither the budget nor the stopped
+       REPL. Got: $4"
+        else
+            ok "$1" "$2 (no REPL) gives the honest REPL message, not a false game fault"
+        fi
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Half 1: ai-eval.sh actually bounds the bb branch.
 # ---------------------------------------------------------------------------
@@ -247,7 +313,9 @@ done
 # captures with `|| EVAL_STATUS=$?`, so a refusal has to survive to the exit code
 # or an un-babysat driver believes the command ran.
 OUT=$(TIMEOUT=nonsense "$SEND_CMD" corp status 2>&1) && CODE=0 || CODE=$?
-if [[ "$CODE" -eq 0 ]]; then
+if [[ "$CORP_REPL_UP" == "0" ]]; then
+    assert_accepted_cost "timeout-parse" "send_command" "$CODE" "$OUT"
+elif [[ "$CODE" -eq 0 ]]; then
     fail "timeout-parse" "send_command exited 0 over a refused invocation"
 elif [[ "$OUT" != *"did not run"* ]]; then
     fail "timeout-parse" "send_command exited $CODE but never said the command
@@ -274,25 +342,16 @@ fi
 # cases no longer care whether a game is live, gone, or never started.
 for read_cmd in status board hand snapshot; do
     OUT=$(TIMEOUT=nonsense "$SEND_CMD" corp "$read_cmd" 2>&1) && CODE=0 || CODE=$?
-    if [[ "$CODE" -ne 78 ]]; then
+    if [[ "$CORP_REPL_UP" == "0" ]]; then
+        assert_accepted_cost "timeout-first" "$read_cmd" "$CODE" "$OUT"
+    elif [[ "$CODE" -ne 78 ]]; then
         fail "timeout-first" "$read_cmd exited $CODE, not 78, over a malformed budget.
        Got: $OUT"
     elif [[ "$OUT" != *"did not run"* ]]; then
         fail "timeout-first" "$read_cmd refused without saying the command did not run.
        Got: $OUT"
-    else
-        bad=""
-        for marker in "GAME-GONE" "auto-resyncing" "NO BOARD" "NO STATE" \
-                      "Attempting to join" "lobby confirmation" "reset.sh"; do
-            [[ "$OUT" == *"$marker"* ]] && bad="$marker"
-        done
-        if [[ -n "$bad" ]]; then
-            fail "timeout-first" "$read_cmd did connection work before validating the
-       budget: output carries '$bad'. A config typo must not be reported as a
-       game/server fault (and must not send the seat to reset.sh)."
-        else
-            ok "timeout-first" "$read_cmd validates the budget before it touches the network"
-        fi
+    elif assert_no_false_game_fault "timeout-first" "$read_cmd" "$OUT"; then
+        ok "timeout-first" "$read_cmd validates the budget before it touches the network"
     fi
 done
 
@@ -329,10 +388,14 @@ done
 # timeout; a refusal reaching an un-babysat driver as exit 0, with a cheerful
 # heartbeat footer, is the worst place to lose it.
 #
-# An 8-digit budget is refused by the length bound, so this needs no live REPL
-# and cannot actually park.
+# An 8-digit budget is refused by the length bound, so this cannot actually
+# park. It is NOT independent of a live REPL, though the comment here used to
+# say so: check_client runs ahead of the refusal (see CORP_REPL_UP above), so
+# with no REPL the honest "not running" message arrives first.
 OUT=$("$SEND_CMD" corp wait 10000000 2>&1) && CODE=0 || CODE=$?
-if [[ "$CODE" -eq 0 ]]; then
+if [[ "$CORP_REPL_UP" == "0" ]]; then
+    assert_accepted_cost "wait-refusal" "the wait command" "$CODE" "$OUT"
+elif [[ "$CODE" -eq 0 ]]; then
     fail "wait-refusal" "the wait command exited 0 over a refused budget — an un-babysat
        driver reads that as a completed quiet wait"
 elif [[ "$OUT" != *"did not run"* ]]; then
