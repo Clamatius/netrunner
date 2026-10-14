@@ -2239,6 +2239,36 @@
                :already-passed? already-passed?
                :lines (vec lines)})))))))
 
+(defn tank-window-state
+  "Which of the THREE tank states the Runner is in at this encounter, for every
+   surface that reports a tank. One classifier, because the two surfaces that
+   report one have drifted apart twice already — #115's both-pass set and #195's
+   `corp-declined?` argument were each a copy left behind in this same file.
+
+     :none        no tank is authorized for this ICE.
+
+     :unsignalled `tank` recorded the intention in the local strategy, but the
+                  shared LOG holds no current signal — THE CORP HAS NOT BEEN
+                  TOLD. ai-netrunner [277], marquee Game F: `tank` is
+                  set-strategy! plus ONE continue-run!, and at the approach step
+                  that one step is the approach pass. The only caller of
+                  signal-tank-once! is the encounter handler, which needs a step
+                  that STARTS at the encounter, so nothing ever sent. `wait` is
+                  not a run loop and sends nothing either, so the run sat there.
+
+     :signalled   a signal for THIS encounter is in the log and still current
+                  (runner-signaled-let-fire?: after this encounter's marker and
+                  not superseded by a later break), so the Corp does owe the subs.
+
+   The local flag ALONE answers \"what did I decide\", never \"what does the Corp
+   know\" — asking it the second question is #199, and believing the answer is
+   what wedged Game F for twenty minutes."
+  [state ice-title]
+  (cond
+    (not (state/tank-authorized? ice-title))                   :none
+    (corp-decisions/runner-signaled-let-fire? state ice-title)  :signalled
+    :else                                                       :unsignalled))
+
 (defn runner-encounter-decline-hint-lines
   "Guidance for a Runner at an encounter it owns with unbroken subroutines it is
    NOT breaking. `continue` is REFUSED here — handle-runner-encounter-ice returns
@@ -2270,10 +2300,10 @@
    game.ai-forced-encounter-wire-test. The #92 rule holds only while the window
    is still open on both sides (guest panel CRITICAL, #160)."
   ([ice-title unbroken-count]
-   (runner-encounter-decline-hint-lines ice-title unbroken-count false false))
-  ([ice-title unbroken-count tank-authorized?]
-   (runner-encounter-decline-hint-lines ice-title unbroken-count tank-authorized? false))
-  ([ice-title unbroken-count tank-authorized? corp-declined?]
+   (runner-encounter-decline-hint-lines ice-title unbroken-count :none false))
+  ([ice-title unbroken-count tank-state]
+   (runner-encounter-decline-hint-lines ice-title unbroken-count tank-state false))
+  ([ice-title unbroken-count tank-state corp-declined?]
    (cond
      corp-declined?
      [(format "    → The Corp has PASSED this encounter — it is not going to fire the %d remaining subroutine%s on %s."
@@ -2282,12 +2312,25 @@
       (format "      • Or break %s first if a break itself earns you something." ice-title)
       "      (This is the one encounter state where `continue` DOES advance you.)"]
 
-     tank-authorized?
+     (= tank-state :signalled)
      [(format "    → Tank stands on %s — you have declined to break; the Corp now owes you the %d unbroken subroutine%s."
               ice-title unbroken-count (if (= unbroken-count 1) "" "s"))
       "      • `wait` — the subs fire on the Corp's action, and the encounter then resolves."
       (format "      • Changed your mind? Break %s with an icebreaker before the Corp fires." ice-title)
       "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
+
+     ;; The state that wedged Game F. Everything the :signalled arm says is
+     ;; false here, and the last line of it is the specific sentence that kept
+     ;; the Runner at `wait` for twenty minutes.
+     (= tank-state :unsignalled)
+     [(format "    → Your tank on %s is recorded here, but the CORP HAS NOT BEEN TOLD: no signal"
+              ice-title)
+      (format "      for this encounter is in the shared log, so the %d unbroken subroutine%s"
+              unbroken-count (if (= unbroken-count 1) "" "s"))
+      "      will not fire and nothing is owed by the Corp yet."
+      (format "      • `continue` — sends the signal from HERE (so does `tank \"%s\"` again)." ice-title)
+      (format "      • Or break %s instead: a tank is not binding until it is sent." ice-title)
+      "      (`wait` will NOT send it, and nothing re-sends on its own.)"]
 
      :else
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
@@ -2409,7 +2452,7 @@
         (if (or (= run-phase "encounter-ice") corp-declined?)
           (doseq [line (runner-encounter-decline-hint-lines
                         ice-title runner-unbroken
-                        (state/tank-authorized? ice-title)
+                        (tank-window-state state ice-title)
                         corp-declined?)]
             (println line))
           ;; A FORCED encounter outside the standard window. Same two options
@@ -3784,7 +3827,14 @@
           ;; that agreed with the prompt display and deadlocked marquee G2.
           (and runner-unbroken (pos? runner-unbroken))
           (let [ice-title (:title (encountered-ice cs) "this ICE")
-                tanked? (state/tank-authorized? ice-title)
+                ;; The LOG, not the local flag alone. Reading the flag here is
+                ;; what made the two seats contradict each other in Game F: this
+                ;; surface said "Owner: the CORP — they owe the subs" while the
+                ;; Corp's own diagnose-blocker said "the Runner owns the break
+                ;; step and has not answered yet". Both were reporting honestly
+                ;; from what they could see; only one of them was reading a
+                ;; shared fact. See tank-window-state.
+                tank-state (tank-window-state cs ice-title)
                 ;; The FOURTH argument, which this copy did not pass (#195): once
                 ;; the Corp is the encounter's recorded passer our `continue` is a
                 ;; free exit, and the decline menu says the opposite without it.
@@ -3795,12 +3845,15 @@
             ;; "Owner: YOU" there is the same false failure `tank` itself used to
             ;; print (#151 item 2). diagnose-blocker is where a seat goes when it
             ;; already suspects it is stuck; it must not manufacture the suspicion.
+            ;; But an UNSENT tank is owed by us, and this is the one surface a
+            ;; wedged seat is certain to read.
             (println (cond
                        corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
-                       tanked? "   → Owner: the CORP — your tank stands; they owe the subs."
+                       (= tank-state :signalled) "   → Owner: the CORP — your tank stands; they owe the subs."
+                       (= tank-state :unsignalled) "   → Owner: YOU — your tank has NOT been signalled to the Corp; `continue` sends it."
                        :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
-                          ice-title runner-unbroken tanked? corp-declined?)]
+                          ice-title runner-unbroken tank-state corp-declined?)]
               (println line)))
 
           ;; Corp at an encounter the Runner is done with — the branch that did

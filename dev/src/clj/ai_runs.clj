@@ -11,6 +11,7 @@
             [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-run-runner-handlers :as runner-handlers]
+            [ai-display :as display]
             [ai-connection :as connection]))
 
 ;; ============================================================================
@@ -1257,11 +1258,38 @@
 ;; encounter" — is filed rather than approximated here. Pinned by
 ;; ai-runs-test/movement-after-a-quiet-encounter-continues-instead-of-waiting.
 
+(defn- warn-tank-not-yet-signalled!
+  "Say so when this step is passing an approach window on an ICE the seat has
+   already tanked. ai-netrunner [277], marquee Game F and the Haiku 5.5 probe:
+   `tank \"X\"` is set-strategy! plus ONE continue-run!, and from the approach
+   step that one step is the approach pass — the signal is sent by the ENCOUNTER
+   handler, which never runs on this tick. The command printed
+   \"✅ Authorized tank on: X\" and nothing else, so the seat had no way to know
+   the Corp had not been told, and `wait` (which is not a run loop) sent nothing
+   either. Three models have wedged here.
+
+   This does NOT send a second step. Taking one would put back exactly the
+   speculative extra continue that #244 and #167 removed, and [277] declined to
+   propose it. The fix is that the seat is told the truth and can act on it."
+  [ice-title]
+  (println (format "   📡 NOT signalled yet: your tank on %s has not reached the Corp." ice-title))
+  (println "      This step is the approach pass; the signal is sent at the ENCOUNTER.")
+  (println (format "      Send `continue` once more (or `tank \"%s\"` again) to signal from there."
+                   ice-title))
+  (println "      `wait` will not send it, and nothing re-sends on its own.")
+  nil)
+
 (defn handle-auto-continue
   "Priority 6: Auto-continue through paid ability windows where we don't need to act"
   [{:keys [my-prompt run-phase gameid side state]}]
   (when (can-auto-continue? my-prompt run-phase side state)
     (println "   → Auto-continuing through paid ability window")
+    ;; Before the send, because the condition is a fact about the window we are
+    ;; LEAVING: read after it, the phase has moved and the ICE may be gone.
+    (when (and (= side "runner") (= run-phase "approach-ice"))
+      (when-let [ice-title (:title (core/current-run-ice state))]
+        (when (= :unsignalled (display/tank-window-state state ice-title))
+          (warn-tank-not-yet-signalled! ice-title))))
     (send-continue! gameid)))
 
 (defn handle-initiation-auto-pass

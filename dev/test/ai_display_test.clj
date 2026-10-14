@@ -3496,8 +3496,15 @@
 ;; fire the subs, and the way to do that is `wait`.
 
 (deftest test-encounter-hint-after-tank-does-not-re-ask
-  (testing "tank authorized: report the pending fire, don't re-open the menu"
-    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 true))]
+  ;; The third argument was a BOOLEAN when this test was written, and `true`
+  ;; meant "the seat has tanked". Game F (ai-netrunner [277]) showed that the
+  ;; local tank flag answers "what did I decide" and not "what does the Corp
+  ;; know", and the two states it conflated need different text, so it is now
+  ;; the tri-state tank-window-state produces. `true` is no longer a legal
+  ;; value; this call site says :signalled, which is the state it always meant
+  ;; (the assertions below are unchanged).
+  (testing "tank SIGNALLED: report the pending fire, don't re-open the menu"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :signalled))]
       (is (not (re-find #"(?i)you must decide" out))
           (str "the seat already decided; re-asking reads as a failed tank, got: " out))
       (is (not (re-find #"(?i)will NOT pass this window" out))
@@ -3509,12 +3516,64 @@
       (is (str/includes? out "2")
           (str "should still say how many subs the Corp owes, got: " out))))
   (testing "no tank yet: the break-or-tank menu is unchanged"
-    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 false))]
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :none))]
       (is (re-find #"(?i)you must decide" out))
       (is (str/includes? out "tank \"Tithe\""))))
   (testing "the 2-arity still means 'undecided'"
     (is (= (display/runner-encounter-decline-hint-lines "Tithe" 2)
-           (display/runner-encounter-decline-hint-lines "Tithe" 2 false)))))
+           (display/runner-encounter-decline-hint-lines "Tithe" 2 :none))))
+
+  ;; The state Game F was actually in, and the one this arm exists for: the
+  ;; tank is recorded locally and the Corp has never been told.
+  (testing "tank UNSIGNALLED: say the Corp has not been told, and what sends it"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :unsignalled))]
+      (is (not (str/includes? out "the Corp now owes you"))
+          (str "nothing is owed until the signal is sent, got: " out))
+      (is (not (str/includes? out "will not move it"))
+          (str "that is the sentence that kept Game F's Runner at `wait`, got: " out))
+      (is (re-find #"(?i)not been told|not reached" out)
+          (str "must say the Corp has not been told, got: " out))
+      (is (str/includes? out "`continue`")
+          (str "must name the command that sends the signal, got: " out))
+      (is (re-find #"(?i)`wait` will NOT send it" out)
+          (str "must say `wait` is not the command, since that is what was tried, got: " out))))
+
+  ;; A value this fn does not know must take the arm that CLAIMS NOTHING. A
+  ;; missed call site is then a re-asked menu, not an invented promise about
+  ;; what the Corp owes — and `false` is specifically pinned because every
+  ;; pre-#277 call site passed a boolean.
+  (testing "an unrecognized tank-state falls back to the menu, not to a claim"
+    (doseq [bogus [false true nil :bogus]]
+      (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 bogus))]
+        (is (not (str/includes? out "the Corp now owes you"))
+            (str "tank-state " (pr-str bogus) " must not claim the Corp owes anything, got: " out))
+        (is (re-find #"(?i)you must decide" out)
+            (str "tank-state " (pr-str bogus) " should re-ask rather than assert, got: " out))))))
+
+;; tank-window-state is the single classifier both surfaces read (#115 and #195
+;; were each a copy of one of these facts left behind in this same file).
+(deftest test-tank-window-state-reads-the-log-not-just-the-flag
+  (let [log-with    [{:text "Runner indicates to fire all unbroken subroutines on Tithe"}]
+        encounter   [{:text "Runner encounters Tithe protecting HQ"}]
+        state-with  (fn [log] {:game-state {:log log}})]
+    (testing ":none when no tank is authorized, whatever the log says"
+      (reset! ai-state/run-strategy {})
+      (is (= :none (display/tank-window-state (state-with log-with) "Tithe"))))
+    (testing ":unsignalled when the flag is set but no signal is in the log"
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :unsignalled (display/tank-window-state (state-with []) "Tithe")))
+      (reset! ai-state/run-strategy {}))
+    (testing ":signalled once a current signal for this encounter is in the log"
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :signalled (display/tank-window-state (state-with log-with) "Tithe")))
+      (reset! ai-state/run-strategy {}))
+    (testing ":unsignalled when the only signal predates THIS encounter"
+      ;; runner-signaled-let-fire?'s staleness rule, surfaced: a tank from an
+      ;; earlier encounter of the same card must not read as current.
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :unsignalled (display/tank-window-state
+                           (state-with (into log-with encounter)) "Tithe")))
+      (reset! ai-state/run-strategy {}))))
 
 (deftest test-status-after-tank-reads-as-waiting-not-undecided
   ;; End to end through the surface a seat actually reads: the run-window
