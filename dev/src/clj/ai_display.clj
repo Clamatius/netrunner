@@ -2375,15 +2375,30 @@
      ;;     is an action this arm OFFERS and correctly produces no signal, so
      ;;     the postcondition diagnoses a successful break as a fault (F4), and
      ;;     it is a claim about latch state this pure fn cannot read (F8).
-     ;; "cannot confirm" is true when nothing was sent, when the send was lost,
-     ;; and when the mirror is diverged, which is why there is no fourth state.
-     ;; The escalation lives on diagnose-blocker, which can read state (D5).
-     [(format "    → Your tank on %s is recorded here, but the shared log carries NO CURRENT" ice-title)
-      (format "      SIGNAL for this encounter, so THIS CLIENT CANNOT CONFIRM the tank reached")
-      (format "      the Corp. The %d unbroken subroutine%s remain%s unbroken."
-              unbroken-count (if (= unbroken-count 1) "" "s") (if (= unbroken-count 1) "s" ""))
-      (format "      • Break %s, or `tank \"%s\"` again." ice-title ice-title)
-      "      • `diagnose-blocker` reads the current state if this does not clear."
+     ;; Round 6 took two more out, and both had survived five rounds:
+     ;;   "THIS CLIENT CANNOT CONFIRM the tank reached the Corp" — false in the
+     ;;     SUPERSEDED case. Take the :signalled arm's own "Changed your mind?
+     ;;     Break X" offer on one of two subs and runner-signaled-let-fire?
+     ;;     fails on (> signal-idx break-idx), so the state is :unsignalled
+     ;;     while the "indicates to fire" line sits in the log being read: it
+     ;;     reached, it is merely no longer CURRENT (M3). "No CURRENT signal"
+     ;;     was already exactly right and needed no gloss.
+     ;;   "or `tank \"X\"` again" — a PRESCRIPTION, not a prediction, and so it
+     ;;     slipped the dispatch-state rule while depending on dispatch state
+     ;;     anyway: in signal-tank-once!'s lost-send branch a re-tank sends 0
+     ;;     and, once report-once! has consumed the mark, prints NOTHING. A
+     ;;     seat obeying it sees "Authorized tank on: X" and the same status
+     ;;     again — the Game F shape, prescribed by the surface built to cure
+     ;;     it (M1, reproduced). `break` depends on no latch, so it stays.
+     ;; What is left is a reading of our own log plus one action that cannot
+     ;; silently no-op. The escalation lives on diagnose-blocker (D5).
+     [(format "    → Your tank on %s is recorded here, but the log AS THIS CLIENT HAS IT" ice-title)
+      (format "      carries no CURRENT signal for this encounter, and the %d unbroken"
+              unbroken-count)
+      (format "      subroutine%s remain%s unbroken."
+              (if (= unbroken-count 1) "" "s") (if (= unbroken-count 1) "s" ""))
+      (format "      • Break %s. That needs no signal and no Corp action." ice-title)
+      "      • `diagnose-blocker` for the live read, and the escalation if it does not clear."
       "      (`wait` sends nothing, and nothing re-sends on a timer.)"]
 
      :else
@@ -2444,7 +2459,7 @@
       (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
 
       (= tank-state :unsignalled)
-      (format "      • Your tank on %s is recorded, but the shared log carries NO CURRENT SIGNAL for this encounter, so this client cannot confirm it reached the Corp — break it, or `tank` it again." ice-title)
+      (format "      • Your tank on %s is recorded, but the log as this client has it carries no CURRENT signal for this encounter — breaking needs neither." ice-title)
 
       :else
       (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
@@ -3924,7 +3939,7 @@
             (println (cond
                        corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
                        (= tank-state :signalled) "   → Owner: the CORP — your tank stands; they owe the subs."
-                       (= tank-state :unsignalled) "   → Owner: YOU — no signal for your tank is in the log: break it, or `tank` it again. Escalation if that does not clear it: ./dev/umpire-ping"
+                       (= tank-state :unsignalled) "   → Owner: cannot be established from here — the log as this client has it carries no CURRENT signal for your tank. Breaking needs no signal; if nothing clears it: ./dev/umpire-ping"
                        :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
                           ice-title runner-unbroken tank-state corp-declined?)]

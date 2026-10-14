@@ -476,7 +476,9 @@
     (let [out (clojure.string/join
                "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
       (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out) (str "got:\n" out))
-      (is (re-find #"(?i)cannot confirm it reached the Corp" out) (str "got:\n" out))
+      (is (re-find #"(?i)as this client has it" out) (str "got:\n" out))
+      (is (not (re-find #"(?i)`tank` it again" out))
+          (str "re-tanking can silently no-op in the lost-send state; got:\n" out))
       (is (not (re-find #"(?i)already stands" out))
           (str "nothing stands until it is sent, got:\n" out))))
   (testing "every state still names the forced window and still offers the break"

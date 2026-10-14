@@ -2518,7 +2518,7 @@
         (let [out (with-out-str (display/show-blocker-diagnosis))]
           (is (not (re-find #"Owner: the CORP" out))
               (str "the Corp has seen no signal; it owns nothing here, got: " out))
-          (is (re-find #"(?i)no signal for your tank is in the log" out)
+          (is (re-find #"(?i)carries no CURRENT signal for your tank" out)
               (str "must name the unsent signal, got: " out))
           ;; D5: not predicting and not helping are different requirements;
           ;; this is the surface whose documented job is the next command.
@@ -2532,8 +2532,15 @@
           ;; arrives later gets it from nowhere else.
           (is (re-find #"umpire-ping" out)
               (str "must leave a route out of the lost-send state, got: " out))
-          (is (re-find #"(?i)break it, or `tank` it again" out)
-              (str "and must name the actions before the escalation, got: " out))
+          ;; M2: this surface must not ASSIGN the window to us when a diverged
+          ;; mirror means we cannot establish who holds it.
+          (is (not (re-find #"Owner: YOU" out))
+              (str "ownership cannot be established from an absent signal, got: " out))
+          (is (re-find #"(?i)Breaking needs no signal" out)
+              (str "must name the action that depends on no latch, got: " out))
+          ;; M1: and must not prescribe the one that can send and print nothing.
+          (is (not (re-find #"(?i)`tank` it again" out))
+              (str "re-tanking can silently no-op in the lost-send state, got: " out))
           ;; It must NOT tell the seat to hold: round 4's deleted :unknown line
           ;; said "Hold." with no next command, and holding is the one action
           ;; that triggers no resync (round 5, L1).

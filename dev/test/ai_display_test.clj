@@ -3535,10 +3535,27 @@
       ;; of nothing-sent, send-lost and diverged-mirror. Round 4's "the Corp
       ;; has nothing to act on" was false outright: the Corp can `fire-subs`
       ;; with no authorization at all (round 5, L2).
-      (is (re-find #"(?i)CANNOT CONFIRM the tank reached" out)
-          (str "must claim only what this client can know, got: " out))
+      ;; A reading of OUR OWN log, hedged to it (M2), with no epistemic gloss:
+      ;; "cannot confirm the tank reached" is false in the superseded case,
+      ;; where the signal is visibly in the log and merely not current (M3).
+      (is (re-find #"(?i)AS THIS CLIENT HAS IT" out)
+          (str "must hedge to our own mirror, got: " out))
+      (is (not (re-find #"(?i)cannot confirm the tank reached" out))
+          (str "false when a later break superseded a signal that DID land; got: " out))
       (is (not (re-find #"(?i)nothing to act on" out))
           (str "the Corp can fire-subs unauthorized; got: " out))
+      ;; BOTH EXITS, pinned. A seat deleted each in turn and 302 tests stayed
+      ;; green, on the surface Game F's Runner actually read (M4/F2).
+      (is (re-find #"(?i)Break Tithe" out)
+          (str "must offer the action that needs no signal, got: " out))
+      (is (re-find #"diagnose-blocker" out)
+          (str "must name the live-read surface, got: " out))
+      ;; And NOT the one that can silently no-op: in signal-tank-once!'s
+      ;; lost-send branch a re-tank sends 0 and prints nothing once
+      ;; report-once! has consumed the mark, which is the Game F shape
+      ;; prescribed by the cure (M1, reproduced).
+      (is (not (re-find #"(?i)`tank \"Tithe\"` again|or `tank` it again" out))
+          (str "re-tanking can send nothing and say nothing; got: " out))
       ;; THE LOG IS THE AUTHORITY, and the arm says so. Four review rounds
       ;; killed three wordings that put the authority somewhere else; the last
       ;; of them defined "the Corp was told" as a 📡 line in our own output,
@@ -3614,6 +3631,18 @@
       (reset! ai-state/run-strategy {:tank #{"Tithe"}})
       (is (= :unsignalled (display/tank-window-state
                            (assoc (state-with []) :diff-mismatch true) "Tithe")))
+      (reset! ai-state/run-strategy {}))
+    ;; THE ORDERING, which round 5 left unwitnessed when it deleted the
+    ;; :unknown tests: a seat inserted `(:diff-mismatch state) :unsignalled`
+    ;; AHEAD of the runner-signaled-let-fire? clause and 302 tests stayed
+    ;; green. That makes the display more sceptical than the gate that actually
+    ;; authorises firing, which is the drift the classifier's own comment says
+    ;; it forbids. A VISIBLE signal wins, diverged mirror or not.
+    (testing "a visible signal outranks a diverged mirror (ordering, not luck)"
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :signalled (display/tank-window-state
+                         (assoc (state-with log-with) :diff-mismatch true) "Tithe"))
+          "the display must not be more sceptical than the Corp's own fire gate")
       (reset! ai-state/run-strategy {}))
     (testing ":unsignalled when the only signal predates THIS encounter"
       ;; runner-signaled-let-fire?'s staleness rule, surfaced: a tank from an
@@ -3822,7 +3851,7 @@
                        "success" "runner"))]
             (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out)
                 (str "no signal is in this fixture's log; got: " out))
-            (is (re-find #"(?i)cannot confirm" out) (str "got: " out))
+            (is (re-find #"(?i)AS THIS CLIENT HAS IT" out) (str "got: " out))
             (is (not (re-find #"(?i)already stands" out))
                 (str "nothing stands until it is sent; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))
