@@ -2468,6 +2468,24 @@
             (is (re-find #"(?i)NOT signalled" out)
                 (str "the notice must still fire: no signal for an encounter that has"
                      " not started can be current, got: " out))
+            ;; THE WORDING, not just the presence of a notice. A seat reverted
+            ;; the whole ai_runs delta and all 302 tests stayed green, because
+            ;; the only assertions were "matches (?i)NOT signalled" and
+            ;; "matches (?i)signal" — both true of the round-2 text that three
+            ;; review rounds killed as FALSE (design round F2). So pin the two
+            ;; dead claims by their absence:
+            ;;   "this step is the approach pass"  — describes a send that has
+            ;;     not happened yet and may be refused (D6);
+            ;;   "Both sides must pass this approach window" — false, because
+            ;;     handle-stalled-window-self-advance sends the second pass
+            ;;     itself (D2/J3).
+            (is (not (re-find #"(?i)this step is the approach pass" out))
+                (str "the notice runs BEFORE send-continue!, so it describes the"
+                     " window, not the step, got: " out))
+            (is (not (re-find #"(?i)both sides must pass" out))
+                (str "self-advance sends the second pass alone, got: " out))
+            (is (re-find #"(?i)APPROACH window" out)
+                (str "it must name the window it is describing, got: " out))
             (is (empty? (filter #(= "system-msg" (:command %)) @sent))
                 (str "and still nothing is sent from the approach step, got: " @sent)))
           (runs/reset-strategy!))))))

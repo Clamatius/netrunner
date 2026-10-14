@@ -472,11 +472,11 @@
           (str "re-offering a sent tank is #151 item 2, got:\n" out))
       (is (re-find #"(?i)already stands" out) (str "got:\n" out))
       (is (re-find #"(?i)owes the subs" out) (str "got:\n" out))))
-  (testing "unsignalled: say the Corp has not been told, and claim nothing it has not seen"
+  (testing "unsignalled: name the log, and claim nothing the mirror cannot support"
     (let [out (clojure.string/join
                "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
-      (is (re-find #"(?i)no current signal for this encounter" out) (str "got:\n" out))
-      (is (re-find #"(?i)Corp owes nothing" out) (str "got:\n" out))
+      (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out) (str "got:\n" out))
+      (is (re-find #"(?i)nothing to act on" out) (str "got:\n" out))
       (is (not (re-find #"(?i)already stands" out))
           (str "nothing stands until it is sent, got:\n" out))))
   (testing "every state still names the forced window and still offers the break"

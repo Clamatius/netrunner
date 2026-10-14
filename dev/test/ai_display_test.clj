@@ -3525,29 +3525,39 @@
 
   ;; The state Game F was actually in, and the one this arm exists for: the
   ;; tank is recorded locally and the Corp has never been told.
-  (testing "tank UNSIGNALLED: say the Corp has not been told, and what sends it"
+  (testing "tank UNSIGNALLED: name the log, and claim nothing the mirror cannot support"
     (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :unsignalled))]
       (is (not (str/includes? out "the Corp now owes you"))
           (str "nothing is owed until the signal is sent, got: " out))
       (is (not (str/includes? out "will not move it"))
           (str "that is the sentence that kept Game F's Runner at `wait`, got: " out))
-      (is (re-find #"(?i)nothing is owed by the Corp" out)
-          (str "must say the Corp is owed nothing yet, got: " out))
+      (is (re-find #"(?i)the Corp has nothing to act on" out)
+          (str "must say the Corp has nothing to act on YET, got: " out))
       ;; THE LOG IS THE AUTHORITY, and the arm says so. Four review rounds
       ;; killed three wordings that put the authority somewhere else; the last
       ;; of them defined "the Corp was told" as a 📡 line in our own output,
       ;; which is false in both directions (signal-tank-once! prints it before
       ;; the send it may refuse; `let-subs-fire` sends without it).
-      (is (re-find #"(?i)log carries no current signal" out)
+      (is (re-find #"(?i)carries NO CURRENT" out)
           (str "must name the log as the authority, got: " out))
-      ;; A route out, on a surface a stuck seat reads (design round D5).
-      (is (re-find #"umpire-ping" out)
-          (str "must name an escalation that does not depend on dispatch, got: " out))
-      ;; And no claim whose truth depends on client dispatch state: which
-      ;; handler wins is decided by :full-break/:tank-all/the latch, none of
-      ;; which this layer reads.
-      (is (not (re-find #"(?i)sends the signal|is sent when|will send it" out))
-          (str "must not predict what a later command will do, got: " out))
+      ;; NO REGEX GUARD OVER THE PROSE. The design round dropped that idea and
+      ;; round 4 proved it had to: a seat appended the exact forbidden sentence
+      ;; ("The signal goes out when the client next acts on this encounter.")
+      ;; and every assertion here still passed, because "goes out when" matches
+      ;; none of the patterns a guard would plausibly list. A rule about which
+      ;; CLAIMS are allowed cannot be enforced by pattern-matching English; what
+      ;; is enforceable is the per-state content below, and the absence of
+      ;; specific wrong tokens.
+      ;;
+      ;; The conclusion the arm must NOT draw, because it is drawn from our own
+      ;; mirror and the :unknown arm exists for an untrustworthy one (D4/F7).
+      (is (not (re-find #"(?i)nothing is owed by the Corp" out))
+          (str "the mirror cannot support that conclusion, got: " out))
+      ;; And no harness diagnosis: breaking is offered here and correctly
+      ;; produces no signal, so "no signal afterwards => harness trouble"
+      ;; diagnoses a successful break as a fault (F4).
+      (is (not (re-find #"(?i)harness trouble" out))
+          (str "a pure fn cannot tell a break from a lost send, got: " out))
       ;; Must not reproduce the client's own signalling token either: a
       ;; transcript grep for it would match the one state this arm rules out.
       (is (not (re-find #"(?i)Signaling Corp" out))
@@ -3559,12 +3569,20 @@
       (is (re-find #"(?i)`wait` sends nothing" out)
           (str "must say `wait` alone is not enough, since that is what was tried, got: " out))))
 
+  (testing "tank UNKNOWN: say the mirror is diverged, and claim nothing either way"
+    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :unknown))]
+      (is (re-find #"(?i)cannot be told from here" out) (str "got: " out))
+      (is (not (re-find #"(?i)carries NO CURRENT" out))
+          (str "a diverged mirror's silence is not evidence, got: " out))
+      (is (not (str/includes? out "the Corp now owes you"))
+          (str "nor is it evidence the other way, got: " out))))
+
   ;; A value this fn does not know must take the arm that CLAIMS NOTHING. A
   ;; missed call site is then a re-asked menu, not an invented promise about
   ;; what the Corp owes — and `false` is specifically pinned because every
   ;; pre-#277 call site passed a boolean.
   (testing "an unrecognized tank-state falls back to the menu, not to a claim"
-    (doseq [bogus [false true nil :bogus]]
+    (doseq [bogus [false true nil :bogus :signalled-ish]]
       (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 bogus))]
         (is (not (str/includes? out "the Corp now owes you"))
             (str "tank-state " (pr-str bogus) " must not claim the Corp owes anything, got: " out))
@@ -3587,6 +3605,19 @@
     (testing ":signalled once a current signal for this encounter is in the log"
       (reset! ai-state/run-strategy {:tank #{"Tithe"}})
       (is (= :signalled (display/tank-window-state (state-with log-with) "Tithe")))
+      (reset! ai-state/run-strategy {}))
+    (testing ":unknown when no signal is visible AND our mirror is known-diverged"
+      ;; signal-tank-once! already refuses to diagnose from a :diff-mismatch
+      ;; mirror (#142): the diff carrying the signal may be the one we dropped.
+      ;; The display must not contradict it by reporting the Corp as untold.
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :unknown (display/tank-window-state
+                       (assoc (state-with []) :diff-mismatch true) "Tithe")))
+      (reset! ai-state/run-strategy {}))
+    (testing "a VISIBLE signal is decisive even on a diverged mirror"
+      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+      (is (= :signalled (display/tank-window-state
+                         (assoc (state-with log-with) :diff-mismatch true) "Tithe")))
       (reset! ai-state/run-strategy {}))
     (testing ":unsignalled when the only signal predates THIS encounter"
       ;; runner-signaled-let-fire?'s staleness rule, surfaced: a tank from an
@@ -3657,7 +3688,7 @@
     ;; Game F end to end on the surface a seat actually reads: tank flag set,
     ;; nothing in the log. This is the state the whole change is about and no
     ;; test drove this surface in it before.
-    (testing "tanked but never signalled: this surface must not say the Corp owes anything"
+    (testing "tanked, no signal in the log: this surface must not say the Corp owes anything"
       (with-mock-state encounter-state
         (reset! ai-state/run-strategy {:tank #{"Tithe"}})
         (try
@@ -3670,7 +3701,7 @@
                 (str "no signal is in the log; got: " out))
             (is (not (re-find #"`wait` \u2014 the subs fire" out))
                 (str "the wait steer is for a SIGNALLED tank; got: " out))
-            (is (re-find #"(?i)log carries no current signal" out)
+            (is (re-find #"(?i)carries NO CURRENT" out)
                 (str "must name the log as the authority; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))
     ;; --tank-all on the SIGNALLED fixture: "not you must decide" was satisfied
@@ -3793,9 +3824,9 @@
                        @ai-state/client-state
                        (get-in on-access [:game-state :run])
                        "success" "runner"))]
-            (is (re-find #"(?i)no current signal for this encounter" out)
+            (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out)
                 (str "no signal is in this fixture's log; got: " out))
-            (is (re-find #"(?i)Corp owes nothing" out) (str "got: " out))
+            (is (re-find #"(?i)nothing to act on" out) (str "got: " out))
             (is (not (re-find #"(?i)already stands" out))
                 (str "nothing stands until it is sent; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))
