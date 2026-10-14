@@ -11,7 +11,6 @@
             [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-run-runner-handlers :as runner-handlers]
-            [ai-display :as display]
             [ai-connection :as connection]))
 
 ;; ============================================================================
@@ -1270,13 +1269,33 @@
 
    This does NOT send a second step. Taking one would put back exactly the
    speculative extra continue that #244 and #167 removed, and [277] declined to
-   propose it. The fix is that the seat is told the truth and can act on it."
+   propose it.
+
+   It also does not tell the seat which key to press next, and that is a
+   correction, not an omission. Round 1 of this fix said \"Send `continue` once
+   more … to signal from there\", and the engine disagrees: `continue`
+   :approach-ice (src/clj/game/core/runs.clj:295) only RECORDS the passer while
+   [:run :no-action] is falsy, and advances on the SECOND pass. So from a window
+   the Corp has not passed, the next continue is the #98 already-passed no-op
+   and the wait that advice discouraged is the step actually needed first —
+   while in the loop paths (monitor-run!, `run --tank-all`) the opposite is
+   true and the loop's own next tick prints \"Signaling Corp\" a few lines
+   below the advice. One keystroke recipe cannot be right in both, so this
+   states what IS true in both: nothing has been sent, and the encounter is
+   where sending happens.
+
+   KNOWN GAP, stated rather than discovered later: this is reachable only for
+   an approach to REZZED ice. handle-runner-approach-ice sits ahead of
+   handle-auto-continue in the handler list and claims every UNREZZED approach,
+   and initiation/movement have no notice either. Game F was the rezzed case.
+   Those paths make no false claim (no encounter, no sub count, so no surface
+   says the Corp owes anything) — they are silent, which is the partial
+   delivery of [277] property 1 recorded in the issue."
   [ice-title]
   (println (format "   📡 NOT signalled yet: your tank on %s has not reached the Corp." ice-title))
-  (println "      This step is the approach pass; the signal is sent at the ENCOUNTER.")
-  (println (format "      Send `continue` once more (or `tank \"%s\"` again) to signal from there."
-                   ice-title))
-  (println "      `wait` will not send it, and nothing re-sends on its own.")
+  (println "      No tank signal for it is in the shared log; this step is the approach pass,")
+  (println "      and the signal is sent at the ENCOUNTER, which has not started.")
+  (println "      Both sides must pass this approach window before it does.")
   nil)
 
 (defn handle-auto-continue
@@ -1286,9 +1305,20 @@
     (println "   → Auto-continuing through paid ability window")
     ;; Before the send, because the condition is a fact about the window we are
     ;; LEAVING: read after it, the phase has moved and the ICE may be gone.
+    ;;
+    ;; The bare tank FLAG, deliberately, and not ai-display/tank-window-state.
+    ;; tank-window-state asks runner-signaled-let-fire?, which is scoped to
+    ;; "this encounter" by `(> signal-idx encounter-idx)` — and at an approach
+    ;; the marker for the coming encounter does not exist yet, so a signal from
+    ;; an EARLIER encounter of a same-titled ICE reads as current and suppressed
+    ;; this notice (two Whitespaces in one run; guest panel MAJOR, round 1).
+    ;; At approach the question has only one honest answer anyway: no signal for
+    ;; an encounter that has not started can be current, so a tank flag here is
+    ;; always not-yet-signalled. Asking the encounter predicate was a category
+    ;; error, not a tunable.
     (when (and (= side "runner") (= run-phase "approach-ice"))
       (when-let [ice-title (:title (core/current-run-ice state))]
-        (when (= :unsignalled (display/tank-window-state state ice-title))
+        (when (state/tank-authorized? ice-title)
           (warn-tank-not-yet-signalled! ice-title))))
     (send-continue! gameid)))
 

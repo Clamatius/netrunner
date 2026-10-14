@@ -3533,10 +3533,19 @@
           (str "that is the sentence that kept Game F's Runner at `wait`, got: " out))
       (is (re-find #"(?i)not been told|not reached" out)
           (str "must say the Corp has not been told, got: " out))
-      (is (str/includes? out "`continue`")
-          (str "must name the command that sends the signal, got: " out))
-      (is (re-find #"(?i)`wait` will NOT send it" out)
-          (str "must say `wait` is not the command, since that is what was tried, got: " out))))
+      ;; A FACT, not a keystroke. Round 1 of this arm said "`continue` — sends
+      ;; the signal from HERE" and two seats found two ways for that to be
+      ;; false: signal-tank-once!'s lost-send state deliberately refuses to
+      ;; re-send, and in the loop paths the next tick signals anyway, putting
+      ;; the advice a few rows above a "Signaling Corp" line. So the arm names
+      ;; WHERE sending happens and what to watch for, and this asserts the
+      ;; absence of the recipe so it cannot creep back.
+      (is (re-find #"(?i)when the client next acts on this encounter" out)
+          (str "must say where the signal is sent from, got: " out))
+      (is (not (re-find #"(?i)`continue`\s*\u2014\s*sends the signal" out))
+          (str "must not promise that a particular keystroke sends it, got: " out))
+      (is (re-find #"(?i)`wait` on its own does not send it" out)
+          (str "must say `wait` alone is not enough, since that is what was tried, got: " out))))
 
   ;; A value this fn does not know must take the arm that CLAIMS NOTHING. A
   ;; missed call site is then a re-asked menu, not an invented promise about
@@ -3588,7 +3597,20 @@
                                             :phase "encounter-ice"}
                                       :encounters {:ice tithe}
                                       :corp {:servers {:hq {:ices [tithe]}}}
-                                      :runner {:click 2 :credit 4 :rig {}}})]
+                                      :runner {:click 2 :credit 4 :rig {}}})
+        ;; THE SIGNAL HAS TO BE IN THE LOG for this fixture to mean "the tank
+        ;; stands". It did not used to need one: the arm was chosen by the local
+        ;; tank flag alone, so a fixture with no :log read as "tanked, Corp owes
+        ;; the subs" and this test passed on it. Since tank-window-state the
+        ;; same fixture reads :unsignalled, and the `(str/includes? out "wait")`
+        ;; assertion below was then satisfied by the NEW arm's
+        ;; "(`wait` will NOT send it …)" — green on text saying the opposite of
+        ;; this deftest's name, with the surface it claims to pin not exercised
+        ;; at all (guest panel MAJOR, round 1). The :log key is the field the
+        ;; defect lives in, so it is no longer optional here.
+        signalled-state (assoc-in encounter-state [:game-state :log]
+                                  [{:text "Runner encounters Tithe protecting HQ"}
+                                   {:text "Runner indicates to fire all unbroken subroutines on Tithe"}])]
     (testing "before tanking, the seat is told to decide"
       (with-mock-state encounter-state
         (reset! ai-state/run-strategy {})
@@ -3599,7 +3621,31 @@
                      "encounter-ice" "runner"))]
           (is (re-find #"(?i)you must decide" out)
               (str "expected the break-or-tank menu, got: " out)))))
-    (testing "after tanking, the same surface reports a pending Corp action"
+    (testing "after tanking AND signalling, the same surface reports a pending Corp action"
+      (with-mock-state signalled-state
+        (reset! ai-state/run-strategy {:tank #{"Tithe"}})
+        (try
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in signalled-state [:game-state :run])
+                       "encounter-ice" "runner"))]
+            (is (not (re-find #"(?i)you must decide" out))
+                (str "the tank already decided this; got: " out))
+            (is (str/includes? out "the Corp now owes you")
+                (str "a signalled tank is owed by the Corp; got: " out))
+            ;; Not a bare "wait": the :unsignalled arm also contains that token,
+            ;; inside "(`wait` will NOT send it …)", which is how this block went
+            ;; green on the wrong arm. Assert the steer, not the word.
+            (is (re-find #"`wait` \u2014 the subs fire" out)
+                (str "expected the wait steer, got: " out))
+            (is (not (re-find #"(?i)`wait` will NOT send it" out))
+                (str "that line belongs to the UNSIGNALLED arm; got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))
+    ;; Game F end to end on the surface a seat actually reads: tank flag set,
+    ;; nothing in the log. This is the state the whole change is about and no
+    ;; test drove this surface in it before.
+    (testing "tanked but never signalled: this surface must not say the Corp owes anything"
       (with-mock-state encounter-state
         (reset! ai-state/run-strategy {:tank #{"Tithe"}})
         (try
@@ -3608,22 +3654,29 @@
                        @ai-state/client-state
                        (get-in encounter-state [:game-state :run])
                        "encounter-ice" "runner"))]
-            (is (not (re-find #"(?i)you must decide" out))
-                (str "the tank already decided this; got: " out))
-            (is (str/includes? out "wait")
-                (str "expected the wait steer, got: " out)))
+            (is (not (str/includes? out "the Corp now owes you"))
+                (str "no signal is in the log; got: " out))
+            (is (not (re-find #"`wait` \u2014 the subs fire" out))
+                (str "the wait steer is for a SIGNALLED tank; got: " out))
+            (is (re-find #"(?i)not been told" out)
+                (str "must say the Corp has not been told; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))
+    ;; --tank-all on the SIGNALLED fixture: "not you must decide" was satisfied
+    ;; by either arm, so this block could not tell the standing decision from
+    ;; the not-told state either.
     (testing "--tank-all covers an ICE it never named"
-      (with-mock-state encounter-state
+      (with-mock-state signalled-state
         (reset! ai-state/run-strategy {:tank-all true})
         (try
           (let [out (with-out-str
                       (display/print-run-window-priority!
                        @ai-state/client-state
-                       (get-in encounter-state [:game-state :run])
+                       (get-in signalled-state [:game-state :run])
                        "encounter-ice" "runner"))]
             (is (not (re-find #"(?i)you must decide" out))
-                (str "--tank-all is a standing decision; got: " out)))
+                (str "--tank-all is a standing decision; got: " out))
+            (is (str/includes? out "the Corp now owes you")
+                (str "--tank-all plus a signal is owed by the Corp; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))))
 
 ;; ============================================================================

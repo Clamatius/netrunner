@@ -452,7 +452,39 @@
     (testing "and is not simultaneously disclaimed"
       (is (not (re-find #"(?i)tank cannot help" out)) (str "got:\n" out)))
     (testing "breaking is still offered"
-      (is (re-find #"(?i)icebreaker" out)))))
+      (is (re-find #"(?i)icebreaker" out)))
+    (testing "the 3-arity means 'no tank state known', so tank is still the offer"
+      (is (= lines (display/forced-encounter-advisory-lines "Archangel" 1 "success" :none))))))
+
+(deftest forced-encounter-advisory-reports-the-tank-state
+  ;; This advisory is the THIRD surface that talks about tanking, and it took no
+  ;; tank state at all — so a seat whose signal was already in the shared log
+  ;; was offered `tank "X"` as a fresh option (the #151 item 2 defect: reads as
+  ;; the tank having failed), and a seat whose tank had never been SENT got no
+  ;; hint that the Corp had not been told. That second state is Game F
+  ;; (ai-netrunner [277]), arriving at a forced encounter instead of a standard
+  ;; one. Guest panel MAJOR over the first cut of the [277] fix, which wired the
+  ;; classifier into the other two surfaces and left this one reading nothing.
+  (testing "signalled: do not re-offer the decision the seat already made and sent"
+    (let [out (clojure.string/join
+               "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :signalled))]
+      (is (not (re-find #"tank \"Archangel\"\s+—\s+decline to break" out))
+          (str "re-offering a sent tank is #151 item 2, got:\n" out))
+      (is (re-find #"(?i)already stands" out) (str "got:\n" out))
+      (is (re-find #"(?i)owes the subs" out) (str "got:\n" out))))
+  (testing "unsignalled: say the Corp has not been told, and claim nothing it has not seen"
+    (let [out (clojure.string/join
+               "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
+      (is (re-find #"(?i)NOT in the shared log" out) (str "got:\n" out))
+      (is (re-find #"(?i)Corp owes nothing" out) (str "got:\n" out))
+      (is (not (re-find #"(?i)already stands" out))
+          (str "nothing stands until it is sent, got:\n" out))))
+  (testing "every state still names the forced window and still offers the break"
+    (doseq [st [:none :unsignalled :signalled]]
+      (let [out (clojure.string/join
+                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
+        (is (re-find #"(?i)forced encounter" out) (str st " lost the window label:\n" out))
+        (is (re-find #"(?i)icebreaker" out) (str st " lost the break option:\n" out))))))
 
 
 ;; ============================================================================

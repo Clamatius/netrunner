@@ -2320,17 +2320,29 @@
       "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
 
      ;; The state that wedged Game F. Everything the :signalled arm says is
-     ;; false here, and the last line of it is the specific sentence that kept
-     ;; the Runner at `wait` for twenty minutes.
+     ;; false here, and its last line is the specific sentence that kept the
+     ;; Runner at `wait` for twenty minutes.
+     ;;
+     ;; This arm STATES A FACT and does not prescribe a keystroke. Round 1 of
+     ;; this fix did prescribe one ("`continue` sends the signal from HERE"),
+     ;; and two seats found two different ways for it to be false: in
+     ;; signal-tank-once!'s lost-send state the client deliberately REFUSES to
+     ;; re-send and says so, and in the loop paths the next tick signals on its
+     ;; own, so the advice contradicted a "Signaling Corp" line a few rows
+     ;; below it. [277] property 2 asks only that the Corp-owes-you claim be
+     ;; backed by the log; the recipe was mine, and it was the whole source of
+     ;; the error. What is always true is what is printed.
      (= tank-state :unsignalled)
-     [(format "    → Your tank on %s is recorded here, but the CORP HAS NOT BEEN TOLD: no signal"
-              ice-title)
-      (format "      for this encounter is in the shared log, so the %d unbroken subroutine%s"
-              unbroken-count (if (= unbroken-count 1) "" "s"))
-      "      will not fire and nothing is owed by the Corp yet."
-      (format "      • `continue` — sends the signal from HERE (so does `tank \"%s\"` again)." ice-title)
+     [(format "    → Your tank on %s is recorded here, but the CORP HAS NOT BEEN TOLD:" ice-title)
+      (format "      no current signal for this encounter is in the shared log, so the %d unbroken"
+              unbroken-count)
+      (format "      subroutine%s will not fire and nothing is owed by the Corp yet."
+              (if (= unbroken-count 1) "" "s"))
+      "      • The signal is sent when the client next acts on this encounter. Watch for"
+      "        a \"📡 Signaling Corp\" line; if the client instead reports the signal"
+      "        never reached the log, that is harness trouble and it names the escalation."
       (format "      • Or break %s instead: a tank is not binding until it is sent." ice-title)
-      "      (`wait` will NOT send it, and nothing re-sends on its own.)"]
+      "      (`wait` on its own does not send it, and nothing re-sends on a timer.)"]
 
      :else
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
@@ -2362,21 +2374,40 @@
    The phase line stays: a seat that reads \"success\" in the ladder and a live
    encounter here needs to be told those are the same window, not two.
 
+   TANK STATE, as everywhere else that reports a tank (#277 round 1 guest
+   MAJOR): this is the THIRD surface that talks about tanking, and it took no
+   tank state at all — so a seat whose signal was already in the log was told
+   \"tank \\\"X\\\"\" as a fresh option (the #151 item 2 defect, verbatim), and one
+   whose tank had never been sent got no hint that the Corp had not been told.
+   #160 put the encounter handlers on core/at-encounter?, so a tank IS live
+   here; the three states are therefore the same three as at a standard
+   encounter. The 3-arity keeps :none for callers that have no state to read.
+
    Pure; returns lines to println."
-  [ice-title unbroken-count phase]
-  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
-           ice-title unbroken-count (if (= unbroken-count 1) "" "s")
-           (if phase (str "phase: " phase) "there is no run at all"))
-   (if phase
-     "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
-     ;; Quest Completed → Ganked! (#164): the encounter outlived its run entirely,
-     ;; so there is no phase line above to reconcile — the seat has to be told the
-     ;; window is real anyway, or "no run" reads as "nothing to do".
-     "      (The encounter outlived its run — it is still live, and still yours to resolve.)")
-   "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
-   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title)
-   "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
-   "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"])
+  ([ice-title unbroken-count phase]
+   (forced-encounter-advisory-lines ice-title unbroken-count phase :none))
+  ([ice-title unbroken-count phase tank-state]
+   [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
+            ice-title unbroken-count (if (= unbroken-count 1) "" "s")
+            (if phase (str "phase: " phase) "there is no run at all"))
+    (if phase
+      "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
+      ;; Quest Completed → Ganked! (#164): the encounter outlived its run entirely,
+      ;; so there is no phase line above to reconcile — the seat has to be told the
+      ;; window is real anyway, or "no run" reads as "nothing to do".
+      "      (The encounter outlived its run — it is still live, and still yours to resolve.)")
+    "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
+    (cond
+      (= tank-state :signalled)
+      (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
+
+      (= tank-state :unsignalled)
+      (format "      • Your tank on %s is recorded but NOT in the shared log yet, so the Corp owes nothing; the signal goes out when the client next acts on this encounter." ice-title)
+
+      :else
+      (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
+    "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
+    "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"]))
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
@@ -2459,7 +2490,8 @@
           ;; (#160 put the handlers on core/at-encounter?, so `tank` is no longer
           ;; a no-op here), but the phase is named — the ladder above says
           ;; "success" and the seat has to be told that is still this encounter.
-          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase)]
+          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase
+                                                        (tank-window-state state ice-title))]
             (println line))))
 
       ;; Corp at approach-ice having already declined/passed: don't offer it a rez
