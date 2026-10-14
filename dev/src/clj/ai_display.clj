@@ -2247,18 +2247,20 @@
 
      :none        no tank is authorized for this ICE.
 
-     :unknown     the tank is recorded, no signal is visible, AND our mirror of
-                  the log is known-diverged (:diff-mismatch, #142). An absent
-                  signal says NOTHING here: the diff carrying it may be the one
-                  we dropped. signal-tank-once! already refuses to diagnose in
-                  this state and holds for the pending resync, and the display
-                  must not contradict it (design round D4/F8).
-
      :unsignalled `tank` recorded the intention in the local strategy and the
                   shared LOG, as this client sees it, holds no current signal.
                   NOT \"the Corp has not been told\": that is a claim about the
                   Corp's knowledge, and this is a reading of our own mirror
-                  (D4). ai-netrunner [277], marquee Game F: `tank` is
+                  (D4). What the guidance for this state may therefore say is
+                  only that THIS CLIENT CANNOT CONFIRM the tank reached the
+                  Corp — true whether nothing was sent, the send was lost, or
+                  our mirror is diverged, so it needs no fourth state. Round 4
+                  added one (:unknown, for :diff-mismatch) and round 5 deleted
+                  it: its guidance said \"hold until the resync lands\", and
+                  :diff-mismatch schedules no resync — recovery runs in
+                  sync-verdict! on the seat's next gated command, so \"hold\"
+                  was the one action that triggered nothing.
+                  ai-netrunner [277], marquee Game F: `tank` is
                   set-strategy! plus ONE continue-run!, and at the approach step
                   that one step is the approach pass. The only caller of
                   signal-tank-once! is the encounter handler, which needs a step
@@ -2275,10 +2277,13 @@
   [state ice-title]
   (cond
     (not (state/tank-authorized? ice-title))                   :none
-    ;; A VISIBLE signal is decisive whatever the mirror's health: we can only
-    ;; have seen it because it arrived.
+    ;; The same predicate the CORP's fire decision reads, deliberately: a
+    ;; display more sceptical than the gate that actually authorises firing
+    ;; would disagree with it. It establishes currency by comparing index
+    ;; positions in the log, so on a :diff-mismatch mirror it can be stale in
+    ;; either direction (round 5, L3) — that risk is the Corp's too, and it
+    ;; clears on the next gated command's resync. Not re-litigated here.
     (corp-decisions/runner-signaled-let-fire? state ice-title)  :signalled
-    (:diff-mismatch state)                                      :unknown
     :else                                                       :unsignalled))
 
 (defn runner-encounter-decline-hint-lines
@@ -2356,31 +2361,26 @@
      ;;     such line. Acceptance is not acknowledgement.
      ;;
      ;; So the authority is the shared LOG, which is what the fire decision
-     ;; itself reads — hedged, because this is our MIRROR of it and
-     ;; signal-tank-once! already refuses to diagnose from a mirror flagged
-     ;; :diff-mismatch (#142).
-     ;; Our copy of the log is known-diverged, so its silence means nothing.
-     ;; signal-tank-once! holds for the pending resync and says so; telling the
-     ;; seat anything else here puts two instructions on one screen (D4/F8).
-     (= tank-state :unknown)
-     [(format "    → Your tank on %s is recorded here, but this client's copy of the log" ice-title)
-      "      diverged from the server's and a resync is pending, so whether the Corp has"
-      "      the signal cannot be told from here."
-      "      • Hold until the resync lands; `status` again afterwards."
-      (format "      • Or break %s, which needs no signal at all." ice-title)]
-
+     ;; itself reads — and the arm below claims only what this client can
+     ;; CONFIRM, because that is our MIRROR of the log and signal-tank-once!
+     ;; already refuses to diagnose from one flagged :diff-mismatch (#142).
      (= tank-state :unsignalled)
-     ;; STATES THE LOG AND STOPS. No "so the subs will not fire and nothing is
-     ;; owed": that conclusion is drawn from our mirror, and the :unknown arm
-     ;; above is where an untrustworthy mirror goes (D4/F7). No "and if no
-     ;; signal appears afterwards, that is harness trouble" either: breaking is
-     ;; an offered action here and correctly produces no signal, so that
-     ;; postcondition diagnoses a successful break as a fault (F4), and it is a
-     ;; claim about latch state, which this pure fn cannot read (F8). The
-     ;; escalation lives on diagnose-blocker, which can read state (D5).
+     ;; STATES WHAT THIS CLIENT CANNOT CONFIRM, AND STOPS. Three claims died
+     ;; here across rounds 4 and 5, all of them mine:
+     ;;   "so the subs will not fire and nothing is owed" — drawn from a mirror
+     ;;     that may be wrong (D4/F7).
+     ;;   "the Corp has nothing to act on" — false outright: the Corp can
+     ;;     `fire-subs` with no authorization at all (L2).
+     ;;   "if no signal appears afterwards, that is harness trouble" — breaking
+     ;;     is an action this arm OFFERS and correctly produces no signal, so
+     ;;     the postcondition diagnoses a successful break as a fault (F4), and
+     ;;     it is a claim about latch state this pure fn cannot read (F8).
+     ;; "cannot confirm" is true when nothing was sent, when the send was lost,
+     ;; and when the mirror is diverged, which is why there is no fourth state.
+     ;; The escalation lives on diagnose-blocker, which can read state (D5).
      [(format "    → Your tank on %s is recorded here, but the shared log carries NO CURRENT" ice-title)
-      (format "      SIGNAL for this encounter. Until it does, the Corp has nothing to act on,")
-      (format "      and the %d unbroken subroutine%s stay%s unresolved."
+      (format "      SIGNAL for this encounter, so THIS CLIENT CANNOT CONFIRM the tank reached")
+      (format "      the Corp. The %d unbroken subroutine%s remain%s unbroken."
               unbroken-count (if (= unbroken-count 1) "" "s") (if (= unbroken-count 1) "s" ""))
       (format "      • Break %s, or `tank \"%s\"` again." ice-title ice-title)
       "      • `diagnose-blocker` reads the current state if this does not clear."
@@ -2443,11 +2443,8 @@
       (= tank-state :signalled)
       (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
 
-      (= tank-state :unknown)
-      (format "      • Your tank on %s is recorded, but this client's copy of the log diverged from the server's and a resync is pending — whether the Corp has the signal cannot be told from here; hold, or break it." ice-title)
-
       (= tank-state :unsignalled)
-      (format "      • Your tank on %s is recorded, but the shared log carries NO CURRENT SIGNAL for this encounter — until it does the Corp has nothing to act on." ice-title)
+      (format "      • Your tank on %s is recorded, but the shared log carries NO CURRENT SIGNAL for this encounter, so this client cannot confirm it reached the Corp — break it, or `tank` it again." ice-title)
 
       :else
       (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
@@ -3927,7 +3924,6 @@
             (println (cond
                        corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
                        (= tank-state :signalled) "   → Owner: the CORP — your tank stands; they owe the subs."
-                       (= tank-state :unknown) "   → Owner: NOBODY can tell from here — our copy of the log is diverged and a resync is pending. Hold."
                        (= tank-state :unsignalled) "   → Owner: YOU — no signal for your tank is in the log: break it, or `tank` it again. Escalation if that does not clear it: ./dev/umpire-ping"
                        :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines

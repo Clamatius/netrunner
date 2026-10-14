@@ -3531,8 +3531,14 @@
           (str "nothing is owed until the signal is sent, got: " out))
       (is (not (str/includes? out "will not move it"))
           (str "that is the sentence that kept Game F's Runner at `wait`, got: " out))
-      (is (re-find #"(?i)the Corp has nothing to act on" out)
-          (str "must say the Corp has nothing to act on YET, got: " out))
+      ;; An EPISTEMIC claim, which is the only kind that is true in all three
+      ;; of nothing-sent, send-lost and diverged-mirror. Round 4's "the Corp
+      ;; has nothing to act on" was false outright: the Corp can `fire-subs`
+      ;; with no authorization at all (round 5, L2).
+      (is (re-find #"(?i)CANNOT CONFIRM the tank reached" out)
+          (str "must claim only what this client can know, got: " out))
+      (is (not (re-find #"(?i)nothing to act on" out))
+          (str "the Corp can fire-subs unauthorized; got: " out))
       ;; THE LOG IS THE AUTHORITY, and the arm says so. Four review rounds
       ;; killed three wordings that put the authority somewhere else; the last
       ;; of them defined "the Corp was told" as a 📡 line in our own output,
@@ -3569,20 +3575,12 @@
       (is (re-find #"(?i)`wait` sends nothing" out)
           (str "must say `wait` alone is not enough, since that is what was tried, got: " out))))
 
-  (testing "tank UNKNOWN: say the mirror is diverged, and claim nothing either way"
-    (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 :unknown))]
-      (is (re-find #"(?i)cannot be told from here" out) (str "got: " out))
-      (is (not (re-find #"(?i)carries NO CURRENT" out))
-          (str "a diverged mirror's silence is not evidence, got: " out))
-      (is (not (str/includes? out "the Corp now owes you"))
-          (str "nor is it evidence the other way, got: " out))))
-
   ;; A value this fn does not know must take the arm that CLAIMS NOTHING. A
   ;; missed call site is then a re-asked menu, not an invented promise about
   ;; what the Corp owes — and `false` is specifically pinned because every
   ;; pre-#277 call site passed a boolean.
   (testing "an unrecognized tank-state falls back to the menu, not to a claim"
-    (doseq [bogus [false true nil :bogus :signalled-ish]]
+    (doseq [bogus [false true nil :bogus :unknown]]
       (let [out (str/join "\n" (display/runner-encounter-decline-hint-lines "Tithe" 2 bogus))]
         (is (not (str/includes? out "the Corp now owes you"))
             (str "tank-state " (pr-str bogus) " must not claim the Corp owes anything, got: " out))
@@ -3606,18 +3604,16 @@
       (reset! ai-state/run-strategy {:tank #{"Tithe"}})
       (is (= :signalled (display/tank-window-state (state-with log-with) "Tithe")))
       (reset! ai-state/run-strategy {}))
-    (testing ":unknown when no signal is visible AND our mirror is known-diverged"
-      ;; signal-tank-once! already refuses to diagnose from a :diff-mismatch
-      ;; mirror (#142): the diff carrying the signal may be the one we dropped.
-      ;; The display must not contradict it by reporting the Corp as untold.
+    ;; NO FOURTH STATE for a diverged mirror. Round 4 added one (:unknown) and
+    ;; round 5 deleted it: its guidance said "hold until the resync lands", and
+    ;; :diff-mismatch schedules no resync at all — recovery runs in
+    ;; sync-verdict! on the next gated command, so "hold" was the one action
+    ;; that triggered nothing. The :unsignalled wording carries the diverged
+    ;; case instead, by claiming only that THIS CLIENT CANNOT CONFIRM.
+    (testing "a diverged mirror is still :unsignalled, not a state of its own"
       (reset! ai-state/run-strategy {:tank #{"Tithe"}})
-      (is (= :unknown (display/tank-window-state
-                       (assoc (state-with []) :diff-mismatch true) "Tithe")))
-      (reset! ai-state/run-strategy {}))
-    (testing "a VISIBLE signal is decisive even on a diverged mirror"
-      (reset! ai-state/run-strategy {:tank #{"Tithe"}})
-      (is (= :signalled (display/tank-window-state
-                         (assoc (state-with log-with) :diff-mismatch true) "Tithe")))
+      (is (= :unsignalled (display/tank-window-state
+                           (assoc (state-with []) :diff-mismatch true) "Tithe")))
       (reset! ai-state/run-strategy {}))
     (testing ":unsignalled when the only signal predates THIS encounter"
       ;; runner-signaled-let-fire?'s staleness rule, surfaced: a tank from an
@@ -3826,7 +3822,7 @@
                        "success" "runner"))]
             (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out)
                 (str "no signal is in this fixture's log; got: " out))
-            (is (re-find #"(?i)nothing to act on" out) (str "got: " out))
+            (is (re-find #"(?i)cannot confirm" out) (str "got: " out))
             (is (not (re-find #"(?i)already stands" out))
                 (str "nothing stands until it is sent; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))

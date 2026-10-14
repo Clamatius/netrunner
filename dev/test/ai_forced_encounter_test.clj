@@ -476,11 +476,11 @@
     (let [out (clojure.string/join
                "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
       (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out) (str "got:\n" out))
-      (is (re-find #"(?i)nothing to act on" out) (str "got:\n" out))
+      (is (re-find #"(?i)cannot confirm it reached the Corp" out) (str "got:\n" out))
       (is (not (re-find #"(?i)already stands" out))
           (str "nothing stands until it is sent, got:\n" out))))
   (testing "every state still names the forced window and still offers the break"
-    (doseq [st [:none :unsignalled :signalled]]
+    (doseq [st [:none :unsignalled :signalled :unknown]]
       (let [out (clojure.string/join
                  "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
         (is (re-find #"(?i)forced encounter" out) (str st " lost the window label:\n" out))

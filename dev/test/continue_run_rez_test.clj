@@ -2522,8 +2522,23 @@
               (str "must name the unsent signal, got: " out))
           ;; D5: not predicting and not helping are different requirements;
           ;; this is the surface whose documented job is the next command.
+          ;; THE ESCALATION, pinned. Round 4 moved it here from the pure arm
+          ;; (which cannot read latch state and so cannot tell a successful
+          ;; break from a lost send), and round 5's harness showed the move was
+          ;; unwitnessed: reverting this line to its round-4 text left the
+          ;; suite GREEN. diagnose-blocker is the documented home of "the ONE
+          ;; next command", and in the lost-send state signal-tank-once!'s own
+          ;; escalation is report-once! keyed on the mark, so a seat that
+          ;; arrives later gets it from nowhere else.
           (is (re-find #"umpire-ping" out)
-              (str "must leave a route out of the lost-send state, got: " out)))
+              (str "must leave a route out of the lost-send state, got: " out))
+          (is (re-find #"(?i)break it, or `tank` it again" out)
+              (str "and must name the actions before the escalation, got: " out))
+          ;; It must NOT tell the seat to hold: round 4's deleted :unknown line
+          ;; said "Hold." with no next command, and holding is the one action
+          ;; that triggers no resync (round 5, L1).
+          (is (not (re-find #"(?i)\bHold\b" out))
+              (str "holding triggers no recovery from here, got: " out)))
         (runs/reset-strategy!)))
     (testing "control: once the signal is in the log, the Corp owns it again"
       (with-mock-state (base (signal-log true))
