@@ -2465,7 +2465,7 @@
             (is (corp-decisions/runner-signaled-let-fire?
                  @state/client-state "Whitespace")
                 "fixture must reproduce the stale-signal reading, or this proves nothing")
-            (is (re-find #"(?i)NOT signalled yet" out)
+            (is (re-find #"(?i)NOT signalled" out)
                 (str "the notice must still fire: no signal for an encounter that has"
                      " not started can be current, got: " out))
             (is (empty? (filter #(= "system-msg" (:command %)) @sent))
@@ -2500,8 +2500,12 @@
         (let [out (with-out-str (display/show-blocker-diagnosis))]
           (is (not (re-find #"Owner: the CORP" out))
               (str "the Corp has seen no signal; it owns nothing here, got: " out))
-          (is (re-find #"(?i)NOT been signalled" out)
-              (str "must name the unsent signal, got: " out)))
+          (is (re-find #"(?i)no signal for your tank is in the log" out)
+              (str "must name the unsent signal, got: " out))
+          ;; D5: not predicting and not helping are different requirements;
+          ;; this is the surface whose documented job is the next command.
+          (is (re-find #"umpire-ping" out)
+              (str "must leave a route out of the lost-send state, got: " out)))
         (runs/reset-strategy!)))
     (testing "control: once the signal is in the log, the Corp owns it again"
       (with-mock-state (base (signal-log true))

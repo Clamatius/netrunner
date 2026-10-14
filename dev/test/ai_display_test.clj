@@ -3531,20 +3531,32 @@
           (str "nothing is owed until the signal is sent, got: " out))
       (is (not (str/includes? out "will not move it"))
           (str "that is the sentence that kept Game F's Runner at `wait`, got: " out))
-      (is (re-find #"(?i)not been told|not reached" out)
-          (str "must say the Corp has not been told, got: " out))
-      ;; A FACT, not a keystroke. Round 1 of this arm said "`continue` — sends
-      ;; the signal from HERE" and two seats found two ways for that to be
-      ;; false: signal-tank-once!'s lost-send state deliberately refuses to
-      ;; re-send, and in the loop paths the next tick signals anyway, putting
-      ;; the advice a few rows above a "Signaling Corp" line. So the arm names
-      ;; WHERE sending happens and what to watch for, and this asserts the
-      ;; absence of the recipe so it cannot creep back.
-      (is (re-find #"(?i)when the client next acts on this encounter" out)
-          (str "must say where the signal is sent from, got: " out))
-      (is (not (re-find #"(?i)`continue`\s*\u2014\s*sends the signal" out))
-          (str "must not promise that a particular keystroke sends it, got: " out))
-      (is (re-find #"(?i)`wait` on its own does not send it" out)
+      (is (re-find #"(?i)nothing is owed by the Corp" out)
+          (str "must say the Corp is owed nothing yet, got: " out))
+      ;; THE LOG IS THE AUTHORITY, and the arm says so. Four review rounds
+      ;; killed three wordings that put the authority somewhere else; the last
+      ;; of them defined "the Corp was told" as a 📡 line in our own output,
+      ;; which is false in both directions (signal-tank-once! prints it before
+      ;; the send it may refuse; `let-subs-fire` sends without it).
+      (is (re-find #"(?i)log carries no current signal" out)
+          (str "must name the log as the authority, got: " out))
+      ;; A route out, on a surface a stuck seat reads (design round D5).
+      (is (re-find #"umpire-ping" out)
+          (str "must name an escalation that does not depend on dispatch, got: " out))
+      ;; And no claim whose truth depends on client dispatch state: which
+      ;; handler wins is decided by :full-break/:tank-all/the latch, none of
+      ;; which this layer reads.
+      (is (not (re-find #"(?i)sends the signal|is sent when|will send it" out))
+          (str "must not predict what a later command will do, got: " out))
+      ;; Must not reproduce the client's own signalling token either: a
+      ;; transcript grep for it would match the one state this arm rules out.
+      (is (not (re-find #"(?i)Signaling Corp" out))
+          (str "must not quote the real signal line, got: " out))
+      (is (not (re-find #"(?i)is sent when|sends the signal|will send" out))
+          (str "must not predict what a later command will do, got: " out))
+      ;; `wait` is the command Game F's Runner sat on, and "it sends nothing"
+      ;; is unconditional (wait is not a run loop), so it survives the rule.
+      (is (re-find #"(?i)`wait` sends nothing" out)
           (str "must say `wait` alone is not enough, since that is what was tried, got: " out))))
 
   ;; A value this fn does not know must take the arm that CLAIMS NOTHING. A
@@ -3658,8 +3670,8 @@
                 (str "no signal is in the log; got: " out))
             (is (not (re-find #"`wait` \u2014 the subs fire" out))
                 (str "the wait steer is for a SIGNALLED tank; got: " out))
-            (is (re-find #"(?i)not been told" out)
-                (str "must say the Corp has not been told; got: " out)))
+            (is (re-find #"(?i)log carries no current signal" out)
+                (str "must name the log as the authority; got: " out)))
           (finally (reset! ai-state/run-strategy {})))))
     ;; --tank-all on the SIGNALLED fixture: "not you must decide" was satisfied
     ;; by either arm, so this block could not tell the standing decision from
@@ -3726,7 +3738,13 @@
                                       :phase "success"}
                                 :encounters {:ice archangel}
                                 :corp {:servers {:rd {:ices []}}}
-                                :runner {:click 1 :credit 3 :rig {}}})]
+                                :runner {:click 1 :credit 3 :rig {}}})
+        ;; A forced encounter with the tank signal actually in the log. The
+        ;; fixture above has no :log at all, which is why the "tank verdict"
+        ;; block below could not tell :none from :unsignalled from :signalled.
+        signalled (assoc-in on-access [:game-state :log]
+                            [{:text "Runner encounters Archangel in HQ"}
+                             {:text "Runner indicates to fire all unbroken subroutines on Archangel"}])]
     (testing "the break/tank menu appears, not the pass-priority steer"
       (with-mock-state on-access
         (reset! ai-state/run-strategy {})
@@ -3739,7 +3757,34 @@
               (str "expected the encountered ICE named, got: " out))
           (is (not (str/includes? out "pass priority"))
               (str "continue does NOT pass an encounter, got: " out)))))
-    (testing "and the tank verdict is honoured there too"
+    ;; THIS BLOCK WAS VACUOUS and a seat proved it: its only assertion was the
+    ;; absence of "you must decide", a phrase NO arm of
+    ;; forced-encounter-advisory-lines has ever printed, so it was green with an
+    ;; empty strategy too. Meanwhile the fixture has no :log, so once the tank
+    ;; became a tri-state this block silently sat on the :unsignalled arm under
+    ;; a name claiming the tank was honoured — the same shape as the #277
+    ;; round-1 MAJOR, in a test nobody had touched. It now asserts the arm.
+    ;;
+    ;; It is also the only witness for the PRODUCTION wiring: a seat hard-wired
+    ;; print-run-window-priority!'s tank-state argument to :none and ran 302
+    ;; tests with 0 failures, so dropping that argument — the copy-left-behind
+    ;; defect #115 and #195 are both recorded in this fn for — shipped green.
+    (testing "a SIGNALLED tank is reported as the Corp's to answer, through the real call"
+      (with-mock-state signalled
+        (reset! ai-state/run-strategy {:tank #{"Archangel"}})
+        (try
+          (let [out (with-out-str
+                      (display/print-run-window-priority!
+                       @ai-state/client-state
+                       (get-in signalled [:game-state :run])
+                       "success" "runner"))]
+            (is (re-find #"(?i)already stands" out)
+                (str "the signal is in the log; the tank stands; got: " out))
+            (is (re-find #"(?i)owes the subs" out) (str "got: " out))
+            (is (not (re-find #"tank \"Archangel\"\s+\u2014\s+decline to break" out))
+                (str "re-offering a sent tank is #151 item 2; got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))
+    (testing "an UNSIGNALLED tank says the Corp has not been told, through the real call"
       (with-mock-state on-access
         (reset! ai-state/run-strategy {:tank #{"Archangel"}})
         (try
@@ -3748,9 +3793,22 @@
                        @ai-state/client-state
                        (get-in on-access [:game-state :run])
                        "success" "runner"))]
-            (is (not (re-find #"(?i)you must decide" out))
-                (str "already tanked; got: " out)))
-          (finally (reset! ai-state/run-strategy {})))))))
+            (is (re-find #"(?i)no current signal for this encounter" out)
+                (str "no signal is in this fixture's log; got: " out))
+            (is (re-find #"(?i)Corp owes nothing" out) (str "got: " out))
+            (is (not (re-find #"(?i)already stands" out))
+                (str "nothing stands until it is sent; got: " out)))
+          (finally (reset! ai-state/run-strategy {})))))
+    (testing "and with no tank at all the fresh offer is still made"
+      (with-mock-state on-access
+        (reset! ai-state/run-strategy {})
+        (let [out (with-out-str
+                    (display/print-run-window-priority!
+                     @ai-state/client-state
+                     (get-in on-access [:game-state :run])
+                     "success" "runner"))]
+          (is (re-find #"tank \"Archangel\"" out)
+              (str "an untanked forced encounter must still offer it; got: " out)))))))
 
 (deftest test-forced-encounter-names-one-ice-not-two
   ;; CRITICAL (guest panel): position pointed at one copy while the wire's

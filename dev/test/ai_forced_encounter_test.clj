@@ -475,7 +475,7 @@
   (testing "unsignalled: say the Corp has not been told, and claim nothing it has not seen"
     (let [out (clojure.string/join
                "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
-      (is (re-find #"(?i)NOT in the shared log" out) (str "got:\n" out))
+      (is (re-find #"(?i)no current signal for this encounter" out) (str "got:\n" out))
       (is (re-find #"(?i)Corp owes nothing" out) (str "got:\n" out))
       (is (not (re-find #"(?i)already stands" out))
           (str "nothing stands until it is sent, got:\n" out))))

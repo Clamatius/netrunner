@@ -2323,26 +2323,42 @@
      ;; false here, and its last line is the specific sentence that kept the
      ;; Runner at `wait` for twenty minutes.
      ;;
-     ;; This arm STATES A FACT and does not prescribe a keystroke. Round 1 of
-     ;; this fix did prescribe one ("`continue` sends the signal from HERE"),
-     ;; and two seats found two different ways for it to be false: in
-     ;; signal-tank-once!'s lost-send state the client deliberately REFUSES to
-     ;; re-send and says so, and in the loop paths the next tick signals on its
-     ;; own, so the advice contradicted a "Signaling Corp" line a few rows
-     ;; below it. [277] property 2 asks only that the Corp-owes-you claim be
-     ;; backed by the log; the recipe was mine, and it was the whole source of
-     ;; the error. What is always true is what is printed.
+     ;; THE RULE FOR THIS ARM, after three rounds that each killed a different
+     ;; wording of the same mistake: no claim whose truth depends on CLIENT
+     ;; DISPATCH state — :full-break, :tank-all, the signaled-fire-encounter
+     ;; latch, [:run :no-action], or whether the caller is a loop. Claims
+     ;; pinned to ENGINE behaviour stay: "`continue` will NOT pass this window"
+     ;; (#92) and the corp-declined arm's "`continue` ends the encounter" are
+     ;; load-bearing, wire-tested, and deleting them is what cost marquee G2.
+     ;;
+     ;; The three dead wordings, for whoever is tempted next:
+     ;;   "`continue` sends the signal from HERE" — false, continue
+     ;;     :approach-ice only records the passer while :no-action is falsy.
+     ;;   "the signal is sent when the client next acts on this encounter" —
+     ;;     false under :full-break (handle-runner-full-break is priority 2.4
+     ;;     and BREAKS), and false in signal-tank-once!'s lost-send branch,
+     ;;     which refuses to re-send by design.
+     ;;   "a 📡 line means the Corp was told" — false in BOTH directions:
+     ;;     signal-tank-once! prints it BEFORE the send it may refuse, and the
+     ;;     separate `let-subs-fire` command sends the same system-msg with no
+     ;;     such line. Acceptance is not acknowledgement.
+     ;;
+     ;; So the authority is the shared LOG, which is what the fire decision
+     ;; itself reads — hedged, because this is our MIRROR of it and
+     ;; signal-tank-once! already refuses to diagnose from a mirror flagged
+     ;; :diff-mismatch (#142).
      (= tank-state :unsignalled)
-     [(format "    → Your tank on %s is recorded here, but the CORP HAS NOT BEEN TOLD:" ice-title)
-      (format "      no current signal for this encounter is in the shared log, so the %d unbroken"
+     [(format "    → Your tank on %s is recorded here, but THE LOG CARRIES NO CURRENT SIGNAL" ice-title)
+      (format "      for this encounter — as this client sees the log — so the %d unbroken"
               unbroken-count)
       (format "      subroutine%s will not fire and nothing is owed by the Corp yet."
               (if (= unbroken-count 1) "" "s"))
-      "      • The signal is sent when the client next acts on this encounter. Watch for"
-      "        a \"📡 Signaling Corp\" line; if the client instead reports the signal"
-      "        never reached the log, that is harness trouble and it names the escalation."
-      (format "      • Or break %s instead: a tank is not binding until it is sent." ice-title)
-      "      (`wait` on its own does not send it, and nothing re-sends on a timer.)"]
+      (format "      • Act on this encounter again (break, or `tank \"%s\"`). If the log still" ice-title)
+      "        carries no signal for it afterwards, that is harness trouble rather than a"
+      "        slow opponent — escalate: ./dev/umpire-ping runner \"tank signal is not"
+      "        reaching the log\""
+      (format "      • Or break %s instead: a tank is not binding until the log carries it." ice-title)
+      "      (`wait` sends nothing, and nothing re-sends on a timer.)"]
 
      :else
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
@@ -2402,7 +2418,7 @@
       (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
 
       (= tank-state :unsignalled)
-      (format "      • Your tank on %s is recorded but NOT in the shared log yet, so the Corp owes nothing; the signal goes out when the client next acts on this encounter." ice-title)
+      (format "      • Your tank on %s is recorded but NOT in the shared log, so the Corp owes nothing — the log carries no current signal for this encounter (as this client sees it)." ice-title)
 
       :else
       (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
@@ -3882,7 +3898,7 @@
             (println (cond
                        corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
                        (= tank-state :signalled) "   → Owner: the CORP — your tank stands; they owe the subs."
-                       (= tank-state :unsignalled) "   → Owner: YOU — your tank has NOT been signalled to the Corp; `continue` sends it."
+                       (= tank-state :unsignalled) "   → Owner: YOU — no signal for your tank is in the log: act on the encounter, or escalate with ./dev/umpire-ping if it stays absent."
                        :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
                           ice-title runner-unbroken tank-state corp-declined?)]

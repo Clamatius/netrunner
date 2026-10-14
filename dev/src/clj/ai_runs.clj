@@ -1271,18 +1271,38 @@
    speculative extra continue that #244 and #167 removed, and [277] declined to
    propose it.
 
-   It also does not tell the seat which key to press next, and that is a
-   correction, not an omission. Round 1 of this fix said \"Send `continue` once
-   more … to signal from there\", and the engine disagrees: `continue`
-   :approach-ice (src/clj/game/core/runs.clj:295) only RECORDS the passer while
-   [:run :no-action] is falsy, and advances on the SECOND pass. So from a window
-   the Corp has not passed, the next continue is the #98 already-passed no-op
-   and the wait that advice discouraged is the step actually needed first —
-   while in the loop paths (monitor-run!, `run --tank-all`) the opposite is
-   true and the loop's own next tick prints \"Signaling Corp\" a few lines
-   below the advice. One keystroke recipe cannot be right in both, so this
-   states what IS true in both: nothing has been sent, and the encounter is
-   where sending happens.
+   IT PREDICTS NOTHING, and that is a correction earned over three review
+   rounds, not an omission. Round 1 said \"Send `continue` once more … to signal
+   from there\": false, because `continue` :approach-ice
+   (src/clj/game/core/runs.clj:295) only RECORDS the passer while
+   [:run :no-action] is falsy, so the next continue can be the #98
+   already-passed no-op. Round 2 said \"both sides must pass this approach
+   window\": false, because handle-stalled-window-self-advance sends the second
+   pass itself (`:second-pass? true`) and the engine's advance branch has no
+   side check. A prediction here is a claim about which handler will win next,
+   and that depends on :full-break, :tank-all, the signaled-fire-encounter
+   latch, [:run :no-action] and whether the caller is a loop. So this states
+   what the log says now and defines what being told looks like.
+
+   It also does not QUOTE the client's own signalling line. Writing
+   \"Signaling Corp\" into a NOT-signalled notice makes every transcript scan
+   and log grep for that token match the one state it is supposed to rule out
+   — the engine-log-embeds-effect-text trap, arriving in our own output — and
+   the Game F repro test asserts the absence of \"Signaling\" here for exactly
+   that reason. Nor does it treat that line as proof of delivery: it is printed
+   BEFORE the send it may refuse, and `let-subs-fire` sends the same system-msg
+   without it, so the LOG is the authority and the line is not.
+
+   It describes the WINDOW, which is observed, and not \"this step\", which is
+   only intended: this runs before send-continue!, and that send can fail.
+
+   The last two lines exist for the LOOP paths (`run --tank-all`,
+   monitor-run!), where this fires on every rezzed approach and the loop
+   signals two ticks later. The sentence is true there but a transcript then
+   shows the Game F symptom on a healthy run, and [277]/[280] have trained
+   seats to read that line as the wedge. Saying when it does not matter is the
+   fix; a once-per-encounter latch is not, because four of those have already
+   failed in this client for want of an encounter identity (#197).
 
    KNOWN GAP, stated rather than discovered later: this is reachable only for
    an approach to REZZED ice. handle-runner-approach-ice sits ahead of
@@ -1292,10 +1312,10 @@
    says the Corp owes anything) — they are silent, which is the partial
    delivery of [277] property 1 recorded in the issue."
   [ice-title]
-  (println (format "   📡 NOT signalled yet: your tank on %s has not reached the Corp." ice-title))
-  (println "      No tank signal for it is in the shared log; this step is the approach pass,")
-  (println "      and the signal is sent at the ENCOUNTER, which has not started.")
-  (println "      Both sides must pass this approach window before it does.")
+  (println (format "   📡 NOT signalled: the log carries no tank signal for %s." ice-title))
+  (println "      This is an APPROACH window; the signal belongs to the encounter.")
+  (println "      Mid-run this notice is ordinary. It is a fault only if you stop acting")
+  (println "      while the log still carries no signal for it.")
   nil)
 
 (defn handle-auto-continue
