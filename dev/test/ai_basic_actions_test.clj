@@ -414,9 +414,10 @@
 (defn- corp-eot-state
   "Corp at 0 clicks with one unrezzed asset installed in a remote.
 
-  `title` defaults to Nico Campaign, whose \"When your turn begins, take 3[c]\"
-  is the one card class for which rezzing into the Runner's turn pays. Pass a
-  [click]-ability asset or an Ambush to get the class where it does not."
+  `title` defaults to Nico Campaign, #103's own example. Pass a [click]-ability
+  asset or an Ambush to vary the card class — see #269: rezzing in THIS window
+  pays off for none of them, Nico included, because a start-of-turn asset is
+  better rezzed at the runner-turn-end boundary."
   [& {:keys [credit cost rezzed title]
       :or {credit 5 cost 2 rezzed false title "Nico Campaign"}}]
   {:corp {:click 0 :credit credit :hand [] :hand-count 3
@@ -490,58 +491,73 @@
             (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
                 "already-rezzed asset must still auto-end")))))))
 
-;; The paid window's hint used to read "Rez now if you want it up on the Runner's
-;; turn, then 'end-turn'". That names a benefit only ONE card class actually has.
+;; #269. The paid window's hint used to read "Rez now if you want it up on the
+;; Runner's turn, then 'end-turn'". It named a payoff, and rezzing in THIS window
+;; pays off for no card class at all:
 ;;
-;;   Nico Campaign        "When your turn begins, take 3[c]"   — needs to be rezzed
-;;                                                               BEFORE the turn flips.
-;;                                                               Claim true.
-;;   Regolith Mining License  "[click]: Take 3[c] from this asset"  — a click ability;
-;;                                                               being rezzed on the
-;;                                                               Runner's turn does
-;;                                                               NOTHING. Claim false.
-;;   Urtica Cipher        fires "when the Runner accesses ... while it is installed"
-;;                                                               — rezzing only reveals
-;;                                                               the trap. Claim false.
+;;   Regolith Mining License  "[click]: Take 3[c] from this asset" — a click
+;;     ability. Being rezzed on the Runner's turn does nothing.
+;;   Urtica Cipher  fires "when the Runner accesses this asset while it is
+;;     installed" — an Ambush fires rezzed or not. Marquee aa73c305 log 105-107:
+;;     an UNREZZED Urtica did 3 net damage on access. Rezzing only reveals it.
+;;   Nico Campaign  "When your turn begins, take 3[c]" — the one that looks like a
+;;     counterexample, and is not. Its defcard carries
+;;     `:derezzed-events [corp-rez-toast]`, corp-rez-toast is
+;;     `{:event :runner-turn-ends}`, and the take-3 ability's `:req` is
+;;     `(:corp-phase-12 @state)`. The engine's own design is to rez at the
+;;     runner-turn-end boundary and collect in phase 1.2 — same payout, without
+;;     sitting rezzed through the Runner's whole turn.
+;;
+;; The first version of this test asserted the opposite for Nico ("the one card
+;; class for which rezzing into the Runner's turn pays"); round-1 review refuted it
+;; off the card definitions above. Worth knowing, because the wrong version read as
+;; perfectly reasonable.
 ;;
 ;; Marquee aa73c305 (Astra Corp) is the cost: on turn 4 it spent its last click
-;; installing a Regolith behind a fresh Brân, this window opened, and it paid 2 to
-;; rez the Regolith. The Runner ran with Tread Lightly (+3 to rez ICE), walked past
-;; the unrezzed Brân and trashed the Regolith for 3. Its own report: "Turn 4's
-;; Regolith rez was a clear mistake. I paid before receiving any income ... Waiting
-;; until my own turn to rez and immediately use it would have avoided that loss."
-;; The same hint had also fired for an Urtica Cipher, which that seat flagged as
-;; "strategically distracting for a concealed trap".
+;; installing a Regolith behind a fresh Bran, this window opened, and it paid 2 to
+;; rez the Regolith. Tread Lightly (+3 to rez ICE) then put Bran out of reach at 9
+;; against its 7 credits; the Regolith was trashed for 3. Its own report: "Turn 4's
+;; Regolith rez was a clear mistake."
 ;;
 ;; The window itself is right (#103 — auto-ending silently threw it away). Only the
-;; recommendation is wrong, and because the line is printed for every card it cannot
-;; be made true by wording: it has to stop promising a payoff and state the timing.
+;; steer is wrong, and since one line is printed for every card it cannot be made
+;; right by wording: it has to name the actions and recommend neither.
 
 (deftest test-paid-window-hint-promises-no-runner-turn-payoff
-  (testing "the eot rez hint must not claim a Runner's-turn benefit — false for a
-            [click] asset and for an Ambush (marquee aa73c305 turn 4)"
-    (let [sent (atom [])]
-      (with-mock-state (mock-client-state
-                        :side "corp"
-                        :game-state (corp-eot-state :title "Regolith Mining License"))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      basic/turn-started-since-last-opp-end? (fn [] true)]
-          (let [out (with-out-str (basic/check-auto-end-turn!))]
-            ;; #103's purpose is preserved: the window is held and the card named,
-            ;; so deleting the hint outright is not a passing fix.
-            (is (re-find #"Regolith Mining License" out)
-                (str "must still name the card the window is for, got: " out))
-            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
-                "must still hold the window open rather than auto-ending")
-            (is (re-find #"(?i)rez" out)
-                (str "must still tell the seat a rez is available here, got: " out))
-            ;; The defect: a payoff this card does not have.
-            (is (not (re-find #"(?i)up on the Runner's turn" out))
-                (str "must not promise the card is 'up on the Runner's turn' — a "
-                     "[click] asset gains nothing there, got: " out))
-            (is (not (re-find #"(?i)rez now" out))
-                (str "must not recommend rezzing; the right answer is card-specific, "
-                     "got: " out))))))))
+  (testing "the eot rez hint names the available actions and recommends neither, for
+            every card class the window fires for (#269, marquee aa73c305 turn 4)"
+    ;; Both classes, because the printed line is card-independent: whatever it says
+    ;; is said about all of them. Urtica Cipher is the 0¢ Ambush case.
+    (doseq [[title cost] [["Regolith Mining License" 2]
+                          ["Urtica Cipher" 0]]]
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state
+                          :side "corp"
+                          :game-state (corp-eot-state :title title :cost cost))
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        basic/turn-started-since-last-opp-end? (fn [] true)]
+            (let [out (with-out-str (basic/check-auto-end-turn!))]
+              ;; #103's purpose is preserved: the window is held, the card named,
+              ;; and the rez COMMAND is still offered — so "delete the hint" is not
+              ;; a passing fix. Matching bare #"rez" would not do it: the
+              ;; "💰 X may still be rezzable" line above already contains that.
+              (is (re-find #"Regolith|Urtica" out)
+                  (str title ": must still name the card, got: " out))
+              (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                  (str title ": must still hold the window open, not auto-end"))
+              (is (re-find #"'rez [^']*'" out)
+                  (str title ": must still offer the rez command itself, got: " out))
+              (is (re-find #"'end-turn'" out)
+                  (str title ": must still offer the alternative, got: " out))
+              ;; The defect: any steer toward rezzing. Neither a payoff claim nor
+              ;; an imperative — a seat reads both as instructions, and for these
+              ;; two cards rezzing here buys nothing whatever.
+              (is (not (re-find #"(?i)up on the Runner's turn" out))
+                  (str title ": must not promise a Runner's-turn payoff, got: " out))
+              (is (not (re-find #"(?i)rez (now|those|them|it) " out))
+                  (str title ": must not direct the seat to rez, got: " out))
+              (is (not (re-find #"(?i)\bfirst\b" out))
+                  (str title ": must not order the rez before end-turn, got: " out)))))))))
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"
