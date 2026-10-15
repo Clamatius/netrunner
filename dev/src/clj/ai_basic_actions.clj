@@ -1728,8 +1728,28 @@
           ;; both, and it errs generous on purpose (restricted recurring
           ;; credits), so one categorical copy would just relocate the overclaim.
           (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        (println "💡 Rez now if you want it up on the Runner's turn, then 'end-turn'")
-        (println "   (nothing to do? just 'end-turn')")
+        ;; This used to read "Rez now if you want it up on the Runner's turn".
+        ;; Being rezzed on the Runner's turn is worth something to exactly one card
+        ;; class — one that acts while the Corp is not acting. Nico Campaign ("when
+        ;; your turn begins, take 3[c]") has to be rezzed before the turn flips, so
+        ;; the claim held for #103's own example. A Regolith Mining License
+        ;; ("[click]: take 3[c]") gains nothing there, and an Ambush like Urtica
+        ;; Cipher fires on access whether rezzed or not, so rezzing only reveals it.
+        ;; The line is printed for every affordable unrezzed card, so for those it
+        ;; advertised a payoff that does not exist — and marquee aa73c305 turn 4
+        ;; took it: the Corp paid 2 to rez a Regolith in this window, left the Brân
+        ;; in front of it unrezzed, and lost the Regolith to a Tread Lightly run.
+        ;; Its own report called that "a clear mistake", so the seat could diagnose
+        ;; it afterwards and was pushed the other way in the moment.
+        ;;
+        ;; "Now or never" was false too: the Corp can rez in the Runner's own paid
+        ;; windows, which is how #103's seat recovered.
+        ;;
+        ;; ai-core's wake guidance prints the same detector's output and already
+        ;; says it this way ("Do those first if you want them") — this is that
+        ;; framing propagated, not a new one. Which rez timing is RIGHT per card
+        ;; class is strategy and belongs in the brief, not in the client.
+        (println "💡 Rez those first if you want them, then 'end-turn' — nothing to do? just 'end-turn'")
         (flush)
         (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))
 

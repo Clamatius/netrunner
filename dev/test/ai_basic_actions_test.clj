@@ -412,11 +412,16 @@
 ;; this deadlock-safe.
 
 (defn- corp-eot-state
-  "Corp at 0 clicks with one unrezzed asset installed in a remote."
-  [& {:keys [credit cost rezzed] :or {credit 5 cost 2 rezzed false}}]
+  "Corp at 0 clicks with one unrezzed asset installed in a remote.
+
+  `title` defaults to Nico Campaign, whose \"When your turn begins, take 3[c]\"
+  is the one card class for which rezzing into the Runner's turn pays. Pass a
+  [click]-ability asset or an Ambush to get the class where it does not."
+  [& {:keys [credit cost rezzed title]
+      :or {credit 5 cost 2 rezzed false title "Nico Campaign"}}]
   {:corp {:click 0 :credit credit :hand [] :hand-count 3
           :hand-size {:total 5} :installed {} :prompt-state nil
-          :servers {:remote1 {:content [{:cid 99 :title "Nico Campaign"
+          :servers {:remote1 {:content [{:cid 99 :title title
                                          :type "Asset" :cost cost :rezzed rezzed}]}}}
    :runner {:click 0 :credit 5 :hand []}
    :turn 8
@@ -484,6 +489,59 @@
           (let [_out (with-out-str (basic/check-auto-end-turn!))]
             (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
                 "already-rezzed asset must still auto-end")))))))
+
+;; The paid window's hint used to read "Rez now if you want it up on the Runner's
+;; turn, then 'end-turn'". That names a benefit only ONE card class actually has.
+;;
+;;   Nico Campaign        "When your turn begins, take 3[c]"   — needs to be rezzed
+;;                                                               BEFORE the turn flips.
+;;                                                               Claim true.
+;;   Regolith Mining License  "[click]: Take 3[c] from this asset"  — a click ability;
+;;                                                               being rezzed on the
+;;                                                               Runner's turn does
+;;                                                               NOTHING. Claim false.
+;;   Urtica Cipher        fires "when the Runner accesses ... while it is installed"
+;;                                                               — rezzing only reveals
+;;                                                               the trap. Claim false.
+;;
+;; Marquee aa73c305 (Astra Corp) is the cost: on turn 4 it spent its last click
+;; installing a Regolith behind a fresh Brân, this window opened, and it paid 2 to
+;; rez the Regolith. The Runner ran with Tread Lightly (+3 to rez ICE), walked past
+;; the unrezzed Brân and trashed the Regolith for 3. Its own report: "Turn 4's
+;; Regolith rez was a clear mistake. I paid before receiving any income ... Waiting
+;; until my own turn to rez and immediately use it would have avoided that loss."
+;; The same hint had also fired for an Urtica Cipher, which that seat flagged as
+;; "strategically distracting for a concealed trap".
+;;
+;; The window itself is right (#103 — auto-ending silently threw it away). Only the
+;; recommendation is wrong, and because the line is printed for every card it cannot
+;; be made true by wording: it has to stop promising a payoff and state the timing.
+
+(deftest test-paid-window-hint-promises-no-runner-turn-payoff
+  (testing "the eot rez hint must not claim a Runner's-turn benefit — false for a
+            [click] asset and for an Ambush (marquee aa73c305 turn 4)"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                        :side "corp"
+                        :game-state (corp-eot-state :title "Regolith Mining License"))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            ;; #103's purpose is preserved: the window is held and the card named,
+            ;; so deleting the hint outright is not a passing fix.
+            (is (re-find #"Regolith Mining License" out)
+                (str "must still name the card the window is for, got: " out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must still hold the window open rather than auto-ending")
+            (is (re-find #"(?i)rez" out)
+                (str "must still tell the seat a rez is available here, got: " out))
+            ;; The defect: a payoff this card does not have.
+            (is (not (re-find #"(?i)up on the Runner's turn" out))
+                (str "must not promise the card is 'up on the Runner's turn' — a "
+                     "[click] asset gains nothing there, got: " out))
+            (is (not (re-find #"(?i)rez now" out))
+                (str "must not recommend rezzing; the right answer is card-specific, "
+                     "got: " out))))))))
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"
