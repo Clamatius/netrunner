@@ -522,9 +522,12 @@
           (with-redefs [ws/send-message! (mock-websocket-send! sent)
                         basic/turn-started-since-last-opp-end? (fn [] true)]
             (let [out (with-out-str (basic/check-auto-end-turn!))
-                  ;; the hint line only — the 💰 line above it legitimately says
-                  ;; "rezzable", so matching the whole output proves nothing.
-                  hint (some #(when (re-find #"💡" %) %) (str/split-lines out))]
+                  lines (str/split-lines out)
+                  hint (some #(when (re-find #"💡" %) %) lines)
+                  ;; Round 4: inspecting the 💡 line alone let an added steer pass
+                  ;; on any OTHER line. Every line that mentions a rez has to be
+                  ;; accounted for, so collect them all and compare the set.
+                  rez-lines (filter #(re-find #"(?i)rez" %) lines)]
               ;; #103's purpose: window held, card named.
               (is (re-find #"Regolith|Urtica" out)
                   (str title ": must still name the card, got: " out))
@@ -540,7 +543,14 @@
                   (str title ": the hint must be exactly the shared offer and nothing "
                        "more — an added clause is the steer coming back. Change "
                        "core/paid-window-rez-offer if this is deliberate, and read "
-                       "#269 first. Got: " hint)))))))))
+                       "#269 first. Got: " hint))
+              ;; EVERY rez-mentioning line, so a steer cannot hide on a new one.
+              (is (= [(format "   💰 %s may still be rezzable for %d¢ — check" title cost)
+                      (str "💡 " core/paid-window-rez-offer)]
+                     rez-lines)
+                  (str title ": these are the only two lines that may mention a rez. "
+                       "An extra one is the steer coming back somewhere else — round 4 "
+                       "passed every other assertion that way. Got: " (vec rez-lines))))))))))
 
 ;; #269. The surface tests above assert each line EQUALS core/paid-window-rez-offer,
 ;; which pins the two surfaces together but says nothing about what the constant
@@ -568,43 +578,9 @@
              "wants another card trashed), so the old 'do that before end-turn' rested "
              "on a false premise. #269 round 3."))))
 
-;; #269 round 3 (sol, MAJOR). The (seq scorable-agendas) branch of the cond sits
-;; BEFORE the paid-window branch, so a Corp holding both a scoreable agenda and an
-;; affordable unrezzed card fell into the agenda arm and was never told the rez
-;; window existed — the very window #103 was filed to protect. Both are facts about
-;; the same state; naming one is no reason to hide the other.
-
-(deftest test-scorable-branch-still-names-the-rez-window
-  (testing "#269: a scoreable agenda must not suppress the paid-window rez offer"
-    (let [sent (atom [])
-          game-state {:corp {:click 0 :credit 9 :hand [] :hand-count 3
-                             :hand-size {:total 5} :installed {} :prompt-state nil
-                             :servers {:remote1 {:content
-                                                 [{:cid 1 :title "Offworld Office"
-                                                   :type "Agenda" :advancementcost 4
-                                                   :advance-counter 4 :rezzed false}
-                                                  {:cid 2 :title "Regolith Mining License"
-                                                   :type "Asset" :cost 2 :rezzed false}]}}}
-                      :runner {:click 0 :credit 5 :hand []}
-                      :turn 8 :active-player "corp" :log []}]
-      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      basic/turn-started-since-last-opp-end? (fn [] true)]
-          (let [out (with-out-str (basic/check-auto-end-turn!))
-                lines (str/split-lines out)]
-            (is (str/includes? out "Offworld Office")
-                (str "must still name the scoreable agenda, got:\n" out))
-            ;; The defect: the rez was invisible in this arm.
-            (is (str/includes? out "Regolith Mining License")
-                (str "must ALSO name the rezzable card, got:\n" out))
-            (is (some #(= (str "💡 " core/paid-window-rez-offer) %) lines)
-                (str "must offer the rez on this arm too, got:\n" out))
-            (is (some #(= (str "💡 " core/paid-window-score-note) %) lines)
-                (str "the score note must be the shared constant, got:\n" out))
-            (is (not (re-find #"(?i)score if able" out))
-                (str "the old steer must be gone, got:\n" out))
-            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
-                "must not auto-end with either obligation pending")))))))
+ ;; The scorable arm is NOT touched by #269 — see the comment on it in
+;; ai_basic_actions.clj and #271. Round 3's test here pinned a rewrite of that arm
+;; that round 4 showed was false in two reachable states, so both are gone.
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"

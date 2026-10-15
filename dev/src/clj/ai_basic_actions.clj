@@ -1665,16 +1665,17 @@
                           (:title agenda)
                           (:counters agenda)
                           (:requirement agenda))))
-        (println (str "💡 " core/paid-window-score-note))
-        ;; #269 round 3 (sol, MAJOR): this branch sits BEFORE the paid-window
-        ;; branch in the cond, so a Corp holding BOTH a scoreable agenda and an
-        ;; affordable unrezzed card used to be told only about the agenda — the
-        ;; rez window #103 exists to protect was never named. Name it here too.
-        (doseq [{:keys [title cost]} eot-rezzables]
-          (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        (when (seq eot-rezzables)
-          (println (str "💡 " core/paid-window-rez-offer)))
-        (println "   The turn will NOT auto-end: send 'end-turn' when you are done.")
+        ;; NOT rewritten by #269, deliberately. Round 3 had me describe the
+        ;; paid-ability window here and offer the rez, because this arm precedes
+        ;; the paid-window arm and so hides it. Round 4 showed the arm is reached
+        ;; in states where that text is false: it has NO clicks guard and
+        ;; ai_card_actions' advance calls check-auto-end-turn! unconditionally, so
+        ;; advancing to scorable on click 1 of 3 printed "this window can still do
+        ;; it" with two clicks unspent; and it sits before both prompt arms, so
+        ;; under a blocking prompt it offered a rez and an end-turn the prompt
+        ;; refuses. The arm needs a clicks guard and to sit after the prompt arms
+        ;; before it can say anything about windows — #271, not here.
+        (println "💡 Review agendas and score if able, then manually end turn")
         (flush))
 
       ;; #114: the prompt is the OPPONENT's decision, not ours. A last click spent

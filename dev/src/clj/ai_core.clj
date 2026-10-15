@@ -2726,11 +2726,13 @@
        first version of this function checked only the rez window)
      - the end-of-turn paid window (#103 — marquee ac71ce63 lost a Nico Campaign
        rez to an auto-end)
-   Either one is named BEFORE the end-turn steer, and end-turn is described as
-   what to do after. A wake that answers this state with a flat 'send end-turn'
-   contradicts the auto-end surface, and the seat that believes the newer surface
-   pays for it. Two surfaces, one answer: call the SAME detectors rather than
-   deciding again here.
+   Both are named BEFORE end-turn is mentioned, so a wake that answers this state
+   with a flat 'send end-turn' contradicts the auto-end surface, and the seat that
+   believes the newer surface pays for it. Neither is a STEER any more (#269): the
+   lines say what is available and end-turn closes the window. Two surfaces, one
+   answer: call the SAME detectors rather than deciding again here, and emit the
+   SAME strings (paid-window-rez-offer / paid-window-score-note) rather than
+   wording it again here — they drifted apart once already.
 
    Both detectors are handed `state` rather than re-reading the atom. The wait
    loop classifies a snapshot and formats guidance from it later; a diff landing
@@ -2762,16 +2764,16 @@
                        (format "        💰 %s may still be rezzable for %d¢ — check" title cost))
                      rezzables))
           ;; The two lists do NOT take the same advice, and this used to give them
-          ;; one line ("Do those first if you want them, then `end-turn`").
+          ;; one line ("Do those first if you want them, then `end-turn`"), which
+          ;; handed the seat the steer #269 took out of check-auto-end-turn! on its
+          ;; very next `wait`.
           ;;
-          ;; Scoring an agenda that is already scoreable costs no click and nothing
-          ;; is given up by doing it before end-turn, so "first" is right there.
-          ;; A rez is a real decision with a cost, and whether THIS window is the
-          ;; moment for it depends on the card — see #269, which took the same
-          ;; steer out of check-auto-end-turn! after a marquee Corp followed it and
-          ;; lost the card it rezzed. Keeping "first" here would have handed the
-          ;; seat the removed instruction on its very next `wait`, so the rez line
-          ;; names the action and recommends nothing.
+          ;; NEITHER list is steered now. Scoring costs no CLICK, which the seat
+          ;; cannot work out for itself, so that fact is stated and nothing more:
+          ;; "nothing is given up by scoring now" is false (round 3 — Atlas,
+          ;; Vitruvius and Beale forfeit an over-advance payoff when scored at the
+          ;; requirement, Azef Protocol wants another installed card trashed). The
+          ;; right moment for a rez is card-dependent; the argument is in #269/#270.
           ;;
           ;; The rez detector also errs generous on purpose (it counts restricted
           ;; recurring credits), so an entry is an opportunity to CHECK either way.

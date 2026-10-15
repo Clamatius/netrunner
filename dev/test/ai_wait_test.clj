@@ -730,10 +730,12 @@
 ;; list — so a seat that got the neutral line, then sent `wait`, was handed the
 ;; removed instruction on the very next surface. No test covered this wording.
 ;;
-;; The two lists do NOT take the same advice, which is why this is a split and not
-;; a deletion: scoring an already-scoreable agenda costs no click and gives up
-;; nothing, so "before end-turn" is correct for scorables. A rez has a cost and a
-;; card-dependent right moment, so it is offered and not recommended.
+;; The two lists do NOT take the same advice, which is why this is a split and
+;; not a deletion: scoring costs no CLICK, which the seat cannot work out for
+;; itself, so that fact is stated. Neither list is steered — round 3 refuted the
+;; premise the score steer rested on ("gives up nothing" is false: Atlas,
+;; Vitruvius and Beale forfeit an over-advance payoff when scored at the
+;; requirement, Azef Protocol wants another installed card trashed).
 
 (defn- obligation-state
   "A client-state at :my-turn-end with the asked-for obligations installed."
@@ -768,7 +770,15 @@
       ;; drift, and an appended clause fails without the test guessing at it.
       (is (some #(= (str "      " core/paid-window-rez-offer) %) (str/split-lines out))
           (str "the rez line must be exactly the shared offer — an added clause is "
-               "the steer coming back. Got:\n" out)))))
+               "the steer coming back. Got:\n" out))
+      ;; Round 4: a steer appended as its own LINE passed every equality assertion,
+      ;; the golden lock included. So account for every rez-mentioning line.
+      (is (= ["        💰 Regolith Mining License may still be rezzable for 2¢ — check"
+              (str "      " core/paid-window-rez-offer)]
+             (filter #(re-find #"(?i)rez" %) (str/split-lines out)))
+          (str "these are the only two lines here that may mention a rez — the "
+               "detector's own entry and the shared offer. An extra one is the steer "
+               "coming back somewhere else. Got:\n" out)))))
 
 (deftest test-my-turn-end-still-urges-a-free-score
   (testing "#269: scoring costs no click, so 'before end-turn' stays for scorables"
