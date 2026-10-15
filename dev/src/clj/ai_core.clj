@@ -2685,6 +2685,35 @@
        ;; Nothing relevant
        :else nil))))
 
+(def paid-window-rez-offer
+  "The one sentence BOTH end-of-turn surfaces use for an available rez.
+
+   #269: the right moment for a rez is card-dependent in a way neither surface can
+   know, so they offer the action and recommend nothing. The per-card analysis is
+   in #269/#270 deliberately — it was wrong in three different ways across three
+   review rounds while it lived in comments here.
+
+   Shared, because these two surfaces are fed by the same detector and drifted
+   apart once already: #269 took the steer out of check-auto-end-turn! and left
+   `Do those first if you want them` in this file, handing the seat the removed
+   instruction on its very next `wait` (round-2 panel, MAJOR). One constant, so a
+   future edit cannot change one surface's policy and not the other's.
+
+   Callers add their own prefix; the tests assert each surface's line equals this
+   string with that prefix."
+  "A rez here is optional: 'rez <name>' rezzes, 'end-turn' closes the window")
+
+(def paid-window-score-note
+  "The scorable counterpart. States the CLICK fact and stops.
+
+   This said `Scoring costs no click — do that before `end-turn` if you want it`,
+   whose premise (scoring forfeits nothing) is false: Project Atlas and Project
+   Vitruvius give up their over-advance payoff when scored at exactly the
+   requirement, Project Beale gives up points, and Azef Protocol wants another
+   installed card trashed. Round-3 panel, MAJOR. The click fact is true and is the
+   part the seat cannot work out for itself, so it is what survives."
+  "Scoring an agenda costs no click, so this window can still do it")
+
 (defn- end-turn-obligation-lines
   "The seat owns a turn that is out of clicks but has NOT ended (#120). Emitted
    from TWO wake reasons — :my-turn-end, and :run-ended when the run that just
@@ -2746,13 +2775,9 @@
           ;;
           ;; The rez detector also errs generous on purpose (it counts restricted
           ;; recurring credits), so an entry is an opportunity to CHECK either way.
-          (into (if (seq scorables)
-                  ["      Scoring costs no click — do that before `end-turn` if you want it."]
-                  []))
-          (into (if (seq rezzables)
-                  ["      A rez here is optional: `rez <name>` rezzes, `end-turn` closes the window."]
-                  []))
-          (conj "      Nothing to do? just `end-turn`.")
+          (into (if (seq scorables) [(str "      " paid-window-score-note)] []))
+          (into (if (seq rezzables) [(str "      " paid-window-rez-offer)] []))
+          (conj "      Nothing to do? just 'end-turn'.")
           (into closing))
       (into ["   👉 Your turn is out of clicks but has NOT ended — send `end-turn`."
              "      Nobody owes a start-turn."]

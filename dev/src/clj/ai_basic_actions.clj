@@ -1665,7 +1665,16 @@
                           (:title agenda)
                           (:counters agenda)
                           (:requirement agenda))))
-        (println "💡 Review agendas and score if able, then manually end turn")
+        (println (str "💡 " core/paid-window-score-note))
+        ;; #269 round 3 (sol, MAJOR): this branch sits BEFORE the paid-window
+        ;; branch in the cond, so a Corp holding BOTH a scoreable agenda and an
+        ;; affordable unrezzed card used to be told only about the agenda — the
+        ;; rez window #103 exists to protect was never named. Name it here too.
+        (doseq [{:keys [title cost]} eot-rezzables]
+          (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
+        (when (seq eot-rezzables)
+          (println (str "💡 " core/paid-window-rez-offer)))
+        (println "   The turn will NOT auto-end: send 'end-turn' when you are done.")
         (flush))
 
       ;; #114: the prompt is the OPPONENT's decision, not ours. A last click spent
@@ -1728,24 +1737,14 @@
           ;; both, and it errs generous on purpose (restricted recurring
           ;; credits), so one categorical copy would just relocate the overclaim.
           (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        ;; #269. This used to read "Rez now if you want it up on the Runner's
-        ;; turn", then "Rez those first if you want them, then 'end-turn'". Both
-        ;; steered the seat toward rezzing, and whether rezzing HERE is right
-        ;; depends on the card in a way this surface cannot know: a [click] asset
-        ;; and an Ambush gain nothing from it, a start-of-turn asset does better
-        ;; rezzed at the runner-turn-end boundary, and a card with a
-        ;; :corp-turn-ends trigger does want it now. Marquee aa73c305 turn 4 took
-        ;; the old advice and lost the card it rezzed.
-        ;;
-        ;; So the line names the two actions and recommends neither. It does not
-        ;; name the runner-turn-end boundary either: ai-core's :my-turn-start
-        ;; guidance currently walks the seat past it (#270), and advertising a
-        ;; window another surface closes would only move the false claim.
-        ;;
-        ;; The per-card timing analysis lives in #269 and #270 on purpose. Three
-        ;; review rounds each found a different sentence of it wrong while it sat
-        ;; in this comment, and a wrong claim here costs a code round to fix.
-        (println "💡 This window is open: 'rez <name>' rezzes, 'end-turn' closes it")
+        ;; #269. This said "Rez now if you want it up on the Runner's turn", then
+        ;; "Rez those first if you want them". Both steered the seat toward
+        ;; rezzing; whether rezzing HERE is right is card-dependent, and marquee
+        ;; aa73c305 turn 4 followed the old line and lost the card it rezzed. The
+        ;; wording is core/paid-window-rez-offer so this surface and the wake
+        ;; guidance cannot drift; the per-card reasoning is in #269/#270, which is
+        ;; where it belongs after three rounds found three sentences of it wrong.
+        (println (str "💡 " core/paid-window-rez-offer))
         (flush)
         (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))
 

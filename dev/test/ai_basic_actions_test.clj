@@ -415,9 +415,9 @@
   "Corp at 0 clicks with one unrezzed asset installed in a remote.
 
   `title` defaults to Nico Campaign, #103's own example. Pass a [click]-ability
-  asset or an Ambush to vary the card class — see #269: rezzing in THIS window
-  pays off for none of them, Nico included, because a start-of-turn asset is
-  better rezzed at the runner-turn-end boundary."
+  asset or an Ambush to vary the card class. Which of them WANTS rezzing here is
+  card-dependent and is argued in #269/#270, not restated here — note only that an
+  end-of-turn Nico rez does pay, it is merely dominated by the boundary rez."
   [& {:keys [credit cost rezzed title]
       :or {credit 5 cost 2 rezzed false title "Nico Campaign"}}]
   {:corp {:click 0 :credit credit :hand [] :hand-count 3
@@ -536,11 +536,75 @@
               ;; fails this, without the test having to guess its wording.
               (is (some? hint)
                   (str title ": the paid window must print a 💡 hint line, got: " out))
-              (is (= "💡 This window is open: 'rez <name>' rezzes, 'end-turn' closes it"
-                     hint)
-                  (str title ": the hint must offer both actions and nothing more. "
-                       "If this line is being changed deliberately, read #269 first: "
-                       "it must not recommend either action. Got: " hint)))))))))
+              (is (= (str "💡 " core/paid-window-rez-offer) hint)
+                  (str title ": the hint must be exactly the shared offer and nothing "
+                       "more — an added clause is the steer coming back. Change "
+                       "core/paid-window-rez-offer if this is deliberate, and read "
+                       "#269 first. Got: " hint)))))))))
+
+;; #269. The surface tests above assert each line EQUALS core/paid-window-rez-offer,
+;; which pins the two surfaces together but says nothing about what the constant
+;; contains — a mutation appending "Rez now!" to the constant itself passed every
+;; one of them, because it moved both sides of the equality (my own mutation
+;; battery, round 3). So the constants are locked here against written-out
+;; literals. That is deliberately a golden-string test: this text IS the
+;; deliverable, three rounds of review went into what it may and may not claim,
+;; and a change to it must be a conscious one rather than a passing edit.
+
+(deftest test-paid-window-guidance-text-is-locked
+  (testing "#269: these two strings are reviewed policy — changing one means
+            changing what the harness tells a seat to do"
+    (is (= "A rez here is optional: 'rez <name>' rezzes, 'end-turn' closes the window"
+           core/paid-window-rez-offer)
+        (str "the rez offer must name both actions and recommend NEITHER. Rounds 1-3 "
+             "removed, in order: a Runner's-turn payoff claim, 'Rez those first ... "
+             "then', and a re-added 'Rez now!'. If you are changing this on purpose, "
+             "read #269 and #270 first."))
+    (is (= "Scoring an agenda costs no click, so this window can still do it"
+           core/paid-window-score-note)
+        (str "the score note states the CLICK fact and stops. It must not steer: "
+             "'scoring forfeits nothing' is false (Atlas, Vitruvius and Beale give up "
+             "an over-advance payoff when scored at the requirement, Azef Protocol "
+             "wants another card trashed), so the old 'do that before end-turn' rested "
+             "on a false premise. #269 round 3."))))
+
+;; #269 round 3 (sol, MAJOR). The (seq scorable-agendas) branch of the cond sits
+;; BEFORE the paid-window branch, so a Corp holding both a scoreable agenda and an
+;; affordable unrezzed card fell into the agenda arm and was never told the rez
+;; window existed — the very window #103 was filed to protect. Both are facts about
+;; the same state; naming one is no reason to hide the other.
+
+(deftest test-scorable-branch-still-names-the-rez-window
+  (testing "#269: a scoreable agenda must not suppress the paid-window rez offer"
+    (let [sent (atom [])
+          game-state {:corp {:click 0 :credit 9 :hand [] :hand-count 3
+                             :hand-size {:total 5} :installed {} :prompt-state nil
+                             :servers {:remote1 {:content
+                                                 [{:cid 1 :title "Offworld Office"
+                                                   :type "Agenda" :advancementcost 4
+                                                   :advance-counter 4 :rezzed false}
+                                                  {:cid 2 :title "Regolith Mining License"
+                                                   :type "Asset" :cost 2 :rezzed false}]}}}
+                      :runner {:click 0 :credit 5 :hand []}
+                      :turn 8 :active-player "corp" :log []}]
+      (with-mock-state (mock-client-state :side "corp" :game-state game-state)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))
+                lines (str/split-lines out)]
+            (is (str/includes? out "Offworld Office")
+                (str "must still name the scoreable agenda, got:\n" out))
+            ;; The defect: the rez was invisible in this arm.
+            (is (str/includes? out "Regolith Mining License")
+                (str "must ALSO name the rezzable card, got:\n" out))
+            (is (some #(= (str "💡 " core/paid-window-rez-offer) %) lines)
+                (str "must offer the rez on this arm too, got:\n" out))
+            (is (some #(= (str "💡 " core/paid-window-score-note) %) lines)
+                (str "the score note must be the shared constant, got:\n" out))
+            (is (not (re-find #"(?i)score if able" out))
+                (str "the old steer must be gone, got:\n" out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must not auto-end with either obligation pending")))))))
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"

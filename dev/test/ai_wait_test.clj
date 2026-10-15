@@ -761,13 +761,14 @@
                               :my-turn-end (obligation-state :rezzable true)))]
       (is (str/includes? out "Regolith Mining License")
           (str "must still name the rezzable card, got:\n" out))
-      (is (re-find #"`rez <name>` rezzes, `end-turn` closes the window" out)
-          (str "must offer both actions, got:\n" out))
-      ;; The defect round 2 found: the steer #269 removed from the other surface.
-      (is (not (re-find #"(?i)do those first|rez those first" out))
-          (str "must not hand back the steer #269 removed, got:\n" out))
-      (is (not (re-find #"(?i)\bfirst\b" out))
-          (str "a rez has a card-dependent right moment — no ordering, got:\n" out)))))
+      ;; Round 3 (fable+sol, MAJOR): a substring assertion plus banned phrases let
+      ;; "Rez now!" through on this surface — the identical hole round 2 found in
+      ;; the other test. Both surfaces now emit core/paid-window-rez-offer and both
+      ;; tests assert EQUALITY against it, so neither the policy nor the wording can
+      ;; drift, and an appended clause fails without the test guessing at it.
+      (is (some #(= (str "      " core/paid-window-rez-offer) %) (str/split-lines out))
+          (str "the rez line must be exactly the shared offer — an added clause is "
+               "the steer coming back. Got:\n" out)))))
 
 (deftest test-my-turn-end-still-urges-a-free-score
   (testing "#269: scoring costs no click, so 'before end-turn' stays for scorables"
@@ -775,10 +776,14 @@
                               :my-turn-end (obligation-state :scorable true)))]
       (is (str/includes? out "Offworld Office")
           (str "must still name the scorable agenda, got:\n" out))
-      (is (re-find #"(?i)costs no click" out)
-          (str "the free-score steer must survive the #269 split, got:\n" out))
-      (is (re-find #"(?i)before `end-turn`" out)
-          (str "scoring first IS right, so it must still say so, got:\n" out)))))
+      ;; Round 3 (fable+sol, MAJOR): this asserted a "before end-turn" STEER, whose
+      ;; premise (scoring forfeits nothing) is false — Atlas/Vitruvius/Beale give up
+      ;; an over-advance payoff when scored at the requirement. The click FACT is
+      ;; what survives, and it is pinned to the shared constant.
+      (is (some #(= (str "      " core/paid-window-score-note) %) (str/split-lines out))
+          (str "the score line must be exactly the shared note, got:\n" out))
+      (is (not (re-find #"(?i)before `?end-turn`?|score if able" out))
+          (str "must not steer the score — the right moment can differ, got:\n" out)))))
 
 (deftest test-my-turn-end-separates-the-two-obligations
   (testing "#269: with both pending, each list gets its own advice"
@@ -788,9 +793,9 @@
       (is (and (str/includes? out "Regolith Mining License")
                (str/includes? out "Offworld Office"))
           (str "both obligations must be named, got:\n" out))
-      (is (and (re-find #"(?i)costs no click" out)
-               (re-find #"`rez <name>` rezzes" out))
-          (str "both lines must appear — one steer, one offer, got:\n" out)))))
+      (is (and (some #(= (str "      " core/paid-window-score-note) %) (str/split-lines out))
+               (some #(= (str "      " core/paid-window-rez-offer) %) (str/split-lines out)))
+          (str "both shared lines must appear, one per obligation, got:\n" out)))))
 
 (deftest test-wake-guidance-is-silent-for-reasons-with-nothing-to-add
   (testing "#115: guidance is per-reason, not a blanket paragraph — reasons that
