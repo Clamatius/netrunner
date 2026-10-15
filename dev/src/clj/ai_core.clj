@@ -2732,10 +2732,27 @@
           (into (map (fn [{:keys [title cost]}]
                        (format "        💰 %s may still be rezzable for %d¢ — check" title cost))
                      rezzables))
-          ;; Mirrors check-auto-end-turn!'s own hedge. The rez detector errs
-          ;; generous on purpose (it counts restricted recurring credits), so an
-          ;; entry here is an opportunity to CHECK, never an instruction to obey.
-          (conj "      Do those first if you want them, then `end-turn` — nothing to do? just `end-turn`.")
+          ;; The two lists do NOT take the same advice, and this used to give them
+          ;; one line ("Do those first if you want them, then `end-turn`").
+          ;;
+          ;; Scoring an agenda that is already scoreable costs no click and nothing
+          ;; is given up by doing it before end-turn, so "first" is right there.
+          ;; A rez is a real decision with a cost, and whether THIS window is the
+          ;; moment for it depends on the card — see #269, which took the same
+          ;; steer out of check-auto-end-turn! after a marquee Corp followed it and
+          ;; lost the card it rezzed. Keeping "first" here would have handed the
+          ;; seat the removed instruction on its very next `wait`, so the rez line
+          ;; names the action and recommends nothing.
+          ;;
+          ;; The rez detector also errs generous on purpose (it counts restricted
+          ;; recurring credits), so an entry is an opportunity to CHECK either way.
+          (into (if (seq scorables)
+                  ["      Scoring costs no click — do that before `end-turn` if you want it."]
+                  []))
+          (into (if (seq rezzables)
+                  ["      A rez here is optional: `rez <name>` rezzes, `end-turn` closes the window."]
+                  []))
+          (conj "      Nothing to do? just `end-turn`.")
           (into closing))
       (into ["   👉 Your turn is out of clicks but has NOT ended — send `end-turn`."
              "      Nobody owes a start-turn."]

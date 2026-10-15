@@ -1728,45 +1728,23 @@
           ;; both, and it errs generous on purpose (restricted recurring
           ;; credits), so one categorical copy would just relocate the overclaim.
           (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        ;; This used to read "Rez now if you want it up on the Runner's turn", and
-        ;; before that "Rez those first if you want them, then 'end-turn'". Both
-        ;; told the seat to rez here. Nothing about this window justifies that, for
-        ;; ANY card:
+        ;; #269. This used to read "Rez now if you want it up on the Runner's
+        ;; turn", then "Rez those first if you want them, then 'end-turn'". Both
+        ;; steered the seat toward rezzing, and whether rezzing HERE is right
+        ;; depends on the card in a way this surface cannot know: a [click] asset
+        ;; and an Ambush gain nothing from it, a start-of-turn asset does better
+        ;; rezzed at the runner-turn-end boundary, and a card with a
+        ;; :corp-turn-ends trigger does want it now. Marquee aa73c305 turn 4 took
+        ;; the old advice and lost the card it rezzed.
         ;;
-        ;;   Regolith Mining License  "[click]: Take 3[c] from this asset" — a click
-        ;;     ability, so being rezzed on the Runner's turn does nothing at all.
-        ;;   Urtica Cipher  fires "when the Runner accesses this asset while it is
-        ;;     installed" — an Ambush fires rezzed or not (marquee aa73c305 log
-        ;;     105-107: an UNREZZED Urtica did 3 net damage on access), so rezzing
-        ;;     only reveals the trap.
-        ;;   Nico Campaign  "When your turn begins, take 3[c]" — and even here the
-        ;;     window is the wrong moment. Its defcard carries
-        ;;     `:derezzed-events [corp-rez-toast]`, and corp-rez-toast is
-        ;;     `{:event :runner-turn-ends}`; the take-3 ability's `:req` is
-        ;;     `(:corp-phase-12 @state)`. So the engine's own design is to rez at
-        ;;     the RUNNER-TURN-END boundary and collect in phase 1.2 — same payout,
-        ;;     without sitting rezzed through the Runner's whole turn.
+        ;; So the line names the two actions and recommends neither. It does not
+        ;; name the runner-turn-end boundary either: ai-core's :my-turn-start
+        ;; guidance currently walks the seat past it (#270), and advertising a
+        ;; window another surface closes would only move the false claim.
         ;;
-        ;; Round-1 review (fable) is what established that last row; this comment
-        ;; previously claimed Nico "has to be rezzed before the turn flips" and used
-        ;; it to call the drip case model error. It is harness error, which is what
-        ;; Michael said in forum [284] ("install drip money asset, immediately rez
-        ;; — exposes unnecessary risk of runner trashing it in virtually all
-        ;; cases"). #269.
-        ;;
-        ;; What it cost: aa73c305 turn 4 took the advice. The Corp paid 2 to rez a
-        ;; Regolith in this window and left the Brân in front of it unrezzed; a
-        ;; Tread Lightly run (+3 to rez ICE) then put Brân out of reach at 9 against
-        ;; its 7 credits, and the Regolith was trashed for 3. Its own report: "a
-        ;; clear mistake".
-        ;;
-        ;; So the line names the two actions and stops. It deliberately does NOT
-        ;; point at the runner-turn-end boundary, correct though that is for a
-        ;; start-of-turn asset: ai-core's :my-turn-start wake guidance currently
-        ;; tells the seat to send start-turn before acting, which walks it straight
-        ;; past that window (#270). Advertising a window the sibling surface closes
-        ;; would just move the false claim. Which timing is right per card class is
-        ;; strategy and belongs in the brief, not here.
+        ;; The per-card timing analysis lives in #269 and #270 on purpose. Three
+        ;; review rounds each found a different sentence of it wrong while it sat
+        ;; in this comment, and a wrong claim here costs a code round to fix.
         (println "💡 This window is open: 'rez <name>' rezzes, 'end-turn' closes it")
         (flush)
         (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))

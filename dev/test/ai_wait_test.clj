@@ -723,6 +723,75 @@
           (is (re-find #"(?i)gone, not paused|game is GONE" out)
               (str "the fast path must decode the reason, not print a bare token, got:\n" out)))))))
 
+;; #269 round 2 (fable, MAJOR). check-auto-end-turn! and this surface are fed by
+;; the SAME two detectors, and the docstring promises "Two surfaces, one answer".
+;; When #269 took the rez steer out of check-auto-end-turn!, this line still read
+;; "Do those first if you want them, then `end-turn`" for the identical rezzables
+;; list — so a seat that got the neutral line, then sent `wait`, was handed the
+;; removed instruction on the very next surface. No test covered this wording.
+;;
+;; The two lists do NOT take the same advice, which is why this is a split and not
+;; a deletion: scoring an already-scoreable agenda costs no click and gives up
+;; nothing, so "before end-turn" is correct for scorables. A rez has a cost and a
+;; card-dependent right moment, so it is offered and not recommended.
+
+(defn- obligation-state
+  "A client-state at :my-turn-end with the asked-for obligations installed."
+  [& {:keys [rezzable scorable]}]
+  ;; :side matters — both detectors gate on (side= "Corp" (:side client-state)),
+  ;; so a sideless fixture silently returns no obligations and this whole file
+  ;; would pass while asserting nothing ([[two-sideless-fixtures]]).
+  {:side "Corp"
+   :game-state
+   {:corp (merge {:click 0 :credit 9}
+                 {:servers
+                  {:remote1
+                   {:content (cond-> []
+                               rezzable (conj {:cid 1 :title "Regolith Mining License"
+                                               :type "Asset" :cost 2 :rezzed false})
+                               scorable (conj {:cid 2 :title "Offworld Office"
+                                               :type "Agenda" :advancementcost 4
+                                               :advance-counter 4 :rezzed false}))}}})
+    :runner {:click 0}
+    :active-player "corp" :turn 7}})
+
+(deftest test-my-turn-end-offers-a-rez-without-recommending-it
+  (testing "#269: the rez obligation names the action and recommends neither"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :rezzable true)))]
+      (is (str/includes? out "Regolith Mining License")
+          (str "must still name the rezzable card, got:\n" out))
+      (is (re-find #"`rez <name>` rezzes, `end-turn` closes the window" out)
+          (str "must offer both actions, got:\n" out))
+      ;; The defect round 2 found: the steer #269 removed from the other surface.
+      (is (not (re-find #"(?i)do those first|rez those first" out))
+          (str "must not hand back the steer #269 removed, got:\n" out))
+      (is (not (re-find #"(?i)\bfirst\b" out))
+          (str "a rez has a card-dependent right moment — no ordering, got:\n" out)))))
+
+(deftest test-my-turn-end-still-urges-a-free-score
+  (testing "#269: scoring costs no click, so 'before end-turn' stays for scorables"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :scorable true)))]
+      (is (str/includes? out "Offworld Office")
+          (str "must still name the scorable agenda, got:\n" out))
+      (is (re-find #"(?i)costs no click" out)
+          (str "the free-score steer must survive the #269 split, got:\n" out))
+      (is (re-find #"(?i)before `end-turn`" out)
+          (str "scoring first IS right, so it must still say so, got:\n" out)))))
+
+(deftest test-my-turn-end-separates-the-two-obligations
+  (testing "#269: with both pending, each list gets its own advice"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :rezzable true
+                                                             :scorable true)))]
+      (is (and (str/includes? out "Regolith Mining License")
+               (str/includes? out "Offworld Office"))
+          (str "both obligations must be named, got:\n" out))
+      (is (and (re-find #"(?i)costs no click" out)
+               (re-find #"`rez <name>` rezzes" out))
+          (str "both lines must appear — one steer, one offer, got:\n" out)))))
+
 (deftest test-wake-guidance-is-silent-for-reasons-with-nothing-to-add
   (testing "#115: guidance is per-reason, not a blanket paragraph — reasons that
             speak for themselves add no lines"
