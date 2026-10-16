@@ -24,6 +24,14 @@
 #
 # Like send_command_wrap_test.sh, the helper is extracted from the LIVE script
 # rather than reimplemented, so this cannot pass against a stale copy.
+#
+# SCOPE, since #255 split this file's job three ways:
+#   here   - clj_str's own behaviour, as a unit.
+#   clj_string_sweep_test.sh  - the censuses: is every site escaped, and is every
+#                               bare interpolation reviewed.
+#   clj_string_route_test.sh  - what each arm actually emits, per arm, on two
+#                               shells.
+#   clj_string_roundtrip_test.clj - does the emitted expression READ as one form.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,73 +77,51 @@ check "ampersand"       'R&D'               "$(clj_str 'R&D')"
 check "brackets"        'Gain 3 [Credits]'  "$(clj_str 'Gain 3 [Credits]')"
 check "empty"           ''                  "$(clj_str '')"
 
-echo "--- the escaped form actually reads as one Clojure string ---"
-# Round-trip through a reader rather than trusting the shape by eye.
+echo "--- a trailing newline is TRUNCATED, deliberately (#255) ---"
+# `$(clj_str "$X")` is a command substitution, and command substitution strips
+# trailing newlines. Two design rounds tried a `printf -v` primitive to preserve
+# them and it produced four review findings, two MAJOR, so the mechanism was
+# deleted and this became a known property instead of a bug. It is pinned here so
+# the next reader learns it from a passing assertion rather than a surprise. No
+# card title, server name, flag, deck id or replay filename has one.
+check "trailing-newline-truncated" 'Hedge Fund' "$(clj_str 'Hedge Fund
+')"
+check "interior-newline-kept"      'a
+b'                                  "$(clj_str 'a
+b')"
+
+echo "--- the reader round trip lives in the lein suite now ---"
+# It was guarded by `command -v clojure`, and there is no clojure/clj CLI on this
+# box (only lein), so it printed a skip on EVERY run of make verify and the
+# property was never checked. `read-string` also reads only the FIRST form, so it
+# could not have caught an extra executable one even when it ran. Both fixed in
+# dev/test/clj_string_roundtrip_test.clj, which `make test` runs.
+if [[ -r "$SCRIPT_DIR/clj_string_roundtrip_test.clj" ]]; then
+    echo "ok   [reader-round-trip-relocated]"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL [reader-round-trip-relocated] — clj_string_roundtrip_test.clj is missing,"
+    echo "       so nothing checks that the emitted expression READS as one form."
+    FAIL=$((FAIL + 1))
+fi
+
+echo "--- the structural census lives in clj_string_sweep_test.sh now ---"
+# What used to be here:
 #
-# Build the SAME expression execute() builds -- the escaped title interpolated
-# straight into Clojure source -- not a nested string literal. Nesting it inside
-# another Clojure string needs a SECOND level of escaping, and a round-trip
-# written that way fails on correct output, which is worse than no test: it
-# reports the fix broken. (Caught by running it: it read as three forms.)
-if command -v clojure >/dev/null 2>&1; then
-    EXPR="(print (identity \"$(clj_str 'Cerberus "Lady" H1')\"))"
-    READ=$(printf '%s' "$EXPR" | clojure -M - 2>/dev/null)
-    check "reader-round-trip" 'Cerberus "Lady" H1' "$READ"
-else
-    echo "skip [reader-round-trip] (clojure CLI not on PATH)"
-fi
-
-echo "--- no execute site interpolates a bare variable into a Clojure string ---"
-# The structural half. A helper nothing is obliged to call decays: this fails on
-# a NEW raw site rather than waiting for someone to play a Cerberus.
-# Per-INTERPOLATION, not per-line. `grep -v clj_str` discarded the whole line,
-# so a site with two arguments stayed green when only ONE lost its escaping --
-# install-card! takes both a card name and a server. (Fresh delta seat, Astra,
-# who executed the partial revert rather than reasoning about it.) Strip every
-# wrapped interpolation first, then look at what is left.
-RAW=$(sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' "$SEND_CMD" \
-      | grep -nE 'execute .*\\"\$[A-Za-z_]+\\"' || true)
-if [[ -z "$RAW" ]]; then
-    echo "ok   [no-raw-interpolation-sites]"
+#     grep -nE 'execute .*\\"\$[A-Za-z_]+\\"'
+#
+# It was blind THREE ways and #255 lived in all three: `execute .*` needs
+# `execute` on the LINE (so every accumulator and every continuation line of a
+# multiline form was invisible - 19 of the 20 sites), `[A-Za-z_]+` cannot match
+# `$1` (so all five flag arms were invisible anyway), and its strip regex does not
+# strip `$(clj_str "$1")` (so it would have flagged the FIXED sites). A guard that
+# is green over the defect it is named for is worse than no guard.
+if [[ -x "$SCRIPT_DIR/clj_string_sweep_test.sh" ]]; then
+    echo "ok   [structural-census-relocated]"
     PASS=$((PASS + 1))
 else
-    echo "FAIL [no-raw-interpolation-sites] — these embed a bare variable:"
-    echo "$RAW" | sed 's/^/       /'
-    FAIL=$((FAIL + 1))
-fi
-
-echo "--- that guard can actually fail (mutation test) ---"
-# Feed the same pattern a line we know is raw. If this reports clean, the grep
-# above is decorative and the check above proves nothing.
-MUTANT='execute "(ai-actions/play-card! \"$CARD_NAME\")"'
-if echo "$MUTANT" | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "ok   [mutation-raw-site-is-detected]"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL [mutation-raw-site-is-detected] — the pattern misses a known raw site"
-    FAIL=$((FAIL + 1))
-fi
-
-# ...and that a WRAPPED site is not falsely flagged.
-SAFE='execute "(ai-actions/play-card! \"$(clj_str "$CARD_NAME")\")"'
-if echo "$SAFE" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
-   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "FAIL [mutation-wrapped-site-is-clean] — a wrapped site is flagged"
-    FAIL=$((FAIL + 1))
-else
-    echo "ok   [mutation-wrapped-site-is-clean]"
-    PASS=$((PASS + 1))
-fi
-
-# The case that made the old per-line form useless: TWO interpolations on one
-# line, only one of them escaped. install-card! is exactly this shape.
-PARTIAL='execute "(ai-actions/install-card! \"$CARD_NAME\" \"$(clj_str "$SERVER")\")"'
-if echo "$PARTIAL" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
-   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "ok   [mutation-partial-escaping-is-detected]"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL [mutation-partial-escaping-is-detected] — one unescaped arg hides behind another's clj_str"
+    echo "FAIL [structural-census-relocated] — clj_string_sweep_test.sh is missing,"
+    echo "       so nothing censuses the interpolation sites."
     FAIL=$((FAIL + 1))
 fi
 
