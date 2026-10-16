@@ -486,7 +486,34 @@
       (let [out (clojure.string/join
                  "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
         (is (re-find #"(?i)forced encounter" out) (str st " lost the window label:\n" out))
-        (is (re-find #"(?i)icebreaker" out) (str st " lost the break option:\n" out))))))
+        (is (re-find #"(?i)icebreaker" out) (str st " lost the break option:\n" out)))))
+  ;; THE WHOLE BLOCK, not the arm. The assertions above all read the ONE line
+  ;; the tank state picks, and the closing `continue` line - which this fn has
+  ;; printed since long before it took a tank state - prescribed "break or tank
+  ;; first" unconditionally. So :signalled emitted "do not re-tank" and
+  ;; "break or tank first" in one output, and every assertion here was green
+  ;; over it: an extra line is invisible to a scan that only looks for the
+  ;; lines it expects. A seat that obeys the LAST thing it read re-tanks, and a
+  ;; re-tank in the lost-send branch sends nothing and prints nothing - the
+  ;; Game F shape, prescribed by the surface built to cure it. Round 6 deleted
+  ;; this same prescription from the sibling surface and did not look here,
+  ;; because the tank arm was new and this line was not.
+  (testing "a tank already on record is never re-prescribed, anywhere in the block"
+    (doseq [st [:signalled :unsignalled]]
+      (let [out (clojure.string/join
+                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
+        (is (not (re-find #"(?i)or tank first" out))
+            (str st " still prescribes a tank the block just reported; got:\n" out))
+        ;; and the ENGINE claim it shares a line with must survive the narrowing
+        ;; (#92: deleting it is what cost marquee G2)
+        (is (re-find #"(?i)`continue` does not pass while the Corp still owns" out)
+            (str st " lost the #92 engine claim:\n" out)))))
+  (testing "but it IS prescribed where no tank is on record"
+    (doseq [st [:none :unknown]]
+      (let [out (clojure.string/join
+                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
+        (is (re-find #"(?i)or tank first" out)
+            (str st " has no tank on record, so the offer belongs here; got:\n" out))))))
 
 
 ;; ============================================================================

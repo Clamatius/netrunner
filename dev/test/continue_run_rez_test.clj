@@ -2486,6 +2486,22 @@
                 (str "self-advance sends the second pass alone, got: " out))
             (is (re-find #"(?i)APPROACH window" out)
                 (str "it must name the window it is describing, got: " out))
+            ;; AND THE CLAIM MUST BE TRUE OF *THIS* FIXTURE. The log built above
+            ;; CONTAINS "ai-runner indicates to fire all unbroken subroutines on
+            ;; Whitespace" - that is the whole point of the stale-signal case -
+            ;; so the notice's original sentence, "the log carries no tank signal
+            ;; for Whitespace", was false in the one state this test sets up, and
+            ;; this test was green over it because `(?i)NOT signalled` matched
+            ;; anyway. The signal REACHED; it is merely no longer CURRENT for the
+            ;; encounter about to start, which is exactly the distinction round 6
+            ;; settled for the sibling surface (M3) and this one did not get.
+            (is (not (re-find #"(?i)no tank signal for" out))
+                (str "this fixture's log DOES carry a tank signal for Whitespace;"
+                     " the notice may only deny a CURRENT one, got: " out))
+            (is (re-find #"(?i)no CURRENT" out)
+                (str "the notice must say which signal it is denying, got: " out))
+            (is (re-find #"(?i)for this encounter" out)
+                (str "and which encounter it is denying it for, got: " out))
             (is (empty? (filter #(= "system-msg" (:command %)) @sent))
                 (str "and still nothing is sent from the approach step, got: " @sent)))
           (runs/reset-strategy!))))))

@@ -2444,6 +2444,12 @@
   ([ice-title unbroken-count phase]
    (forced-encounter-advisory-lines ice-title unbroken-count phase :none))
   ([ice-title unbroken-count phase tank-state]
+   ;; ONE predicate for "is `tank` still an offer here", read in TWO places: the
+   ;; cond below, and the closing `continue` line. They were decided separately
+   ;; and disagreed — see the closing line's own comment. Deriving both from the
+   ;; same expression is the only thing that stops them drifting again, which is
+   ;; the defect tank-window-state was introduced to end.
+   (let [tank-offered? (not (contains? #{:signalled :unsignalled} tank-state))]
    [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
             ice-title unbroken-count (if (= unbroken-count 1) "" "s")
             (if phase (str "phase: " phase) "there is no run at all"))
@@ -2463,8 +2469,20 @@
 
       :else
       (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
-    "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
-    "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"]))
+    ;; The ENGINE claim (#92) is unconditional and stays. The PRESCRIPTION after
+    ;; the dash is not: with a tank already on record this block said
+    ;; "do not re-tank" two lines up and "break or tank first" here, in one
+    ;; output. A seat that obeys the last thing it read re-tanks — and a re-tank
+    ;; in signal-tank-once!'s lost-send branch sends 0 and, once report-once!
+    ;; has consumed the mark, prints NOTHING, so the seat sees the same status
+    ;; again: the Game F shape, prescribed by the surface built to cure it.
+    ;; Round 6 deleted this same prescription from the sibling surface (M1) and
+    ;; did not look at this line, because the tank arm above was NEW and this
+    ;; line was not. Panel seat sol, over the merge queue, 2026-10-15.
+    (if tank-offered?
+      "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
+      "      • `continue` does not pass while the Corp still owns its half of this window.")
+    "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"])))
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current

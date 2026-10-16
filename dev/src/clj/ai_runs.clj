@@ -1310,12 +1310,26 @@
    and initiation/movement have no notice either. Game F was the rezzed case.
    Those paths make no false claim (no encounter, no sub count, so no surface
    says the Corp owes anything) — they are silent, which is the partial
-   delivery of [277] property 1 recorded in the issue."
+   delivery of [277] property 1 recorded in the issue.
+
+   WORDING: \"no CURRENT signal for this encounter\", never \"no tank signal\".
+   The gate here is the bare tank FLAG, which establishes nothing about what
+   the log holds — and this notice's own repro fixture (the stale-signal case
+   in continue-run-rez-test) puts `ai-runner indicates to fire all unbroken
+   subroutines on Whitespace` IN the log and then asserts the notice fires.
+   So \"the log carries no tank signal for Whitespace\" was FALSE in the one
+   state that test sets up, and the test stayed green over it because it
+   matched on `(?i)NOT signalled` alone. Round 6 had already settled this
+   exact wording for the sibling surface (runner-encounter-decline-hint-lines,
+   finding M3: a superseded signal REACHED, it is merely no longer CURRENT)
+   and this surface kept the older, stronger claim. Panel seat sol, over the
+   merge queue, 2026-10-15."
   [ice-title]
-  (println (format "   📡 NOT signalled: the log carries no tank signal for %s." ice-title))
+  (println "   📡 NOT signalled: the log as this client has it carries no CURRENT")
+  (println (format "      signal for this encounter on %s." ice-title))
   (println "      This is an APPROACH window; the signal belongs to the encounter.")
   (println "      Mid-run this notice is ordinary. It is a fault only if you stop acting")
-  (println "      while the log still carries no signal for it.")
+  (println "      while no current signal has appeared for it.")
   nil)
 
 (defn handle-auto-continue
