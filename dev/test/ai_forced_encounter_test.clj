@@ -498,22 +498,35 @@
   ;; Game F shape, prescribed by the surface built to cure it. Round 6 deleted
   ;; this same prescription from the sibling surface and did not look here,
   ;; because the tank arm was new and this line was not.
-  (testing "a tank already on record is never re-prescribed, anywhere in the block"
-    (doseq [st [:signalled :unsignalled]]
-      (let [out (clojure.string/join
-                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
-        (is (not (re-find #"(?i)or tank first" out))
-            (str st " still prescribes a tank the block just reported; got:\n" out))
-        ;; and the ENGINE claim it shares a line with must survive the narrowing
-        ;; (#92: deleting it is what cost marquee G2)
-        (is (re-find #"(?i)`continue` does not pass while the Corp still owns" out)
-            (str st " lost the #92 engine claim:\n" out)))))
-  (testing "but it IS prescribed where no tank is on record"
-    (doseq [st [:none :unknown]]
-      (let [out (clojure.string/join
-                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
-        (is (re-find #"(?i)or tank first" out)
-            (str st " has no tank on record, so the offer belongs here; got:\n" out))))))
+  ;; EQUALITY on the line, not an absence regex. A delta seat (astra) broke the
+  ;; first cut of these assertions in one line: `— tank first.` re-prescribes
+  ;; the tank for both recorded states while keeping the required engine
+  ;; substring and avoiding the forbidden phrase `or tank first`. An absence
+  ;; test can only forbid the wordings someone thought of, and the word "tank"
+  ;; cannot simply be banned here - both recorded-state arms have to SAY
+  ;; "tank" to report the tank. So pin the whole line per state; there are
+  ;; exactly two spellings and a new one is a review decision.
+  (let [engine-claim "      • `continue` does not pass while the Corp still owns its half of this window"
+        with-offer   (str engine-claim " — break or tank first.")
+        bare         (str engine-claim ".")
+        continue-line (fn [st]
+                        (->> (display/forced-encounter-advisory-lines "Archangel" 1 "success" st)
+                             (filter #(clojure.string/includes? % "`continue` does not pass"))
+                             first))]
+    (testing "a tank already on record is never re-prescribed, anywhere in the block"
+      (doseq [st [:signalled :unsignalled]]
+        (is (= bare (continue-line st))
+            (str st " must state the #92 engine claim and prescribe nothing after it"))))
+    (testing "but it IS prescribed where no tank is on record"
+      (doseq [st [:none :unknown]]
+        (is (= with-offer (continue-line st))
+            (str st " has no tank on record, so the offer belongs on this line"))))
+    (testing "and exactly one such line exists in every state (a second would contradict)"
+      (doseq [st [:none :unsignalled :signalled :unknown]]
+        (is (= 1 (count (filter #(clojure.string/includes? % "`continue` does not pass")
+                                (display/forced-encounter-advisory-lines
+                                 "Archangel" 1 "success" st))))
+            (str st " has more or fewer than one `continue` line"))))))
 
 
 ;; ============================================================================

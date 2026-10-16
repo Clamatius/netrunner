@@ -2495,13 +2495,21 @@
             ;; anyway. The signal REACHED; it is merely no longer CURRENT for the
             ;; encounter about to start, which is exactly the distinction round 6
             ;; settled for the sibling surface (M3) and this one did not get.
-            (is (not (re-find #"(?i)no tank signal for" out))
-                (str "this fixture's log DOES carry a tank signal for Whitespace;"
-                     " the notice may only deny a CURRENT one, got: " out))
-            (is (re-find #"(?i)no CURRENT" out)
-                (str "the notice must say which signal it is denying, got: " out))
-            (is (re-find #"(?i)for this encounter" out)
-                (str "and which encounter it is denying it for, got: " out))
+            ;; EQUALITY on the two lines that make the claim, not substring
+            ;; presence. A delta seat (astra) broke the first cut of these in one
+            ;; line: "the log contains no signal whatsoever for this encounter or
+            ;; any earlier encounter; no CURRENT signal exists" still denies the
+            ;; fixture's historical signal while containing BOTH required
+            ;; substrings and avoiding the forbidden one. There are exactly two
+            ;; lines here and a third wording is a review decision, so pin them.
+            (is (= ["   📡 NOT signalled: the log as this client has it carries no CURRENT"
+                    "      signal for this encounter on Whitespace."]
+                   (->> (clojure.string/split-lines out)
+                        (drop-while #(not (clojure.string/includes? % "NOT signalled")))
+                        (take 2)))
+                (str "the notice may deny only a CURRENT signal for THIS encounter -"
+                     " this fixture's log does carry an earlier one for Whitespace."
+                     " got: " out))
             (is (empty? (filter #(= "system-msg" (:command %)) @sent))
                 (str "and still nothing is sent from the approach step, got: " @sent)))
           (runs/reset-strategy!))))))
