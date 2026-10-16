@@ -1665,6 +1665,16 @@
                           (:title agenda)
                           (:counters agenda)
                           (:requirement agenda))))
+        ;; NOT rewritten by #269, deliberately. Round 3 had me describe the
+        ;; paid-ability window here and offer the rez, because this arm precedes
+        ;; the paid-window arm and so hides it. Round 4 showed the arm is reached
+        ;; in states where that text is false: it has NO clicks guard and
+        ;; ai_card_actions' advance calls check-auto-end-turn! unconditionally, so
+        ;; advancing to scorable on click 1 of 3 printed "this window can still do
+        ;; it" with two clicks unspent; and it sits before both prompt arms, so
+        ;; under a blocking prompt it offered a rez and an end-turn the prompt
+        ;; refuses. The arm needs a clicks guard and to sit after the prompt arms
+        ;; before it can say anything about windows — #271, not here.
         (println "💡 Review agendas and score if able, then manually end turn")
         (flush))
 
@@ -1728,8 +1738,14 @@
           ;; both, and it errs generous on purpose (restricted recurring
           ;; credits), so one categorical copy would just relocate the overclaim.
           (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        (println "💡 Rez now if you want it up on the Runner's turn, then 'end-turn'")
-        (println "   (nothing to do? just 'end-turn')")
+        ;; #269. This said "Rez now if you want it up on the Runner's turn", then
+        ;; "Rez those first if you want them". Both steered the seat toward
+        ;; rezzing; whether rezzing HERE is right is card-dependent, and marquee
+        ;; aa73c305 turn 4 followed the old line and lost the card it rezzed. The
+        ;; wording is core/paid-window-rez-offer so this surface and the wake
+        ;; guidance cannot drift; the per-card reasoning is in #269/#270, which is
+        ;; where it belongs after three rounds found three sentences of it wrong.
+        (println (str "💡 " core/paid-window-rez-offer))
         (flush)
         (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))
 

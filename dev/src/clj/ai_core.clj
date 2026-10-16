@@ -2685,6 +2685,35 @@
        ;; Nothing relevant
        :else nil))))
 
+(def paid-window-rez-offer
+  "The one sentence BOTH end-of-turn surfaces use for an available rez.
+
+   #269: the right moment for a rez is card-dependent in a way neither surface can
+   know, so they offer the action and recommend nothing. The per-card analysis is
+   in #269/#270 deliberately — it was wrong in three different ways across three
+   review rounds while it lived in comments here.
+
+   Shared, because these two surfaces are fed by the same detector and drifted
+   apart once already: #269 took the steer out of check-auto-end-turn! and left
+   `Do those first if you want them` in this file, handing the seat the removed
+   instruction on its very next `wait` (round-2 panel, MAJOR). One constant, so a
+   future edit cannot change one surface's policy and not the other's.
+
+   Callers add their own prefix; the tests assert each surface's line equals this
+   string with that prefix."
+  "A rez here is optional: 'rez <name>' rezzes, 'end-turn' closes the window")
+
+(def paid-window-score-note
+  "The scorable counterpart. States the CLICK fact and stops.
+
+   This said `Scoring costs no click — do that before `end-turn` if you want it`,
+   whose premise (scoring forfeits nothing) is false: Project Atlas and Project
+   Vitruvius give up their over-advance payoff when scored at exactly the
+   requirement, Project Beale gives up points, and Azef Protocol wants another
+   installed card trashed. Round-3 panel, MAJOR. The click fact is true and is the
+   part the seat cannot work out for itself, so it is what survives."
+  "Scoring an agenda costs no click, so this window can still do it")
+
 (defn- end-turn-obligation-lines
   "The seat owns a turn that is out of clicks but has NOT ended (#120). Emitted
    from TWO wake reasons — :my-turn-end, and :run-ended when the run that just
@@ -2697,11 +2726,13 @@
        first version of this function checked only the rez window)
      - the end-of-turn paid window (#103 — marquee ac71ce63 lost a Nico Campaign
        rez to an auto-end)
-   Either one is named BEFORE the end-turn steer, and end-turn is described as
-   what to do after. A wake that answers this state with a flat 'send end-turn'
-   contradicts the auto-end surface, and the seat that believes the newer surface
-   pays for it. Two surfaces, one answer: call the SAME detectors rather than
-   deciding again here.
+   Both are named BEFORE end-turn is mentioned, so a wake that answers this state
+   with a flat 'send end-turn' contradicts the auto-end surface, and the seat that
+   believes the newer surface pays for it. Neither is a STEER any more (#269): the
+   lines say what is available and end-turn closes the window. Two surfaces, one
+   answer: call the SAME detectors rather than deciding again here, and emit the
+   SAME strings (paid-window-rez-offer / paid-window-score-note) rather than
+   wording it again here — they drifted apart once already.
 
    Both detectors are handed `state` rather than re-reading the atom. The wait
    loop classifies a snapshot and formats guidance from it later; a diff landing
@@ -2732,10 +2763,23 @@
           (into (map (fn [{:keys [title cost]}]
                        (format "        💰 %s may still be rezzable for %d¢ — check" title cost))
                      rezzables))
-          ;; Mirrors check-auto-end-turn!'s own hedge. The rez detector errs
-          ;; generous on purpose (it counts restricted recurring credits), so an
-          ;; entry here is an opportunity to CHECK, never an instruction to obey.
-          (conj "      Do those first if you want them, then `end-turn` — nothing to do? just `end-turn`.")
+          ;; The two lists do NOT take the same advice, and this used to give them
+          ;; one line ("Do those first if you want them, then `end-turn`"), which
+          ;; handed the seat the steer #269 took out of check-auto-end-turn! on its
+          ;; very next `wait`.
+          ;;
+          ;; NEITHER list is steered now. Scoring costs no CLICK, which the seat
+          ;; cannot work out for itself, so that fact is stated and nothing more:
+          ;; "nothing is given up by scoring now" is false (round 3 — Atlas,
+          ;; Vitruvius and Beale forfeit an over-advance payoff when scored at the
+          ;; requirement, Azef Protocol wants another installed card trashed). The
+          ;; right moment for a rez is card-dependent; the argument is in #269/#270.
+          ;;
+          ;; The rez detector also errs generous on purpose (it counts restricted
+          ;; recurring credits), so an entry is an opportunity to CHECK either way.
+          (into (if (seq scorables) [(str "      " paid-window-score-note)] []))
+          (into (if (seq rezzables) [(str "      " paid-window-rez-offer)] []))
+          (conj "      Nothing to do? just 'end-turn'.")
           (into closing))
       (into ["   👉 Your turn is out of clicks but has NOT ended — send `end-turn`."
              "      Nobody owes a start-turn."]

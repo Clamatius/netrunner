@@ -723,6 +723,90 @@
           (is (re-find #"(?i)gone, not paused|game is GONE" out)
               (str "the fast path must decode the reason, not print a bare token, got:\n" out)))))))
 
+;; #269 round 2 (fable, MAJOR). check-auto-end-turn! and this surface are fed by
+;; the SAME two detectors, and the docstring promises "Two surfaces, one answer".
+;; When #269 took the rez steer out of check-auto-end-turn!, this line still read
+;; "Do those first if you want them, then `end-turn`" for the identical rezzables
+;; list — so a seat that got the neutral line, then sent `wait`, was handed the
+;; removed instruction on the very next surface. No test covered this wording.
+;;
+;; The two lists do NOT take the same advice, which is why this is a split and
+;; not a deletion: scoring costs no CLICK, which the seat cannot work out for
+;; itself, so that fact is stated. Neither list is steered — round 3 refuted the
+;; premise the score steer rested on ("gives up nothing" is false: Atlas,
+;; Vitruvius and Beale forfeit an over-advance payoff when scored at the
+;; requirement, Azef Protocol wants another installed card trashed).
+
+(defn- obligation-state
+  "A client-state at :my-turn-end with the asked-for obligations installed."
+  [& {:keys [rezzable scorable]}]
+  ;; :side matters — both detectors gate on (side= "Corp" (:side client-state)),
+  ;; so a sideless fixture silently returns no obligations and this whole file
+  ;; would pass while asserting nothing ([[two-sideless-fixtures]]).
+  {:side "Corp"
+   :game-state
+   {:corp (merge {:click 0 :credit 9}
+                 {:servers
+                  {:remote1
+                   {:content (cond-> []
+                               rezzable (conj {:cid 1 :title "Regolith Mining License"
+                                               :type "Asset" :cost 2 :rezzed false})
+                               scorable (conj {:cid 2 :title "Offworld Office"
+                                               :type "Agenda" :advancementcost 4
+                                               :advance-counter 4 :rezzed false}))}}})
+    :runner {:click 0}
+    :active-player "corp" :turn 7}})
+
+(deftest test-my-turn-end-offers-a-rez-without-recommending-it
+  (testing "#269: the rez obligation names the action and recommends neither"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :rezzable true)))]
+      (is (str/includes? out "Regolith Mining License")
+          (str "must still name the rezzable card, got:\n" out))
+      ;; Round 3 (fable+sol, MAJOR): a substring assertion plus banned phrases let
+      ;; "Rez now!" through on this surface — the identical hole round 2 found in
+      ;; the other test. Both surfaces now emit core/paid-window-rez-offer and both
+      ;; tests assert EQUALITY against it, so neither the policy nor the wording can
+      ;; drift, and an appended clause fails without the test guessing at it.
+      (is (some #(= (str "      " core/paid-window-rez-offer) %) (str/split-lines out))
+          (str "the rez line must be exactly the shared offer — an added clause is "
+               "the steer coming back. Got:\n" out))
+      ;; Round 4: a steer appended as its own LINE passed every equality assertion,
+      ;; the golden lock included. So account for every rez-mentioning line.
+      (is (= ["        💰 Regolith Mining License may still be rezzable for 2¢ — check"
+              (str "      " core/paid-window-rez-offer)]
+             (filter #(re-find #"(?i)rez" %) (str/split-lines out)))
+          (str "these are the only two lines here that may mention a rez — the "
+               "detector's own entry and the shared offer. An extra one is the steer "
+               "coming back somewhere else. Got:\n" out)))))
+
+(deftest test-my-turn-end-still-urges-a-free-score
+  (testing "#269: scoring costs no click, so 'before end-turn' stays for scorables"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :scorable true)))]
+      (is (str/includes? out "Offworld Office")
+          (str "must still name the scorable agenda, got:\n" out))
+      ;; Round 3 (fable+sol, MAJOR): this asserted a "before end-turn" STEER, whose
+      ;; premise (scoring forfeits nothing) is false — Atlas/Vitruvius/Beale give up
+      ;; an over-advance payoff when scored at the requirement. The click FACT is
+      ;; what survives, and it is pinned to the shared constant.
+      (is (some #(= (str "      " core/paid-window-score-note) %) (str/split-lines out))
+          (str "the score line must be exactly the shared note, got:\n" out))
+      (is (not (re-find #"(?i)before `?end-turn`?|score if able" out))
+          (str "must not steer the score — the right moment can differ, got:\n" out)))))
+
+(deftest test-my-turn-end-separates-the-two-obligations
+  (testing "#269: with both pending, each list gets its own advice"
+    (let [out (str/join "\n" (core/wake-reason-guidance-lines
+                              :my-turn-end (obligation-state :rezzable true
+                                                             :scorable true)))]
+      (is (and (str/includes? out "Regolith Mining License")
+               (str/includes? out "Offworld Office"))
+          (str "both obligations must be named, got:\n" out))
+      (is (and (some #(= (str "      " core/paid-window-score-note) %) (str/split-lines out))
+               (some #(= (str "      " core/paid-window-rez-offer) %) (str/split-lines out)))
+          (str "both shared lines must appear, one per obligation, got:\n" out)))))
+
 (deftest test-wake-guidance-is-silent-for-reasons-with-nothing-to-add
   (testing "#115: guidance is per-reason, not a blanket paragraph — reasons that
             speak for themselves add no lines"

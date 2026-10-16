@@ -412,11 +412,17 @@
 ;; this deadlock-safe.
 
 (defn- corp-eot-state
-  "Corp at 0 clicks with one unrezzed asset installed in a remote."
-  [& {:keys [credit cost rezzed] :or {credit 5 cost 2 rezzed false}}]
+  "Corp at 0 clicks with one unrezzed asset installed in a remote.
+
+  `title` defaults to Nico Campaign, #103's own example. Pass a [click]-ability
+  asset or an Ambush to vary the card class. Which of them WANTS rezzing here is
+  card-dependent and is argued in #269/#270, not restated here — note only that an
+  end-of-turn Nico rez does pay, it is merely dominated by the boundary rez."
+  [& {:keys [credit cost rezzed title]
+      :or {credit 5 cost 2 rezzed false title "Nico Campaign"}}]
   {:corp {:click 0 :credit credit :hand [] :hand-count 3
           :hand-size {:total 5} :installed {} :prompt-state nil
-          :servers {:remote1 {:content [{:cid 99 :title "Nico Campaign"
+          :servers {:remote1 {:content [{:cid 99 :title title
                                          :type "Asset" :cost cost :rezzed rezzed}]}}}
    :runner {:click 0 :credit 5 :hand []}
    :turn 8
@@ -484,6 +490,97 @@
           (let [_out (with-out-str (basic/check-auto-end-turn!))]
             (is (some #(= "end-turn" (get-in % [:data :command])) @sent)
                 "already-rezzed asset must still auto-end")))))))
+
+;; #269. The paid window's hint used to read "Rez now if you want it up on the
+;; Runner's turn, then 'end-turn'", then "Rez those first if you want them". Both
+;; steered the seat toward rezzing. Whether rezzing in THIS window is right is
+;; card-dependent in a way the surface cannot know, and marquee aa73c305 turn 4
+;; followed the old line and lost the card it rezzed. The window itself is right
+;; (#103 — auto-ending silently threw it away); only the steer was wrong.
+;;
+;; This test pins the line's SHAPE rather than banning wordings. Round 2 showed why:
+;; an earlier version of it excluded "up on the Runner's turn", "rez (now|those|
+;; them|it) " and "first", and "Rez now!" walked through all three on the trailing
+;; space while every other assertion stayed green. Enumerating the forbidden
+;; spellings pins the history; asserting the contract pins the contract.
+;;
+;; The per-card timing argument is deliberately NOT restated here — it lives in
+;; #269/#270, having been wrong in three different ways across three review rounds
+;; while it sat in comments.
+
+(deftest test-paid-window-hint-recommends-neither-action
+  (testing "the eot rez hint offers both actions and recommends neither, for every
+            card class the window fires for (#269, marquee aa73c305 turn 4)"
+    ;; Both classes, because one card-independent line is printed for all of them:
+    ;; whatever it says is said about every card. Urtica Cipher is the 0¢ Ambush.
+    (doseq [[title cost] [["Regolith Mining License" 2]
+                          ["Urtica Cipher" 0]]]
+      (let [sent (atom [])]
+        (with-mock-state (mock-client-state
+                          :side "corp"
+                          :game-state (corp-eot-state :title title :cost cost))
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        basic/turn-started-since-last-opp-end? (fn [] true)]
+            (let [out (with-out-str (basic/check-auto-end-turn!))
+                  lines (str/split-lines out)
+                  hint (some #(when (re-find #"💡" %) %) lines)
+                  ;; Round 4: inspecting the 💡 line alone let an added steer pass
+                  ;; on any OTHER line. Every line that mentions a rez has to be
+                  ;; accounted for, so collect them all and compare the set.
+                  rez-lines (filter #(re-find #"(?i)rez" %) lines)]
+              ;; #103's purpose: window held, card named.
+              (is (re-find #"Regolith|Urtica" out)
+                  (str title ": must still name the card, got: " out))
+              (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                  (str title ": must still hold the window open, not auto-end"))
+              ;; The contract, asserted positively: the hint offers the rez command
+              ;; and the end-turn command, and consists of nothing else. Any added
+              ;; clause — a payoff claim, an imperative, a "usually right here" —
+              ;; fails this, without the test having to guess its wording.
+              (is (some? hint)
+                  (str title ": the paid window must print a 💡 hint line, got: " out))
+              (is (= (str "💡 " core/paid-window-rez-offer) hint)
+                  (str title ": the hint must be exactly the shared offer and nothing "
+                       "more — an added clause is the steer coming back. Change "
+                       "core/paid-window-rez-offer if this is deliberate, and read "
+                       "#269 first. Got: " hint))
+              ;; EVERY rez-mentioning line, so a steer cannot hide on a new one.
+              (is (= [(format "   💰 %s may still be rezzable for %d¢ — check" title cost)
+                      (str "💡 " core/paid-window-rez-offer)]
+                     rez-lines)
+                  (str title ": these are the only two lines that may mention a rez. "
+                       "An extra one is the steer coming back somewhere else — round 4 "
+                       "passed every other assertion that way. Got: " (vec rez-lines))))))))))
+
+;; #269. The surface tests above assert each line EQUALS core/paid-window-rez-offer,
+;; which pins the two surfaces together but says nothing about what the constant
+;; contains — a mutation appending "Rez now!" to the constant itself passed every
+;; one of them, because it moved both sides of the equality (my own mutation
+;; battery, round 3). So the constants are locked here against written-out
+;; literals. That is deliberately a golden-string test: this text IS the
+;; deliverable, three rounds of review went into what it may and may not claim,
+;; and a change to it must be a conscious one rather than a passing edit.
+
+(deftest test-paid-window-guidance-text-is-locked
+  (testing "#269: these two strings are reviewed policy — changing one means
+            changing what the harness tells a seat to do"
+    (is (= "A rez here is optional: 'rez <name>' rezzes, 'end-turn' closes the window"
+           core/paid-window-rez-offer)
+        (str "the rez offer must name both actions and recommend NEITHER. Rounds 1-3 "
+             "removed, in order: a Runner's-turn payoff claim, 'Rez those first ... "
+             "then', and a re-added 'Rez now!'. If you are changing this on purpose, "
+             "read #269 and #270 first."))
+    (is (= "Scoring an agenda costs no click, so this window can still do it"
+           core/paid-window-score-note)
+        (str "the score note states the CLICK fact and stops. It must not steer: "
+             "'scoring forfeits nothing' is false (Atlas, Vitruvius and Beale give up "
+             "an over-advance payoff when scored at the requirement, Azef Protocol "
+             "wants another card trashed), so the old 'do that before end-turn' rested "
+             "on a false premise. #269 round 3."))))
+
+ ;; The scorable arm is NOT touched by #269 — see the comment on it in
+;; ai_basic_actions.clj and #271. Round 3's test here pinned a rewrite of that arm
+;; that round 4 showed was false in two reachable states, so both are gone.
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"
