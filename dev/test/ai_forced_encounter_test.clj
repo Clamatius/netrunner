@@ -516,13 +516,36 @@
     (testing "a tank already on record is never re-prescribed, anywhere in the block"
       (doseq [st [:signalled :unsignalled]]
         (is (= bare (continue-line st))
-            (str st " must state the #92 engine claim and prescribe nothing after it"))))
+            (str st " must state the #92 engine claim and prescribe nothing after it"))
+        ;; ANYWHERE, which is what the label says. Pinning the `continue` line
+        ;; alone left the rest of the block free: a delta seat (fable) added
+        ;; `If nothing fires, tank "X" again.` to the :signalled ARM and the
+        ;; whole suite stayed green. `tank "X"` is the COMMAND form, so its
+        ;; absence is the right check - both recorded-state arms still have to
+        ;; say the word "tank" to report the tank, and they say "Your tank on X".
+        (is (not (clojure.string/includes?
+                  (clojure.string/join
+                   "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))
+                  "tank \"Archangel\""))
+            (str st " prescribes the tank command somewhere in the block"))))
     (testing "but it IS prescribed where no tank is on record"
-      (doseq [st [:none :unknown]]
+      ;; :unknown-to-this-fn is NOT a state tank-window-state can return, and it
+      ;; is in this list on purpose: tank-offered? is the COMPLEMENT of
+      ;; #{:signalled :unsignalled}, not membership of #{:none :unknown}, so an
+      ;; unrecognised state gets the tank OFFER - which is what the cond's own
+      ;; :else arm does. Written as membership the two would disagree again for
+      ;; any state added later, and the loop as it stood could not tell the two
+      ;; formulations apart (delta seat fable, COSMETIC).
+      (doseq [st [:none :unknown :some-state-added-later]]
         (is (= with-offer (continue-line st))
-            (str st " has no tank on record, so the offer belongs on this line"))))
+            (str st " has no tank on record, so the offer belongs on this line"))
+        (is (clojure.string/includes?
+             (clojure.string/join
+              "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))
+             "tank \"Archangel\"")
+            (str st " must still offer the tank command"))))
     (testing "and exactly one such line exists in every state (a second would contradict)"
-      (doseq [st [:none :unsignalled :signalled :unknown]]
+      (doseq [st [:none :unsignalled :signalled :unknown :some-state-added-later]]
         (is (= 1 (count (filter #(clojure.string/includes? % "`continue` does not pass")
                                 (display/forced-encounter-advisory-lines
                                  "Archangel" 1 "success" st))))

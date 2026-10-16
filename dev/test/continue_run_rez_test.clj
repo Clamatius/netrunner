@@ -2502,14 +2502,29 @@
             ;; fixture's historical signal while containing BOTH required
             ;; substrings and avoiding the forbidden one. There are exactly two
             ;; lines here and a third wording is a review decision, so pin them.
-            (is (= ["   📡 NOT signalled: the log as this client has it carries no CURRENT"
-                    "      signal for this encounter on Whitespace."]
+            ;; ALL FIVE LINES. Pinning the first two left the rest free: a
+            ;; delta seat (fable) reverted the LAST line alone, back to
+            ;; "while the log still carries no signal for it" - the same
+            ;; unqualified claim, in the same false-for-this-fixture sense -
+            ;; and the suite stayed green. The notice is five lines and every
+            ;; one of them is a claim.
+            (is (= ["   📡 NOT signalled: Whitespace."
+                    "      The log as this client has it carries no CURRENT signal for this encounter."
+                    "      This is an APPROACH window; the signal belongs to the encounter."
+                    "      Mid-run this notice is ordinary. It is a fault only if you stop acting"
+                    "      while no CURRENT signal for this encounter has appeared."]
                    (->> (clojure.string/split-lines out)
                         (drop-while #(not (clojure.string/includes? % "NOT signalled")))
-                        (take 2)))
+                        (take 5)))
                 (str "the notice may deny only a CURRENT signal for THIS encounter -"
                      " this fixture's log does carry an earlier one for Whitespace."
                      " got: " out))
+            ;; and the token the other two surfaces emit must be greppable on ONE
+            ;; line here too, or a transcript scan for it misses this notice.
+            (is (some #(clojure.string/includes?
+                        % "no CURRENT signal for this encounter")
+                      (clojure.string/split-lines out))
+                (str "the token must not be split across a line break, got: " out))
             (is (empty? (filter #(= "system-msg" (:command %)) @sent))
                 (str "and still nothing is sent from the approach step, got: " @sent)))
           (runs/reset-strategy!))))))
