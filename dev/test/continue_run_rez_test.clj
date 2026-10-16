@@ -13,7 +13,9 @@
             [ai-basic-actions :as basic]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
-            [ai-websocket-client-v2 :as ws]))
+            [ai-run-corp-decisions :as corp-decisions]
+            [ai-websocket-client-v2 :as ws]
+            [ai-display :as display]))
 
 ;; `handle-events` keeps a per-game memory of already-reported log entries
 ;; (#31), so it is no longer a pure function. Without this fixture the
@@ -2328,3 +2330,266 @@
         (is (re-find #"Cyberdex Virus Suite \[0\]" out) (str "the copies must be listed with [N]: " out))
         (is (not (re-find #"Card not found installed" out))
             (str "listing two copies and then denying either exists is a contradiction: " out))))))
+
+;; =============================================================================
+;; Game F (2026-10-08, ai-netrunner [277]): `tank` typed at the APPROACH step
+;; =============================================================================
+;;
+;; The Runner's `continue` stopped at "Run paused - ICE rezzed!" with the run
+;; still at approach-ice. It then typed `tank "Whitespace"`. `tank` in
+;; dev/send_command is set-strategy! plus ONE continue-run!; at approach that
+;; one step is the plain pass into the encounter (handle-auto-continue), and the
+;; only caller of signal-tank-once! is handle-runner-encounter-ice, which needs
+;; a step that STARTS at the encounter. Nothing called continue-run! again
+;; (`wait` is not a run loop), so no signal was ever sent — while the Runner's
+;; prompt, which reads the tank SET (state/tank-authorized?) and not the LOG,
+;; said "Tank stands … the Corp now owes you … re-sending `continue` or `tank`
+;; will not move it". The Corp's --fire-unbroken was right not to fire, and the
+;; game sat twenty minutes until the umpire pointed the Corp at `fire-subs`.
+;; Read from the replay and both seat transcripts; this is the reproduction.
+;;
+;; Two properties, from [277]. The first testing block records what happens
+;; today and is green; the second asserts the property and is red until fixed.
+
+(defn- runner-approach-rezzed-state
+  "The Runner at the APPROACH step of a Whitespace the Corp has just rezzed:
+   no encounter on the wire yet, an empty paid-ability window, and the Runner
+   holding priority (nobody has passed this window). The rez line itself was
+   already reported on the previous tick, which is why that tick stopped."
+  [subs]
+  (let [whitespace {:cid 55 :title "Whitespace" :rezzed true :subroutines subs}]
+    {:connected true
+     :uid "test-user"
+     :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+     :side "runner"
+     :game-state {:active-player "runner"
+                  :run {:phase "approach-ice" :position 1
+                        :server [:rd] :no-action false}
+                  :runner {:credit 5 :click 2
+                           :prompt-state {:msg "You may use paid abilities"
+                                          :prompt-type "run"
+                                          :choices [] :selectable []}}
+                  :corp {:credit 5
+                         :servers {:rd {:ices [whitespace]}}}
+                  :log []}}))
+
+(deftest tank-at-the-approach-step-sends-no-signal-game-f
+  (testing "what happened: `tank` at approach takes the plain approach pass and
+            sends NO tank signal, and nothing in its output says so"
+    (let [sent (atom [])]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (runner-approach-rezzed-state two-unbroken-subs)
+          (runner-handlers/reset-state!)
+          ;; exactly what dev/send_command `tank "Whitespace"` does
+          (runs/set-strategy! {:tank #{"Whitespace"}})
+          (let [out (with-out-str (runs/continue-run!))]
+            (is (= 1 (count (filter #(= "continue" (:command %)) @sent)))
+                (str "the one step is the approach pass, got: " @sent))
+            (is (empty? (filter #(= "system-msg" (:command %)) @sent))
+                (str "no signal reaches the Corp from the approach step, got: " @sent))
+            (is (not (clojure.string/includes? out "Signaling"))
+                (str "and `tank` does not claim to have signalled, got: " out))
+            ;; [277] property 1: after `tank`, either the signal has been sent
+            ;; or the output says it has not been sent yet. The wording is the
+            ;; fix's choice; an honest line must at least mention the signal.
+            (is (or (seq (filter #(= "system-msg" (:command %)) @sent))
+                    (re-find #"(?i)signal" out))
+                (str "RED (Game F): no signal was sent and the output does not"
+                     " say so — the seat is left believing it has tanked, got: " out)))
+          (runs/reset-strategy!)))))
+  (testing "the wedge: at the encounter that followed, with NO signal in the shared
+            log, the run-window guidance must not tell the Runner the Corp owes
+            the subs — that text is what kept the Runner at `wait`"
+    (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                               [:game-state :log] (signal-log false))
+      (runner-handlers/reset-state!)
+      (runs/set-strategy! {:tank #{"Whitespace"}})
+      (let [cs @state/client-state
+            out (with-out-str
+                  (display/print-run-window-priority!
+                   cs (get-in cs [:game-state :run]) "encounter-ice" "runner"))]
+        ;; [277] property 2: "Tank stands … the Corp owes you" only when the
+        ;; log holds a current signal for this encounter
+        ;; (corp-decisions/runner-signaled-let-fire?), which it does not here.
+        (is (not (clojure.string/includes? out "the Corp now owes you"))
+            (str "RED (Game F): the Corp has seen no signal, yet the Runner is"
+                 " told it is owed the subs, got: " out))
+        (is (not (clojure.string/includes? out "will not move it"))
+            (str "RED (Game F): the Runner is told nothing will move the window,"
+                 " when a `continue` at the encounter would send the signal, got: " out)))
+      (runs/reset-strategy!))
+    (testing "control: once the signal IS in the log, the same text is right"
+      (with-mock-state (assoc-in (runner-encounter-ctx-state two-unbroken-subs nil)
+                                 [:game-state :log] (signal-log true))
+        (runs/set-strategy! {:tank #{"Whitespace"}})
+        (let [cs @state/client-state
+              out (with-out-str
+                    (display/print-run-window-priority!
+                     cs (get-in cs [:game-state :run]) "encounter-ice" "runner"))]
+          (is (clojure.string/includes? out "the Corp now owes you")
+              (str "with the signal landed, the tank does stand, got: " out)))
+        (runs/reset-strategy!)))))
+
+;; =============================================================================
+;; Round 1 review of the Game F fix: the two cases its own tests could not see
+;; =============================================================================
+
+(deftest approach-notice-survives-a-stale-signal-for-the-same-title
+  ;; The first fix gated the approach notice on tank-window-state, which asks
+  ;; runner-signaled-let-fire?. That predicate is scoped to "this encounter" by
+  ;; `(> signal-idx encounter-idx)` — and at an APPROACH the marker for the
+  ;; coming encounter does not exist yet, so a signal left over from an EARLIER
+  ;; encounter of a same-titled ICE read as CURRENT and silenced the notice.
+  ;; Two Whitespaces in one run, or one Whitespace approached twice, is routine.
+  ;; Guest panel MAJOR; the gate now reads the tank flag, which is the only
+  ;; question with an honest answer at a phase that has no encounter.
+  (testing "a tank signal from a PREVIOUS encounter must not silence the notice"
+    (let [sent (atom [])
+          stale-log [{:text "ai-runner encounters Whitespace protecting R&D at position 1."}
+                     {:text "ai-runner indicates to fire all unbroken subroutines on Whitespace."}
+                     {:text "ai-runner passes Whitespace."}]]
+      (with-redefs [ws/send-message! (fn [_evt data] (swap! sent conj data) true)]
+        (with-mock-state (assoc-in (runner-approach-rezzed-state two-unbroken-subs)
+                                   [:game-state :log] stale-log)
+          (runner-handlers/reset-state!)
+          (runs/set-strategy! {:tank #{"Whitespace"}})
+          ;; The stale lines are OLD news by the time we are at this approach,
+          ;; so let handle-events report them once (which is what happened on
+          ;; the earlier tick in a real game) and assert on the tick after.
+          ;; Without this, handle-events sits ahead of handle-auto-continue in
+          ;; the handler list and answers first, and the notice is never reached.
+          (with-out-str (runs/continue-run!))
+          (let [out (with-out-str (runs/continue-run!))]
+            ;; sanity: this log really does read as "signalled" to the
+            ;; encounter-scoped predicate, which is why the old gate went quiet
+            (is (corp-decisions/runner-signaled-let-fire?
+                 @state/client-state "Whitespace")
+                "fixture must reproduce the stale-signal reading, or this proves nothing")
+            (is (re-find #"(?i)NOT signalled" out)
+                (str "the notice must still fire: no signal for an encounter that has"
+                     " not started can be current, got: " out))
+            ;; THE WORDING, not just the presence of a notice. A seat reverted
+            ;; the whole ai_runs delta and all 302 tests stayed green, because
+            ;; the only assertions were "matches (?i)NOT signalled" and
+            ;; "matches (?i)signal" — both true of the round-2 text that three
+            ;; review rounds killed as FALSE (design round F2). So pin the two
+            ;; dead claims by their absence:
+            ;;   "this step is the approach pass"  — describes a send that has
+            ;;     not happened yet and may be refused (D6);
+            ;;   "Both sides must pass this approach window" — false, because
+            ;;     handle-stalled-window-self-advance sends the second pass
+            ;;     itself (D2/J3).
+            (is (not (re-find #"(?i)this step is the approach pass" out))
+                (str "the notice runs BEFORE send-continue!, so it describes the"
+                     " window, not the step, got: " out))
+            (is (not (re-find #"(?i)both sides must pass" out))
+                (str "self-advance sends the second pass alone, got: " out))
+            (is (re-find #"(?i)APPROACH window" out)
+                (str "it must name the window it is describing, got: " out))
+            ;; AND THE CLAIM MUST BE TRUE OF *THIS* FIXTURE. The log built above
+            ;; CONTAINS "ai-runner indicates to fire all unbroken subroutines on
+            ;; Whitespace" - that is the whole point of the stale-signal case -
+            ;; so the notice's original sentence, "the log carries no tank signal
+            ;; for Whitespace", was false in the one state this test sets up, and
+            ;; this test was green over it because `(?i)NOT signalled` matched
+            ;; anyway. The signal REACHED; it is merely no longer CURRENT for the
+            ;; encounter about to start, which is exactly the distinction round 6
+            ;; settled for the sibling surface (M3) and this one did not get.
+            ;; EQUALITY on the two lines that make the claim, not substring
+            ;; presence. A delta seat (astra) broke the first cut of these in one
+            ;; line: "the log contains no signal whatsoever for this encounter or
+            ;; any earlier encounter; no CURRENT signal exists" still denies the
+            ;; fixture's historical signal while containing BOTH required
+            ;; substrings and avoiding the forbidden one. There are exactly two
+            ;; lines here and a third wording is a review decision, so pin them.
+            ;; ALL FIVE LINES. Pinning the first two left the rest free: a
+            ;; delta seat (fable) reverted the LAST line alone, back to
+            ;; "while the log still carries no signal for it" - the same
+            ;; unqualified claim, in the same false-for-this-fixture sense -
+            ;; and the suite stayed green. The notice is five lines and every
+            ;; one of them is a claim.
+            (is (= ["   📡 NOT signalled: Whitespace."
+                    "      The log as this client has it carries no CURRENT signal for this encounter."
+                    "      This is an APPROACH window; the signal belongs to the encounter."
+                    "      Mid-run this notice is ordinary. It is a fault only if you stop acting"
+                    "      while no CURRENT signal for this encounter has appeared."]
+                   (->> (clojure.string/split-lines out)
+                        (drop-while #(not (clojure.string/includes? % "NOT signalled")))
+                        (take 5)))
+                (str "the notice may deny only a CURRENT signal for THIS encounter -"
+                     " this fixture's log does carry an earlier one for Whitespace."
+                     " got: " out))
+            ;; and the token the other two surfaces emit must be greppable on ONE
+            ;; line here too, or a transcript scan for it misses this notice.
+            (is (some #(clojure.string/includes?
+                        % "no CURRENT signal for this encounter")
+                      (clojure.string/split-lines out))
+                (str "the token must not be split across a line break, got: " out))
+            (is (empty? (filter #(= "system-msg" (:command %)) @sent))
+                (str "and still nothing is sent from the approach step, got: " @sent)))
+          (runs/reset-strategy!))))))
+
+(deftest diagnose-blocker-names-the-unsent-tank
+  ;; A revert table called this out: the diagnose-blocker "Owner:" line was
+  ;; changed with no red-to-green witness. diagnose-blocker is where a seat
+  ;; goes once it already suspects it is wedged, and in Game F it was the
+  ;; surface that told the Runner the Corp owed the subs while the Corp's own
+  ;; copy said the Runner still owed the break step.
+  (let [whitespace {:cid 55 :title "Whitespace" :rezzed true
+                    :subroutines two-unbroken-subs}
+        base (fn [log]
+               {:connected true :uid "test-user"
+                :gameid (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+                :side "runner"
+                :game-state {:active-player "runner" :turn 5
+                             :run {:server ["servers" "rd"] :position 1
+                                   :phase "encounter-ice"}
+                             :encounters {:ice whitespace}
+                             :corp {:credit 5 :servers {:rd {:ices [whitespace]}}}
+                             :runner {:click 2 :credit 5 :rig {}
+                                      :prompt-state {:msg "You may use paid abilities"
+                                                     :prompt-type "run"
+                                                     :choices [] :selectable []}}
+                             :log log}})]
+    (testing "tanked, never signalled: the window is OURS and the line says so"
+      (with-mock-state (base [])
+        (runs/set-strategy! {:tank #{"Whitespace"}})
+        (let [out (with-out-str (display/show-blocker-diagnosis))]
+          (is (not (re-find #"Owner: the CORP" out))
+              (str "the Corp has seen no signal; it owns nothing here, got: " out))
+          (is (re-find #"(?i)carries no CURRENT signal for your tank" out)
+              (str "must name the unsent signal, got: " out))
+          ;; D5: not predicting and not helping are different requirements;
+          ;; this is the surface whose documented job is the next command.
+          ;; THE ESCALATION, pinned. Round 4 moved it here from the pure arm
+          ;; (which cannot read latch state and so cannot tell a successful
+          ;; break from a lost send), and round 5's harness showed the move was
+          ;; unwitnessed: reverting this line to its round-4 text left the
+          ;; suite GREEN. diagnose-blocker is the documented home of "the ONE
+          ;; next command", and in the lost-send state signal-tank-once!'s own
+          ;; escalation is report-once! keyed on the mark, so a seat that
+          ;; arrives later gets it from nowhere else.
+          (is (re-find #"umpire-ping" out)
+              (str "must leave a route out of the lost-send state, got: " out))
+          ;; M2: this surface must not ASSIGN the window to us when a diverged
+          ;; mirror means we cannot establish who holds it.
+          (is (not (re-find #"Owner: YOU" out))
+              (str "ownership cannot be established from an absent signal, got: " out))
+          (is (re-find #"(?i)Breaking needs no signal" out)
+              (str "must name the action that depends on no latch, got: " out))
+          ;; M1: and must not prescribe the one that can send and print nothing.
+          (is (not (re-find #"(?i)`tank` it again" out))
+              (str "re-tanking can silently no-op in the lost-send state, got: " out))
+          ;; It must NOT tell the seat to hold: round 4's deleted :unknown line
+          ;; said "Hold." with no next command, and holding is the one action
+          ;; that triggers no resync (round 5, L1).
+          (is (not (re-find #"(?i)\bHold\b" out))
+              (str "holding triggers no recovery from here, got: " out)))
+        (runs/reset-strategy!)))
+    (testing "control: once the signal is in the log, the Corp owns it again"
+      (with-mock-state (base (signal-log true))
+        (runs/set-strategy! {:tank #{"Whitespace"}})
+        (let [out (with-out-str (display/show-blocker-diagnosis))]
+          (is (re-find #"Owner: the CORP" out)
+              (str "a signalled tank is the Corp's to answer, got: " out)))
+        (runs/reset-strategy!)))))

@@ -1257,11 +1257,103 @@
 ;; encounter" — is filed rather than approximated here. Pinned by
 ;; ai-runs-test/movement-after-a-quiet-encounter-continues-instead-of-waiting.
 
+(defn- warn-tank-not-yet-signalled!
+  "Say so when this step is passing an approach window on an ICE the seat has
+   already tanked. ai-netrunner [277], marquee Game F and the Haiku 5.5 probe:
+   `tank \"X\"` is set-strategy! plus ONE continue-run!, and from the approach
+   step that one step is the approach pass — the signal is sent by the ENCOUNTER
+   handler, which never runs on this tick. The command printed
+   \"✅ Authorized tank on: X\" and nothing else, so the seat had no way to know
+   the Corp had not been told, and `wait` (which is not a run loop) sent nothing
+   either. Three models have wedged here.
+
+   This does NOT send a second step. Taking one would put back exactly the
+   speculative extra continue that #244 and #167 removed, and [277] declined to
+   propose it.
+
+   IT PREDICTS NOTHING, and that is a correction earned over three review
+   rounds, not an omission. Round 1 said \"Send `continue` once more … to signal
+   from there\": false, because `continue` :approach-ice
+   (src/clj/game/core/runs.clj:295) only RECORDS the passer while
+   [:run :no-action] is falsy, so the next continue can be the #98
+   already-passed no-op. Round 2 said \"both sides must pass this approach
+   window\": false, because handle-stalled-window-self-advance sends the second
+   pass itself (`:second-pass? true`) and the engine's advance branch has no
+   side check. A prediction here is a claim about which handler will win next,
+   and that depends on :full-break, :tank-all, the signaled-fire-encounter
+   latch, [:run :no-action] and whether the caller is a loop. So this states
+   what the log says now and defines what being told looks like.
+
+   It also does not QUOTE the client's own signalling line. Writing
+   \"Signaling Corp\" into a NOT-signalled notice makes every transcript scan
+   and log grep for that token match the one state it is supposed to rule out
+   — the engine-log-embeds-effect-text trap, arriving in our own output — and
+   the Game F repro test asserts the absence of \"Signaling\" here for exactly
+   that reason. Nor does it treat that line as proof of delivery: it is printed
+   BEFORE the send it may refuse, and `let-subs-fire` sends the same system-msg
+   without it, so the LOG is the authority and the line is not.
+
+   It describes the WINDOW, which is observed, and not \"this step\", which is
+   only intended: this runs before send-continue!, and that send can fail.
+
+   The last two lines exist for the LOOP paths (`run --tank-all`,
+   monitor-run!), where this fires on every rezzed approach and the loop
+   signals two ticks later. The sentence is true there but a transcript then
+   shows the Game F symptom on a healthy run, and [277]/[280] have trained
+   seats to read that line as the wedge. Saying when it does not matter is the
+   fix; a once-per-encounter latch is not, because four of those have already
+   failed in this client for want of an encounter identity (#197).
+
+   KNOWN GAP, stated rather than discovered later: this is reachable only for
+   an approach to REZZED ice. handle-runner-approach-ice sits ahead of
+   handle-auto-continue in the handler list and claims every UNREZZED approach,
+   and initiation/movement have no notice either. Game F was the rezzed case.
+   Those paths make no false claim (no encounter, no sub count, so no surface
+   says the Corp owes anything) — they are silent, which is the partial
+   delivery of [277] property 1 recorded in the issue.
+
+   WORDING: \"no CURRENT signal for this encounter\", never \"no tank signal\".
+   The gate here is the bare tank FLAG, which establishes nothing about what
+   the log holds — and this notice's own repro fixture (the stale-signal case
+   in continue-run-rez-test) puts `ai-runner indicates to fire all unbroken
+   subroutines on Whitespace` IN the log and then asserts the notice fires.
+   So \"the log carries no tank signal for Whitespace\" was FALSE in the one
+   state that test sets up, and the test stayed green over it because it
+   matched on `(?i)NOT signalled` alone. Round 6 had already settled this
+   exact wording for the sibling surface (runner-encounter-decline-hint-lines,
+   finding M3: a superseded signal REACHED, it is merely no longer CURRENT)
+   and this surface kept the older, stronger claim. Panel seat sol, over the
+   merge queue, 2026-10-15."
+  [ice-title]
+  (println "   📡 NOT signalled: the log as this client has it carries no CURRENT")
+  (println (format "      signal for this encounter on %s." ice-title))
+  (println "      This is an APPROACH window; the signal belongs to the encounter.")
+  (println "      Mid-run this notice is ordinary. It is a fault only if you stop acting")
+  (println "      while no current signal has appeared for it.")
+  nil)
+
 (defn handle-auto-continue
   "Priority 6: Auto-continue through paid ability windows where we don't need to act"
   [{:keys [my-prompt run-phase gameid side state]}]
   (when (can-auto-continue? my-prompt run-phase side state)
     (println "   → Auto-continuing through paid ability window")
+    ;; Before the send, because the condition is a fact about the window we are
+    ;; LEAVING: read after it, the phase has moved and the ICE may be gone.
+    ;;
+    ;; The bare tank FLAG, deliberately, and not ai-display/tank-window-state.
+    ;; tank-window-state asks runner-signaled-let-fire?, which is scoped to
+    ;; "this encounter" by `(> signal-idx encounter-idx)` — and at an approach
+    ;; the marker for the coming encounter does not exist yet, so a signal from
+    ;; an EARLIER encounter of a same-titled ICE reads as current and suppressed
+    ;; this notice (two Whitespaces in one run; guest panel MAJOR, round 1).
+    ;; At approach the question has only one honest answer anyway: no signal for
+    ;; an encounter that has not started can be current, so a tank flag here is
+    ;; always not-yet-signalled. Asking the encounter predicate was a category
+    ;; error, not a tunable.
+    (when (and (= side "runner") (= run-phase "approach-ice"))
+      (when-let [ice-title (:title (core/current-run-ice state))]
+        (when (state/tank-authorized? ice-title)
+          (warn-tank-not-yet-signalled! ice-title))))
     (send-continue! gameid)))
 
 (defn handle-initiation-auto-pass

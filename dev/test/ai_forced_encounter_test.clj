@@ -452,7 +452,104 @@
     (testing "and is not simultaneously disclaimed"
       (is (not (re-find #"(?i)tank cannot help" out)) (str "got:\n" out)))
     (testing "breaking is still offered"
-      (is (re-find #"(?i)icebreaker" out)))))
+      (is (re-find #"(?i)icebreaker" out)))
+    (testing "the 3-arity means 'no tank state known', so tank is still the offer"
+      (is (= lines (display/forced-encounter-advisory-lines "Archangel" 1 "success" :none))))))
+
+(deftest forced-encounter-advisory-reports-the-tank-state
+  ;; This advisory is the THIRD surface that talks about tanking, and it took no
+  ;; tank state at all — so a seat whose signal was already in the shared log
+  ;; was offered `tank "X"` as a fresh option (the #151 item 2 defect: reads as
+  ;; the tank having failed), and a seat whose tank had never been SENT got no
+  ;; hint that the Corp had not been told. That second state is Game F
+  ;; (ai-netrunner [277]), arriving at a forced encounter instead of a standard
+  ;; one. Guest panel MAJOR over the first cut of the [277] fix, which wired the
+  ;; classifier into the other two surfaces and left this one reading nothing.
+  (testing "signalled: do not re-offer the decision the seat already made and sent"
+    (let [out (clojure.string/join
+               "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :signalled))]
+      (is (not (re-find #"tank \"Archangel\"\s+—\s+decline to break" out))
+          (str "re-offering a sent tank is #151 item 2, got:\n" out))
+      (is (re-find #"(?i)already stands" out) (str "got:\n" out))
+      (is (re-find #"(?i)owes the subs" out) (str "got:\n" out))))
+  (testing "unsignalled: name the log, and claim nothing the mirror cannot support"
+    (let [out (clojure.string/join
+               "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" :unsignalled))]
+      (is (re-find #"(?i)NO CURRENT SIGNAL for this encounter" out) (str "got:\n" out))
+      (is (re-find #"(?i)as this client has it" out) (str "got:\n" out))
+      (is (not (re-find #"(?i)`tank` it again" out))
+          (str "re-tanking can silently no-op in the lost-send state; got:\n" out))
+      (is (not (re-find #"(?i)already stands" out))
+          (str "nothing stands until it is sent, got:\n" out))))
+  (testing "every state still names the forced window and still offers the break"
+    (doseq [st [:none :unsignalled :signalled :unknown]]
+      (let [out (clojure.string/join
+                 "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))]
+        (is (re-find #"(?i)forced encounter" out) (str st " lost the window label:\n" out))
+        (is (re-find #"(?i)icebreaker" out) (str st " lost the break option:\n" out)))))
+  ;; THE WHOLE BLOCK, not the arm. The assertions above all read the ONE line
+  ;; the tank state picks, and the closing `continue` line - which this fn has
+  ;; printed since long before it took a tank state - prescribed "break or tank
+  ;; first" unconditionally. So :signalled emitted "do not re-tank" and
+  ;; "break or tank first" in one output, and every assertion here was green
+  ;; over it: an extra line is invisible to a scan that only looks for the
+  ;; lines it expects. A seat that obeys the LAST thing it read re-tanks, and a
+  ;; re-tank in the lost-send branch sends nothing and prints nothing - the
+  ;; Game F shape, prescribed by the surface built to cure it. Round 6 deleted
+  ;; this same prescription from the sibling surface and did not look here,
+  ;; because the tank arm was new and this line was not.
+  ;; EQUALITY on the line, not an absence regex. A delta seat (astra) broke the
+  ;; first cut of these assertions in one line: `— tank first.` re-prescribes
+  ;; the tank for both recorded states while keeping the required engine
+  ;; substring and avoiding the forbidden phrase `or tank first`. An absence
+  ;; test can only forbid the wordings someone thought of, and the word "tank"
+  ;; cannot simply be banned here - both recorded-state arms have to SAY
+  ;; "tank" to report the tank. So pin the whole line per state; there are
+  ;; exactly two spellings and a new one is a review decision.
+  (let [engine-claim "      • `continue` does not pass while the Corp still owns its half of this window"
+        with-offer   (str engine-claim " — break or tank first.")
+        bare         (str engine-claim ".")
+        continue-line (fn [st]
+                        (->> (display/forced-encounter-advisory-lines "Archangel" 1 "success" st)
+                             (filter #(clojure.string/includes? % "`continue` does not pass"))
+                             first))]
+    (testing "a tank already on record is never re-prescribed, anywhere in the block"
+      (doseq [st [:signalled :unsignalled]]
+        (is (= bare (continue-line st))
+            (str st " must state the #92 engine claim and prescribe nothing after it"))
+        ;; ANYWHERE, which is what the label says. Pinning the `continue` line
+        ;; alone left the rest of the block free: a delta seat (fable) added
+        ;; `If nothing fires, tank "X" again.` to the :signalled ARM and the
+        ;; whole suite stayed green. `tank "X"` is the COMMAND form, so its
+        ;; absence is the right check - both recorded-state arms still have to
+        ;; say the word "tank" to report the tank, and they say "Your tank on X".
+        (is (not (clojure.string/includes?
+                  (clojure.string/join
+                   "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))
+                  "tank \"Archangel\""))
+            (str st " prescribes the tank command somewhere in the block"))))
+    (testing "but it IS prescribed where no tank is on record"
+      ;; :unknown-to-this-fn is NOT a state tank-window-state can return, and it
+      ;; is in this list on purpose: tank-offered? is the COMPLEMENT of
+      ;; #{:signalled :unsignalled}, not membership of #{:none :unknown}, so an
+      ;; unrecognised state gets the tank OFFER - which is what the cond's own
+      ;; :else arm does. Written as membership the two would disagree again for
+      ;; any state added later, and the loop as it stood could not tell the two
+      ;; formulations apart (delta seat fable, COSMETIC).
+      (doseq [st [:none :unknown :some-state-added-later]]
+        (is (= with-offer (continue-line st))
+            (str st " has no tank on record, so the offer belongs on this line"))
+        (is (clojure.string/includes?
+             (clojure.string/join
+              "\n" (display/forced-encounter-advisory-lines "Archangel" 1 "success" st))
+             "tank \"Archangel\"")
+            (str st " must still offer the tank command"))))
+    (testing "and exactly one such line exists in every state (a second would contradict)"
+      (doseq [st [:none :unsignalled :signalled :unknown :some-state-added-later]]
+        (is (= 1 (count (filter #(clojure.string/includes? % "`continue` does not pass")
+                                (display/forced-encounter-advisory-lines
+                                 "Archangel" 1 "success" st))))
+            (str st " has more or fewer than one `continue` line"))))))
 
 
 ;; ============================================================================

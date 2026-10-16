@@ -2239,6 +2239,53 @@
                :already-passed? already-passed?
                :lines (vec lines)})))))))
 
+(defn tank-window-state
+  "Which of the THREE tank states the Runner is in at this encounter, for every
+   surface that reports a tank. One classifier, because the two surfaces that
+   report one have drifted apart twice already — #115's both-pass set and #195's
+   `corp-declined?` argument were each a copy left behind in this same file.
+
+     :none        no tank is authorized for this ICE.
+
+     :unsignalled `tank` recorded the intention in the local strategy and the
+                  shared LOG, as this client sees it, holds no current signal.
+                  NOT \"the Corp has not been told\": that is a claim about the
+                  Corp's knowledge, and this is a reading of our own mirror
+                  (D4). What the guidance for this state may therefore say is
+                  only that THIS CLIENT CANNOT CONFIRM the tank reached the
+                  Corp — true whether nothing was sent, the send was lost, or
+                  our mirror is diverged, so it needs no fourth state. Round 4
+                  added one (:unknown, for :diff-mismatch) and round 5 deleted
+                  it: its guidance said \"hold until the resync lands\", and
+                  :diff-mismatch schedules no resync — recovery runs in
+                  sync-verdict! on the seat's next gated command, so \"hold\"
+                  was the one action that triggered nothing.
+                  ai-netrunner [277], marquee Game F: `tank` is
+                  set-strategy! plus ONE continue-run!, and at the approach step
+                  that one step is the approach pass. The only caller of
+                  signal-tank-once! is the encounter handler, which needs a step
+                  that STARTS at the encounter, so nothing ever sent. `wait` is
+                  not a run loop and sends nothing either, so the run sat there.
+
+     :signalled   a signal for THIS encounter is in the log and still current
+                  (runner-signaled-let-fire?: after this encounter's marker and
+                  not superseded by a later break), so the Corp does owe the subs.
+
+   The local flag ALONE answers \"what did I decide\", never \"what does the Corp
+   know\" — asking it the second question is #199, and believing the answer is
+   what wedged Game F for twenty minutes."
+  [state ice-title]
+  (cond
+    (not (state/tank-authorized? ice-title))                   :none
+    ;; The same predicate the CORP's fire decision reads, deliberately: a
+    ;; display more sceptical than the gate that actually authorises firing
+    ;; would disagree with it. It establishes currency by comparing index
+    ;; positions in the log, so on a :diff-mismatch mirror it can be stale in
+    ;; either direction (round 5, L3) — that risk is the Corp's too, and it
+    ;; clears on the next gated command's resync. Not re-litigated here.
+    (corp-decisions/runner-signaled-let-fire? state ice-title)  :signalled
+    :else                                                       :unsignalled))
+
 (defn runner-encounter-decline-hint-lines
   "Guidance for a Runner at an encounter it owns with unbroken subroutines it is
    NOT breaking. `continue` is REFUSED here — handle-runner-encounter-ice returns
@@ -2270,10 +2317,10 @@
    game.ai-forced-encounter-wire-test. The #92 rule holds only while the window
    is still open on both sides (guest panel CRITICAL, #160)."
   ([ice-title unbroken-count]
-   (runner-encounter-decline-hint-lines ice-title unbroken-count false false))
-  ([ice-title unbroken-count tank-authorized?]
-   (runner-encounter-decline-hint-lines ice-title unbroken-count tank-authorized? false))
-  ([ice-title unbroken-count tank-authorized? corp-declined?]
+   (runner-encounter-decline-hint-lines ice-title unbroken-count :none false))
+  ([ice-title unbroken-count tank-state]
+   (runner-encounter-decline-hint-lines ice-title unbroken-count tank-state false))
+  ([ice-title unbroken-count tank-state corp-declined?]
    (cond
      corp-declined?
      [(format "    → The Corp has PASSED this encounter — it is not going to fire the %d remaining subroutine%s on %s."
@@ -2282,12 +2329,77 @@
       (format "      • Or break %s first if a break itself earns you something." ice-title)
       "      (This is the one encounter state where `continue` DOES advance you.)"]
 
-     tank-authorized?
+     (= tank-state :signalled)
      [(format "    → Tank stands on %s — you have declined to break; the Corp now owes you the %d unbroken subroutine%s."
               ice-title unbroken-count (if (= unbroken-count 1) "" "s"))
       "      • `wait` — the subs fire on the Corp's action, and the encounter then resolves."
       (format "      • Changed your mind? Break %s with an icebreaker before the Corp fires." ice-title)
       "      (Nothing is owed by you at this window: re-sending `continue` or `tank` will not move it.)"]
+
+     ;; The state that wedged Game F. Everything the :signalled arm says is
+     ;; false here, and its last line is the specific sentence that kept the
+     ;; Runner at `wait` for twenty minutes.
+     ;;
+     ;; THE RULE FOR THIS ARM, after three rounds that each killed a different
+     ;; wording of the same mistake: no claim whose truth depends on CLIENT
+     ;; DISPATCH state — :full-break, :tank-all, the signaled-fire-encounter
+     ;; latch, [:run :no-action], or whether the caller is a loop. Claims
+     ;; pinned to ENGINE behaviour stay: "`continue` will NOT pass this window"
+     ;; (#92) and the corp-declined arm's "`continue` ends the encounter" are
+     ;; load-bearing, wire-tested, and deleting them is what cost marquee G2.
+     ;;
+     ;; The three dead wordings, for whoever is tempted next:
+     ;;   "`continue` sends the signal from HERE" — false, continue
+     ;;     :approach-ice only records the passer while :no-action is falsy.
+     ;;   "the signal is sent when the client next acts on this encounter" —
+     ;;     false under :full-break (handle-runner-full-break is priority 2.4
+     ;;     and BREAKS), and false in signal-tank-once!'s lost-send branch,
+     ;;     which refuses to re-send by design.
+     ;;   "a 📡 line means the Corp was told" — false in BOTH directions:
+     ;;     signal-tank-once! prints it BEFORE the send it may refuse, and the
+     ;;     separate `let-subs-fire` command sends the same system-msg with no
+     ;;     such line. Acceptance is not acknowledgement.
+     ;;
+     ;; So the authority is the shared LOG, which is what the fire decision
+     ;; itself reads — and the arm below claims only what this client can
+     ;; CONFIRM, because that is our MIRROR of the log and signal-tank-once!
+     ;; already refuses to diagnose from one flagged :diff-mismatch (#142).
+     (= tank-state :unsignalled)
+     ;; STATES WHAT THIS CLIENT CANNOT CONFIRM, AND STOPS. Three claims died
+     ;; here across rounds 4 and 5, all of them mine:
+     ;;   "so the subs will not fire and nothing is owed" — drawn from a mirror
+     ;;     that may be wrong (D4/F7).
+     ;;   "the Corp has nothing to act on" — false outright: the Corp can
+     ;;     `fire-subs` with no authorization at all (L2).
+     ;;   "if no signal appears afterwards, that is harness trouble" — breaking
+     ;;     is an action this arm OFFERS and correctly produces no signal, so
+     ;;     the postcondition diagnoses a successful break as a fault (F4), and
+     ;;     it is a claim about latch state this pure fn cannot read (F8).
+     ;; Round 6 took two more out, and both had survived five rounds:
+     ;;   "THIS CLIENT CANNOT CONFIRM the tank reached the Corp" — false in the
+     ;;     SUPERSEDED case. Take the :signalled arm's own "Changed your mind?
+     ;;     Break X" offer on one of two subs and runner-signaled-let-fire?
+     ;;     fails on (> signal-idx break-idx), so the state is :unsignalled
+     ;;     while the "indicates to fire" line sits in the log being read: it
+     ;;     reached, it is merely no longer CURRENT (M3). "No CURRENT signal"
+     ;;     was already exactly right and needed no gloss.
+     ;;   "or `tank \"X\"` again" — a PRESCRIPTION, not a prediction, and so it
+     ;;     slipped the dispatch-state rule while depending on dispatch state
+     ;;     anyway: in signal-tank-once!'s lost-send branch a re-tank sends 0
+     ;;     and, once report-once! has consumed the mark, prints NOTHING. A
+     ;;     seat obeying it sees "Authorized tank on: X" and the same status
+     ;;     again — the Game F shape, prescribed by the surface built to cure
+     ;;     it (M1, reproduced). `break` depends on no latch, so it stays.
+     ;; What is left is a reading of our own log plus one action that cannot
+     ;; silently no-op. The escalation lives on diagnose-blocker (D5).
+     [(format "    → Your tank on %s is recorded here, but the log AS THIS CLIENT HAS IT" ice-title)
+      (format "      carries no CURRENT signal for this encounter, and the %d unbroken"
+              unbroken-count)
+      (format "      subroutine%s remain%s unbroken."
+              (if (= unbroken-count 1) "" "s") (if (= unbroken-count 1) "s" ""))
+      (format "      • Break %s. That needs no signal and no Corp action." ice-title)
+      "      • `diagnose-blocker` for the live read, and the escalation if it does not clear."
+      "      (`wait` sends nothing, and nothing re-sends on a timer.)"]
 
      :else
      [(format "    → %d unbroken subroutine%s on %s — `continue` will NOT pass this window; you must decide:"
@@ -2319,21 +2431,58 @@
    The phase line stays: a seat that reads \"success\" in the ladder and a live
    encounter here needs to be told those are the same window, not two.
 
+   TANK STATE, as everywhere else that reports a tank (#277 round 1 guest
+   MAJOR): this is the THIRD surface that talks about tanking, and it took no
+   tank state at all — so a seat whose signal was already in the log was told
+   \"tank \\\"X\\\"\" as a fresh option (the #151 item 2 defect, verbatim), and one
+   whose tank had never been sent got no hint that the Corp had not been told.
+   #160 put the encounter handlers on core/at-encounter?, so a tank IS live
+   here; the three states are therefore the same three as at a standard
+   encounter. The 3-arity keeps :none for callers that have no state to read.
+
    Pure; returns lines to println."
-  [ice-title unbroken-count phase]
-  [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
-           ice-title unbroken-count (if (= unbroken-count 1) "" "s")
-           (if phase (str "phase: " phase) "there is no run at all"))
-   (if phase
-     "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
-     ;; Quest Completed → Ganked! (#164): the encounter outlived its run entirely,
-     ;; so there is no phase line above to reconcile — the seat has to be told the
-     ;; window is real anyway, or "no run" reads as "nothing to do".
-     "      (The encounter outlived its run — it is still live, and still yours to resolve.)")
-   "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
-   (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title)
-   "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
-   "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"])
+  ([ice-title unbroken-count phase]
+   (forced-encounter-advisory-lines ice-title unbroken-count phase :none))
+  ([ice-title unbroken-count phase tank-state]
+   ;; ONE predicate for "is `tank` still an offer here", read in TWO places: the
+   ;; cond below, and the closing `continue` line. They were decided separately
+   ;; and disagreed — see the closing line's own comment. Deriving both from the
+   ;; same expression is the only thing that stops them drifting again, which is
+   ;; the defect tank-window-state was introduced to end.
+   (let [tank-offered? (not (contains? #{:signalled :unsignalled} tank-state))]
+   [(format "    → FORCED ENCOUNTER: %s is live with %d unbroken subroutine%s, outside the normal encounter window (%s)."
+            ice-title unbroken-count (if (= unbroken-count 1) "" "s")
+            (if phase (str "phase: " phase) "there is no run at all"))
+    (if phase
+      "      (The run phase above is not the whole truth here — the encounter outranks it, for you and for the engine.)"
+      ;; Quest Completed → Ganked! (#164): the encounter outlived its run entirely,
+      ;; so there is no phase line above to reconcile — the seat has to be told the
+      ;; window is real anyway, or "no run" reads as "nothing to do".
+      "      (The encounter outlived its run — it is still live, and still yours to resolve.)")
+    "      • Break it with an icebreaker — `abilities \"<breaker>\"` then `use-ability`; that path does not depend on the phase."
+    (cond
+      (= tank-state :signalled)
+      (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
+
+      (= tank-state :unsignalled)
+      (format "      • Your tank on %s is recorded, but the log as this client has it carries no CURRENT signal for this encounter — breaking needs neither." ice-title)
+
+      :else
+      (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))
+    ;; The ENGINE claim (#92) is unconditional and stays. The PRESCRIPTION after
+    ;; the dash is not: with a tank already on record this block said
+    ;; "do not re-tank" two lines up and "break or tank first" here, in one
+    ;; output. A seat that obeys the last thing it read re-tanks — and a re-tank
+    ;; in signal-tank-once!'s lost-send branch sends 0 and, once report-once!
+    ;; has consumed the mark, prints NOTHING, so the seat sees the same status
+    ;; again: the Game F shape, prescribed by the surface built to cure it.
+    ;; Round 6 deleted this same prescription from the sibling surface (M1) and
+    ;; did not look at this line, because the tank arm above was NEW and this
+    ;; line was not. Panel seat sol, over the merge queue, 2026-10-15.
+    (if tank-offered?
+      "      • `continue` does not pass while the Corp still owns its half of this window — break or tank first."
+      "      • `continue` does not pass while the Corp still owns its half of this window.")
+    "        (If the Corp passes without firing, `continue` then ENDS the encounter; `status` will say so.)"])))
 
 (defn print-run-window-priority!
   "Print the 'whose move is it now + what continue does' guidance for the current
@@ -2409,14 +2558,15 @@
         (if (or (= run-phase "encounter-ice") corp-declined?)
           (doseq [line (runner-encounter-decline-hint-lines
                         ice-title runner-unbroken
-                        (state/tank-authorized? ice-title)
+                        (tank-window-state state ice-title)
                         corp-declined?)]
             (println line))
           ;; A FORCED encounter outside the standard window. Same two options
           ;; (#160 put the handlers on core/at-encounter?, so `tank` is no longer
           ;; a no-op here), but the phase is named — the ladder above says
           ;; "success" and the seat has to be told that is still this encounter.
-          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase)]
+          (doseq [line (forced-encounter-advisory-lines ice-title runner-unbroken run-phase
+                                                        (tank-window-state state ice-title))]
             (println line))))
 
       ;; Corp at approach-ice having already declined/passed: don't offer it a rez
@@ -3784,7 +3934,14 @@
           ;; that agreed with the prompt display and deadlocked marquee G2.
           (and runner-unbroken (pos? runner-unbroken))
           (let [ice-title (:title (encountered-ice cs) "this ICE")
-                tanked? (state/tank-authorized? ice-title)
+                ;; The LOG, not the local flag alone. Reading the flag here is
+                ;; what made the two seats contradict each other in Game F: this
+                ;; surface said "Owner: the CORP — they owe the subs" while the
+                ;; Corp's own diagnose-blocker said "the Runner owns the break
+                ;; step and has not answered yet". Both were reporting honestly
+                ;; from what they could see; only one of them was reading a
+                ;; shared fact. See tank-window-state.
+                tank-state (tank-window-state cs ice-title)
                 ;; The FOURTH argument, which this copy did not pass (#195): once
                 ;; the Corp is the encounter's recorded passer our `continue` is a
                 ;; free exit, and the decline menu says the opposite without it.
@@ -3795,12 +3952,15 @@
             ;; "Owner: YOU" there is the same false failure `tank` itself used to
             ;; print (#151 item 2). diagnose-blocker is where a seat goes when it
             ;; already suspects it is stuck; it must not manufacture the suspicion.
+            ;; But an UNSENT tank is owed by us, and this is the one surface a
+            ;; wedged seat is certain to read.
             (println (cond
                        corp-declined? "   → Owner: YOU — the Corp has passed this encounter; your continue closes it."
-                       tanked? "   → Owner: the CORP — your tank stands; they owe the subs."
+                       (= tank-state :signalled) "   → Owner: the CORP — your tank stands; they owe the subs."
+                       (= tank-state :unsignalled) "   → Owner: cannot be established from here — the log as this client has it carries no CURRENT signal for your tank. Breaking needs no signal; if nothing clears it: ./dev/umpire-ping"
                        :else "   → Owner: YOU — a break/tank decision, not a both-pass window."))
             (doseq [line (runner-encounter-decline-hint-lines
-                          ice-title runner-unbroken tanked? corp-declined?)]
+                          ice-title runner-unbroken tank-state corp-declined?)]
               (println line)))
 
           ;; Corp at an encounter the Runner is done with — the branch that did
