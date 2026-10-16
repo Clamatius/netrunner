@@ -2464,8 +2464,14 @@
       (= tank-state :signalled)
       (format "      • Your tank on %s already stands and the Corp has the signal — it owes the subs; do not re-tank." ice-title)
 
+      ;; `diagnose-blocker` is named here because the sibling surface names it
+      ;; and this arm must not be the one place a stuck seat is left without the
+      ;; escalation: narrowing the closing line below (it used to add "or tank
+      ;; first") made `break` the WHOLE of this arm's guidance, and a seat with
+      ;; no breaker in the lost-send or diverged-mirror state then has no route
+      ;; out of the block. Delta seat fable, MINOR.
       (= tank-state :unsignalled)
-      (format "      • Your tank on %s is recorded, but the log as this client has it carries no CURRENT signal for this encounter — breaking needs neither." ice-title)
+      (format "      • Your tank on %s is recorded, but the log as this client has it carries no CURRENT signal for this encounter — breaking needs neither, and `diagnose-blocker` gives the live read." ice-title)
 
       :else
       (format "      • tank \"%s\"  — decline to break: let the subs fire, then the encounter resolves." ice-title))

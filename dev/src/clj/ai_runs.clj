@@ -1323,13 +1323,19 @@
    exact wording for the sibling surface (runner-encounter-decline-hint-lines,
    finding M3: a superseded signal REACHED, it is merely no longer CURRENT)
    and this surface kept the older, stronger claim. Panel seat sol, over the
-   merge queue, 2026-10-15."
+   merge queue, 2026-10-15.
+
+   \"no CURRENT signal for this encounter\" is ONE line and must stay one line.
+   The other two surfaces emit that exact token, and transcript scans and log
+   greps key on it; the first cut of this fix split it across a line break, so
+   a scan for the token missed the one notice it was added to. Delta seat
+   fable, COSMETIC."
   [ice-title]
-  (println "   📡 NOT signalled: the log as this client has it carries no CURRENT")
-  (println (format "      signal for this encounter on %s." ice-title))
+  (println (format "   📡 NOT signalled: %s." ice-title))
+  (println "      The log as this client has it carries no CURRENT signal for this encounter.")
   (println "      This is an APPROACH window; the signal belongs to the encounter.")
   (println "      Mid-run this notice is ordinary. It is a fault only if you stop acting")
-  (println "      while no current signal has appeared for it.")
+  (println "      while no CURRENT signal for this encounter has appeared.")
   nil)
 
 (defn handle-auto-continue
