@@ -1581,9 +1581,19 @@
    - No scorable agendas and no affordable end-of-turn rez (Corp only): both are
      moves that cost no click, so both hold the window open instead (#103/#271).
 
-   With clicks STILL IN HAND it never ends anything — every auto-end arm gates on
-   clicks=0 — and the only thing it says is that an agenda went scorable, which
-   is what `advance` calls it for (#271).
+   With clicks STILL IN HAND this says NOTHING AT ALL, deliberately. Every arm
+   here gates on clicks=0, so there is no auto-end to report on, and #271 round 1
+   had me add a scorable-agenda note for that case on the reasoning that `advance`
+   is what makes an agenda scorable. Both review seats and I then found five
+   separate things wrong with it, the first being that the reasoning is false:
+   ai_card_actions' advance ALREADY prints \"X is now SCORABLE!\" and the `score`
+   command two lines before it calls this (ai_card_actions.clj:959). The rest:
+   the arm had no prompt guard, so at clicks>0 under a prompt it offered a score
+   board.cljs renders no button for; it fired from every click-consuming caller,
+   not just advance, so a Corp deliberately holding an agenda got the block on
+   every draw and credit; it reused the end-of-turn window's wording outside that
+   window; and it had no already-ended? guard, which the engine can reach because
+   end-turn-continue never touches [side :click].
 
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
    This prevents the 'forgot to end-turn' stuck state.
@@ -1683,7 +1693,21 @@
                          (opponent-label side)))
         (println (format "   Prompt: %s" (:msg prompt)))
         (println "   Nothing for you to do: you have no choices in this prompt.")
-        (println "   Your turn will end automatically as soon as they resolve it.")
+        ;; #271 r1 (guest seat, MAJOR): this said "Your turn will end
+        ;; automatically as soon as they resolve it" unconditionally, and
+        ;; resume-deferred-auto-end! re-enters check-auto-end-turn! — which
+        ;; re-applies every guard afresh, as its own comment says, and so lands in
+        ;; the obligations arm and HOLDS the turn. The promise was already false
+        ;; for the rez half before #271 (this arm has always preceded the
+        ;; paid-window arm); #271 widened it to scorable agendas. Both detectors
+        ;; are already in scope here, so the line can simply say which it is
+        ;; rather than hedge both ways.
+        (if (or (seq scorable-agendas) (seq eot-rezzables))
+          (do
+            (println "   Your turn resumes automatically as soon as they resolve it.")
+            (println "   It will NOT end there: you still have a move that costs no click,")
+            (println "   and the re-check will name it then."))
+          (println "   Your turn will end automatically as soon as they resolve it."))
         (flush)
         (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
 
@@ -1787,41 +1811,8 @@
             (println "💡 Auto-ending turn (0 clicks) — expect that discard prompt next"))
           (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
-        (end-turn!))
+        (end-turn!)))))))
 
-      ;; Clicks STILL IN HAND, agenda scorable (#271 defect 1). ai_card_actions'
-      ;; `advance` calls this unconditionally — its own comment says "will be
-      ;; blocked if agenda is scorable" — so advancing to scorable on click 1 of 3
-      ;; reaches the cond with two clicks unspent. The old arm had NO clicks guard
-      ;; and sat at the top, so it printed "⚠️  Cannot auto-end turn" and
-      ;; "Review agendas and score if able, then manually end turn" to that Corp.
-      ;; The first line is a non-event (nothing was going to auto-end at 2 clicks;
-      ;; every other arm here gates on clicks=0) and the second forfeits them.
-      ;;
-      ;; The agenda fact itself is worth saying at ANY click count — `advance` is
-      ;; the action that makes an agenda scorable, and that scoring costs no click
-      ;; is the part the seat cannot work out for itself. So the fact is kept, the
-      ;; click count is stated, and the two untrue lines are gone. Nothing here
-      ;; mentions ending the turn: the click that empties the pool comes back
-      ;; through the obligations arm above.
-      ;;
-      ;; No rezzables list here. find-eot-rezzable-cards is the END-of-turn window
-      ;; (#103); with clicks in hand a rez is just the ordinary rez action and
-      ;; needs no prompting, and listing it every time an agenda went scorable is
-      ;; how a useful beat becomes noise a seat learns to skip.
-      ;;
-      ;; nil clicks reads as 0 and so prints NOTHING, which is the safe direction:
-      ;; a board with no :click is one we cannot make a click claim about.
-      (and (pos? (or clicks 0))
-           (seq scorable-agendas))
-      (do
-        (println "")
-        (println (format "🎯 Agenda(s) may be scorable — %d click(s) still in hand" clicks))
-        (doseq [{:keys [title counters requirement]} scorable-agendas]
-          (println (format "   🎯 %s (%d/%d advancement) — you MAY be able to score this — check"
-                           title counters requirement)))
-        (println (str "💡 " core/paid-window-score-note))
-        (flush)))))))
 
 (defn- claim-deferred-arm!
   "Atomically take ARMED off the client state. Returns true for the ONE caller

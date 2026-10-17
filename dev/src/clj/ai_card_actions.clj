@@ -963,8 +963,11 @@
                     (core/show-before-after "💰 Credits" before-credits after-credits)
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                     (flush)
-                    ;; Auto-end turn if no clicks remaining
-                    ;; (will be blocked if agenda is scorable)
+                    ;; The auto-end hook. Nothing is "blocked" here, which is
+                    ;; what this comment used to claim (#271): with clicks left it
+                    ;; says nothing at all, and at 0 clicks it HOLDS the turn open
+                    ;; and names what the window still offers — the agenda above,
+                    ;; an affordable unrezzed card, or both.
                     (basic/check-auto-end-turn!))
                   (do
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))

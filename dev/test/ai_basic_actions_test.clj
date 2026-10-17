@@ -621,29 +621,39 @@
    :active-player "corp"
    :log []})
 
-(deftest test-scorable-agenda-with-clicks-left-does-not-ask-for-an-end-turn
-  (testing "#271 defect 1: at click 2 of 3 nothing may claim the turn is about to
-            end or ask for a manual end — the Corp still has two actions"
-    (let [sent (atom [])]
-      (with-mock-state (mock-client-state :side "corp"
-                                          :game-state (corp-scorable-state :click 2))
-        (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      basic/turn-started-since-last-opp-end? (fn [] true)]
-          (let [out (with-out-str (basic/check-auto-end-turn!))
-                lines (remove str/blank? (str/split-lines out))]
-            ;; Whole output, not a line. The defect was a TRUE fact ("this agenda
-            ;; is scorable") printed with two false ones stapled to it, and an
-            ;; assertion that only banned the wordings I thought of would have
-            ;; let the next one through (#269 round 2, #269 round 4).
-            (is (= ["🎯 Agenda(s) may be scorable — 2 click(s) still in hand"
-                    "   🎯 Hostile Takeover (2/2 advancement) — you MAY be able to score this — check"
-                    (str "💡 " core/paid-window-score-note)]
-                   lines)
-                (str "every line must be true at THIS click count: the agenda fact, "
-                     "the click count, and the no-click note. Nothing about ending "
-                     "the turn, and no instruction. Got:\n" out))
-            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
-                "must not end a turn with clicks unspent")))))))
+(deftest test-scorable-agenda-with-clicks-left-says-nothing-at-all
+  (testing "#271 defect 1 (r1 panel, MAJOR): with clicks in hand this check has
+            nothing to report \u2014 every arm gates on clicks=0, and advance already
+            prints the scorable notice itself"
+    ;; r1 shipped a clicks>0 scorable note here. Both seats and I found five
+    ;; separate things wrong with it; the first was that its rationale was false
+    ;; (ai_card_actions.clj:959 already prints "X is now SCORABLE!" plus the
+    ;; `score` command, two lines before this call), so the arm was deleted.
+    ;;
+    ;; Varying :click is the point: 0 is covered by the obligations tests below,
+    ;; and a fixture that pins it is what hid this defect from the test #269's
+    ;; reverted attempt shipped with. nil is in the list because the deleted arm
+    ;; claimed in a comment to handle it and no fixture omitted :click (r1 F7).
+    (doseq [click [1 2 3 nil]]
+      (let [sent (atom [])
+            gs (cond-> (corp-scorable-state :click click)
+                 (nil? click) (update :corp dissoc :click))]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        basic/turn-started-since-last-opp-end? (fn [] true)]
+            (let [out (with-out-str (basic/check-auto-end-turn!))]
+              ;; Whole output, not a line. The defect was a TRUE fact ("this
+              ;; agenda is scorable") printed with false ones stapled to it, and
+              ;; an assertion that only banned the wordings I thought of would
+              ;; have let the next one through (#269 rounds 2 and 4).
+              (is (= "" out)
+                  (str "click " click ": the auto-end check has nothing to say "
+                       "with clicks in hand. Any output here is a surface that "
+                       "has to be true under a prompt and on every click-"
+                       "consuming caller, which is what r1's arm was not. Got:\n"
+                       out))
+              (is (empty? @sent)
+                  (str "click " click ": and nothing may be sent")))))))))
 
 (deftest test-scorable-agenda-at-zero-clicks-still-arms-the-114-recheck
   (testing "#271 defect 2: a scorable agenda must not swallow the :waiting prompt
@@ -731,6 +741,49 @@
                 (str "nothing to rez, so no rez line may appear, got:\n" out))
             (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
                 "must not auto-end over a scorable agenda")))))))
+
+(deftest test-114-promise-matches-what-the-recheck-will-actually-do
+  (testing "#271 r1 (guest seat, MAJOR): the #114 waiting arm must not promise an
+            automatic turn END when the re-check will HOLD the turn instead"
+    ;; resume-deferred-auto-end! calls check-auto-end-turn! again, which re-applies
+    ;; every guard afresh \u2014 so with an obligation pending it lands in the
+    ;; obligations arm and holds. The unconditional "will end automatically" was
+    ;; therefore false, and had been false for the rez half since #103: this arm
+    ;; has always preceded the paid-window arm.
+    (let [prompt {:msg "Waiting for Runner to resolve Public Trail"
+                  :prompt-type "waiting"}]
+      ;; BOTH directions. Asserting only the obligations case would stay green if
+      ;; the promise were simply deleted, which would lose #114's own point.
+      (testing "obligation pending -> says it will NOT end"
+        (doseq [[what gs] [["scorable agenda"
+                            (corp-scorable-state :click 0 :prompt prompt)]
+                           ["end-of-turn rez"
+                            (assoc-in (corp-eot-state) [:corp :prompt-state] prompt)]]]
+          (with-mock-state (mock-client-state :side "corp" :game-state gs)
+            (with-redefs [ws/send-message! (fn [& _] nil)
+                          basic/turn-started-since-last-opp-end? (fn [] true)]
+              (let [out (with-out-str (basic/check-auto-end-turn!))]
+                (is (re-find #"(?i)will NOT end there" out)
+                    (str what ": must say the turn does not end there, got:\n" out))
+                (is (not (re-find #"turn will end automatically" out))
+                    (str what ": must not also make the promise it is correcting, "
+                         "got:\n" out))
+                (is (some? (:auto-end-deferred @state/client-state))
+                    (str what ": and must still arm the #114 re-check")))))))
+      (testing "nothing pending -> #114's original promise is intact"
+        (let [gs (-> (corp-scorable-state :click 0)
+                     (assoc-in [:corp :servers] {})
+                     (assoc-in [:corp :prompt-state] prompt))]
+          (with-mock-state (mock-client-state :side "corp" :game-state gs)
+            (with-redefs [ws/send-message! (fn [& _] nil)
+                          basic/turn-started-since-last-opp-end? (fn [] true)]
+              (let [out (with-out-str (basic/check-auto-end-turn!))]
+                (is (re-find #"turn will end automatically" out)
+                    (str "with no obligation the turn DOES end on resume \u2014 "
+                         "#114's promise must survive, got:\n" out))
+                (is (not (re-find #"(?i)will NOT end there" out))
+                    (str "and must not claim an obligation it does not have, got:\n"
+                         out))))))))))
 
 (deftest test-already-ended-turn-makes-no-claim-about-a-scorable-agenda
   (testing "#271: once our own end-turn is in the log the window is CLOSED, so
