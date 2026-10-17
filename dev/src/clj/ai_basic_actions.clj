@@ -1578,7 +1578,22 @@
    - 0 clicks remaining
    - No active prompts
    - Not already ended (checks recent log)
-   - No scorable agendas (Corp only)
+   - No scorable agendas and no affordable end-of-turn rez (Corp only): both are
+     moves that cost no click, so both hold the window open instead (#103/#271).
+
+   With clicks STILL IN HAND this says NOTHING AT ALL, deliberately. Every arm
+   here gates on clicks=0, so there is no auto-end to report on, and #271 round 1
+   had me add a scorable-agenda note for that case on the reasoning that `advance`
+   is what makes an agenda scorable. Both review seats and I then found five
+   separate things wrong with it, the first being that the reasoning is false:
+   ai_card_actions' advance ALREADY prints \"X is now SCORABLE!\" and the `score`
+   command two lines before it calls this (ai_card_actions.clj:959). The rest:
+   the arm had no prompt guard, so at clicks>0 under a prompt it offered a score
+   board.cljs renders no button for; it fired from every click-consuming caller,
+   not just advance, so a Corp deliberately holding an agenda got the block on
+   every draw and credit; it reused the end-of-turn window's wording outside that
+   window; and it had no already-ended? guard, which the engine can reach because
+   end-turn-continue never touches [side :click].
 
    Note: Oversized hand is OK - game engine will prompt for discard during end-turn.
    This prevents the 'forgot to end-turn' stuck state.
@@ -1655,29 +1670,6 @@
       (not turn-started?)
       nil
 
-      ;; Have scorable agendas - DON'T auto-end!
-      (seq scorable-agendas)
-      (do
-        (println "")
-        (println "⚠️  Cannot auto-end turn: Agenda(s) may be scorable!")
-        (doseq [agenda scorable-agendas]
-          (println (format "   🎯 %s (%d/%d counters - SCORABLE!)"
-                          (:title agenda)
-                          (:counters agenda)
-                          (:requirement agenda))))
-        ;; NOT rewritten by #269, deliberately. Round 3 had me describe the
-        ;; paid-ability window here and offer the rez, because this arm precedes
-        ;; the paid-window arm and so hides it. Round 4 showed the arm is reached
-        ;; in states where that text is false: it has NO clicks guard and
-        ;; ai_card_actions' advance calls check-auto-end-turn! unconditionally, so
-        ;; advancing to scorable on click 1 of 3 printed "this window can still do
-        ;; it" with two clicks unspent; and it sits before both prompt arms, so
-        ;; under a blocking prompt it offered a rez and an end-turn the prompt
-        ;; refuses. The arm needs a clicks guard and to sit after the prompt arms
-        ;; before it can say anything about windows — #271, not here.
-        (println "💡 Review agendas and score if able, then manually end turn")
-        (flush))
-
       ;; #114: the prompt is the OPPONENT's decision, not ours. A last click spent
       ;; on a card that hands the other seat a choice (Public Trail, tag punishment)
       ;; leaves us holding a :waiting pseudo-prompt with NO choices. The old code
@@ -1701,7 +1693,42 @@
                          (opponent-label side)))
         (println (format "   Prompt: %s" (:msg prompt)))
         (println "   Nothing for you to do: you have no choices in this prompt.")
-        (println "   Your turn will end automatically as soon as they resolve it.")
+        ;; "resumes", not "will end" (#271 rounds 1 and 2). This promised the
+        ;; turn would end as soon as they resolved it, which
+        ;; resume-deferred-auto-end! does not guarantee: it re-enters
+        ;; check-auto-end-turn!, which re-applies every guard afresh and so may
+        ;; land in the obligations arm and HOLD the turn instead (r1, MAJOR;
+        ;; already false for the rez half before #271, since this arm has always
+        ;; preceded the paid-window arm).
+        ;;
+        ;; r1's fix was a BRANCH on the two detectors that said "It will NOT end
+        ;; there" when either had something. Round 2 took two MAJORs off it from
+        ;; both vendors: that is a prediction about a board the opponent has not
+        ;; finished changing (a seat reproduced the turn auto-ending straight
+        ;; after the line promised it would not), and it quoted two detectors
+        ;; that allow false positives by design without their "MAY" hedge. The
+        ;; branch is gone. The seat does not need to be told in advance which way
+        ;; the re-check will go — the re-check prints what it actually did, with
+        ;; the obligations arm's own hedged wording, at the moment it knows.
+        ;; One true sentence beats a branch that is right twice and wrong twice.
+        ;;
+        ;; Where that print actually lands (r3, MINOR — the sentence above was
+        ;; fine, this reason was not): resume-deferred-auto-end-async! wraps the
+        ;; resume in a `future` on the websocket RECEIVE thread
+        ;; (ai_websocket_client_v2.clj:30-43), so the obligations arm's println
+        ;; goes to the REPL process stdout, NOT into any send_command reply. The
+        ;; seat reads the hold off its next `wait`, through
+        ;; core/end-turn-obligation-lines — which is exactly the surface the
+        ;; obligations arm below is kept in step with via the shared
+        ;; core/paid-window-* constants. So the argument holds, but it holds
+        ;; because of `wait`, not because of this println.
+        ;;
+        ;; "once they have resolved EVERYTHING they owe", not "as soon as they
+        ;; resolve it" (r3, MINOR): with a chain of opponent decisions the first
+        ;; resolution leaves still-waiting? true, so the arm stays armed and
+        ;; nothing happens yet. And "re-checked", not "resumes": the re-check is
+        ;; what is guaranteed; what it then does is the cond's business.
+        (println "   Your turn is re-checked automatically once they have resolved\n   everything they owe.")
         (flush)
         (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
 
@@ -1716,10 +1743,27 @@
         (println "💡 Use 'prompt' command to see choices, or 'choose' to respond")
         (flush))
 
-      ;; Paid-ability window (#103): the last click is spent, but the end-of-turn
-      ;; window is still open and there is something to spend it on. Auto-ending
-      ;; here silently throws that window away — marquee ac71ce63 lost a Nico
-      ;; Campaign rez to it and only recovered by rezzing after the fact.
+      ;; End-of-turn obligations (#103 rez window, scorable agendas; merged by
+      ;; #271). The last click is spent, but 0 clicks is not 0 moves: scoring
+      ;; costs no click, and the end-of-turn paid window is still open with
+      ;; something to spend it on. Auto-ending here silently throws that away —
+      ;; marquee ac71ce63 lost a Nico Campaign rez to it and only recovered by
+      ;; rezzing after the fact.
+      ;;
+      ;; ONE arm for both lists, because they are two facts about the SAME state.
+      ;; The scorable half used to be its own arm at the top of this cond, and
+      ;; naming the agenda suppressed the rezzables list completely: a Corp
+      ;; holding a scorable agenda AND an affordable unrezzed card was never told
+      ;; the #103 window existed — the window #103 was filed to protect (#271
+      ;; defect 3).
+      ;;
+      ;; It also sits AFTER both prompt arms now. The scorable arm preceded them,
+      ;; so a last click spent on a card that hands the Runner a decision landed
+      ;; there instead: the seat was told to score and end the turn, the prompt
+      ;; refuses both, and #114's resume-deferred-auto-end! was never armed —
+      ;; which orphans the turn at 0 clicks forever (#271 defect 2). The prompt
+      ;; arms tell the seat to resolve the prompt instead, and the #114 re-check
+      ;; brings it back HERE once the board can act again.
       ;;
       ;; Hand control back instead of ending. This cannot wedge autonomous play:
       ;; the bots end their turn through smart-end-turn! (the explicit command,
@@ -1729,25 +1773,48 @@
       (and (= clicks 0)
            (nil? prompt)
            (not already-ended?)
-           (seq eot-rezzables))
+           (or (seq scorable-agendas) (seq eot-rezzables)))
       (do
         (println "")
-        (println "⏸️  Holding the end-of-turn paid window (0 clicks, turn NOT ended)")
+        ;; Same framing as ai-core/end-turn-obligation-lines, which answers this
+        ;; same state on the next `wait`. Two surfaces, one answer.
+        (println "⏸️  Turn NOT ended (0 clicks) — 0 clicks is not 0 moves:")
+        (doseq [{:keys [title counters requirement]} scorable-agendas]
+          ;; "MAY", for the same reason as the rez line below: find-scorable-agendas
+          ;; does a bare counter check and ignores :cannot-score (Clot et al.), and
+          ;; its own docstring asks callers to assume the agendas MIGHT be scorable.
+          (println (format "   🎯 %s (%d/%d advancement) — you MAY be able to score this — check"
+                           title counters requirement)))
         (doseq [{:keys [title cost]} eot-rezzables]
           ;; "may", matching ai-core's wake guidance: the same detector feeds
           ;; both, and it errs generous on purpose (restricted recurring
           ;; credits), so one categorical copy would just relocate the overclaim.
           (println (format "   💰 %s may still be rezzable for %d¢ — check" title cost)))
-        ;; #269. This said "Rez now if you want it up on the Runner's turn", then
-        ;; "Rez those first if you want them". Both steered the seat toward
-        ;; rezzing; whether rezzing HERE is right is card-dependent, and marquee
-        ;; aa73c305 turn 4 followed the old line and lost the card it rezzed. The
-        ;; wording is core/paid-window-rez-offer so this surface and the wake
+        ;; #269. The rez hint said "Rez now if you want it up on the Runner's
+        ;; turn", then "Rez those first if you want them". Both steered the seat
+        ;; toward rezzing; whether rezzing HERE is right is card-dependent, and
+        ;; marquee aa73c305 turn 4 followed the old line and lost the card it
+        ;; rezzed. The scorable hint said "scoring forfeits nothing", which is
+        ;; false (Atlas, Vitruvius, Beale, Azef Protocol). Both wordings are
+        ;; core/paid-window-{score-note,rez-offer} so this surface and the wake
         ;; guidance cannot drift; the per-card reasoning is in #269/#270, which is
         ;; where it belongs after three rounds found three sentences of it wrong.
-        (println (str "💡 " core/paid-window-rez-offer))
+        ;;
+        ;; Emitted per list, not unconditionally: the score note is false
+        ;; advertising with no agenda scorable, and the rez offer names a `rez`
+        ;; with nothing to rez.
+        (when (seq scorable-agendas)
+          (println (str "💡 " core/paid-window-score-note)))
+        (when (seq eot-rezzables)
+          (println (str "💡 " core/paid-window-rez-offer)))
         (flush)
-        (core/with-cursor {:status :paid-window :rezzable (mapv :title eot-rezzables)}))
+        ;; :status stays :paid-window — it names the end-of-turn window this arm
+        ;; holds open, which is the same window either way. :scorable is new
+        ;; alongside :rezzable so a cursor reader sees both obligations, not just
+        ;; the one that used to reach here.
+        (core/with-cursor {:status :paid-window
+                           :scorable (mapv :title scorable-agendas)
+                           :rezzable (mapv :title eot-rezzables)}))
 
       ;; Safe to auto-end
       (and (= clicks 0)
@@ -1766,6 +1833,7 @@
           (println "💡 Auto-ending turn (0 clicks, nothing pending)"))
         (flush)
         (end-turn!)))))))
+
 
 (defn- claim-deferred-arm!
   "Atomically take ARMED off the client state. Returns true for the ONE caller
