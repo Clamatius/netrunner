@@ -578,9 +578,184 @@
              "wants another card trashed), so the old 'do that before end-turn' rested "
              "on a false premise. #269 round 3."))))
 
- ;; The scorable arm is NOT touched by #269 — see the comment on it in
-;; ai_basic_actions.clj and #271. Round 3's test here pinned a rewrite of that arm
-;; that round 4 showed was false in two reachable states, so both are gone.
+;; ============================================================================
+;; #271: the scorable-agenda arm — clicks guard, arm order, and the hidden window
+;; ============================================================================
+;; #269's rounds 3 and 4 found the arm wrong and my rewrite of it wrong, and it
+;; was reverted; #271 is the carried work. Three defects, all from where the arm
+;; sat and what it did not check:
+;;
+;;   1. No clicks guard. ai_card_actions' `advance` calls check-auto-end-turn!
+;;      unconditionally, so advancing to scorable on click 1 of 3 printed
+;;      "Cannot auto-end turn" and "manually end turn" to a Corp with two
+;;      actions left. A seat that obeys forfeits them.
+;;   2. It preceded both prompt arms, so a last click spent on a card that hands
+;;      the Runner a decision landed here instead — and #114's deferred re-check
+;;      was never armed, which orphans the turn at 0 clicks forever.
+;;   3. Naming the agenda suppressed the #103 rezzables list entirely, so a Corp
+;;      holding a scorable agenda AND an affordable unrezzed card was never told
+;;      the paid window existed. That is the window #103 was filed to protect.
+;;
+;; The fixture takes `click` rather than pinning it to 0, which is what made
+;; defect 1 invisible to the test the reverted attempt shipped with.
+
+(defn- corp-scorable-state
+  "Corp with a scorable agenda installed in a remote.
+
+  `click` VARIES — a fixture that pins it to 0 cannot see #271 defect 1 at all.
+  `rezzable?` adds #103's Nico Campaign in a second remote (defect 3: both
+  obligations pending at once). `prompt` puts a prompt in :prompt-state
+  (defect 2). Hostile Takeover at 2/2 is the cheapest scorable shape."
+  [& {:keys [click prompt rezzable? credit]
+      :or {click 0 prompt nil rezzable? false credit 5}}]
+  {:corp {:click click :credit credit :hand [] :hand-count 3
+          :hand-size {:total 5} :installed {} :prompt-state prompt
+          :servers (cond-> {:remote1 {:content [{:cid 1 :title "Hostile Takeover"
+                                                 :type "Agenda" :advance-counter 2
+                                                 :advancementcost 2}]}}
+                     rezzable?
+                     (assoc :remote2 {:content [{:cid 2 :title "Nico Campaign"
+                                                 :type "Asset" :cost 2 :rezzed false}]}))}
+   :runner {:click 0 :credit 5 :hand []}
+   :turn 8
+   :active-player "corp"
+   :log []})
+
+(deftest test-scorable-agenda-with-clicks-left-does-not-ask-for-an-end-turn
+  (testing "#271 defect 1: at click 2 of 3 nothing may claim the turn is about to
+            end or ask for a manual end — the Corp still has two actions"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp"
+                                          :game-state (corp-scorable-state :click 2))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))
+                lines (remove str/blank? (str/split-lines out))]
+            ;; Whole output, not a line. The defect was a TRUE fact ("this agenda
+            ;; is scorable") printed with two false ones stapled to it, and an
+            ;; assertion that only banned the wordings I thought of would have
+            ;; let the next one through (#269 round 2, #269 round 4).
+            (is (= ["🎯 Agenda(s) may be scorable — 2 click(s) still in hand"
+                    "   🎯 Hostile Takeover (2/2 advancement) — you MAY be able to score this — check"
+                    (str "💡 " core/paid-window-score-note)]
+                   lines)
+                (str "every line must be true at THIS click count: the agenda fact, "
+                     "the click count, and the no-click note. Nothing about ending "
+                     "the turn, and no instruction. Got:\n" out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must not end a turn with clicks unspent")))))))
+
+(deftest test-scorable-agenda-at-zero-clicks-still-arms-the-114-recheck
+  (testing "#271 defect 2: a scorable agenda must not swallow the :waiting prompt
+            arm — without the #114 arm the turn is orphaned at 0 clicks forever"
+    (let [sent (atom [])
+          prompt {:msg "Waiting for Runner to resolve Public Trail"
+                  :prompt-type "waiting"}]
+      (with-mock-state (mock-client-state
+                         :side "corp"
+                         :game-state (corp-scorable-state :click 0 :prompt prompt))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (some? (:auto-end-deferred @state/client-state))
+                (str "the #114 arm must be set — the scorable arm used to claim this "
+                     "state and nothing re-evaluated the turn. Got:\n" out))
+            (is (re-find #"(?i)runner owes a decision" out)
+                (str "must name who owes the decision, got:\n" out))
+            ;; The turn is NOT in a window the seat can act in: a prompt is up, so
+            ;; board.cljs renders no basic actions. Offering a score here is the
+            ;; advice the prompt refuses.
+            (is (not (re-find #"(?i)score" out))
+                (str "must not offer a score the active prompt refuses, got:\n" out))
+            (is (empty? @sent)
+                "must not end the turn while the opponent owes a decision")))))))
+
+(deftest test-scorable-agenda-at-zero-clicks-under-our-own-prompt-says-resolve-it
+  (testing "#271 defect 2: a prompt WE owe outranks the scorable note — the seat
+            cannot score or end until it resolves"
+    (let [sent (atom [])
+          prompt {:msg "Choose a card to discard" :prompt-type "select"
+                  :choices [{:value "x"}] :eid {:eid 1}}]
+      (with-mock-state (mock-client-state
+                         :side "corp"
+                         :game-state (corp-scorable-state :click 0 :prompt prompt))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (re-find #"Active prompt must be resolved first" out)
+                (str "the blocking-prompt arm must win, got:\n" out))
+            (is (not (re-find #"(?i)score" out))
+                (str "must not offer a score the prompt refuses, got:\n" out))
+            (is (empty? @sent) "must not end the turn under an unresolved prompt")))))))
+
+(deftest test-both-obligations-are-named-when-both-are-pending
+  (testing "#271 defect 3: a scorable agenda must not hide the #103 rez window —
+            both are facts about the same state and both get named"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state
+                         :side "corp"
+                         :game-state (corp-scorable-state :click 0 :rezzable? true))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))
+                lines (remove str/blank? (str/split-lines out))]
+            (is (re-find #"Hostile Takeover" out)
+                (str "the agenda must be named, got:\n" out))
+            (is (re-find #"Nico Campaign" out)
+                (str "#103's window is hidden by the scorable arm — this is the "
+                     "defect. Got:\n" out))
+            ;; Both shared constants, so this surface cannot drift from the wake
+            ;; guidance the way the two did before #269 made them constants.
+            (is (some #(= (str "💡 " core/paid-window-score-note) %) lines)
+                (str "must emit core/paid-window-score-note verbatim, got:\n" out))
+            (is (some #(= (str "💡 " core/paid-window-rez-offer) %) lines)
+                (str "must emit core/paid-window-rez-offer verbatim, got:\n" out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must hold the window open, not auto-end")))))))
+
+(deftest test-scorable-agenda-alone-at-zero-clicks-holds-the-window
+  (testing "#271: the no-rezzables case keeps the original behaviour — no auto-end,
+            agenda named — with the click fact from the shared constant"
+    (let [sent (atom [])]
+      (with-mock-state (mock-client-state :side "corp"
+                                          :game-state (corp-scorable-state :click 0))
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))
+                lines (remove str/blank? (str/split-lines out))]
+            (is (re-find #"Hostile Takeover" out)
+                (str "the agenda must still be named, got:\n" out))
+            (is (some #(= (str "💡 " core/paid-window-score-note) %) lines)
+                (str "must emit core/paid-window-score-note verbatim, got:\n" out))
+            (is (not (some #(re-find #"(?i)rez" %) lines))
+                (str "nothing to rez, so no rez line may appear, got:\n" out))
+            (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
+                "must not auto-end over a scorable agenda")))))))
+
+(deftest test-already-ended-turn-makes-no-claim-about-a-scorable-agenda
+  (testing "#271: once our own end-turn is in the log the window is CLOSED, so
+            neither obligation line nor a click count may be printed"
+    ;; This is the state the clicks guard has to be nil-and-zero correct about:
+    ;; clicks is 0, already-ended? is true, so every arm that could speak is
+    ;; gated off and the clicks-in-hand arm must NOT pick the state up. A guard
+    ;; mutated to fire unconditionally reaches here and says "0 click(s) still
+    ;; in hand" over an ended turn.
+    (let [sent (atom [])
+          ;; A REAL already-ended log line, not a redef: already-ended-this-turn?
+          ;; is private, and its authorship scan is the thing that has to agree
+          ;; this turn is over (#230/#231 — a name missing from the board makes
+          ;; the line invisible, so the username has to be on the board too).
+          gs (-> (corp-scorable-state :click 0 :rezzable? true)
+                 (assoc-in [:corp :user :username] "ai-corp")
+                 (assoc :log [{:text "ai-corp is ending their turn 8 with 5 [Credit]."}]))]
+      (with-mock-state (mock-client-state :side "corp" :game-state gs)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      basic/turn-started-since-last-opp-end? (fn [] true)]
+          (let [out (with-out-str (basic/check-auto-end-turn!))]
+            (is (= "" out)
+                (str "an ended turn has no window to hold open and no clicks to "
+                     "report — the only honest output is none. Got:\n" out))
+            (is (empty? @sent) "and nothing may be sent")))))))
 
 (deftest test-smart-end-turn-still-ends-over-paid-window
   (testing "#103 deadlock-safety: the EXPLICIT end-turn obeys, so bots never wedge"
