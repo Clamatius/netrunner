@@ -742,48 +742,53 @@
             (is (not (some #(= "end-turn" (get-in % [:data :command])) @sent))
                 "must not auto-end over a scorable agenda")))))))
 
-(deftest test-114-promise-matches-what-the-recheck-will-actually-do
-  (testing "#271 r1 (guest seat, MAJOR): the #114 waiting arm must not promise an
-            automatic turn END when the re-check will HOLD the turn instead"
-    ;; resume-deferred-auto-end! calls check-auto-end-turn! again, which re-applies
-    ;; every guard afresh \u2014 so with an obligation pending it lands in the
-    ;; obligations arm and holds. The unconditional "will end automatically" was
-    ;; therefore false, and had been false for the rez half since #103: this arm
-    ;; has always preceded the paid-window arm.
+(deftest test-114-line-claims-only-what-the-recheck-guarantees
+  (testing "#271 rounds 1-2: the #114 waiting line may promise that the turn
+            RESUMES, which is guaranteed, and must not promise how it resumes"
+    ;; r1 found this arm promising "Your turn will end automatically as soon as
+    ;; they resolve it" while resume-deferred-auto-end! re-enters
+    ;; check-auto-end-turn! and may HOLD the turn in the obligations arm.
+    ;;
+    ;; r1's fix branched on the two detectors and said "It will NOT end there"
+    ;; when either had something. r2 took two MAJORs off that, from both vendors:
+    ;; it is a prediction about a board the opponent is still changing (a seat
+    ;; reproduced the turn auto-ending right after the line promised it would
+    ;; not), and it quoted detectors that allow false positives without their own
+    ;; "MAY" hedge. So the ONE line is asserted here, identically in every state,
+    ;; and both directions of r1's branch are banned.
     (let [prompt {:msg "Waiting for Runner to resolve Public Trail"
                   :prompt-type "waiting"}]
-      ;; BOTH directions. Asserting only the obligations case would stay green if
-      ;; the promise were simply deleted, which would lose #114's own point.
-      (testing "obligation pending -> says it will NOT end"
-        (doseq [[what gs] [["scorable agenda"
-                            (corp-scorable-state :click 0 :prompt prompt)]
-                           ["end-of-turn rez"
-                            (assoc-in (corp-eot-state) [:corp :prompt-state] prompt)]]]
-          (with-mock-state (mock-client-state :side "corp" :game-state gs)
-            (with-redefs [ws/send-message! (fn [& _] nil)
-                          basic/turn-started-since-last-opp-end? (fn [] true)]
-              (let [out (with-out-str (basic/check-auto-end-turn!))]
-                (is (re-find #"(?i)will NOT end there" out)
-                    (str what ": must say the turn does not end there, got:\n" out))
-                (is (not (re-find #"turn will end automatically" out))
-                    (str what ": must not also make the promise it is correcting, "
-                         "got:\n" out))
-                (is (some? (:auto-end-deferred @state/client-state))
-                    (str what ": and must still arm the #114 re-check")))))))
-      (testing "nothing pending -> #114's original promise is intact"
-        (let [gs (-> (corp-scorable-state :click 0)
-                     (assoc-in [:corp :servers] {})
-                     (assoc-in [:corp :prompt-state] prompt))]
-          (with-mock-state (mock-client-state :side "corp" :game-state gs)
-            (with-redefs [ws/send-message! (fn [& _] nil)
-                          basic/turn-started-since-last-opp-end? (fn [] true)]
-              (let [out (with-out-str (basic/check-auto-end-turn!))]
-                (is (re-find #"turn will end automatically" out)
-                    (str "with no obligation the turn DOES end on resume \u2014 "
-                         "#114's promise must survive, got:\n" out))
-                (is (not (re-find #"(?i)will NOT end there" out))
-                    (str "and must not claim an obligation it does not have, got:\n"
-                         out))))))))))
+      (doseq [[what gs]
+              [["scorable agenda pending"
+                (corp-scorable-state :click 0 :prompt prompt)]
+               ["end-of-turn rez pending"
+                (assoc-in (corp-eot-state) [:corp :prompt-state] prompt)]
+               ["nothing pending"
+                (-> (corp-scorable-state :click 0)
+                    (assoc-in [:corp :servers] {})
+                    (assoc-in [:corp :prompt-state] prompt))]]]
+        (with-mock-state (mock-client-state :side "corp" :game-state gs)
+          (with-redefs [ws/send-message! (fn [& _] nil)
+                        basic/turn-started-since-last-opp-end? (fn [] true)]
+            (let [out (with-out-str (basic/check-auto-end-turn!))
+                  lines (remove str/blank? (str/split-lines out))
+                  ;; Every line that says anything about how this resumes. The
+                  ;; set, not a sample: r1's branch put its claim on a SECOND
+                  ;; line, which an assertion aimed at the first would have
+                  ;; missed entirely.
+                  resume-lines (filter #(re-find #"(?i)resum|automatic|end there|will end" %)
+                                       lines)]
+              (is (= ["   Your turn resumes automatically as soon as they resolve it."]
+                     resume-lines)
+                  (str what ": exactly one line may describe the resume, and it may "
+                       "claim only that the turn resumes — which is the one thing "
+                       "resume-deferred-auto-end! guarantees. 'will end' is false "
+                       "when an obligation is pending (r1); 'will NOT end' is a "
+                       "prediction about a board the opponent is still changing "
+                       "(r2, reproduced). Got: " (vec resume-lines)))
+              (is (some? (:auto-end-deferred @state/client-state))
+                  (str what ": and the #114 re-check must be armed — without it "
+                       "the turn is orphaned at 0 clicks forever")))))))))
 
 (deftest test-already-ended-turn-makes-no-claim-about-a-scorable-agenda
   (testing "#271: once our own end-turn is in the log the window is CLOSED, so

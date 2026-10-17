@@ -964,10 +964,14 @@
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                     (flush)
                     ;; The auto-end hook. Nothing is "blocked" here, which is
-                    ;; what this comment used to claim (#271): with clicks left it
-                    ;; says nothing at all, and at 0 clicks it HOLDS the turn open
-                    ;; and names what the window still offers — the agenda above,
-                    ;; an affordable unrezzed card, or both.
+                    ;; what this comment claimed for months (#271 quotes it as
+                    ;; part of defect 1) — and it does not HOLD the turn either,
+                    ;; which is what I replaced that claim with in #271 round 1
+                    ;; (round 2, both vendors). With clicks left it says nothing at
+                    ;; all. At 0 clicks it picks ONE of three: auto-end (neither
+                    ;; obligation pending — advancing ICE, or an agenda to 1/3),
+                    ;; defer to an active prompt, or hold the end-of-turn window
+                    ;; open and name what it still offers. Read its cond for which.
                     (basic/check-auto-end-turn!))
                   (do
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))

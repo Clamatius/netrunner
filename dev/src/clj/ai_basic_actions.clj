@@ -1693,21 +1693,25 @@
                          (opponent-label side)))
         (println (format "   Prompt: %s" (:msg prompt)))
         (println "   Nothing for you to do: you have no choices in this prompt.")
-        ;; #271 r1 (guest seat, MAJOR): this said "Your turn will end
-        ;; automatically as soon as they resolve it" unconditionally, and
-        ;; resume-deferred-auto-end! re-enters check-auto-end-turn! — which
-        ;; re-applies every guard afresh, as its own comment says, and so lands in
-        ;; the obligations arm and HOLDS the turn. The promise was already false
-        ;; for the rez half before #271 (this arm has always preceded the
-        ;; paid-window arm); #271 widened it to scorable agendas. Both detectors
-        ;; are already in scope here, so the line can simply say which it is
-        ;; rather than hedge both ways.
-        (if (or (seq scorable-agendas) (seq eot-rezzables))
-          (do
-            (println "   Your turn resumes automatically as soon as they resolve it.")
-            (println "   It will NOT end there: you still have a move that costs no click,")
-            (println "   and the re-check will name it then."))
-          (println "   Your turn will end automatically as soon as they resolve it."))
+        ;; "resumes", not "will end" (#271 rounds 1 and 2). This promised the
+        ;; turn would end as soon as they resolved it, which
+        ;; resume-deferred-auto-end! does not guarantee: it re-enters
+        ;; check-auto-end-turn!, which re-applies every guard afresh and so may
+        ;; land in the obligations arm and HOLD the turn instead (r1, MAJOR;
+        ;; already false for the rez half before #271, since this arm has always
+        ;; preceded the paid-window arm).
+        ;;
+        ;; r1's fix was a BRANCH on the two detectors that said "It will NOT end
+        ;; there" when either had something. Round 2 took two MAJORs off it from
+        ;; both vendors: that is a prediction about a board the opponent has not
+        ;; finished changing (a seat reproduced the turn auto-ending straight
+        ;; after the line promised it would not), and it quoted two detectors
+        ;; that allow false positives by design without their "MAY" hedge. The
+        ;; branch is gone. The seat does not need to be told in advance which way
+        ;; the re-check will go — the re-check prints what it actually did, with
+        ;; the obligations arm's own hedged wording, at the moment it knows.
+        ;; One true sentence beats a branch that is right twice and wrong twice.
+        (println "   Your turn resumes automatically as soon as they resolve it.")
         (flush)
         (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
 
