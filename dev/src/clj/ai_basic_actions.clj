@@ -1711,7 +1711,24 @@
         ;; the re-check will go — the re-check prints what it actually did, with
         ;; the obligations arm's own hedged wording, at the moment it knows.
         ;; One true sentence beats a branch that is right twice and wrong twice.
-        (println "   Your turn resumes automatically as soon as they resolve it.")
+        ;;
+        ;; Where that print actually lands (r3, MINOR — the sentence above was
+        ;; fine, this reason was not): resume-deferred-auto-end-async! wraps the
+        ;; resume in a `future` on the websocket RECEIVE thread
+        ;; (ai_websocket_client_v2.clj:30-43), so the obligations arm's println
+        ;; goes to the REPL process stdout, NOT into any send_command reply. The
+        ;; seat reads the hold off its next `wait`, through
+        ;; core/end-turn-obligation-lines — which is exactly the surface the
+        ;; obligations arm below is kept in step with via the shared
+        ;; core/paid-window-* constants. So the argument holds, but it holds
+        ;; because of `wait`, not because of this println.
+        ;;
+        ;; "once they have resolved EVERYTHING they owe", not "as soon as they
+        ;; resolve it" (r3, MINOR): with a chain of opponent decisions the first
+        ;; resolution leaves still-waiting? true, so the arm stays armed and
+        ;; nothing happens yet. And "re-checked", not "resumes": the re-check is
+        ;; what is guaranteed; what it then does is the cond's business.
+        (println "   Your turn is re-checked automatically once they have resolved\n   everything they owe.")
         (flush)
         (core/with-cursor {:status :waiting-for-opponent :prompt prompt}))
 

@@ -968,10 +968,17 @@
                     ;; part of defect 1) — and it does not HOLD the turn either,
                     ;; which is what I replaced that claim with in #271 round 1
                     ;; (round 2, both vendors). With clicks left it says nothing at
-                    ;; all. At 0 clicks it picks ONE of three: auto-end (neither
-                    ;; obligation pending — advancing ICE, or an agenda to 1/3),
-                    ;; defer to an active prompt, or hold the end-of-turn window
-                    ;; open and name what it still offers. Read its cond for which.
+                    ;; all. At 0 clicks it picks ONE of three: auto-end (no
+                    ;; scorable agenda AND nothing affordable to rez), defer to an
+                    ;; active prompt, or hold the end-of-turn window open and name
+                    ;; what it still offers. Read its cond for which.
+                    ;;
+                    ;; Stated as the condition, not as examples: r1 wrote
+                    ;; "advancing ICE, or an agenda to 1/3" here and a seat pointed
+                    ;; out that advancing ICE on the last click HOLDS the turn
+                    ;; whenever an affordable unrezzed card is on the board — the
+                    ;; #103 case this issue exists to protect. An example gets read
+                    ;; as the rule.
                     (basic/check-auto-end-turn!))
                   (do
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))

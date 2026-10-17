@@ -743,21 +743,35 @@
                 "must not auto-end over a scorable agenda")))))))
 
 (deftest test-114-line-claims-only-what-the-recheck-guarantees
-  (testing "#271 rounds 1-2: the #114 waiting line may promise that the turn
-            RESUMES, which is guaranteed, and must not promise how it resumes"
-    ;; r1 found this arm promising "Your turn will end automatically as soon as
-    ;; they resolve it" while resume-deferred-auto-end! re-enters
-    ;; check-auto-end-turn! and may HOLD the turn in the obligations arm.
+  (testing "#271 rounds 1-3: the #114 waiting arm's output is these four lines in
+            every state, and it may claim only that the turn is RE-CHECKED"
+    ;; Three rounds on one sentence, each finding a smaller overclaim:
+    ;;   r1  "Your turn will end automatically as soon as they resolve it" \u2014 false,
+    ;;       resume-deferred-auto-end! can HOLD the turn in the obligations arm.
+    ;;   r2  my fix branched on the two detectors and said "It will NOT end there".
+    ;;       Two MAJORs, both vendors: a prediction about a board the opponent is
+    ;;       still changing (a seat reproduced the turn auto-ending straight after
+    ;;       the line promised it would not), quoting detectors that allow false
+    ;;       positives by design without their own "MAY" hedge.
+    ;;   r3  "as soon as they resolve it" binds to the one displayed prompt; with a
+    ;;       CHAIN of opponent decisions the first resolution leaves still-waiting?
+    ;;       true, so nothing happens yet.
     ;;
-    ;; r1's fix branched on the two detectors and said "It will NOT end there"
-    ;; when either had something. r2 took two MAJORs off that, from both vendors:
-    ;; it is a prediction about a board the opponent is still changing (a seat
-    ;; reproduced the turn auto-ending right after the line promised it would
-    ;; not), and it quoted detectors that allow false positives without their own
-    ;; "MAY" hedge. So the ONE line is asserted here, identically in every state,
-    ;; and both directions of r1's branch are banned.
+    ;; So: WHOLE output, not a regex over it. r2's version of this test filtered
+    ;; lines on a four-token regex, and a seat's script showed that an added second
+    ;; line promising an outcome in other words ("After they choose, your turn is
+    ;; over.") was invisible to it \u2014 the very class r2 removed could come back
+    ;; green. The arm's output is fixed, so the vector is assertable, and an extra
+    ;; line of any wording fails it. House style since #269 round 2.
     (let [prompt {:msg "Waiting for Runner to resolve Public Trail"
-                  :prompt-type "waiting"}]
+                  :prompt-type "waiting"}
+          expected ["\u23f8\ufe0f  Turn not ended yet \u2014 the Runner owes a decision (you are at 0 clicks)."
+                    "   Prompt: Waiting for Runner to resolve Public Trail"
+                    "   Nothing for you to do: you have no choices in this prompt."
+                    "   Your turn is re-checked automatically once they have resolved"
+                    "   everything they owe."]]
+      ;; All three states, because the whole point of r2's deleted branch was to
+      ;; say something DIFFERENT in the first two. The output is identical now.
       (doseq [[what gs]
               [["scorable agenda pending"
                 (corp-scorable-state :click 0 :prompt prompt)]
@@ -771,23 +785,16 @@
           (with-redefs [ws/send-message! (fn [& _] nil)
                         basic/turn-started-since-last-opp-end? (fn [] true)]
             (let [out (with-out-str (basic/check-auto-end-turn!))
-                  lines (remove str/blank? (str/split-lines out))
-                  ;; Every line that says anything about how this resumes. The
-                  ;; set, not a sample: r1's branch put its claim on a SECOND
-                  ;; line, which an assertion aimed at the first would have
-                  ;; missed entirely.
-                  resume-lines (filter #(re-find #"(?i)resum|automatic|end there|will end" %)
-                                       lines)]
-              (is (= ["   Your turn resumes automatically as soon as they resolve it."]
-                     resume-lines)
-                  (str what ": exactly one line may describe the resume, and it may "
-                       "claim only that the turn resumes — which is the one thing "
-                       "resume-deferred-auto-end! guarantees. 'will end' is false "
-                       "when an obligation is pending (r1); 'will NOT end' is a "
-                       "prediction about a board the opponent is still changing "
-                       "(r2, reproduced). Got: " (vec resume-lines)))
+                  lines (remove str/blank? (str/split-lines out))]
+              (is (= expected lines)
+                  (str what ": this arm's whole output is reviewed policy. It may "
+                       "claim only that the turn is RE-CHECKED, which is the one "
+                       "thing resume-deferred-auto-end! guarantees \u2014 not that it "
+                       "will end (r1), not that it will not (r2), and not on the "
+                       "resolution of the one displayed prompt (r3). Read #271 "
+                       "rounds 1-3 before changing this. Got:\n" (vec lines)))
               (is (some? (:auto-end-deferred @state/client-state))
-                  (str what ": and the #114 re-check must be armed — without it "
+                  (str what ": and the #114 re-check must be armed \u2014 without it "
                        "the turn is orphaned at 0 clicks forever")))))))))
 
 (deftest test-already-ended-turn-makes-no-claim-about-a-scorable-agenda
