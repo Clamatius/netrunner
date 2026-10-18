@@ -1523,3 +1523,76 @@
             (is (not (re-find #"\bnull\b" out)) (str label " printed: " out))
             (is (re-find #"face-down card" out)
                 (str label ": name it the way the selectable list did, got: " out))))))))
+
+;; ============================================================================
+;; press-choice! — the ✅ line must precede the auto-end-turn banner (#253)
+;;
+;; press-choice! ran maybe-auto-end-turn-after-prompt! BEFORE printing its own
+;; "✅ Chose: X". A `choose` that spends the last click therefore read:
+;;
+;;   💡 Auto-ending turn (0 clicks, nothing pending)
+;;   ⏳ Waiting for runner to start
+;;   ✅ Chose: Server 1
+;;
+;; i.e. the consequence of the choice landing, two lines above any confirmation
+;; that it landed, with an unrelated wait banner between them. The natural read
+;; is "something ELSE ended my turn" — the misleading-output class again, and the
+;; opposite of every other command, whose ✅ line is the first thing printed.
+;;
+;; choose-card! already had the right order (its 📇 line prints before the hook);
+;; press-choice! was the one site out of step. The ordering constraint the old
+;; statement order was reaching for ("a choice the engine rejects must NOT read
+;; as success") is satisfied by the BRANCH — both lines live inside the
+;; wait-for-prompt-change! true arm — not by which statement comes first.
+;;
+;; These assert the INDEX of each line, not its presence: a membership test
+;; ("both lines are in the output") passes in either order and so pins nothing.
+;; ============================================================================
+
+(defn- auto-end-banner-stub
+  "Stands in for check-auto-end-turn! on the clicks=0 path, printing what the
+   real hook prints when it ends the turn."
+  []
+  (println "💡 Auto-ending turn (0 clicks, nothing pending)")
+  (println "⏳ Waiting for runner to start"))
+
+(defn- index-of [out needle]
+  (str/index-of out needle))
+
+(deftest press-choice-success-line-precedes-auto-end-banner
+  (testing "✅ Chose: prints BEFORE the auto-end-turn banner its own choice triggered (#253)"
+    (with-mock-state (mock-client-state :side "corp" :prompt manegarm-prompt)
+      (with-redefs [ws/send-message! (fn [_evt _data] true)
+                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    basic/check-auto-end-turn! auto-end-banner-stub]
+        (let [out (with-out-str (prompts/choose-option! 1))
+              chose-at (index-of out "✅ Chose:")
+              banner-at (index-of out "Auto-ending turn")]
+          (is (some? chose-at) (str "expected a ✅ Chose: line, got: " out))
+          (is (some? banner-at) (str "expected the auto-end banner, got: " out))
+          (is (< chose-at banner-at)
+              (str "the choice's own confirmation must come before the turn-end it "
+                   "caused — got ✅ at " chose-at ", banner at " banner-at ":\n" out)))))))
+
+(deftest press-choice-duplicate-notice-precedes-auto-end-banner
+  (testing "the duplicate-prompt notice is part of the choice's own report, so it also precedes the banner (#253)"
+    (let [duplicate (assoc manegarm-prompt :eid {:eid 101}
+                           :choices [{:uuid "u-pay2" :value "Spend [Click][Click]" :idx 0}
+                                     {:uuid "u-etr2" :value "End the run" :idx 1}])]
+      (with-mock-state (mock-client-state :side "corp" :prompt manegarm-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        (swap! state/client-state assoc-in
+                               [:game-state :corp :prompt-state] duplicate)
+                        true)
+                      basic/check-auto-end-turn! auto-end-banner-stub]
+          (let [out (with-out-str (prompts/choose-option! 1))
+                dup-at (index-of out "identical duplicate prompt")
+                banner-at (index-of out "Auto-ending turn")]
+            (is (some? dup-at) (str "expected the duplicate notice, got: " out))
+            (is (some? banner-at) (str "expected the auto-end banner, got: " out))
+            (is (< dup-at banner-at)
+                (str "the duplicate notice explains what the choice revealed, so it "
+                     "belongs above the turn-end — got notice at " dup-at
+                     ", banner at " banner-at ":\n" out))))))))

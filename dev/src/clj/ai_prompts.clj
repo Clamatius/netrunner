@@ -165,7 +165,6 @@
             new-choice-values (mapv :value (:choices new-prompt))
             duplicate? (and same-shape? (= new-choice-values old-choice-values))
             follow-up? (and same-shape? (not= new-choice-values old-choice-values))]
-        (maybe-auto-end-turn-after-prompt!)
         (println (str "✅ Chose: " (core/format-choice choice)))
         (when duplicate?
           (println (str "ℹ️  Your choice RESOLVED, but an identical duplicate prompt "
@@ -177,6 +176,16 @@
                         "CHANGED (a repeating ability — e.g. break another subroutine, "
                         "paying its cost again). Re-read the choices before answering; "
                         "answer 'Done' (if offered) to stop repeating.")))
+        ;; LAST, below the choice's own report (#253): the hook can END THE TURN,
+        ;; and its banner is a CONSEQUENCE of this choice landing. Printed first
+        ;; it read "💡 Auto-ending turn / ⏳ Waiting for runner" with the ✅ two
+        ;; lines below it, so a seat scanning for "did my thing work?" saw a turn
+        ;; end before any confirmation — the natural read being that something
+        ;; else ended it. Nothing above depends on the hook having run:
+        ;; `new-prompt` is captured before it (see the binding), and every line
+        ;; here is already inside the wait-for-prompt-change! true arm, which is
+        ;; what makes printing ✅ honest — not the statement order.
+        (maybe-auto-end-turn-after-prompt!)
         (core/with-cursor (cond-> {:status :success :choice choice}
                             duplicate? (assoc :duplicate-prompt true)
                             follow-up? (assoc :follow-up-prompt true))))
