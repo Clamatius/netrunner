@@ -1523,3 +1523,120 @@
             (is (not (re-find #"\bnull\b" out)) (str label " printed: " out))
             (is (re-find #"face-down card" out)
                 (str label ": name it the way the selectable list did, got: " out))))))))
+
+;; ============================================================================
+;; press-choice! — the ✅ line must precede the auto-end-turn banner (#253)
+;;
+;; press-choice! ran maybe-auto-end-turn-after-prompt! BEFORE printing its own
+;; "✅ Chose: X". A `choose` that spends the last click therefore read:
+;;
+;;   💡 Auto-ending turn (0 clicks, nothing pending)
+;;   ⏳ Waiting for runner to start
+;;   ✅ Chose: Server 1
+;;
+;; i.e. the consequence of the choice landing, two lines above any confirmation
+;; that it landed, with an unrelated wait banner between them. The natural read
+;; is "something ELSE ended my turn" — the misleading-output class again, and the
+;; opposite of every other command, whose ✅ line is the first thing printed.
+;;
+;; choose-card! already had the right order (its 📇 line prints before the hook),
+;; and the third caller choose-by-index! prints no success line at all and is
+;; reached only by the goldfish/heuristic bots, which do not read stdout — so
+;; press-choice! was the one site out of step, and the family is closed. The ordering constraint the old
+;; statement order was reaching for ("a choice the engine rejects must NOT read
+;; as success") is satisfied by the BRANCH — both lines live inside the
+;; wait-for-prompt-change! true arm — not by which statement comes first.
+;;
+;; These assert the INDEX of each line, not its presence: a membership test
+;; ("both lines are in the output") passes in either order and so pins nothing.
+;; ============================================================================
+
+;; SUBSTITUTION: check-auto-end-turn! is STUBBED, and the stub prints
+;; UNCONDITIONALLY — it reads no board at all. So these tests say NOTHING about
+;; whether the real hook would fire on this fixture, and the comment here makes no
+;; claim that it would. Two review rounds were spent on earlier versions of this
+;; comment that did make such claims, both times falsely (the second one missed
+;; turn-started-since-last-opp-end?, which returns false on a log-less fixture:
+;; ai_basic_actions.clj:479-482, first cond arm, (boolean nil)). The real hook's
+;; nine guards are tested in ai-basic-actions-test; nothing about them is restated
+;; here, because a restatement is one more thing that can go stale and be believed.
+;;
+;; Likewise the stub's two lines are a COPY of ai_basic_actions.clj:1833 and
+;; ai_state.clj:970 as they read today, and nothing pins them: reword the real
+;; banner and the copy rots green. They are realistic only so a failure message
+;; reads like the transcript in #253.
+;;
+;; What IS pinned, and all that is: (1) the order of press-choice!'s own lines
+;; against whatever the hook prints, and (2) that the hook is called on the
+;; POST-resolve board — hook-time prompt nil, clicks spent — which is why test 1's
+;; waiter clears the prompt. (2) is asserted, not described, so the fixture cannot
+;; be quietly reverted (#253 r2). Test 2 leaves a duplicate prompt pending on
+;; purpose; it needs a banner at a known point to place the ℹ️ notice against, and
+;; it makes no claim about the board.
+(def ^:private hook-time-board (atom nil))
+
+(defn- auto-end-banner-stub
+  "Stands in for check-auto-end-turn!, printing what the real hook prints when it
+   ends the turn. Records the board it was CALLED ON so a test can pin it."
+  []
+  (reset! hook-time-board
+          {:prompt (state/get-prompt)
+           :clicks (get-in @state/client-state [:game-state :corp :click])})
+  (println "💡 Auto-ending turn (0 clicks, nothing pending)")
+  (println "⏳ Waiting for runner to start"))
+
+(defn- index-of [out needle]
+  (str/index-of out needle))
+
+(deftest press-choice-success-line-precedes-auto-end-banner
+  (testing "✅ Chose: prints BEFORE the auto-end-turn banner its own choice triggered (#253)"
+    (with-mock-state (mock-client-state :side "corp" :clicks 0 :active-player "corp"
+                                       :prompt manegarm-prompt)
+      (with-redefs [ws/send-message! (fn [_evt _data] true)
+                    prompts/wait-for-prompt-change!
+                    (fn [_eid & _]
+                      ;; The choice RESOLVES the prompt, so clear it: the hook must
+                      ;; be called on the post-resolve board, and the assertion
+                      ;; below pins that rather than trusting this comment.
+                      (swap! state/client-state assoc-in
+                             [:game-state :corp :prompt-state] nil)
+                      true)
+                    basic/check-auto-end-turn! auto-end-banner-stub]
+        (reset! hook-time-board nil)
+        (let [out (with-out-str (prompts/choose-option! 1))
+              chose-at (index-of out "✅ Chose:")
+              banner-at (index-of out "Auto-ending turn")]
+          (is (some? chose-at) (str "expected a ✅ Chose: line, got: " out))
+          (is (some? banner-at) (str "expected the auto-end banner, got: " out))
+          (is (< chose-at banner-at)
+              (str "the choice's own confirmation must come before the turn-end it "
+                   "caused — got ✅ at " chose-at ", banner at " banner-at ":\n" out))
+          ;; The fixture is load-bearing, not decoration: restore a clicks=4
+          ;; fixture or drop the prompt-clearing waiter and this goes red.
+          (is (= {:prompt nil :clicks 0} @hook-time-board)
+              (str "the hook must be called on the POST-resolve board — prompt "
+                   "resolved, clicks spent — got: " @hook-time-board)))))))
+
+(deftest press-choice-duplicate-notice-precedes-auto-end-banner
+  (testing "the duplicate-prompt notice is part of the choice's own report, so it also precedes the banner (#253)"
+    (let [duplicate (assoc manegarm-prompt :eid {:eid 101}
+                           :choices [{:uuid "u-pay2" :value "Spend [Click][Click]" :idx 0}
+                                     {:uuid "u-etr2" :value "End the run" :idx 1}])]
+      (with-mock-state (mock-client-state :side "corp" :clicks 0 :active-player "corp"
+                                         :prompt manegarm-prompt)
+        (with-redefs [ws/send-message! (fn [_evt _data] true)
+                      prompts/wait-for-prompt-change!
+                      (fn [_eid & _]
+                        (swap! state/client-state assoc-in
+                               [:game-state :corp :prompt-state] duplicate)
+                        true)
+                      basic/check-auto-end-turn! auto-end-banner-stub]
+          (let [out (with-out-str (prompts/choose-option! 1))
+                dup-at (index-of out "identical duplicate prompt")
+                banner-at (index-of out "Auto-ending turn")]
+            (is (some? dup-at) (str "expected the duplicate notice, got: " out))
+            (is (some? banner-at) (str "expected the auto-end banner, got: " out))
+            (is (< dup-at banner-at)
+                (str "the duplicate notice explains what the choice revealed, so it "
+                     "belongs above the turn-end — got notice at " dup-at
+                     ", banner at " banner-at ":\n" out))))))))
