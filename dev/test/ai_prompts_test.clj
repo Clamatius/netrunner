@@ -1539,8 +1539,10 @@
 ;; is "something ELSE ended my turn" — the misleading-output class again, and the
 ;; opposite of every other command, whose ✅ line is the first thing printed.
 ;;
-;; choose-card! already had the right order (its 📇 line prints before the hook);
-;; press-choice! was the one site out of step. The ordering constraint the old
+;; choose-card! already had the right order (its 📇 line prints before the hook),
+;; and the third caller choose-by-index! prints no success line at all and is
+;; reached only by the goldfish/heuristic bots, which do not read stdout — so
+;; press-choice! was the one site out of step, and the family is closed. The ordering constraint the old
 ;; statement order was reaching for ("a choice the engine rejects must NOT read
 ;; as success") is satisfied by the BRANCH — both lines live inside the
 ;; wait-for-prompt-change! true arm — not by which statement comes first.
@@ -1549,15 +1551,26 @@
 ;; ("both lines are in the output") passes in either order and so pins nothing.
 ;; ============================================================================
 
-;; SUBSTITUTION, stated rather than assumed: check-auto-end-turn! is STUBBED,
-;; and the fixtures below are the clicks=0 / my-turn board the issue names
-;; (:clicks 0, :active-player "corp") so the stub stands where the real hook
-;; would fire. The property under test is press-choice!'s STATEMENT ORDER, which
-;; the stub pins exactly; the real hook's nine guards for WHETHER it fires are
-;; tested in ai-basic-actions-test and are not re-litigated here. The stub's two
-;; lines are copied verbatim from ai_basic_actions.clj:1833 and the wait banner,
-;; and the assertions match on "Auto-ending turn", a substring of both of the
-;; real hook's banner variants — so a reworded banner does not silently pass.
+;; SUBSTITUTION, stated rather than assumed: check-auto-end-turn! is STUBBED.
+;; What these tests pin is press-choice!'s STATEMENT ORDER — that whatever the
+;; hook prints lands below the choice's own report — and that is all they pin.
+;; The real hook's guards for WHETHER it fires are tested in ai-basic-actions-test
+;; and are not re-litigated here.
+;;
+;; The stub's WORDING IS NOT PINNED by anything, and a guest review seat caught an
+;; earlier version of this comment claiming otherwise. The two lines are a COPY of
+;; ai_basic_actions.clj:1833 and ai_state's ⏳ wait line as they read today; reword
+;; the real banner and the stub keeps printing the old text, so both tests stay
+;; green while the copy rots. That is accepted: a wording assertion here would pin
+;; the stub to itself, which proves nothing either. Order is the property; wording
+;; is only so the failure message reads like the transcript in #253.
+;;
+;; Test 1's board is the one the issue names and the one the real hook would act
+;; on: :clicks 0, :active-player "corp", and the stubbed waiter CLEARS the prompt,
+;; so after the choice it is genuinely "0 clicks, nothing pending". Test 2's board
+;; is deliberately counterfactual — a duplicate prompt is pending, so the real hook
+;; would decline to end the turn — because what it needs is a banner at a known
+;; point in the stream to place the ℹ️ notice against.
 (defn- auto-end-banner-stub
   "Stands in for check-auto-end-turn! on the clicks=0 path, printing what the
    real hook prints when it ends the turn."
@@ -1573,7 +1586,14 @@
     (with-mock-state (mock-client-state :side "corp" :clicks 0 :active-player "corp"
                                        :prompt manegarm-prompt)
       (with-redefs [ws/send-message! (fn [_evt _data] true)
-                    prompts/wait-for-prompt-change! (fn [_eid & _] true)
+                    prompts/wait-for-prompt-change!
+                    (fn [_eid & _]
+                      ;; The choice RESOLVES the prompt — clear it, so the board the
+                      ;; hook is called on really is "0 clicks, nothing pending"
+                      ;; rather than one where the real hook would decline (#253 r1).
+                      (swap! state/client-state assoc-in
+                             [:game-state :corp :prompt-state] nil)
+                      true)
                     basic/check-auto-end-turn! auto-end-banner-stub]
         (let [out (with-out-str (prompts/choose-option! 1))
               chose-at (index-of out "✅ Chose:")
