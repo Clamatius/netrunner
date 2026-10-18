@@ -1551,30 +1551,37 @@
 ;; ("both lines are in the output") passes in either order and so pins nothing.
 ;; ============================================================================
 
-;; SUBSTITUTION, stated rather than assumed: check-auto-end-turn! is STUBBED.
-;; What these tests pin is press-choice!'s STATEMENT ORDER — that whatever the
-;; hook prints lands below the choice's own report — and that is all they pin.
-;; The real hook's guards for WHETHER it fires are tested in ai-basic-actions-test
-;; and are not re-litigated here.
+;; SUBSTITUTION: check-auto-end-turn! is STUBBED, and the stub prints
+;; UNCONDITIONALLY — it reads no board at all. So these tests say NOTHING about
+;; whether the real hook would fire on this fixture, and the comment here makes no
+;; claim that it would. Two review rounds were spent on earlier versions of this
+;; comment that did make such claims, both times falsely (the second one missed
+;; turn-started-since-last-opp-end?, which returns false on a log-less fixture:
+;; ai_basic_actions.clj:479-482, first cond arm, (boolean nil)). The real hook's
+;; nine guards are tested in ai-basic-actions-test; nothing about them is restated
+;; here, because a restatement is one more thing that can go stale and be believed.
 ;;
-;; The stub's WORDING IS NOT PINNED by anything, and a guest review seat caught an
-;; earlier version of this comment claiming otherwise. The two lines are a COPY of
-;; ai_basic_actions.clj:1833 and ai_state's ⏳ wait line as they read today; reword
-;; the real banner and the stub keeps printing the old text, so both tests stay
-;; green while the copy rots. That is accepted: a wording assertion here would pin
-;; the stub to itself, which proves nothing either. Order is the property; wording
-;; is only so the failure message reads like the transcript in #253.
+;; Likewise the stub's two lines are a COPY of ai_basic_actions.clj:1833 and
+;; ai_state.clj:970 as they read today, and nothing pins them: reword the real
+;; banner and the copy rots green. They are realistic only so a failure message
+;; reads like the transcript in #253.
 ;;
-;; Test 1's board is the one the issue names and the one the real hook would act
-;; on: :clicks 0, :active-player "corp", and the stubbed waiter CLEARS the prompt,
-;; so after the choice it is genuinely "0 clicks, nothing pending". Test 2's board
-;; is deliberately counterfactual — a duplicate prompt is pending, so the real hook
-;; would decline to end the turn — because what it needs is a banner at a known
-;; point in the stream to place the ℹ️ notice against.
+;; What IS pinned, and all that is: (1) the order of press-choice!'s own lines
+;; against whatever the hook prints, and (2) that the hook is called on the
+;; POST-resolve board — hook-time prompt nil, clicks spent — which is why test 1's
+;; waiter clears the prompt. (2) is asserted, not described, so the fixture cannot
+;; be quietly reverted (#253 r2). Test 2 leaves a duplicate prompt pending on
+;; purpose; it needs a banner at a known point to place the ℹ️ notice against, and
+;; it makes no claim about the board.
+(def ^:private hook-time-board (atom nil))
+
 (defn- auto-end-banner-stub
-  "Stands in for check-auto-end-turn! on the clicks=0 path, printing what the
-   real hook prints when it ends the turn."
+  "Stands in for check-auto-end-turn!, printing what the real hook prints when it
+   ends the turn. Records the board it was CALLED ON so a test can pin it."
   []
+  (reset! hook-time-board
+          {:prompt (state/get-prompt)
+           :clicks (get-in @state/client-state [:game-state :corp :click])})
   (println "💡 Auto-ending turn (0 clicks, nothing pending)")
   (println "⏳ Waiting for runner to start"))
 
@@ -1588,13 +1595,14 @@
       (with-redefs [ws/send-message! (fn [_evt _data] true)
                     prompts/wait-for-prompt-change!
                     (fn [_eid & _]
-                      ;; The choice RESOLVES the prompt — clear it, so the board the
-                      ;; hook is called on really is "0 clicks, nothing pending"
-                      ;; rather than one where the real hook would decline (#253 r1).
+                      ;; The choice RESOLVES the prompt, so clear it: the hook must
+                      ;; be called on the post-resolve board, and the assertion
+                      ;; below pins that rather than trusting this comment.
                       (swap! state/client-state assoc-in
                              [:game-state :corp :prompt-state] nil)
                       true)
                     basic/check-auto-end-turn! auto-end-banner-stub]
+        (reset! hook-time-board nil)
         (let [out (with-out-str (prompts/choose-option! 1))
               chose-at (index-of out "✅ Chose:")
               banner-at (index-of out "Auto-ending turn")]
@@ -1602,7 +1610,12 @@
           (is (some? banner-at) (str "expected the auto-end banner, got: " out))
           (is (< chose-at banner-at)
               (str "the choice's own confirmation must come before the turn-end it "
-                   "caused — got ✅ at " chose-at ", banner at " banner-at ":\n" out)))))))
+                   "caused — got ✅ at " chose-at ", banner at " banner-at ":\n" out))
+          ;; The fixture is load-bearing, not decoration: restore a clicks=4
+          ;; fixture or drop the prompt-clearing waiter and this goes red.
+          (is (= {:prompt nil :clicks 0} @hook-time-board)
+              (str "the hook must be called on the POST-resolve board — prompt "
+                   "resolved, clicks spent — got: " @hook-time-board)))))))
 
 (deftest press-choice-duplicate-notice-precedes-auto-end-banner
   (testing "the duplicate-prompt notice is part of the choice's own report, so it also precedes the banner (#253)"
