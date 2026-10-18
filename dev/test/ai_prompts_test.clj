@@ -1549,6 +1549,15 @@
 ;; ("both lines are in the output") passes in either order and so pins nothing.
 ;; ============================================================================
 
+;; SUBSTITUTION, stated rather than assumed: check-auto-end-turn! is STUBBED,
+;; and the fixtures below are the clicks=0 / my-turn board the issue names
+;; (:clicks 0, :active-player "corp") so the stub stands where the real hook
+;; would fire. The property under test is press-choice!'s STATEMENT ORDER, which
+;; the stub pins exactly; the real hook's nine guards for WHETHER it fires are
+;; tested in ai-basic-actions-test and are not re-litigated here. The stub's two
+;; lines are copied verbatim from ai_basic_actions.clj:1833 and the wait banner,
+;; and the assertions match on "Auto-ending turn", a substring of both of the
+;; real hook's banner variants — so a reworded banner does not silently pass.
 (defn- auto-end-banner-stub
   "Stands in for check-auto-end-turn! on the clicks=0 path, printing what the
    real hook prints when it ends the turn."
@@ -1561,7 +1570,8 @@
 
 (deftest press-choice-success-line-precedes-auto-end-banner
   (testing "✅ Chose: prints BEFORE the auto-end-turn banner its own choice triggered (#253)"
-    (with-mock-state (mock-client-state :side "corp" :prompt manegarm-prompt)
+    (with-mock-state (mock-client-state :side "corp" :clicks 0 :active-player "corp"
+                                       :prompt manegarm-prompt)
       (with-redefs [ws/send-message! (fn [_evt _data] true)
                     prompts/wait-for-prompt-change! (fn [_eid & _] true)
                     basic/check-auto-end-turn! auto-end-banner-stub]
@@ -1579,7 +1589,8 @@
     (let [duplicate (assoc manegarm-prompt :eid {:eid 101}
                            :choices [{:uuid "u-pay2" :value "Spend [Click][Click]" :idx 0}
                                      {:uuid "u-etr2" :value "End the run" :idx 1}])]
-      (with-mock-state (mock-client-state :side "corp" :prompt manegarm-prompt)
+      (with-mock-state (mock-client-state :side "corp" :clicks 0 :active-player "corp"
+                                         :prompt manegarm-prompt)
         (with-redefs [ws/send-message! (fn [_evt _data] true)
                       prompts/wait-for-prompt-change!
                       (fn [_eid & _]
