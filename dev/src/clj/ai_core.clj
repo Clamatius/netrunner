@@ -318,45 +318,41 @@
    containing a pronoun marker still renders differently than it serializes
    (#236).
 
-   The AUTHOR is decided before the grammar is: it is the longest known username
-   this line starts with, because a line the engine wrote reads `<author> <text>`
-   (`system-msg`). Ranking the grammar MATCHES instead — `sort-by count >` over
-   the lines that already parsed — let a longer known username that prefixes the
-   line fall away when its own remainder was not a boundary, and a shorter one
-   then claimed a line it did not author (#235).
+   The possessive slot accepts only `rendered-possessives`, not any token
+   (#235). `\\S+` there let a username that itself contains the boundary grammar
+   turn an unrelated engine line into the OTHER player's boundary: a Corp named
+   `A is ending x turn 1` typing /roll 6 against a Runner named `A` emitted one
+   die-roll line that read as the Runner's own end-turn, so the Runner could not
+   end its turn. That variant is closed — the crafted token `x` is not a
+   possessive, and no legitimate boundary is affected, because every possessive
+   the engine can render is in the set.
 
-   That ranking, not the possessive slot, was the whole of #235. Narrowing the
-   slot to `rendered-possessives` (from `\\S+`, which accepted any token) closes
-   only the variant where the crafted name supplies a non-possessive: a Corp
-   named `A is ending x turn 1` against a Runner named `A`. A name that supplies
-   a REAL possessive still fits the 20-code-point registration cap —
-   `A started its turn 1` — and under the old ranking every line that Corp
-   authored, a die roll included, read as the RUNNER's start boundary. Both
-   vendor seats found that on the first review round.
-
-   The slot stays narrowed: it is what makes the engine's own grammar the only
-   grammar accepted, and it is cheap. But the longest-author rule is what closes
-   the class, for either verb and any token.
-
-   What this costs is a LOST boundary where two names genuinely collide — a name
-   crafted so that the other player's real line also begins with it. Lost, never
-   misattributed. For the scenario #235 filed it costs nothing at all: both
-   players' real boundaries still attribute correctly, since the crafted name's
-   own real line puts a genuine possessive in the slot."
+   PARTIAL, and the residue is #276, which also records why the obvious
+   completion is wrong. A crafted name can supply a REAL possessive instead
+   (`A started its turn 1`, 20 code points, the registration cap), and the steal
+   is reachable again. The fix that suggests itself — rank by AUTHOR (longest
+   known username the line starts with) before testing the grammar, rather than
+   ranking the grammar matches — was implemented here and REVERTED on review:
+   it closes the steal and opens a worse denial, because a name only has to
+   shadow a prefix (`AI-runner started`, `AI-corp is` — our own seat names) to
+   make the VICTIM's own real boundaries unattributable. A lost boundary is not
+   harmless: `can-start-turn?` consults `my-turn-to-act?` only as a veto, never
+   as an allow, so losing a boundary wedges a seat through
+   `:turn-already-played` / `:turn-not-started` exactly as a stolen one does.
+   No ranking rule is safe while the consumers have no authority fallback, which
+   is #232/#233's argument, and that is where the rest of this belongs."
   [text usernames kind]
   (when (and text (contains? #{:start :end} kind))
-    (let [verb (if (= kind :start) "started" "is ending")
-          author (->> usernames
-                      (remove nil?)
-                      (filter #(str/starts-with? text (str % " ")))
-                      (sort-by count >)
-                      first)]
-      (when author
-        (let [prefix (str author " " verb " ")]
-          (when (and (str/starts-with? text prefix)
-                     (re-find possessive-turn-remainder-pattern
-                              (subs text (count prefix))))
-            author))))))
+    (let [verb (if (= kind :start) "started" "is ending")]
+      (->> usernames
+           (remove nil?)
+           (filter (fn [username]
+                     (let [prefix (str username " " verb " ")]
+                       (and (str/starts-with? text prefix)
+                            (re-find possessive-turn-remainder-pattern
+                                     (subs text (count prefix)))))))
+           (sort-by count >)
+           first))))
 
 (defn start-turn-log-line?
   "True when TEXT is a direct start-turn boundary authored by a known player.

@@ -178,64 +178,6 @@
         (is (= "Clam" (core/turn-log-author "Clam is ending their turn 12 with 3 [Credit]"
                                             usernames :end)))))))
 
-(deftest test-turn-log-author-attributes-a-line-to-its-longest-known-author
-  (testing "#235 review round 1, found by BOTH vendor seats and executed by me against the
-            real ai-core: narrowing the possessive slot closed the arbitrary-token variant
-            and left the attack open, because the token set was never the root cause.
-
-            A crafted username can simply supply a REAL possessive. `A started its turn 1` is
-            20 code points, the registration cap, and passes valid-username?. Against a
-            Runner named `A`, every line the Corp authors begins `A started its turn 1 `, so
-            the OLD code rejected the long name (its own suffix is not a boundary), then
-            accepted `A` with remainder `its turn 1 rolls ...` — a Corp die roll became the
-            Runner's START boundary, turn-started-since-last-opp-end? went true and
-            can-start-turn? answered :turn-already-played. The mirror image of the wedge
-            #235 filed, with the same cost.
-
-            The defect is in the RANKING, not the grammar: `sort-by count >` ran over the
-            grammar MATCHES, so a longer known username that prefixes the line but fails the
-            grammar fell away instead of blocking the shorter one. A line the engine wrote
-            reads `<author> <text>`, so the author is the longest known username the line
-            starts with — decided BEFORE the grammar is tested, not after."
-    (doseq [crafted ["A started its turn 1"      ; the seats' two variants, both 20 chars
-                     "A started her turn 2"]]
-      (let [usernames [crafted "A"]
-            die-roll (str crafted " rolls a 6 sided die and rolls a 4.")]
-        (is (nil? (core/turn-log-author die-roll usernames :start))
-            (str "a line authored by " (pr-str crafted) " was attributed to \"A\""))
-        (is (empty? (core/find-start-turn-indices [{:text die-roll}]
-                                                  :include-username "A" :usernames usernames))
-            (str "the Runner's start scan claimed a line authored by " (pr-str crafted)))))))
-
-(deftest test-turn-log-author-still-attributes-the-crafted-players-real-boundaries
-  (testing "the cost of the above, pinned rather than described. #235 said a crafted name
-            would make the boundary 'merely lost, not misattributed', and the fix commit
-            repeated that; executed, this scenario loses NOTHING. Both players' real
-            boundaries still attribute correctly, because the crafted name's own real line
-            puts a genuine possessive in the slot and the longest-author rule picks the long
-            name over the short one. Only the die roll is unattributed, which is right."
-    (let [crafted "A is ending x turn 1"
-          usernames [crafted "A"]]
-      (is (= crafted (core/turn-log-author
-                      (str crafted " is ending their turn 1 with 5 [Credit] and 3 cards in HQ.")
-                      usernames :end)))
-      (is (= crafted (core/turn-log-author
-                      (str crafted " started their turn 2 with 5 [Credit] and 3 cards in HQ.")
-                      usernames :start)))
-      (is (= "A" (core/turn-log-author
-                  "A is ending their turn 1 with 5 [Credit] and 3 cards in HQ."
-                  usernames :end)))
-      (is (= "A" (core/turn-log-author
-                  "A started their turn 2 with 5 [Credit] and 3 cards in HQ."
-                  usernames :start))))
-    (testing "a boundary IS lost where the two genuinely collide: a name crafted so that the
-              OTHER player's real line also begins with it. Lost, still not misattributed —
-              which is the trade #235 chose, now exercised rather than assumed."
-      (let [usernames ["A started its turn 1" "A"]]
-        (is (nil? (core/turn-log-author
-                   "A started its turn 1 with 5 [Credit] and 5 cards in HQ."
-                   usernames :start)))))))
-
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
     (let [log [(make-log-entry "AI-corp is ending their turn 1")
@@ -475,55 +417,16 @@
         (is (= :opponent-identity-unknown (:reason (actions/can-start-turn?))))))))
 
 (deftest test-turn-scans-disambiguate-a-username-containing-the-verb
-  (testing "BEHAVIOUR CHANGE, #235 review round 1. This case was pinned the other way by
-            #230/#231: with usernames [\"Clam\" \"Clam is\"], `Clam is ending their turn 1`
-            used to return \"Clam\". It now returns nil, and that is deliberate.
-
-            The line is ambiguous in a way the text cannot settle. It is both what the engine
-            writes when `Clam` ends a turn AND what it writes when `Clam is` authors a line
-            whose body opens `ending their turn 1`. The old rule settled it by trusting the
-            grammar — rank the usernames whose remainder PARSES — and that is exactly the
-            #235 exploit: an attacker picks a name whose own ordinary lines mimic the
-            boundary grammar (`A started its turn 1`), and the grammar then hands them the
-            other player's boundary. The grammar cannot tell `short name authored a
-            boundary` from `long name authored a line that looks like one`.
-
-            So attribution now goes to the longest known username the line starts with. An
-            attacker can still use a crafted name to DENY attribution, but no longer to STEAL
-            it, and a denied boundary costs a fallback to my-turn-to-act? while a stolen one
-            wedges a seat out of its turn (#235, and the start-verb mirror the panel found).
-
-            The ordinary collision is untouched: `Clam` / `Clam Jones` both still attribute,
-            because a real name's own line parses under its own prefix. Only a name that is
-            another name plus the opening of the verb phrase loses anything."
-    (let [usernames ["Clam" "Clam is"]
-          log [(make-end-turn-entry "Clam" 1)
-               (make-end-turn-entry "Clam is" 1)
-               (make-start-turn-entry "Clam" 2)]]
-      (is (nil? (core/turn-log-author (:text (first log)) usernames :end))
-          "ambiguous between Clam's boundary and a Clam-is line: lost, not misattributed")
-      (is (= "Clam is" (core/turn-log-author (:text (second log)) usernames :end))
-          "the longer name's own real boundary is unambiguous and still attributes")
-      (is (empty? (vec (core/find-end-turn-indices log "Clam is" usernames)))
-          "so the scan claims neither: index 0 is ambiguous, index 1 is excluded by author")
-      (testing "the START boundary is unaffected, since 'Clam is ' does not prefix
-                'Clam started ...' — the loss is narrower than the whole name pair"
-        (is (= [2] (vec (core/find-start-turn-indices log
-                                                      :include-username "Clam"
-                                                      :usernames usernames)))))
-      (testing "and the ordinary prefix collision still disambiguates both ways (#230)"
-        (let [ordinary ["Clam" "Clam Jones"]]
-          (is (= "Clam" (core/turn-log-author "Clam is ending their turn 1" ordinary :end)))
-          (is (= "Clam Jones" (core/turn-log-author "Clam Jones is ending their turn 1"
-                                                    ordinary :end)))))
-      (testing "the author must be followed by a SPACE, not merely be a prefix of the line.
-                system-msg always writes `<author> <body>`, so a name the line does not
-                break on cannot have authored it. Dropping the space from the candidate
-                filter left the whole suite green, and it is not harmless: 'Bo is ending t'
-                is a longer prefix of this line than 'Bo', so the longest-author rule would
-                hand it a line it cannot have written and the boundary would be lost."
-        (let [un ["Bo" "Bo is ending t"]]
-          (is (= "Bo" (core/turn-log-author "Bo is ending their turn 1" un :end))))))))
+  (let [usernames ["Clam" "Clam is"]
+        log [(make-end-turn-entry "Clam" 1)
+             (make-end-turn-entry "Clam is" 1)
+             (make-start-turn-entry "Clam" 2)]]
+    (is (= "Clam" (core/turn-log-author (:text (first log)) usernames :end)))
+    (is (= "Clam is" (core/turn-log-author (:text (second log)) usernames :end)))
+    (is (= [0] (vec (core/find-end-turn-indices log "Clam is" usernames))))
+    (is (= [2] (vec (core/find-start-turn-indices log
+                                                :include-username "Clam"
+                                                :usernames usernames))))))
 
 (deftest test-find-start-turn-indices-basic
   (testing "finds start turn indices"
