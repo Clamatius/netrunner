@@ -268,6 +268,35 @@
   [entry]
   (contains? #{nil "__system__"} (:user entry)))
 
+(def rendered-possessives
+  "Every possessive `game.core.say/select-pronoun` can render into a log line.
+
+   The engine writes turn boundaries as `[their] turn N` (`game.core.turns`) and
+   `insert-pronouns` substitutes the author's configured possessive before the
+   line reaches the log, so the client must accept all of these (#227) — and,
+   because this is the slot a crafted username exploits, nothing else (#235).
+
+   A deliberate COPY of an engine table: `select-pronoun` is private, and
+   production code reaching through `#'` to a private var would couple this
+   namespace to the engine's internals. The copy cannot go stale in silence —
+   `ai-turn-validation-test/test-rendered-possessives-matches-the-engine-authority`
+   re-derives the set from `select-pronoun` over every value in
+   `jinteki.settings/valid-pronouns` plus the unset fallback, and fails if the
+   two diverge. All 23 render a single token, which is what lets a set of them
+   stand in for one `\\S+`."
+  #{"their" "her" "its" "his" "faer" "nir" "vis" "eir" "hir" "zir" "xyr" "xir"})
+
+(def ^:private possessive-turn-remainder-pattern
+  "What has to follow `<username> <verb> ` for the line to be a turn boundary.
+
+   Built FROM `rendered-possessives` so the two cannot drift. ` turn ` must
+   follow the whole possessive, so an alternation cannot match a prefix of a
+   longer word (`hertz turn 1` is not `her`). The trailing class keeps the turn
+   number whole — `turn 1` must not match inside `turn 12`."
+  (re-pattern
+   (str "^(?:"
+        (str/join "|" (map #(java.util.regex.Pattern/quote %) (sort rendered-possessives)))
+        ") turn \\d+(?:\\s|\\.|$)")))
 (defn turn-log-author
   "Return the known player whose direct turn boundary begins TEXT.
 
@@ -285,9 +314,17 @@
    fixed here: a boundary whose author this board cannot NAME is invisible, not
    merely unattributed — an opponent who has left has their `:user` dissoc'd
    (`web/lobby.clj`), which is the window can-start-turn?'s
-   :opponent-identity-unknown arm exists to answer truthfully. The possessive
-   slot is `\\S+` rather than the engine's pronoun set (#235), and a username
-   containing a pronoun marker renders differently than it serializes (#236)."
+   :opponent-identity-unknown arm exists to answer truthfully. A username
+   containing a pronoun marker still renders differently than it serializes
+   (#236).
+
+   The possessive slot accepts only `rendered-possessives`, not any token
+   (#235). `\\S+` there let a username that itself contains the boundary grammar
+   turn an unrelated engine line into the OTHER player's boundary: a Corp named
+   `A is ending x turn 1` typing /roll 6 against a Runner named `A` produced one
+   die-roll line that read as the Runner's own end-turn, so the Runner could not
+   end its turn. Such a name now matches nothing, which loses a boundary rather
+   than misattributing one — the trade the issue chose."
   [text usernames kind]
   (when (and text (contains? #{:start :end} kind))
     (let [verb (if (= kind :start) "started" "is ending")]
@@ -296,7 +333,7 @@
            (filter (fn [username]
                      (let [prefix (str username " " verb " ")]
                        (and (str/starts-with? text prefix)
-                            (re-find #"^\S+ turn \d+(?:\s|\.|$)"
+                            (re-find possessive-turn-remainder-pattern
                                      (subs text (count prefix)))))))
            (sort-by count >)
            first))))
