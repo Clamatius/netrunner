@@ -156,7 +156,22 @@
     (let [usernames ["Clam"]]
       (doseq [token ["a" "the" "x" "hertz" "theirs" "HIS"]]
         (is (nil? (core/turn-log-author (str "Clam is ending " token " turn 4") usernames :end))
-            (str "non-pronoun token accepted in the possessive slot: " (pr-str token)))))))
+            (str "non-pronoun token accepted in the possessive slot: " (pr-str token))))
+      (testing "the possessive has to sit IMMEDIATELY after the verb, not merely somewhere
+                after it. The docstring calls anchoring load-bearing (#231) but nothing
+                pinned it: dropping the pattern's ^ left the whole suite green, so a line
+                that only CONTAINS the boundary grammar later would have been read as one."
+        (is (nil? (core/turn-log-author
+                   "Clam is ending the encounter and their turn 3 is nearly over"
+                   usernames :end)))
+        (is (nil? (core/turn-log-author
+                   "Clam started the run before their turn 3 clicks were spent"
+                   usernames :start))))
+      (testing "the turn NUMBER has to end where the slot does — dropping the trailing
+                boundary class also left the suite green."
+        (is (nil? (core/turn-log-author "Clam is ending their turn 4x" usernames :end)))
+        (is (= "Clam" (core/turn-log-author "Clam is ending their turn 12 with 3 [Credit]"
+                                            usernames :end)))))))
 
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
