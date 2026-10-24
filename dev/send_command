@@ -1010,9 +1010,49 @@ execute() {
     # If we wrapped it, the result is a string literal like "output\n". We need to unquote it.
     # If it wasn't wrapped, just print the result as is.
     if [[ "$wrapped" == "true" ]]; then
-        # Remove surrounding quotes and interpret escapes
-        # Check if result is at least 2 chars (quoted)
-        if [[ ${#RESULT} -ge 2 ]]; then
+        # Remove surrounding quotes and interpret escapes.
+        #
+        # The test is "is this ACTUALLY a quoted string literal", not "are there
+        # two bytes to remove". `${#RESULT} -ge 2` was the latter, and error text
+        # always has two bytes, so the guard was satisfied on every throw and
+        # never protected anything: the slice below ate the first byte of the
+        # message and the last byte of its final line. A stale REPL answering
+        # `No such var: ai-actions/show-snapshot` reached the seat as
+        # "yntax error compiling ..." ending in "CompilerExceptio" (#282).
+        #
+        # That lands on the surface a seat reaches for when it is ALREADY
+        # confused — status/board/hand/log/snapshot/prompt all take this path, as
+        # does show-prompt-if-any, which after_action runs after every
+        # state-changing command. The sibling defect in is_display_expr (:789)
+        # was the same assumption one step earlier: that a display expression is
+        # safe to wrap. This one is that a wrapped expression SUCCEEDED.
+        #
+        # Anything that is not a quoted literal is passed through untouched by
+        # the else arm: it is the REPL's own error text, and the only useful
+        # thing to do with it is show it exactly as it came.
+        #
+        # The STATUS is the real discriminator and comes first. A shape test
+        # alone cannot tell "a quoted value" from "error text that happens to be
+        # quoted": a backend that failed while emitting literally
+        # `"backend failed"` had its quotes stripped off the error anyway, which
+        # is the same class of mistake one layer in (review r1, guest seat). A
+        # non-zero status means these bytes are error text whatever shape they
+        # have -- which is all this branch needs, and is why the status is the
+        # gate rather than the shape.
+        #
+        # Do NOT read it as "non-zero here means the REPL answered". It does
+        # not: ai-eval.sh exits 1 on a stale PID file having contacted no REPL
+        # at all (ai-eval.sh:117), bb exits non-zero on a refused connection,
+        # and a missing binary would arrive as 127. 124 and 78 are the only
+        # statuses excluded here, because they exit above. (Review r2.)
+        #
+        # Known limitation, deliberately not handled (documented on #282): if
+        # something writes to *err* while the eval SUCCEEDS, 2>&1 merges it
+        # ahead of the value, the shape test fails and the board prints as a raw
+        # one-line literal. No *err* writer exists in dev/src/clj today. Picking
+        # a trailing quoted segment out of mixed output is a wider contract
+        # decision than this defect.
+        if [[ "$EVAL_STATUS" -eq 0 && "$RESULT" == '"'*'"' ]]; then
             LEN=$((${#RESULT}-2))
             # echo -e expands \n and \t but leaves \" backslashed, so any quote
             # a display fn printed came out as \" — which matters now that the
