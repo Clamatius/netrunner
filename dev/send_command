@@ -1030,7 +1030,23 @@ execute() {
         # Anything that is not a quoted literal is passed through untouched by
         # the else arm: it is the REPL's own error text, and the only useful
         # thing to do with it is show it exactly as it came.
-        if [[ "$RESULT" == '"'*'"' && ${#RESULT} -ge 2 ]]; then
+        #
+        # The STATUS is the real discriminator and comes first. A shape test
+        # alone cannot tell "a quoted value" from "error text that happens to be
+        # quoted": a backend that failed while emitting literally
+        # `"backend failed"` had its quotes stripped off the error anyway, which
+        # is the same class of mistake one layer in (review r1, guest seat). A
+        # non-zero status means these bytes are error text whatever shape they
+        # have. 124 and 78 have already exited above, so the only non-zero left
+        # here is the REPL answering with an error.
+        #
+        # Known limitation, deliberately not handled (documented on #282): if
+        # something writes to *err* while the eval SUCCEEDS, 2>&1 merges it
+        # ahead of the value, the shape test fails and the board prints as a raw
+        # one-line literal. No *err* writer exists in dev/src/clj today. Picking
+        # a trailing quoted segment out of mixed output is a wider contract
+        # decision than this defect.
+        if [[ "$EVAL_STATUS" -eq 0 && "$RESULT" == '"'*'"' ]]; then
             LEN=$((${#RESULT}-2))
             # echo -e expands \n and \t but leaves \" backslashed, so any quote
             # a display fn printed came out as \" — which matters now that the

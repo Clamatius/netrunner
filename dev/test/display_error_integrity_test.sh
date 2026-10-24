@@ -40,6 +40,12 @@ SEND_CMD="$SCRIPT_DIR/../send_command"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/nr-display-err-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 export HEARTBEAT_DIR="$TMP/heartbeats"
+# send_command appends every invocation to ${SEND_COMMAND_LOG:-logs/commands.log}
+# (:1115), and that log is the evidence base the after_action prompt statistics
+# were computed from. A test that leaves fake 'corp snapshot' lines in it skews
+# later analysis of what seats really do, so redirect it like the four other
+# shell tests that drive this dispatcher already do. (Review r1, guest seat.)
+export SEND_COMMAND_LOG="$TMP/commands.log"
 
 # The error text the backend emits. The leading "S" and trailing "n" are the
 # bytes #282 ate, so they are what this test is really about.
@@ -64,6 +70,12 @@ esac
 # non-zero exit) or answer with the quoted string with-out-str really returns.
 if [[ "$STUB_MODE" == "throw" ]]; then
     printf '%s\n%s\n%s\n%s\n' "$ERR_LINE1" "$ERR_LINE2" "$ERR_LINE3" "$ERR_LINE4" >&2
+    exit 1
+fi
+# A FAILED eval whose error text is itself quote-delimited. A shape-only guard
+# strips those quotes and alters the error it promised to preserve.
+if [[ "$STUB_MODE" == "throw-quoted" ]]; then
+    printf '"backend failed"\n' >&2
     exit 1
 fi
 printf '"Server 1: Palisade (rezzed)\\nCredits: 7\\n"'
@@ -111,6 +123,14 @@ assert_code "snapshot-throw-exit-1"      1 "$CODE"
 run_display throw status
 assert_eq   "status-throw-text-intact"   "$WANT_ERR" "$OUT"
 assert_code "status-throw-exit-1"        1 "$CODE"
+
+# A failed eval is error text whatever SHAPE it has. The status, not the shape,
+# is what separates "a quoted value" from "error text that happens to be
+# quoted" -- a shape-only guard stripped the quotes off this one and handed the
+# seat a quieter, altered error.
+run_display throw-quoted snapshot
+assert_eq   "quoted-error-text-not-stripped" '"backend failed"' "$OUT"
+assert_code "quoted-error-exit-1"            1 "$CODE"
 
 echo "--- the control: a genuinely quoted result still unquotes correctly ---"
 
