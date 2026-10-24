@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # send_command - Simplified AI player control interface
-# Usage: ./send_command [client] <action> [args...]
-#   Single-client: ./send_command status
-#   Multi-client:  ./send_command runner status
-#                  ./send_command corp create-game "Test"
+# Usage: ./send_command <runner|corp> <action> [args...]
+#   e.g. ./send_command runner status
+#        ./send_command corp create-game "Test"
+# Only help and clear-heartbeats run without a side (#279).
 
 set -euo pipefail
 set +H  # Disable history expansion to allow ! in function names
@@ -39,40 +39,35 @@ REPL_BLOCKING_TIMEOUT="${REPL_BLOCKING_TIMEOUT:-1800}"
 DEBUG="${DEBUG:-0}"  # Set DEBUG=1 to show verbose output
 SHOW_LAST_LOG="${SHOW_LAST_LOG:-0}"  # Set SHOW_LAST_LOG=1 to show last log entry after commands
 
-# Multi-client support: detect if first arg is a client name
-# Valid client names: runner, corp, or any custom name
-# Port mapping: runner=7889 (default), corp=7890
+# The first argument is a side if, and only if, it is `runner` or `corp` (#279).
+# It used to be "any lowercase token that is not a command name", decided by a
+# hand-kept list of command names that fell 14 behind the dispatcher: those 14
+# were eaten as a "custom client" name (which always meant the Runner's port
+# anyway), so `send_command status-compact` printed help and exited 0. The set
+# of sides is two and does not grow. A missing side is refused at the dispatcher
+# below, not guessed: the old default would have made `send_command concede`
+# concede the Runner's game in one word.
+# Port mapping: runner=7889, corp=7890
 CLIENT_NAME=""
 CLIENT_PORT="7889"
-# Heuristic-bot namespace default (overridden per-side below). Initialized here
-# so unqualified invocations (e.g. `send_command bot-loop`) don't hit an unbound
-# $BOT_NS under set -u.
+# Initialized so the sideless commands (help, clear-heartbeats) don't hit an
+# unbound $BOT_NS under set -u.
 BOT_NS="ai-heuristic-corp"
 
-# Check if first argument looks like a client name (not a command)
-FIRST_ARG="${1:-help}"
-if [[ "$FIRST_ARG" =~ ^(runner|corp|[a-z][a-z0-9-]*)$ ]] && [[ ! "$FIRST_ARG" =~ ^(help|status|snapshot|game-over\?|game-over-status|board|hand|prompt|credits|clicks|archives|heap|log|card-text|hand-text|decklist|abilities|list-playables|diagnose-blocker|start-turn|end-phase-12|end-post-discard|indicate-action|take-credit|draw|end-turn|smart-end-turn|remove-tag|purge|trash-resource|change|fix-credits|discard-card|draw-to-card|find-card|keep-hand|mulligan|discard|play|play-index|run|use-ability|use-runner-ability|trash|rez|fire-subs|let-subs-fire|auto-pass|advance|score|choose|choose-value|choose-card|multi-choose|continue|continue-run|monitor-run|jack-out|tank|wait|get-cursor|ping|peer-status|clear-heartbeats|create-game|select-deck|start-game|leave-game|list-lobbies|join|resync|chat|install|install-index|connect|eval|debug-chat|dashboard|dashboard-compact|bot|bot-turn|bot-status|bot-loop|bot-loop-status|bot-loop-stop)$ ]]; then
-    CLIENT_NAME="$1"
-    shift
-
-    # Map client name to port and heuristic-bot namespace
-    case "$CLIENT_NAME" in
-        runner)
-            CLIENT_PORT="7889"
-            BOT_NS="ai-heuristic-runner"
-            ;;
-        corp)
-            CLIENT_PORT="7890"
-            BOT_NS="ai-heuristic-corp"
-            ;;
-        *)
-            # Custom client, try to find its port by checking what's running
-            # Default to 7889 if not specified
-            CLIENT_PORT="7889"
-            BOT_NS="ai-heuristic-corp"
-            ;;
-    esac
-fi
+case "${1:-}" in
+    runner)
+        CLIENT_NAME="runner"
+        CLIENT_PORT="7889"
+        BOT_NS="ai-heuristic-runner"
+        shift
+        ;;
+    corp)
+        CLIENT_NAME="corp"
+        CLIENT_PORT="7890"
+        BOT_NS="ai-heuristic-corp"
+        shift
+        ;;
+esac
 
 # Color output
 # ANSI-C quoting ($'...') embeds real escape chars so colors render in both
@@ -164,11 +159,7 @@ check_client() {
     # port would fail the run for a backend we aren't using.
     [[ "$AI_EVAL" != "$AI_EVAL_DEFAULT" ]] && return 0
     if ! lsof -i :$CLIENT_PORT > /dev/null 2>&1; then
-        if [[ -n "$CLIENT_NAME" ]]; then
-            error "AI Client REPL '$CLIENT_NAME' not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $CLIENT_PORT"
-        else
-            error "AI Client REPL not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh"
-        fi
+        error "AI Client REPL '$CLIENT_NAME' not running on port $CLIENT_PORT. Start with: ./dev/start-ai-client-repl.sh $CLIENT_NAME $CLIENT_PORT"
     fi
 }
 
@@ -299,17 +290,10 @@ ensure_connection() {
     # #109 is about (a seat learning nothing at the moment it must diagnose),
     # just with silence instead of a wrong guess. `execute` already guards this way.
     local connect_result
-    if [[ -n "$CLIENT_NAME" ]]; then
-        connect_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
-          (require (quote [ai-websocket-client-v2 :as ws]))
-          (ws/ensure-connected!)
-          "ok")' 2>&1) || true
-    else
-        connect_result=$(TIMEOUT=10 "$AI_EVAL" '(do
-          (require (quote [ai-websocket-client-v2 :as ws]))
-          (ws/ensure-connected!)
-          "ok")' 2>&1) || true
-    fi
+    connect_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+      (require (quote [ai-websocket-client-v2 :as ws]))
+      (ws/ensure-connected!)
+      "ok")' 2>&1) || true
 
     # Show connection messages if present (they go to stdout)
     if [[ "$connect_result" == *"reconnecting"* ]] || [[ "$connect_result" == *"broken"* ]]; then
@@ -320,15 +304,9 @@ ensure_connection() {
     # Ask for the VERDICT, not a discarded boolean: which of "in sync" / "decided"
     # / "gone" / "didn't land" we got decides whether this command may proceed.
     local sync_result
-    if [[ -n "$CLIENT_NAME" ]]; then
-        sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
-          (require (quote [ai-connection :as conn]))
-          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1) || true
-    else
-        sync_result=$(TIMEOUT=10 "$AI_EVAL" '(do
-          (require (quote [ai-connection :as conn]))
-          (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1) || true
-    fi
+    sync_result=$(TIMEOUT=10 "$AI_EVAL" "$CLIENT_NAME" "$CLIENT_PORT" '(do
+      (require (quote [ai-connection :as conn]))
+      (str "SYNC-VERDICT " (name (conn/sync-verdict!))))' 2>&1) || true
 
     # Require a non-empty verdict token: a backend that echoes the expression back
     # would otherwise match the literal in the source and capture "".
@@ -580,7 +558,7 @@ ${BLUE}AI Player Command Interface${NC}
 ${YELLOW}Multi-Client Usage:${NC}
   ./send_command runner <action> [args...]  - Send command to Runner client (port 7889)
   ./send_command corp <action> [args...]    - Send command to Corp client (port 7890)
-  ./send_command <action> [args...]         - Send to default client (backward compatible)
+  Commands need a side (runner or corp). 'help' also works without one.
   ./send_command <side> help <command>      - Just that command's entry and flags
 
 ${YELLOW}Examples:${NC}
@@ -1108,14 +1086,9 @@ execute() {
     # round 1: automation such as ai-self-play.sh or a model driver read shell
     # success and carried on as though the command had completed.
     local EVAL_STATUS=0
-    if [[ -n "$CLIENT_NAME" ]]; then
-        # Multi-client mode: pass client name and port via stdin
-        # Note: 2>&1 captures stderr too, so errors are visible
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || EVAL_STATUS=$?
-    else
-        # Single-client mode: use default (backward compatible)
-        RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin < "$EXPR_FILE" 2>&1) || EVAL_STATUS=$?
-    fi
+    # Pass client name and port; the expression goes via stdin.
+    # Note: 2>&1 captures stderr too, so errors are visible
+    RESULT=$(TIMEOUT="$TIMEOUT" "$AI_EVAL" --stdin "$CLIENT_NAME" "$CLIENT_PORT" < "$EXPR_FILE" 2>&1) || EVAL_STATUS=$?
     RET=$EVAL_STATUS
 
     # 124 is `timeout`'s and ONLY timeout's: the eval was killed, so the command
@@ -1262,6 +1235,20 @@ after_action() {
 # Main command dispatcher
 COMMAND="${1:-help}"
 shift || true
+
+# No side, no command (#279). Only the commands that touch no client may omit
+# it: help is pure text, and reset.sh calls clear-heartbeats sideless ON PURPOSE
+# so that it does not re-touch a heartbeat on its way out. This runs before the
+# log line and the heartbeat touch, so a refused invocation leaves no trace.
+if [[ -z "$CLIENT_NAME" ]]; then
+    case "$COMMAND" in
+        help|--help|-h|clear-heartbeats) ;;
+        *)
+            echo "💡 Name the side first: ./send_command <runner|corp> $COMMAND${*:+ $*}" >&2
+            error "no side given: '$COMMAND' is not runner or corp. Nothing was sent."
+            ;;
+    esac
+fi
 
 # Determine project root for logging
 NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1487,7 +1474,7 @@ case "$COMMAND" in
 
     card-text)
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command card-text <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME card-text <card-name>"
         execute "(ai-actions/show-card-text \"$(clj_str "$CARD_NAME")\")"
         ;;
 
@@ -1503,7 +1490,7 @@ case "$COMMAND" in
 
     abilities)
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command abilities <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME abilities <card-name>"
         execute "(ai-actions/show-card-abilities \"$(clj_str "$CARD_NAME")\")"
         ;;
 
@@ -1549,7 +1536,7 @@ case "$COMMAND" in
     take-credit)
         ensure_connection
         COUNT="${1:-1}"
-        num_arg_bounded COUNT "Usage: send_command take-credit [count]"
+        num_arg_bounded COUNT "Usage: send_command $CLIENT_NAME take-credit [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Taking $COUNT credits..."
             execute "(ai-actions/take-credit! $COUNT)"
@@ -1563,7 +1550,7 @@ case "$COMMAND" in
     draw)
         ensure_connection
         COUNT="${1:-1}"
-        num_arg_bounded COUNT "Usage: send_command draw [count]"
+        num_arg_bounded COUNT "Usage: send_command $CLIENT_NAME draw [count]"
         if [[ "$COUNT" -gt 1 ]]; then
             info "Drawing $COUNT cards..."
             execute "(ai-actions/draw-card! $COUNT)"
@@ -1620,7 +1607,7 @@ case "$COMMAND" in
     fix-credits)
         ensure_connection
         AMOUNT="${1:-}"
-        [[ -z "$AMOUNT" ]] && error "Usage: send_command fix-credits <amount>\n  Example: fix-credits 10 (set to 10)\n  Example: fix-credits +5 (add 5)\n  Example: fix-credits -3 (subtract 3)"
+        [[ -z "$AMOUNT" ]] && error "Usage: send_command $CLIENT_NAME fix-credits <amount>\n  Example: fix-credits 10 (set to 10)\n  Example: fix-credits +5 (add 5)\n  Example: fix-credits -3 (subtract 3)"
         # This arm had NO numeric guard, so the amount was interpolated into the
         # eval verbatim: `fix-credits '(do (ai-actions/end-turn!) 0)'` ENDED THE
         # TURN. The sign is part of its documented contract (`+5`, `-3`).
@@ -1640,7 +1627,7 @@ case "$COMMAND" in
     discard-card)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command discard-card \"Card Name\""
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME discard-card \"Card Name\""
         info "Moving $CARD_NAME from hand to discard pile..."
         execute "(ai-actions/discard-card! \"$(clj_str "$CARD_NAME")\")"
         ;;
@@ -1650,7 +1637,7 @@ case "$COMMAND" in
         TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command draw-to-card \"Card Name\""
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME draw-to-card \"Card Name\""
         info "Drawing until $CARD_NAME appears in hand..."
         execute "(ai-actions/draw-to-card! \"$(clj_str "$CARD_NAME")\")"
         ;;
@@ -1665,7 +1652,7 @@ case "$COMMAND" in
         # ordinary command sent to the REPL of the side it is for.
         CARD_NAME="${1:-}"
         MAX_TURNS="${2:-10}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command corp|runner find-card \"Card Name\" [max-turns]"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME corp|runner find-card \"Card Name\" [max-turns]"
         case "$CLIENT_NAME" in
             runner) OPPONENT="corp" ;;
             corp)   OPPONENT="runner" ;;
@@ -1844,8 +1831,8 @@ case "$COMMAND" in
         ensure_connection
         KEY="${1:-}"
         DELTA="${2:-}"
-        [[ -z "$KEY" ]] && error "Usage: send_command change <key> <delta>"
-        [[ -z "$DELTA" ]] && error "Usage: send_command change <key> <delta>"
+        [[ -z "$KEY" ]] && error "Usage: send_command $CLIENT_NAME change <key> <delta>"
+        [[ -z "$DELTA" ]] && error "Usage: send_command $CLIENT_NAME change <key> <delta>"
         # `^-?[0-9]+$` - the optional SIGN is why a sweep anchored on
         # `^[0-9]+$` could not see this arm (both review seats found it there).
         num_arg_signed DELTA "Delta must be a number"
@@ -1908,7 +1895,7 @@ case "$COMMAND" in
         ensure_connection
         CARD_NAME="${1:-}"
         SERVER="${2:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command play <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME play <card-name>"
 
         # Auto-upgrade to install if server argument provided
         if [[ -n "$SERVER" ]]; then
@@ -1924,7 +1911,7 @@ case "$COMMAND" in
     play-index)
         ensure_connection
         INDEX="${1:-}"
-        [[ -z "$INDEX" ]] && error "Usage: send_command play-index <0-4>"
+        [[ -z "$INDEX" ]] && error "Usage: send_command $CLIENT_NAME play-index <0-4>"
         num_arg INDEX "Index must be a number"
         info "Playing card at index $INDEX"
         execute "(ai-actions/play-card! $INDEX)"
@@ -1937,7 +1924,7 @@ case "$COMMAND" in
         TIMEOUT="$REPL_BLOCKING_TIMEOUT"
         SERVER="${1:-}"
         shift
-        [[ -z "$SERVER" ]] && error "Usage: send_command run <server> [--flags...]"
+        [[ -z "$SERVER" ]] && error "Usage: send_command $CLIENT_NAME run <server> [--flags...]"
 
         # #110 §3: `run R&D` unquoted is split by the SHELL before we are called.
         # The shell backgrounds `... run R` and then tries to execute `D`, so the
@@ -1970,8 +1957,8 @@ case "$COMMAND" in
         ensure_connection
         CARD_NAME="${1:-}"
         ABILITY_INDEX="${2:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
-        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-ability <card-name> <ability-index>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME use-ability <card-name> <ability-index>"
+        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command $CLIENT_NAME use-ability <card-name> <ability-index>"
         num_arg ABILITY_INDEX "Ability index must be a number"
         info "Using ability $ABILITY_INDEX on $CARD_NAME..."
         execute "(ai-actions/use-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
@@ -1982,8 +1969,8 @@ case "$COMMAND" in
         ensure_connection
         CARD_NAME="${1:-}"
         ABILITY_INDEX="${2:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
-        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command use-runner-ability <card-name> <ability-index>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME use-runner-ability <card-name> <ability-index>"
+        [[ -z "$ABILITY_INDEX" ]] && error "Usage: send_command $CLIENT_NAME use-runner-ability <card-name> <ability-index>"
         num_arg ABILITY_INDEX "Ability index must be a number"
         info "Using runner-ability $ABILITY_INDEX on $CARD_NAME (e.g., bioroid click-to-break)..."
         execute "(ai-actions/use-runner-ability! \"$(clj_str "$CARD_NAME")\" $ABILITY_INDEX)"
@@ -1994,7 +1981,7 @@ case "$COMMAND" in
     trash)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command trash <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME trash <card-name>"
         info "Trashing $CARD_NAME..."
         execute "(ai-actions/trash-installed! \"$(clj_str "$CARD_NAME")\")"
         after_action
@@ -2004,7 +1991,7 @@ case "$COMMAND" in
     rez)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command rez <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME rez <card-name>"
         info "Rezzing $CARD_NAME..."
         execute "(ai-actions/rez-card! \"$(clj_str "$CARD_NAME")\")"
         after_action
@@ -2014,7 +2001,7 @@ case "$COMMAND" in
     fire-subs)
         ensure_connection
         ICE_NAME="${1:-}"
-        [[ -z "$ICE_NAME" ]] && error "Usage: send_command fire-subs <ice-name>"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command $CLIENT_NAME fire-subs <ice-name>"
         info "Firing unbroken subroutines on $ICE_NAME..."
         execute "(ai-actions/fire-unbroken-subs! \"$(clj_str "$ICE_NAME")\")"
         ;;
@@ -2023,7 +2010,7 @@ case "$COMMAND" in
     let-subs-fire)
         ensure_connection
         ICE_NAME="${1:-}"
-        [[ -z "$ICE_NAME" ]] && error "Usage: send_command let-subs-fire <ice-name>"
+        [[ -z "$ICE_NAME" ]] && error "Usage: send_command $CLIENT_NAME let-subs-fire <ice-name>"
         info "Signaling intent to let subs fire on $ICE_NAME..."
         execute "(ai-actions/let-subs-fire! \"$(clj_str "$ICE_NAME")\")"
         ;;
@@ -2055,7 +2042,7 @@ case "$COMMAND" in
             esac
             shift
         done
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command advance <card-name> [count] [--overadvance]"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME advance <card-name> [count] [--overadvance]"
         OPTS="{}"
         [[ "$OVERADVANCE" == "true" ]] && OPTS="{:overadvance true}"
         if [[ "$COUNT" -gt 1 ]]; then
@@ -2075,7 +2062,7 @@ case "$COMMAND" in
     score)
         ensure_connection
         CARD_NAME="${1:-}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command score <card-name>"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME score <card-name>"
         info "Scoring $CARD_NAME..."
         execute "(ai-actions/score-agenda! \"$(clj_str "$CARD_NAME")\")"
         after_action
@@ -2085,7 +2072,7 @@ case "$COMMAND" in
     choose)
         ensure_connection
         CHOICE="${1:-}"
-        [[ -z "$CHOICE" ]] && error "Usage: send_command choose <index-or-label>"
+        [[ -z "$CHOICE" ]] && error "Usage: send_command $CLIENT_NAME choose <index-or-label>"
         if is_num "$CHOICE"; then
             CHOICE="$NUM_ARG"
             info "Choosing option $CHOICE..."
@@ -2108,7 +2095,7 @@ case "$COMMAND" in
     choose-value)
         ensure_connection
         VALUE="${1:-}"
-        [[ -z "$VALUE" ]] && error "Usage: send_command choose-value <text>"
+        [[ -z "$VALUE" ]] && error "Usage: send_command $CLIENT_NAME choose-value <text>"
         info "Choosing option matching: $VALUE..."
         execute "(ai-actions/choose-by-value! \"$(clj_str "$VALUE")\")"
         after_action
@@ -2117,7 +2104,7 @@ case "$COMMAND" in
     choose-card)
         ensure_connection
         INDEX="${1:-}"
-        [[ -z "$INDEX" ]] && error "Usage: send_command choose-card <index> [--all]"
+        [[ -z "$INDEX" ]] && error "Usage: send_command $CLIENT_NAME choose-card <index> [--all]"
         num_arg INDEX "Index must be a number"
         shift
         # --all is the seat's shift-click: on the engine's per-credit payment
@@ -2141,7 +2128,7 @@ case "$COMMAND" in
     multi-choose)
         ensure_connection
         if [[ $# -eq 0 ]]; then
-            error "Usage: send_command multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."
+            error "Usage: send_command $CLIENT_NAME multi-choose <card1> <card2> ... OR multi-choose 0 1 2 ..."
         fi
 
         # Check if all args are numeric (indices) or text (card names)
@@ -2535,7 +2522,7 @@ case "$COMMAND" in
         ensure_connection --allow-dead
         GAME_ID="${1:-}"
         SIDE="${2:-Runner}"
-        [[ -z "$GAME_ID" ]] && error "Usage: send_command join <game-id> [Runner|Corp]"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command $CLIENT_NAME join <game-id> [Runner|Corp]"
         info "Joining game $GAME_ID as $SIDE..."
         execute "(ai-actions/connect-game! \"$(clj_str "$GAME_ID")\" \"$(clj_str "$SIDE")\")"
         ;;
@@ -2550,7 +2537,7 @@ case "$COMMAND" in
               (ws/ensure-connected!))' > /dev/null 2>&1 || true
         fi
         GAME_ID="${1:-}"
-        [[ -z "$GAME_ID" ]] && error "Usage: send_command resync <game-id>"
+        [[ -z "$GAME_ID" ]] && error "Usage: send_command $CLIENT_NAME resync <game-id>"
         info "Resyncing game $GAME_ID..."
         # Use reconnect-game! which waits for game-state to arrive
         execute "(ai-connection/reconnect-game! \"$(clj_str "$GAME_ID")\")"
@@ -2559,7 +2546,7 @@ case "$COMMAND" in
     chat)
         ensure_connection
         MESSAGE="${1:-}"
-        [[ -z "$MESSAGE" ]] && error "Usage: send_command chat <message>"
+        [[ -z "$MESSAGE" ]] && error "Usage: send_command $CLIENT_NAME chat <message>"
         # Slash-prefixed chat is executed by the server as a game command
         # (process_actions/should-process-command?), and `/jack-out`
         # (commands.clj) checks side + "is there a run" but NOT the phase — while
@@ -2606,7 +2593,7 @@ case "$COMMAND" in
                     shift ;;
             esac
         done
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command install <card-name> [server] [--overwrite]"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME install <card-name> [server] [--overwrite]"
         if [[ -n "$SERVER" ]]; then
             info "Installing card: $CARD_NAME on $SERVER"
             if [[ -n "$OVERWRITE" ]]; then
@@ -2625,7 +2612,7 @@ case "$COMMAND" in
         ensure_connection
         INDEX="${1:-}"
         SERVER="${2:-}"
-        [[ -z "$INDEX" ]] && error "Usage: send_command install-index <0-4> [server]"
+        [[ -z "$INDEX" ]] && error "Usage: send_command $CLIENT_NAME install-index <0-4> [server]"
         num_arg INDEX "Index must be a number"
         if [[ -n "$SERVER" ]]; then
             info "Installing card at index $INDEX on $SERVER"
@@ -2640,7 +2627,7 @@ case "$COMMAND" in
     # Advanced
     eval)
         EXPR="${1:-}"
-        [[ -z "$EXPR" ]] && error "Usage: send_command eval '<clojure-expression>'"
+        [[ -z "$EXPR" ]] && error "Usage: send_command $CLIENT_NAME eval '<clojure-expression>'"
         execute "$EXPR"
         ;;
 

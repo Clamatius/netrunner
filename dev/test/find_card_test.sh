@@ -209,7 +209,9 @@ run runner find-card "Sure Gamble" 0
 
 reset_stub
 run find-card "Sure Gamble"
-[[ "$CODE" -ne 0 && "$OUT" == *"needs your side"* ]]; check "sideless-refused" $? "exit $CODE"
+# Since #279 the dispatcher refuses every sideless command before find-card's own
+# side check is reached, so the refusal is the dispatcher's — and nothing is sent.
+[[ "$CODE" -ne 0 && "$OUT" == *"no side given"* && -z "$LOG" ]]; check "sideless-refused" $? "exit $CODE"
 
 # ---------------------------------------------------------------------------
 # The stub answers by PATTERN, so nothing above can tell whether the Clojure

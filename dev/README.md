@@ -200,33 +200,33 @@ File locking ensures no conflicts when both clients write simultaneously.
 
 **Check status:**
 ```bash
-./dev/send_command status
-./dev/send_command board
-./dev/send_command hand
+./dev/send_command runner status
+./dev/send_command runner board
+./dev/send_command runner hand
 ```
 
 **Join a game:**
 ```bash
 # List available games
-./dev/send_command list-lobbies
+./dev/send_command runner list-lobbies
 
 # Join game (copy UUID from list-lobbies output)
-./dev/send_command join <game-id> Runner
+./dev/send_command runner join <game-id> Runner
 ```
 
 **Or create your own game:**
 ```bash
-./dev/send_command create-game "AI Test" "Runner"
+./dev/send_command runner create-game "AI Test" "Runner"
 # Wait for opponent to join via web UI
-./dev/send_command start-game
+./dev/send_command runner start-game
 ```
 
 **Take a turn:**
 ```bash
-./dev/send_command start-turn
-./dev/send_command play "Sure Gamble"
-./dev/send_command take-credit
-./dev/send_command end-turn
+./dev/send_command runner start-turn
+./dev/send_command runner play "Sure Gamble"
+./dev/send_command runner take-credit
+./dev/send_command runner end-turn
 ```
 
 ---
@@ -309,7 +309,7 @@ Contains:
 
 **Solutions:**
 1. Check game server is running on port 1042
-2. Manually reconnect: `./dev/send_command connect`
+2. Manually reconnect: `./dev/send_command <side> connect`
 3. Restart AI client: `./dev/stop-ai-client.sh && ./dev/start-ai-client-repl.sh`
 
 ### Game State Desync
@@ -317,8 +317,8 @@ Contains:
 **Problem:** AI thinks it's in a different game state than server
 
 **Solutions:**
-1. Resync: `./dev/send_command resync <game-id>`
-2. Leave and rejoin: `./dev/send_command leave-game` then `./dev/send_command join <game-id> <side>`
+1. Resync: `./dev/send_command <side> resync <game-id>`
+2. Leave and rejoin: `./dev/send_command <side> leave-game` then `./dev/send_command <side> join <game-id> <side>`
 
 ### Commands Not Working
 
@@ -328,7 +328,7 @@ Contains:
 1. Is AI client running? `lsof -i:7889` should show Java process
 2. Are you in the right directory? Commands should be run from project root or `dev/`
 3. Check REPL logs: `tail -f /tmp/ai-client-repl.log`
-4. Try reconnecting: `./dev/send_command connect`
+4. Try reconnecting: `./dev/send_command <side> connect`
 
 ### Can't Join Game
 
@@ -357,28 +357,28 @@ Check terminal where `lein repl` is running
 ### Execute Arbitrary Code
 
 ```bash
-./dev/send_command eval '(println "Debug:" @ws/client-state)'
+./dev/send_command runner eval '(println "Debug:" @ws/client-state)'
 ```
 
 ### Inspect State
 
 ```bash
-./dev/send_command eval '(keys @ws/client-state)'
-./dev/send_command eval '(ws/my-credits)'
-./dev/send_command eval '(ws/my-hand-count)'
+./dev/send_command runner eval '(keys @ws/client-state)'
+./dev/send_command runner eval '(ws/my-credits)'
+./dev/send_command runner eval '(ws/my-hand-count)'
 ```
 
 ### Test Without Web UI
 
 ```bash
 # Create game as Corp
-./dev/send_command create-game "Test" "Corp"
+./dev/send_command corp create-game "Test" "Corp"
 
 # In another terminal, join as Runner
-./dev/send_command join <game-id> Runner
+./dev/send_command runner join <game-id> Runner
 
 # Start game
-./dev/send_command start-game
+./dev/send_command corp start-game
 ```
 
 ---
@@ -398,22 +398,22 @@ Check terminal where `lein repl` is running
 ./dev/start-ai-client-repl.sh
 
 # Status
-./dev/send_command status
-./dev/send_command board
-./dev/send_command hand
+./dev/send_command runner status
+./dev/send_command runner board
+./dev/send_command runner hand
 
 # Lobby
-./dev/send_command list-lobbies
-./dev/send_command create-game "AI Game" "Runner"
-./dev/send_command join <uuid> Runner
-./dev/send_command start-game
+./dev/send_command runner list-lobbies
+./dev/send_command runner create-game "AI Game" "Runner"
+./dev/send_command runner join <uuid> Runner
+./dev/send_command runner start-game
 
 # Turn
-./dev/send_command start-turn
-./dev/send_command take-credit
-./dev/send_command play "Sure Gamble"
-./dev/send_command run "R&D"
-./dev/send_command end-turn
+./dev/send_command runner start-turn
+./dev/send_command runner take-credit
+./dev/send_command runner play "Sure Gamble"
+./dev/send_command runner run "R&D"
+./dev/send_command runner end-turn
 
 # Cleanup
 ./dev/stop-ai-client.sh

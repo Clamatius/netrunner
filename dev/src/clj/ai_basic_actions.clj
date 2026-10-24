@@ -1519,7 +1519,7 @@
       (do
         (println (format "❌ ERROR: You still have %d click(s) remaining!" clicks))
         (println "   Use all clicks before ending turn, or use --force flag")
-        (println "   Example: send_command end-turn --force")
+        (println "   Example: send_command <side> end-turn --force")
         (core/with-cursor {:status :error :clicks-remaining clicks}))
 
       ;; FORCE: burn remaining clicks as credits first
