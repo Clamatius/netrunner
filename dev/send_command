@@ -140,7 +140,7 @@ did_you_mean() {
         # as one mangled command — a seat model tried to run it verbatim.
         echo -e "${YELLOW}💡 Did you mean: ${hits//|/ | }${NC}" >&2
     else
-        echo -e "${YELLOW}💡 Run './send_command <side> help' for commands, or 'help --full' for everything.${NC}" >&2
+        echo -e "${YELLOW}💡 Run './send_command <side> help' for your commands, 'help --full' for the player commands, or 'help --dev' for the dev/test ones.${NC}" >&2
     fi
 }
 
@@ -566,7 +566,8 @@ ${GREEN}Lobby:${NC}
 ${YELLOW}Examples:${NC}
 ${role_examples}
 
-${BLUE}For full help:${NC} ./send_command help --full
+${BLUE}All player commands:${NC} ./send_command help --full
+${BLUE}Dev / test commands:${NC} ./send_command help --dev
 ${BLUE}One command and its flags:${NC} ./send_command help <command>   (e.g. help monitor-run)
 
 EOF

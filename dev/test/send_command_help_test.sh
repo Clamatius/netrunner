@@ -336,6 +336,28 @@ done
 # --dev view exists to draw is not silently erased.
 assert_contains "help nuke-state (dev hit)" "$dev_hit" "Dev/test command"
 
+# The same false-completeness sentence had FOUR homes, not three: the miss
+# message, the success trailer, the --full `Help:` entry, and the hint printed
+# beside "Unknown command". I fixed the first three and found the fourth only by
+# grepping the script for the pointer afterwards.
+#
+# This one is checked at the SOURCE, not in rendered output, for two reasons: the
+# unknown-command path runs check_client first and so needs a live REPL (this
+# test is deliberately REPL-free), and a source check covers every place that
+# points a seat at a help view — including a fifth one nobody has written yet.
+# Same idiom as send_command_wrap_test.sh extracting its constant from source.
+echo
+echo "No pointer at a help view claims that view is complete (source check)"
+bad_pointers="$(grep -nE "help --(full|dev)" "$SEND_CMD" \
+                | grep -iE 'for everything|every ([a-z]+ )?command|documents every|all of them' \
+                | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [[ -n "$bad_pointers" ]]; then
+    fail "a help-view pointer claims completeness:"
+    sed 's/^/      /' <<<"$bad_pointers"
+else
+    pass "no help-view pointer in $(basename "$SEND_CMD") claims completeness"
+fi
+
 echo
 echo "─────────────────────────────"
 echo "Passed: $PASS   Failed: $FAIL"
