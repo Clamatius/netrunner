@@ -11,10 +11,15 @@
    - :break-dynamic  - Use card's \"Match strength and fully break\" ability
    - :use-ability    - Use specific ability by index {:ability-index N}
 
-   V2 stubs (recognized but no-op):
-   - :break-subs     - Selective sub breaking (not yet implemented)
-   - :prep           - Pre-encounter actions
-   - :script         - Multi-step sequences"
+   V2 stubs — recognized, and NOT all of them no-ops (they differ, and this
+   docstring used to flatten all three into \"no-op\"):
+   - :break-subs     - Selective sub breaking (not yet implemented) — PAUSES the
+                       run (pause-with-context -> :tactic-paused, terminal)
+   - :script         - Multi-step sequences (not yet implemented) — PAUSES too
+   - :prep           - Pre-encounter actions (not yet implemented) — returns nil
+                       and falls through to the next handler
+
+   Also note :pause (and :default :pause) is NOT a stub: it works in V1."
   (:require [ai-card-actions :as actions]
             [ai-core :as core]))
 

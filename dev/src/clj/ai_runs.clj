@@ -99,15 +99,42 @@
   "Parse command-line style flags from arguments.
    Returns {:server \"HQ\" :flags {:full-break true :no-continue false ...}}
 
-   Supported flags:
+   Supported flags — ALL 14 this body handles. This docstring is the authority
+   (it is the parser); run!/continue-run!/monitor-run! document only the subset
+   each of them honours, rather than keeping a second list that drifts. The
+   list used to name 8 of the 14 while run!'s named a different 5, and the two
+   disagreed about one parser (#281).
+
+   Runner, run-shaping:
    --full-break      : Runner auto-breaks all ICE
    --tank <ice-name> : Runner pre-authorizes letting subs fire on specified ICE
+                       (repeatable; accumulates into a set)
    --tank-all        : Runner pre-authorizes letting subs fire on ALL ICE (yolo)
+   --tactics <edn>   : Runner per-ICE break plan as an EDN map. NOTE: unusable
+                       from dev/send_command — the arms interpolate each flag
+                       into a Clojure string without clj_str (#255), so any map
+                       containing a card title breaks the form. Use
+                       --tactics-file from the CLI.
+   --tactics-file <path> : the same map, slurped from a file
+   --no-continue     : Don't auto-continue after run start (run! only — it is
+                       the sole consumer of :no-continue)
+
+   Corp, rez/fire:
    --no-rez          : Corp doesn't rez anything
    --rez <ice-name>  : Corp auto-rezzes named ICE; PAUSES on other unrezzed ICE
+                       (repeatable; accumulates into a set)
    --fire-unbroken   : Corp auto-fires unbroken subs
-   --no-continue     : Don't auto-continue after run start
-   --force           : Bypass all smart checks (for continue-run)
+   --fire-if-asked   : Corp auto-fires on a tank SIGNAL only; a plain pass wakes
+
+   Loop control (harness/bot, not a player seat):
+   --persistent      : own the whole opponent run; park across empty windows
+   --return-on-signal: surface :waiting-for-runner-signal instead of handling it.
+                       Do NOT pair with --persistent: park-continuable? is only
+                       #{:run-complete :no-run}, so this return ends the park.
+   --since <cursor>  : fast-return if the cursor already advanced, WITHOUT
+                       advancing the run and, with --persistent, without parking
+   --force           : Bypass all smart checks (for continue-run). AI-vs-AI
+                       testing only.
 
    Usage:
    (parse-run-flags [\"hq\" \"--full-break\"])
@@ -312,12 +339,20 @@
    - remote1, remote 1, r1, server1, server 1 → Server 1
    - remote2, r2, server2 → Server 2
 
-   Strategy flags:
-   --full-break      : Runner auto-breaks all ICE (no pauses for break decisions)
-   --no-rez          : Corp doesn't rez anything (auto-declines all rez opportunities)
-   --rez <ice-name>  : Corp auto-rezzes named ICE; other unrezzed ICE PAUSES for a rez decision (not auto-declined)
-   --fire-unbroken   : Corp auto-fires all unbroken subroutines
-   --no-continue     : Don't auto-continue after run initiation (stop at first decision)
+   Strategy flags THIS function honours (the full set any of these commands
+   parse is parse-run-flags' docstring — the parser is the single authority):
+   --full-break      : auto-break all ICE (no pauses for break decisions)
+   --no-continue     : Don't auto-continue after run initiation (stop at first
+                       decision). run! is the ONLY consumer of :no-continue.
+   --tank <ice-name> : pre-authorize letting subs fire on that ICE (repeatable)
+   --tank-all        : pre-authorize it on every ICE this run
+   --tactics-file <path> : per-ICE break plan from a file (see parse-run-flags;
+                       the inline --tactics form is unusable from the CLI, #255)
+
+   The Corp flags (--no-rez, --rez, --fire-unbroken, --fire-if-asked) and the
+   loop flags (--persistent, --return-on-signal, --since) are PARSED but ignored
+   here: this is the Runner's run verb. They are listed only in
+   parse-run-flags' docstring, so this one cannot promise what it drops.
 
    Usage:
    (run! \"hq\")                        ; Auto-continues till decision needed
