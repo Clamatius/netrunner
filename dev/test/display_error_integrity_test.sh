@@ -41,7 +41,9 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/nr-display-err-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 export HEARTBEAT_DIR="$TMP/heartbeats"
 # send_command appends every invocation to ${SEND_COMMAND_LOG:-logs/commands.log}
-# (:1115), and that log is the evidence base the after_action prompt statistics
+# (its LOG_FILE assignment -- named, not cited by line, because the line number
+# drifted by exactly the comment block added in the same commit), and that log
+# is the evidence base the after_action prompt statistics
 # were computed from. A test that leaves fake 'corp snapshot' lines in it skews
 # later analysis of what seats really do, so redirect it like the four other
 # shell tests that drive this dispatcher already do. (Review r1, guest seat.)
@@ -84,6 +86,15 @@ chmod +x "$STUB"
 export ERR_LINE1 ERR_LINE2 ERR_LINE3 ERR_LINE4
 
 fails=0
+
+# Captured BEFORE any send_command runs, for the real-log guard at the end.
+REAL_LOG_PATH="$SCRIPT_DIR/../../logs/commands.log"
+if [[ -f "$REAL_LOG_PATH" ]]; then
+    # tr: macOS wc pads its output, and this value lands in a failure message.
+    REAL_LOG_BEFORE="$(wc -l < "$REAL_LOG_PATH" | tr -d ' ')"
+else
+    REAL_LOG_BEFORE="absent"
+fi
 
 assert_eq() {  # NAME EXPECTED ACTUAL
     local name="$1" want="$2" got="$3"
@@ -148,6 +159,36 @@ if [[ "$OUT" == '"'* ]]; then
     fails=$((fails+1))
 else
     echo "ok   [snapshot-ok-quotes-stripped]"
+fi
+
+echo "--- the log isolation is itself guarded (review r2) ---"
+
+# Round 1 added the SEND_COMMAND_LOG redirect and nothing protected it: deleting
+# the export left every assertion above green while four fake entries per run
+# landed in the real logs/commands.log (measured: 280 -> 284 lines). A fix with
+# no guard rots, so this asserts the redirect is actually in force.
+#
+# Positive check, which is the one that cannot be fooled by concurrency: the
+# commands this test ran must have been logged to OUR file. With the export
+# gone, SEND_COMMAND_LOG is unset, this file is never created, and the
+# assertion fails.
+if [[ -s "$TMP/commands.log" ]]; then
+    echo "ok   [commands-logged-to-the-redirect]"
+else
+    echo "FAIL [commands-logged-to-the-redirect]: $TMP/commands.log is missing or empty,"
+    echo "     so SEND_COMMAND_LOG is not in force and the real log is being written instead."
+    fails=$((fails+1))
+fi
+
+# Negative check: the real log must not have grown while this test ran. Only
+# ever fails on growth, so a concurrent writer cannot make it fail spuriously.
+if [[ "$REAL_LOG_BEFORE" == "absent" ]]; then
+    echo "ok   [real-log-untouched] (no real log on this checkout)"
+elif [[ "$(wc -l < "$REAL_LOG_PATH" 2>/dev/null | tr -d ' ' || echo 0)" -le "$REAL_LOG_BEFORE" ]]; then
+    echo "ok   [real-log-untouched]"
+else
+    echo "FAIL [real-log-untouched]: $REAL_LOG_PATH grew from $REAL_LOG_BEFORE lines while this test ran."
+    fails=$((fails+1))
 fi
 
 if [[ "$fails" -eq 0 ]]; then

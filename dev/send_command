@@ -1037,8 +1037,14 @@ execute() {
         # `"backend failed"` had its quotes stripped off the error anyway, which
         # is the same class of mistake one layer in (review r1, guest seat). A
         # non-zero status means these bytes are error text whatever shape they
-        # have. 124 and 78 have already exited above, so the only non-zero left
-        # here is the REPL answering with an error.
+        # have -- which is all this branch needs, and is why the status is the
+        # gate rather than the shape.
+        #
+        # Do NOT read it as "non-zero here means the REPL answered". It does
+        # not: ai-eval.sh exits 1 on a stale PID file having contacted no REPL
+        # at all (ai-eval.sh:117), bb exits non-zero on a refused connection,
+        # and a missing binary would arrive as 127. 124 and 78 are the only
+        # statuses excluded here, because they exit above. (Review r2.)
         #
         # Known limitation, deliberately not handled (documented on #282): if
         # something writes to *err* while the eval SUCCEEDS, 2>&1 merges it
