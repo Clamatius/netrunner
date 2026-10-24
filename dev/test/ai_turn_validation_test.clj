@@ -9,7 +9,9 @@
             [ai-core :as core]
             [ai-state :as state]
             [ai-websocket-client-v2 :as ws]
-            [game.core.process-actions :as process-actions]))
+            [game.core.process-actions :as process-actions]
+            [game.core.say :as say]
+            [jinteki.settings :as settings]))
 
 ;; ============================================================================
 ;; Test Helpers - Log Entry Builders
@@ -89,6 +91,92 @@
     (is (core/start-turn-log-line? "Clam started his turn 2" usernames))
     (is (core/start-turn-log-line? "Clam Jones started zir turn 3" usernames))
     (is (not (core/start-turn-log-line? "Clam started a run on turn 3" usernames)))))
+
+;; ============================================================================
+;; #235: the possessive slot is the engine's pronoun set, not \S+
+;; ============================================================================
+
+(deftest test-rendered-possessives-matches-the-engine-authority
+  (testing "#235: ai-core's possessive set is a COPY of what select-pronoun renders.
+            This is the guard that stops the copy going stale in silence: it re-derives
+            the set from the engine over every configured pronoun value plus the unset
+            fallback, and fails if the two diverge. select-pronoun is private, which is
+            why production code holds a copy rather than calling it.
+
+            Deriving over valid-pronouns is not merely a sample of the input space:
+            select-pronoun's `case` ends in a default arm, so a stored value outside
+            valid-pronouns — legacy or hand-edited profile data — also renders \"their\",
+            which is already in the set. The derived set is complete over ALL inputs."
+    (let [select-pronoun @#'say/select-pronoun
+          configured (conj (vec settings/valid-pronouns) nil)
+          derived (set (map #(select-pronoun {:options {:pronouns %}}) configured))]
+      (is (= derived core/rendered-possessives)
+          (str "ai-core/rendered-possessives has diverged from game.core.say/select-pronoun. "
+               "engine renders " (pr-str (sort derived)) ", client accepts "
+               (pr-str (sort core/rendered-possessives))))
+      (testing "the slot is one token wide, which is what makes a set of them a regex alternation"
+        (is (empty? (filter #(re-find #"\s" %) derived))))
+      (testing "the fallback is reachable: an unset pronoun renders too"
+        (is (contains? derived (select-pronoun {})))))))
+
+(deftest test-turn-log-author-accepts-every-possessive-the-engine-can-render
+  (testing "#227 must not regress: narrowing the slot still attributes a boundary for
+            every pronoun a human can configure, on both kinds."
+    (let [usernames ["Clam"]]
+      (doseq [possessive (sort core/rendered-possessives)]
+        (is (= "Clam" (core/turn-log-author
+                       (str "Clam is ending " possessive " turn 4 with 5 [Credit] and 3 cards in HQ.")
+                       usernames :end))
+            (str "end boundary not attributed for possessive " (pr-str possessive)))
+        (is (= "Clam" (core/turn-log-author
+                       (str "Clam started " possessive " turn 4 with 5 [Credit] and 3 cards in HQ.")
+                       usernames :start))
+            (str "start boundary not attributed for possessive " (pr-str possessive)))))))
+
+(deftest test-turn-log-author-rejects-a-crafted-username-in-the-possessive-slot
+  (testing "#235, executed by the GPT-6-Astra seat on the 2026-09-21 polish panel: a Corp
+            registered as 'A is ending x turn 1' (20 chars, the username cap) against a
+            Runner named 'A'. During the RUNNER's turn the Corp types /roll 6, and the
+            engine emits one line that is a die roll and nothing else.
+
+            With \\S+ in the possessive slot the longer name was rejected (its own suffix
+            is not a boundary) and 'A' then matched with \\S+ = 'x', so a die roll the Corp
+            authored became the RUNNER's own end-turn boundary — already-ended-this-turn?
+            went true and end-turn! refused :already-ended, wedging the Runner's turn.
+
+            The boundary is now merely LOST rather than misattributed, which is the
+            outcome the issue chose: no author is named, because none of this is one."
+    (let [usernames ["A is ending x turn 1" "A"]
+          die-roll "A is ending x turn 1 rolls a 6 sided die and rolls a 4."]
+      (is (nil? (core/turn-log-author die-roll usernames :end)))
+      (is (nil? (core/turn-log-author die-roll usernames :start)))
+      (testing "and the seat that could not end its turn is no longer told it already had"
+        (is (empty? (core/find-end-turn-indices [{:text die-roll}] "A" usernames)))))))
+
+(deftest test-turn-log-author-rejects-a-non-pronoun-token-in-the-possessive-slot
+  (testing "the general property behind #235: the slot is a closed set, so an arbitrary
+            token there is not a boundary. 'a' and 'the' are the shapes an ordinary English
+            log line would put there; 'hertz' pins that an alternation cannot match a
+            PREFIX of a longer word, since ' turn ' has to follow the whole token."
+    (let [usernames ["Clam"]]
+      (doseq [token ["a" "the" "x" "hertz" "theirs" "HIS"]]
+        (is (nil? (core/turn-log-author (str "Clam is ending " token " turn 4") usernames :end))
+            (str "non-pronoun token accepted in the possessive slot: " (pr-str token))))
+      (testing "the possessive has to sit IMMEDIATELY after the verb, not merely somewhere
+                after it. The docstring calls anchoring load-bearing (#231) but nothing
+                pinned it: dropping the pattern's ^ left the whole suite green, so a line
+                that only CONTAINS the boundary grammar later would have been read as one."
+        (is (nil? (core/turn-log-author
+                   "Clam is ending the encounter and their turn 3 is nearly over"
+                   usernames :end)))
+        (is (nil? (core/turn-log-author
+                   "Clam started the run before their turn 3 clicks were spent"
+                   usernames :start))))
+      (testing "the turn NUMBER has to end where the slot does — dropping the trailing
+                boundary class also left the suite green."
+        (is (nil? (core/turn-log-author "Clam is ending their turn 4x" usernames :end)))
+        (is (= "Clam" (core/turn-log-author "Clam is ending their turn 12 with 3 [Credit]"
+                                            usernames :end)))))))
 
 (deftest test-find-end-turn-indices-basic
   (testing "finds end turn indices"
