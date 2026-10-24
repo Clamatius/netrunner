@@ -588,6 +588,13 @@ ${YELLOW}Examples:${NC}
   ./send_command runner keep-hand           - Runner keeps mulligan
   ./send_command corp start-game            - Corp starts the game
 
+${GREEN}Help:${NC}
+  help            - Your side's commands, the short list
+  help --full     - Every PLAYER command (this page)
+  help --dev      - Every dev / test / infra command (not used when playing)
+  help <command>  - Just that command's entry and the Flags block naming it,
+                    from whichever of the two pages documents it
+
 ${GREEN}Status Commands:${NC}
   snapshot [N]    - One-shot per-decision read-loop in a single call:
                     status-compact + prompt(if any) + board-compact + hand +

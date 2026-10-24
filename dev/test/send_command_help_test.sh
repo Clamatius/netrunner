@@ -198,6 +198,9 @@ for c in status-compact board-compact hand-text log-compact \
          game-over-status 'game-over?' peer-status bot-status change; do
     assert_entry "$c"
 done
+# `help` itself: the discovery verb denied its own name ("No help entry for
+# 'help'"), which is the misleading-output class this change exists to remove.
+assert_entry help
 
 echo
 echo "Run flags (#281): named as whole tokens in a Flags section"
