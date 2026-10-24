@@ -1232,23 +1232,28 @@ after_action() {
     return $RET
 }
 
-# Main command dispatcher
-COMMAND="${1:-help}"
-shift || true
-
 # No side, no command (#279). Only the commands that touch no client may omit
 # it: help is pure text, and reset.sh calls clear-heartbeats sideless ON PURPOSE
 # so that it does not re-touch a heartbeat on its way out. This runs before the
 # log line and the heartbeat touch, so a refused invocation leaves no trace.
+# `${1-help}`, not `${1:-help}`: no arguments at all is a request for help, but
+# an EMPTY first argument is what `send_command "$SIDE" status` sends when $SIDE
+# is unset, and the `:-` form turned it into help at exit 0 (r1 MAJOR).
+# The hint gives the usage shape rather than re-printing argv: re-printed, the
+# arguments lost their quoting and a mis-cased side got a side put in front of it.
 if [[ -z "$CLIENT_NAME" ]]; then
-    case "$COMMAND" in
+    case "${1-help}" in
         help|--help|-h|clear-heartbeats) ;;
         *)
-            echo "💡 Name the side first: ./send_command <runner|corp> $COMMAND${*:+ $*}" >&2
-            error "no side given: '$COMMAND' is not runner or corp. Nothing was sent."
+            echo "💡 Name the side first: ./send_command <runner|corp> <command> [args...]" >&2
+            error "no side given: '${1-}' is not runner or corp. Nothing was sent."
             ;;
     esac
 fi
+
+# Main command dispatcher
+COMMAND="${1:-help}"
+shift || true
 
 # Determine project root for logging
 NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1652,7 +1657,7 @@ case "$COMMAND" in
         # ordinary command sent to the REPL of the side it is for.
         CARD_NAME="${1:-}"
         MAX_TURNS="${2:-10}"
-        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME corp|runner find-card \"Card Name\" [max-turns]"
+        [[ -z "$CARD_NAME" ]] && error "Usage: send_command $CLIENT_NAME find-card \"Card Name\" [max-turns]"
         case "$CLIENT_NAME" in
             runner) OPPONENT="corp" ;;
             corp)   OPPONENT="runner" ;;

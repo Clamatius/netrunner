@@ -63,14 +63,41 @@ for args in "${refused_cases[@]}"; do
         fail "refused:$args" "exited 0. Output: $OUT"
     elif [[ "$OUT" != *"no side given: '$first' is not runner or corp. Nothing was sent."* ]]; then
         fail "refused:$args" "the refusal did not name '$first'. Output: $OUT"
-    elif [[ "$OUT" != *"./send_command <runner|corp> $args"* ]]; then
-        fail "refused:$args" "the hint did not repeat the whole command. Output: $OUT"
+    elif [[ "$OUT" != *"./send_command <runner|corp> <command> [args...]"* ]]; then
+        fail "refused:$args" "the hint did not give the usage shape. Output: $OUT"
     elif [[ -n "$CALLS" || -n "$LOGGED" || -n "$HEARTBEATS" ]]; then
         fail "refused:$args" "a refused command left a trace: eval='$CALLS' log='$LOGGED' heartbeats='$HEARTBEATS'"
     else
         ok "refused:$args"
     fi
 done
+
+# 1b. An EMPTY first argument is a missing side, not a request for help: it is
+#     what `send_command "$SIDE" status` sends when $SIDE is unset. `${1:-help}`
+#     used to turn it into help at exit 0 (r1 MAJOR). Quoted args can't go
+#     through the split loop above, so these are spelled out.
+for case_name in "empty" "empty+status"; do
+    if [[ "$case_name" == "empty" ]]; then run ""; else run "" status; fi
+    if [[ "$CODE" -eq 0 ]]; then
+        fail "refused:$case_name" "exited 0. Output: $OUT"
+    elif [[ "$OUT" != *"no side given: '' is not runner or corp. Nothing was sent."* ]]; then
+        fail "refused:$case_name" "no refusal. Output: $OUT"
+    elif [[ -n "$CALLS" || -n "$LOGGED" || -n "$HEARTBEATS" ]]; then
+        fail "refused:$case_name" "a refused command left a trace: eval='$CALLS' log='$LOGGED' heartbeats='$HEARTBEATS'"
+    else
+        ok "refused:$case_name"
+    fi
+done
+
+# 1c. The hint is the usage shape, never argv re-printed: re-printing dropped the
+#     quoting (`play "Sure Gamble"` came back as `play Sure Gamble`) and put a
+#     side in front of a mis-cased one (`<runner|corp> Runner status`).
+run play "Sure Gamble"
+if [[ "$OUT" == *"play Sure Gamble"* ]]; then
+    fail "hint-not-argv" "the hint re-printed the unquoted arguments. Output: $OUT"
+else
+    ok "hint-not-argv"
+fi
 
 # 2. The sideless commands that touch no client still run, and still touch no
 #    client or heartbeat. reset.sh relies on clear-heartbeats being sideless.
@@ -100,6 +127,16 @@ for triple in "runner 7889 corp" "corp 7890 runner"; do
         ok "routes:$side"
     fi
 done
+
+# 3b. The usage strings name the caller's side exactly once. A sed that
+#     prefixed $CLIENT_NAME also hit find-card's, which already said
+#     `corp|runner`, and printed `send_command runner corp|runner find-card` (r1).
+run runner find-card
+if [[ "$OUT" != *"Usage: send_command runner find-card \"Card Name\""* ]]; then
+    fail "usage-names-side-once" "find-card's usage did not read 'send_command runner find-card'. Output: $OUT"
+else
+    ok "usage-names-side-once"
+fi
 
 # 4. The full help no longer advertises a sideless form.
 run help --full
