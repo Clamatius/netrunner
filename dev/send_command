@@ -140,7 +140,7 @@ did_you_mean() {
         # as one mangled command — a seat model tried to run it verbatim.
         echo -e "${YELLOW}💡 Did you mean: ${hits//|/ | }${NC}" >&2
     else
-        echo -e "${YELLOW}💡 Run './send_command <side> help' for commands, or 'help --full' for everything.${NC}" >&2
+        echo -e "${YELLOW}💡 Run './send_command <side> help' for your commands, 'help --full' for player commands, or 'help --dev' for dev/test ones.${NC}" >&2
     fi
 }
 
@@ -378,10 +378,57 @@ show_help() {
 # monitor-run` printed the general help and its flags were only in --full).
 # An entry is a two-space-indented line starting with the command, plus its
 # deeper-indented continuation lines. A miss says so rather than printing nothing.
+#
+# #283: the lookup searches --full FIRST and --dev on a miss. It used to read
+# --full only, so all 24 dev-view entries were unreachable by name — `help
+# nuke-state` denied a command `help --dev` documents, which re-opened #216 on
+# this route (its remedy for list-game-ids was a --dev listing, and `help
+# list-game-ids` still said no such entry). Two passes rather than one
+# concatenated stream: the pass that produced the hit IS the attribution, so the
+# trailer can name the right view, and a command documented in both views can
+# never print twice.
+#
+# No trailer here may claim --full holds every command: it excludes every --dev
+# one. That sentence was wrong in the miss message AND in the success trailer
+# four lines from it (guest panel, twice — the second time inside the fix for
+# the first).
 show_help_command() {
     local cmd="$1" out
-    out="$( (RED= GREEN= YELLOW= BLUE= NC=; show_help_full) | awk -v cmd="$cmd" '
-        function starts_entry(line) { return line ~ ("^  " cmd "( |$)") }
+    out="$(help_entry_from "$cmd" show_help_full)"
+    if [[ -n "${out//[[:space:]]/}" ]]; then
+        echo "$out"
+        echo
+        echo "(More: help --full for player commands, help --dev for dev/test ones)"
+        return
+    fi
+    out="$(help_entry_from "$cmd" show_help_dev)"
+    if [[ -n "${out//[[:space:]]/}" ]]; then
+        echo "$out"
+        echo
+        echo "(Dev/test command — not used when playing a game. The list: help --dev)"
+        return
+    fi
+    echo "No help entry for '$cmd'. 'help' lists your side's commands; 'help --full' documents player commands, 'help --dev' dev/test ones. Some dispatcher commands have no entry yet."
+}
+
+# Cut one command's entry (and any Flags block naming it) out of ONE rendered
+# help view. $2 is the renderer function name.
+#
+# Colours are stripped for BOTH renderers: show_help_dev interpolates
+# ${BLUE}/${GREEN}/${YELLOW}/${NC} just as show_help_full does, and an escape
+# code reaching the awk input also reaches the seat's context.
+help_entry_from() {
+    local cmd="$1" renderer="$2"
+    (RED= GREEN= YELLOW= BLUE= NC=; "$renderer") | awk -v cmd="$cmd" '
+        # LITERAL prefix compare, never a regex. `cmd` is a command name, and
+        # interpolating it into an ERE made `game-over?` mean "game-ove" plus an
+        # optional r: it missed its own entry and matched `  game-ove ...`
+        # instead. Anchoring alone is not literalness (guest panel found this
+        # twice: in the matcher, and again in the test written to pin it).
+        function starts_entry(line,   p, n) {
+            p = "  " cmd; n = length(p)
+            if (substr(line, 1, n) != p) return 0
+            return length(line) == n || substr(line, n + 1, 1) == " " }
         # A Flags header names its commands as whole words ("Run Flags: (usable
         # with run, continue, ...)"); a substring test would hand `help run` the
         # monitor-run block.
@@ -395,14 +442,7 @@ show_help_command() {
             print ""; print; in_flags = 1; in_entry = 0; next }
         starts_entry($0) { print; in_entry = 1; next }
         in_entry && /^   / { print; next }
-        { in_entry = 0 }')"
-    if [[ -n "${out//[[:space:]]/}" ]]; then
-        echo "$out"
-        echo
-        echo "(Every command: help --full)"
-    else
-        echo "No help entry for '$cmd'. 'help' lists your commands; 'help --full' documents every one."
-    fi
+        { in_entry = 0 }'
 }
 
 show_help_compact() {
@@ -526,7 +566,8 @@ ${GREEN}Lobby:${NC}
 ${YELLOW}Examples:${NC}
 ${role_examples}
 
-${BLUE}For full help:${NC} ./send_command help --full
+${BLUE}Player reference:${NC}   ./send_command help --full
+${BLUE}Dev / test reference:${NC} ./send_command help --dev
 ${BLUE}One command and its flags:${NC} ./send_command help <command>   (e.g. help monitor-run)
 
 EOF
@@ -548,24 +589,61 @@ ${YELLOW}Examples:${NC}
   ./send_command runner keep-hand           - Runner keeps mulligan
   ./send_command corp start-game            - Corp starts the game
 
+${GREEN}Help:${NC}
+  help            - Your side's commands, the short list
+  help --full     - Player reference: commands usable while playing a game
+  help --dev      - Dev / test / infra reference (not used when playing)
+  help <command>  - Just that command's entry and the Flags block naming it,
+                    from whichever of the two pages documents it
+
 ${GREEN}Status Commands:${NC}
   snapshot [N]    - One-shot per-decision read-loop in a single call:
                     status-compact + prompt(if any) + board-compact + hand +
                     last-N log (default 5) + cursor. Fewer round-trips.
   status          - Show game state (turn, credits, clicks, hand size)
+  status-compact  - The same state in 1-2 bare lines, no decorations. What
+                    snapshot embeds; the one to parse in a loop.
   board           - Show full game board (servers, ICE, rigs)
+  board-compact   - The same board, one bare line per zone, no decorations.
   hand            - Show cards in hand
+  hand-text       - Every card in hand with a ONE-LINE gist: type, cost, and the
+                    first sentence of its text (truncated at 60 chars). Good for
+                    a quick read of the whole hand; for a card's COMPLETE text
+                    use card-text <name>, which this does not replace.
   prompt [--full] - Show current prompt (if any); --full reprints one just shown
   credits         - Show current credits
   clicks          - Show remaining clicks
   archives        - Show Corp's Archives (faceup/facedown cards)
   heap            - Show Runner's Heap (discard pile)
   log [N]         - Show last N game log entries (default: 20)
+  log-compact [N] - Last N entries, one bare line each, no decorations
+                    (default: 5). 'log' is the one to read by eye.
   card-text <name>   - Look up card information (type, cost, text)
   decklist        - Your own decklist for this game (opponent's is hidden)
   abilities <name>   - Show abilities for installed card
   list-playables  - List all currently playable actions (cards, abilities)
   diagnose-blocker - Explain why you can/can't act + the single next command
+  peer-status     - Is my opponent alive? How long since their driver last acted.
+                    Use when a wait keeps timing out empty: 'active Ns ago' =
+                    still thinking (keep waiting); 'SILENT / likely disconnected'
+                    = their process died — conclude, don't wait forever.
+  game-over-status - ONE machine-readable line answering "is this game finished?",
+                    so a loop need not screen-scrape 'status'. Exactly one of:
+                      NO-GAME
+                      GAME-OVER winner=<corp|runner|tie> turn=N
+                      GAME-GONE turn=N
+                      AWAITING-START turn=N next-player=<side>
+                      IN-PROGRESS turn=N whose-turn=<side> clicks=N
+                    GAME-GONE means the server closed our lobby: a stop
+                    condition exactly like GAME-OVER, not something to retry.
+                    AWAITING-START may add ' open-prompt=mine' (the boundary is
+                    waiting on OUR prompt) or ' blocked=my-mulligan' /
+                    ' blocked=opponent-mulligan'; IN-PROGRESS may add
+                    ' owes=end-turn'. All four are ADDITIVE last fields, so
+                    prefix-match the line rather than comparing it whole.
+                    clicks is the ACTIVE player's remaining clicks.
+  game-over?      - Alias for game-over-status; identical output (its tokens are
+                    listed under that entry).
 
 ${GREEN}Basic Actions:${NC}
   start-turn      - Start your turn (gain clicks, Corp draws card)
@@ -633,6 +711,34 @@ ${GREEN}Running:${NC}
     --full-break     Runner: auto-break all ICE with available breakers
     --no-continue    Don't auto-continue after run start
     --single         Take ONE step and return (what 'continue-run' is an alias for)
+    --tank <name>    Runner: pre-authorize letting subs fire on the ICE titled
+                     <name>, instead of being asked mid-encounter. Repeatable.
+                     Same signal the 'tank' command sends, committed up front.
+    --tank-all       Runner: pre-authorize it on EVERY ICE this run (yolo).
+    --tactics <edn>  Runner: per-ICE break plan inline. Unusable from this script
+                     for any map containing a QUOTED string — each flag is
+                     interpolated into a Clojure string unquoted, so the first
+                     card title breaks the form before the parser sees it. A
+                     keyword-only map such as '{:default :pause}' does get
+                     through. For anything naming a card, use --tactics-file.
+    --tactics-file <path>
+                     Runner: per-ICE break plan, read as an EDN map from <path>:
+                       {"Tithe" {:card "Unity" :action :break-dynamic}
+                        :default :pause}
+                     Keys are ICE titles (:default covers the rest); the value's
+                     :action is one of
+                       :break-dynamic  match strength and fully break  [works]
+                       :use-ability    with {:ability-index N}         [works]
+                       :pause          stop and hand the encounter back [works]
+                       :break-subs     NOT implemented — PAUSES the run
+                       :script         NOT implemented — PAUSES the run
+                       :prep           NOT implemented — ignored, falls through
+                     Known gap: a breaker HOSTED on another card (e.g. on a
+                     Leprechaun) is not found, so its plan silently won't fire.
+                     Use the FILE form: the inline --tactics flag cannot carry a
+                     quoted map from the command line (the quotes break the
+                     Clojure form before the parser sees them), so a map with
+                     any card title in it must come from a file.
 
   ${BLUE}monitor-run Flags:${NC} (Corp; usable with continue, monitor-run)
     --fire-if-asked  Sleep mode: auto-fire on a tank SIGNAL, auto-continue, wake
@@ -737,9 +843,21 @@ ${GREEN}Heuristic Bot (Corp infra / self-play):${NC}
   bot-loop [--patient N] - Autonomous loop (used by the match harness)
   bot-loop-status  - Is the autonomous loop alive?
   bot-loop-stop    - Stop the autonomous loop
+  bot-status       - The heuristic bot's own decision-relevant readout for THIS
+                     side; the fields differ by side (the Corp bot lists hand by
+                     type and installed agendas with advancement, the Runner bot
+                     lists missing breakers and the active run). Not the game
+                     'status' command.
 
 ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits (+N/-N adjusts instead)
+  change <key> <delta> - CHEATING: move a numeric state key by a SIGNED delta
+                        (change credit -3, change click 2). The credits-only
+                        version is fix-credits. Pass the key BARE: the script
+                        already prepends the colon, so 'change :credit 5' sends
+                        ::credit and the server handler throws. Like every
+                        backdoor here it APPEARS IN THE GAME LOG — the opponent
+                        can see it.
   discard-card <name> - Move card to discard (for testing)
   draw-to-card <name> - Draw until card appears in hand
   find-card <name> [turns] - Multi-turn search; the opponent heuristic bot plays between (default 10)
@@ -751,6 +869,27 @@ ${GREEN}Debug & Dev:${NC}
                         distinguish a transient empty board from an idle-purged game
   debug-chat [on|off] - Toggle debug chat mode
   connect             - Manually reconnect WebSocket
+
+${GREEN}Run Flags — harness/internal (NOT for a player seat):${NC}
+  --return-on-signal  Makes a Corp loop RETURN :waiting-for-runner-signal instead
+                      of handling the tank signal itself. The heuristic bot sets
+                      this for its own stall tracker; a model seat has no such
+                      tracker. Do NOT combine with --persistent: the park only
+                      resumes on :run-complete/:no-run, so this flag's return
+                      ENDS the park and nobody is minding the Runner's run.
+  --since <cursor>    Fast-return: if the state cursor has already passed
+                      <cursor>, return at once WITHOUT advancing the run — and,
+                      with --persistent, WITHOUT parking. 'new run active' if a
+                      run is live; 'run ended' only if there is no run AND no
+                      live encounter (with an encounter still live neither
+                      fast-return fires and it monitors normally — #164: 'run
+                      ended' would be a false claim there). Harness use only;
+                      'wait --since N' is the player-facing one.
+  --force             Bypass ALL smart checks for the whole run, not just
+                      continue-run: run! stores it in the strategy and the
+                      Priority-0 handler honours it for the entire auto-continue
+                      loop. AI-vs-AI testing ONLY — in a HITL game it breaks
+                      state by passing when it should wait.
 
 ${GREEN}Replay Recording:${NC}
   replay-start    - Start recording game for replay

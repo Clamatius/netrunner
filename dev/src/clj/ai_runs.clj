@@ -99,15 +99,48 @@
   "Parse command-line style flags from arguments.
    Returns {:server \"HQ\" :flags {:full-break true :no-continue false ...}}
 
-   Supported flags:
+   Supported flags — ALL 14 this body handles. This docstring is the authority
+   (it is the parser); run!/continue-run!/monitor-run! document only the subset
+   each of them honours, rather than keeping a second list that drifts. The
+   list used to name 8 of the 14 while run!'s named a different 5, and the two
+   disagreed about one parser (#281).
+
+   Runner, run-shaping:
    --full-break      : Runner auto-breaks all ICE
    --tank <ice-name> : Runner pre-authorizes letting subs fire on specified ICE
+                       (repeatable; accumulates into a set)
    --tank-all        : Runner pre-authorizes letting subs fire on ALL ICE (yolo)
+   --tactics <edn>   : Runner per-ICE break plan as an EDN map. From
+                       dev/send_command this only works for a map with NO
+                       quoted strings: the arms interpolate each flag into a
+                       Clojure string without clj_str (#255), so a card title
+                       breaks the form while {:default :pause} survives. Any
+                       plan naming a card must use --tactics-file.
+   --tactics-file <path> : the same map, slurped from a file
+   --no-continue     : Don't auto-continue after run start (run! only — it is
+                       the sole consumer of :no-continue)
+
+   Corp, rez/fire:
    --no-rez          : Corp doesn't rez anything
    --rez <ice-name>  : Corp auto-rezzes named ICE; PAUSES on other unrezzed ICE
+                       (repeatable; accumulates into a set)
    --fire-unbroken   : Corp auto-fires unbroken subs
-   --no-continue     : Don't auto-continue after run start
-   --force           : Bypass all smart checks (for continue-run)
+   --fire-if-asked   : Corp auto-fires on a tank SIGNAL only; a plain pass wakes
+
+   Loop control, PLAYER-facing:
+   --persistent      : own the whole opponent run; park across empty windows.
+                       Documented in the player help and what an autonomous Corp
+                       seat is told to use — NOT harness-only.
+
+   Loop control, HARNESS/BOT only (do not put these in a player brief):
+   --return-on-signal: surface :waiting-for-runner-signal instead of handling it.
+                       Do NOT pair with --persistent: park-continuable? is only
+                       #{:run-complete :no-run}, so this return ends the park.
+   --since <cursor>  : fast-return if the cursor already advanced, WITHOUT
+                       advancing the run and, with --persistent, without parking
+   --force           : Bypass ALL smart checks. Honoured by run! as well as
+                       continue-run (run! stores it in the strategy and
+                       handle-force-mode is Priority 0). AI-vs-AI testing only.
 
    Usage:
    (parse-run-flags [\"hq\" \"--full-break\"])
@@ -312,12 +345,28 @@
    - remote1, remote 1, r1, server1, server 1 → Server 1
    - remote2, r2, server2 → Server 2
 
-   Strategy flags:
-   --full-break      : Runner auto-breaks all ICE (no pauses for break decisions)
-   --no-rez          : Corp doesn't rez anything (auto-declines all rez opportunities)
-   --rez <ice-name>  : Corp auto-rezzes named ICE; other unrezzed ICE PAUSES for a rez decision (not auto-declined)
-   --fire-unbroken   : Corp auto-fires all unbroken subroutines
-   --no-continue     : Don't auto-continue after run initiation (stop at first decision)
+   Strategy flags THIS function honours (the full set any of these commands
+   parse is parse-run-flags' docstring — the parser is the single authority):
+   --full-break      : auto-break all ICE (no pauses for break decisions)
+   --no-continue     : Don't auto-continue after run initiation (stop at first
+                       decision). run! is the ONLY consumer of :no-continue.
+   --tank <ice-name> : pre-authorize letting subs fire on that ICE (repeatable)
+   --tank-all        : pre-authorize it on every ICE this run
+   --tactics-file <path> : per-ICE break plan from a file (see parse-run-flags;
+                       prefer this from the CLI — the inline --tactics form
+                       cannot carry a map containing a QUOTED string, #255, so
+                       any plan naming a card must come from a file; a
+                       keyword-only map like {:default :pause} does get through)
+   --force           : bypass ALL smart checks for this whole run. set-strategy!
+                       below stores every flag except :no-continue, so :force
+                       reaches the strategy and handle-force-mode (Priority 0)
+                       honours it for the entire auto-continue loop — this is
+                       NOT continue-run-only. AI-vs-AI testing ONLY.
+
+   The Corp flags (--no-rez, --rez, --fire-unbroken, --fire-if-asked) and the
+   defender-loop flags (--persistent, --return-on-signal, --since) are PARSED
+   but ignored here: this is the Runner's run verb. They are listed only in
+   parse-run-flags' docstring, so this one cannot promise what it drops.
 
    Usage:
    (run! \"hq\")                        ; Auto-continues till decision needed
