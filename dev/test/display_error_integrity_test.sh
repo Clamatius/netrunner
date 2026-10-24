@@ -87,15 +87,6 @@ export ERR_LINE1 ERR_LINE2 ERR_LINE3 ERR_LINE4
 
 fails=0
 
-# Captured BEFORE any send_command runs, for the real-log guard at the end.
-REAL_LOG_PATH="$SCRIPT_DIR/../../logs/commands.log"
-if [[ -f "$REAL_LOG_PATH" ]]; then
-    # tr: macOS wc pads its output, and this value lands in a failure message.
-    REAL_LOG_BEFORE="$(wc -l < "$REAL_LOG_PATH" | tr -d ' ')"
-else
-    REAL_LOG_BEFORE="absent"
-fi
-
 assert_eq() {  # NAME EXPECTED ACTUAL
     local name="$1" want="$2" got="$3"
     if [[ "$want" == "$got" ]]; then
@@ -180,16 +171,14 @@ else
     fails=$((fails+1))
 fi
 
-# Negative check: the real log must not have grown while this test ran. Only
-# ever fails on growth, so a concurrent writer cannot make it fail spuriously.
-if [[ "$REAL_LOG_BEFORE" == "absent" ]]; then
-    echo "ok   [real-log-untouched] (no real log on this checkout)"
-elif [[ "$(wc -l < "$REAL_LOG_PATH" 2>/dev/null | tr -d ' ' || echo 0)" -le "$REAL_LOG_BEFORE" ]]; then
-    echo "ok   [real-log-untouched]"
-else
-    echo "FAIL [real-log-untouched]: $REAL_LOG_PATH grew from $REAL_LOG_BEFORE lines while this test ran."
-    fails=$((fails+1))
-fi
+# There is deliberately NO "the real log did not grow" check here. I wrote one,
+# claimed in its own comment that "a concurrent writer cannot make it fail
+# spuriously", and had that exactly backwards: growth from a concurrent writer
+# is precisely what makes it fail. It passed in a quiet worktree and failed the
+# moment `make verify` ran in the main checkout, where other sessions are
+# writing logs/commands.log continuously (46869 lines and climbing). The
+# positive check above is the whole guard: it is the one that goes red when the
+# export is deleted, and it cannot be perturbed by anyone else's traffic.
 
 if [[ "$fails" -eq 0 ]]; then
     echo "✅ display_error_integrity_test: all assertions passed."
