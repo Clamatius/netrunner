@@ -126,15 +126,20 @@
    --fire-unbroken   : Corp auto-fires unbroken subs
    --fire-if-asked   : Corp auto-fires on a tank SIGNAL only; a plain pass wakes
 
-   Loop control (harness/bot, not a player seat):
-   --persistent      : own the whole opponent run; park across empty windows
+   Loop control, PLAYER-facing:
+   --persistent      : own the whole opponent run; park across empty windows.
+                       Documented in the player help and what an autonomous Corp
+                       seat is told to use — NOT harness-only.
+
+   Loop control, HARNESS/BOT only (do not put these in a player brief):
    --return-on-signal: surface :waiting-for-runner-signal instead of handling it.
                        Do NOT pair with --persistent: park-continuable? is only
                        #{:run-complete :no-run}, so this return ends the park.
    --since <cursor>  : fast-return if the cursor already advanced, WITHOUT
                        advancing the run and, with --persistent, without parking
-   --force           : Bypass all smart checks (for continue-run). AI-vs-AI
-                       testing only.
+   --force           : Bypass ALL smart checks. Honoured by run! as well as
+                       continue-run (run! stores it in the strategy and
+                       handle-force-mode is Priority 0). AI-vs-AI testing only.
 
    Usage:
    (parse-run-flags [\"hq\" \"--full-break\"])
@@ -348,10 +353,15 @@
    --tank-all        : pre-authorize it on every ICE this run
    --tactics-file <path> : per-ICE break plan from a file (see parse-run-flags;
                        the inline --tactics form is unusable from the CLI, #255)
+   --force           : bypass ALL smart checks for this whole run. set-strategy!
+                       below stores every flag except :no-continue, so :force
+                       reaches the strategy and handle-force-mode (Priority 0)
+                       honours it for the entire auto-continue loop — this is
+                       NOT continue-run-only. AI-vs-AI testing ONLY.
 
    The Corp flags (--no-rez, --rez, --fire-unbroken, --fire-if-asked) and the
-   loop flags (--persistent, --return-on-signal, --since) are PARSED but ignored
-   here: this is the Runner's run verb. They are listed only in
+   defender-loop flags (--persistent, --return-on-signal, --since) are PARSED
+   but ignored here: this is the Runner's run verb. They are listed only in
    parse-run-flags' docstring, so this one cannot promise what it drops.
 
    Usage:

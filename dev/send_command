@@ -398,17 +398,17 @@ show_help_command() {
     if [[ -n "${out//[[:space:]]/}" ]]; then
         echo "$out"
         echo
-        echo "(Every player command: help --full · dev/test commands: help --dev)"
+        echo "(More: help --full for player commands, help --dev for dev/test ones)"
         return
     fi
     out="$(help_entry_from "$cmd" show_help_dev)"
     if [[ -n "${out//[[:space:]]/}" ]]; then
         echo "$out"
         echo
-        echo "(Dev/test command — not used when playing a game. All of them: help --dev)"
+        echo "(Dev/test command — not used when playing a game. The list: help --dev)"
         return
     fi
-    echo "No help entry for '$cmd'. 'help' lists your commands, 'help --full' documents every player command, 'help --dev' every dev/test one."
+    echo "No help entry for '$cmd'. 'help' lists your side's commands; 'help --full' the player commands; 'help --dev' the dev/test ones."
 }
 
 # Cut one command's entry (and any Flags block naming it) out of ONE rendered
@@ -590,8 +590,8 @@ ${YELLOW}Examples:${NC}
 
 ${GREEN}Help:${NC}
   help            - Your side's commands, the short list
-  help --full     - Every PLAYER command (this page)
-  help --dev      - Every dev / test / infra command (not used when playing)
+  help --full     - The PLAYER commands (this page)
+  help --dev      - The dev / test / infra commands (not used when playing)
   help <command>  - Just that command's entry and the Flags block naming it,
                     from whichever of the two pages documents it
 
@@ -605,8 +605,10 @@ ${GREEN}Status Commands:${NC}
   board           - Show full game board (servers, ICE, rigs)
   board-compact   - The same board, one bare line per zone, no decorations.
   hand            - Show cards in hand
-  hand-text       - Every card in hand WITH its full rules text, so you don't
-                    card-text them one at a time.
+  hand-text       - Every card in hand with a ONE-LINE gist: type, cost, and the
+                    first sentence of its text (truncated at 60 chars). Good for
+                    a quick read of the whole hand; for a card's COMPLETE text
+                    use card-text <name>, which this does not replace.
   prompt [--full] - Show current prompt (if any); --full reprints one just shown
   credits         - Show current credits
   clicks          - Show remaining clicks
@@ -712,10 +714,12 @@ ${GREEN}Running:${NC}
                      <name>, instead of being asked mid-encounter. Repeatable.
                      Same signal the 'tank' command sends, committed up front.
     --tank-all       Runner: pre-authorize it on EVERY ICE this run (yolo).
-    --tactics <edn>  Runner: per-ICE break plan inline. NOT USABLE from this
-                     script: each flag is interpolated into a Clojure string
-                     unquoted, so the first card title in the map breaks the
-                     form before the parser sees it. Use --tactics-file.
+    --tactics <edn>  Runner: per-ICE break plan inline. Unusable from this script
+                     for any map containing a QUOTED string — each flag is
+                     interpolated into a Clojure string unquoted, so the first
+                     card title breaks the form before the parser sees it. A
+                     keyword-only map such as '{:default :pause}' does get
+                     through. For anything naming a card, use --tactics-file.
     --tactics-file <path>
                      Runner: per-ICE break plan, read as an EDN map from <path>:
                        {"Tithe" {:card "Unity" :action :break-dynamic}
@@ -838,9 +842,11 @@ ${GREEN}Heuristic Bot (Corp infra / self-play):${NC}
   bot-loop [--patient N] - Autonomous loop (used by the match harness)
   bot-loop-status  - Is the autonomous loop alive?
   bot-loop-stop    - Stop the autonomous loop
-  bot-status       - The heuristic bot's own decision-relevant readout:
-                     credits, clicks, hand contents by type, installed agendas
-                     with advancement. Not the game 'status' command.
+  bot-status       - The heuristic bot's own decision-relevant readout for THIS
+                     side; the fields differ by side (the Corp bot lists hand by
+                     type and installed agendas with advancement, the Runner bot
+                     lists missing breakers and the active run). Not the game
+                     'status' command.
 
 ${GREEN}Debug & Dev:${NC}
   fix-credits <N>     - CHEATING: Manually set credits (+N/-N adjusts instead)
@@ -871,11 +877,18 @@ ${GREEN}Run Flags — harness/internal (NOT for a player seat):${NC}
                       resumes on :run-complete/:no-run, so this flag's return
                       ENDS the park and nobody is minding the Runner's run.
   --since <cursor>    Fast-return: if the state cursor has already passed
-                      <cursor>, return at once (:new-run if a run is live,
-                      :run-complete if not) WITHOUT advancing the run — and,
-                      with --persistent, without parking. Harness use only;
+                      <cursor>, return at once WITHOUT advancing the run — and,
+                      with --persistent, WITHOUT parking. 'new run active' if a
+                      run is live; 'run ended' only if there is no run AND no
+                      live encounter (with an encounter still live neither
+                      fast-return fires and it monitors normally — #164: 'run
+                      ended' would be a false claim there). Harness use only;
                       'wait --since N' is the player-facing one.
-  --force             Bypass continue-run's smart checks. AI-vs-AI testing only.
+  --force             Bypass ALL smart checks for the whole run, not just
+                      continue-run: run! stores it in the strategy and the
+                      Priority-0 handler honours it for the entire auto-continue
+                      loop. AI-vs-AI testing ONLY — in a HITL game it breaks
+                      state by passing when it should wait.
 
 ${GREEN}Replay Recording:${NC}
   replay-start    - Start recording game for replay

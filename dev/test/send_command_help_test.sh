@@ -72,6 +72,27 @@ assert_contains() {
     fi
 }
 
+# The isolation above is load-bearing, so assert it rather than trusting it:
+# without these exports every run of this test appends to the real
+# logs/commands.log and refreshes logs/.heartbeats/{corp,runner} — the
+# peer-liveness timestamps an un-babysat game reads to tell a thinking opponent
+# from a dead process. It was verified by mutation and then left unasserted, so
+# the next reader could drop the exports as unused with the suite still green
+# (code review).
+echo "Test isolation"
+if [[ "${SEND_COMMAND_LOG:-}" == "$TMP/"* && "${HEARTBEAT_DIR:-}" == "$TMP/"* ]]; then
+    pass "command log and heartbeats are redirected into this test's TMP"
+else
+    fail "SEND_COMMAND_LOG/HEARTBEAT_DIR not redirected — this run writes the REAL log and heartbeats"
+fi
+"$SEND_CMD" corp help >/dev/null 2>&1
+if [[ -e "$TMP/commands.log" ]]; then
+    pass "the redirect is in force (this test's log received the invocation)"
+else
+    fail "no log at $TMP/commands.log — the redirect is not reaching send_command"
+fi
+
+echo
 echo "Rendering every help variant from $SEND_CMD"
 echo
 
@@ -203,22 +224,55 @@ done
 assert_entry help
 
 echo
-echo "Run flags (#281): named as whole tokens in a Flags section"
-# Whole-token match: `--tank` must not be satisfied by `--tank-all`, nor
-# `--tactics` by `--tactics-file`.
+echo "Run flags (#281): each has its OWN entry line in a Flags section"
+# A flag counts as documented only if it HEADS an indented entry line, i.e. some
+# line is <indent><flag> followed by a space or end-of-line.
+#
+# "appears somewhere in some view" is NOT the test. That is the measurement bug
+# this whole change exists to correct (both #280 and #281 shipped a wrong count
+# from it), and the first version of THIS assertion re-committed it: a plain
+# whole-token grep over the rendered views was satisfied for --since by
+# `wait [seconds] [--since N]` and for --force by `end-turn [--force]` — other
+# commands' flags. Deleting the entire --dev harness flag section left both
+# green (code review, two seats, reproduced by mutation). Requiring the flag at
+# the HEAD of its line excludes both, because there it is mid-line.
+#
+# Literal compare again, for the same reason as has_entry.
+has_flag_entry() {
+    awk -v flag="$1" '
+        {
+            line = $0
+            sub(/^ +/, "", line)                  # strip the indent
+            if (line == $0) next                  # unindented: a section header
+            n = length(flag)
+            if (substr(line, 1, n) != flag) next
+            if (length(line) == n || substr(line, n + 1, 1) == " ") found = 1
+        }
+        END { exit(found ? 0 : 1) }' <<<"$2"
+}
 assert_flag() {
     local flag="$1"
-    if grep -qE "(^|[^-A-Za-z0-9])${flag}([^-A-Za-z0-9]|\$)" <<<"$all_views"; then
-        pass "flag documented: $flag"
+    if has_flag_entry "$flag" "$all_views"; then
+        pass "flag has its own entry: $flag"
     else
-        fail "flag handled by parse-run-flags but in no help view: $flag"
+        fail "flag handled by parse-run-flags but has no entry line: $flag"
     fi
 }
-# All seven that were absent. --since and --force were previously MIScounted as
-# documented: they appear only as `wait`'s and `end-turn`'s flags, which are
-# different commands (design review r1, guest seat).
+# All seven that were absent.
 for f in --tank --tank-all --tactics --tactics-file --return-on-signal --since --force; do
     assert_flag "$f"
+done
+# The assertion must be able to TELL that difference: --since and --force appear
+# mid-line as other commands' flags, so a head-of-line test must reject those
+# lines on their own. Pin it, so the weaker form cannot come back silently.
+other_cmd_flags="  wait [seconds] [--since N]  Block until something happens
+  end-turn [--force] - End your turn (requires --force if clicks remain)"
+for f in --since --force; do
+    if has_flag_entry "$f" "$other_cmd_flags"; then
+        fail "has_flag_entry counts $f where it is only another command's flag"
+    else
+        pass "has_flag_entry rejects $f as another command's flag"
+    fi
 done
 
 echo
@@ -232,6 +286,18 @@ for c in nuke-state list-game-ids replay-save bot-turn change bot-status; do
         pass "help $c: resolves"
     fi
 done
+# peer-status is documented in COMPACT help, so assert_entry above is satisfied
+# without the --full entry this change added. The point of that entry is that
+# the per-command lookup (which reads --full then --dev, never compact) can find
+# it, so assert THAT: deleting the --full entry left 53/53 green otherwise
+# (code review, two seats, reproduced by mutation).
+ps="$("$SEND_CMD" corp help peer-status 2>&1)"
+if [[ "$ps" == *"No help entry"* ]]; then
+    fail "help peer-status: denied — compact documents it but --full/--dev do not"
+else
+    pass "help peer-status: resolves"
+fi
+
 # The name that breaks a pattern-based matcher.
 go="$("$SEND_CMD" corp help 'game-over?' 2>&1)"
 if [[ "$go" == *"No help entry"* ]]; then
@@ -239,8 +305,11 @@ if [[ "$go" == *"No help entry"* ]]; then
 else
     pass "help game-over?: resolves"
 fi
-# ...and it must be ITS entry, not a prefix neighbour's.
-assert_contains "help game-over?" "$go" "game-over?"
+# ...and it must be ITS OWN entry. Asserting the command name here proves
+# nothing: the miss message contains it too ("No help entry for 'game-over?'"),
+# so that assertion was satisfied by the very denial it excluded (code review).
+# Assert the entry's text instead.
+assert_contains "help game-over?" "$go" "Alias for game-over-status"
 
 echo
 echo "Trailers name the view that actually holds the entry (#283)"
@@ -253,7 +322,11 @@ assert_contains "help nuke-state (dev hit)" "$dev_hit" "help --dev"
 # corrected only one of them (design review r1 then r2, guest seats).
 for label_out in "help rez:$full_hit" "help nuke-state:$dev_hit" "help no-such-command:$nope"; do
     lbl="${label_out%%:*}"; body="${label_out#*:}"
-    if grep -qiE 'every command|documents every one' <<<"$body"; then
+    # Widened: the first version banned 'every command' and 'documents every
+    # one', and my own replacement wording 'documents every PLAYER command' slid
+    # straight past it — still a completeness claim, still false (concede is a
+    # player command held out of --full). Ban the claim shape, not one phrasing.
+    if grep -qiE 'every ([a-z]+ )?command|documents every|all of them' <<<"$body"; then
         fail "$lbl: trailer still claims --full documents every command"
     else
         pass "$lbl: no false 'every command' claim"
