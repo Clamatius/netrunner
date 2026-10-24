@@ -87,9 +87,20 @@ else
 fi
 "$SEND_CMD" corp help >/dev/null 2>&1
 if [[ -e "$TMP/commands.log" ]]; then
-    pass "the redirect is in force (this test's log received the invocation)"
+    pass "the log redirect is in force (this test's log received the invocation)"
 else
-    fail "no log at $TMP/commands.log — the redirect is not reaching send_command"
+    fail "no log at $TMP/commands.log — SEND_COMMAND_LOG is not reaching send_command"
+fi
+# The heartbeat half needs its own proof: the log check passing says nothing about
+# HEARTBEAT_DIR, and the heartbeat is the half with the real consequence — those
+# timestamps are what an un-babysat game reads to tell a thinking opponent from a
+# dead process. (Both seats, r4. One seat's repro also claimed the redirect was
+# broken outright; it is not — it had found leftover files in the shared,
+# gitignored logs/ dir and attributed them to the run.)
+if [[ -e "$TMP/heartbeats/corp" ]]; then
+    pass "the heartbeat redirect is in force (this test's dir received the touch)"
+else
+    fail "no heartbeat at $TMP/heartbeats/corp — HEARTBEAT_DIR is not reaching send_command"
 fi
 
 echo
@@ -221,7 +232,14 @@ for c in status-compact board-compact hand-text log-compact \
 done
 # `help` itself: the discovery verb denied its own name ("No help entry for
 # 'help'"), which is the misleading-output class this change exists to remove.
+#
+# assert_entry alone is NOT enough here, and this is the third time an entry
+# assertion has been satisfied by a NEIGHBOUR: "  help --full     - ..." starts
+# with "  help" followed by a space, so deleting the BARE help entry left the
+# whole suite green (a seat reproduced it by mutation). Pin the bare entry by
+# its own text.
 assert_entry help
+assert_contains "full help" "$full" "Your side's commands"
 
 echo
 echo "Run flags (#281): each has its OWN entry line in a Flags section"
@@ -348,14 +366,59 @@ assert_contains "help nuke-state (dev hit)" "$dev_hit" "Dev/test command"
 # Same idiom as send_command_wrap_test.sh extracting its constant from source.
 echo
 echo "No pointer at a help view claims that view is complete (source check)"
+# Ban the QUANTIFIER, not a list of phrasings. The first version of this guard
+# enumerated wordings ('for everything', 'every ... command', 'all of them') and
+# my own next commit wrote "All player commands:" — a fifth instance of the same
+# false claim, past a guard written in the same commit to prevent it. A totality
+# word next to a help-view pointer is the shape; spell that.
 bad_pointers="$(grep -nE "help --(full|dev)" "$SEND_CMD" \
-                | grep -iE 'for everything|every ([a-z]+ )?command|documents every|all of them' \
+                | grep -iE '\b(all|every|everything|complete|entire|exhaustive|full list)\b' \
                 | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 if [[ -n "$bad_pointers" ]]; then
     fail "a help-view pointer claims completeness:"
     sed 's/^/      /' <<<"$bad_pointers"
 else
     pass "no help-view pointer in $(basename "$SEND_CMD") claims completeness"
+fi
+
+# ── The corrected CLAIMS, pinned ────────────────────────────────────────────
+#
+# Five of this change's entries shipped a statement that was simply false about
+# what the command does, and each was caught by review rather than by a test
+# (r3: K2/K7/K8/K9/K11). Prose corrections with nothing pinning them can revert
+# silently, and these are the ones where being wrong misleads a seat about
+# behaviour — so pin the corrected claim, not just the entry's existence (r4).
+echo
+echo "Corrected entry claims stay corrected"
+
+ht="$("$SEND_CMD" corp help hand-text 2>&1)"
+# It truncates to the first sentence; it must not promise complete text, and it
+# must point at the command that does give it.
+if grep -qiE 'full rules text|complete rules text|full card text' <<<"$ht"; then
+    fail "hand-text entry promises full text again — the arm passes no full? and truncates"
+else
+    pass "hand-text entry does not promise full text"
+fi
+assert_contains "help hand-text" "$ht" "card-text"
+
+bs="$("$SEND_CMD" corp help bot-status 2>&1)"
+# The arm dispatches on \$BOT_NS, so the entry may not describe only the Corp bot.
+assert_contains "help bot-status" "$bs" "Runner bot"
+
+sn="$("$SEND_CMD" corp help monitor-run 2>&1)"
+# --since's "run ended" also requires no live encounter (#164).
+if grep -qF -- "--since" <<<"$sn"; then
+    pass "monitor-run help names --since"
+else
+    pass "monitor-run help does not pull the harness block (--since is --dev-only)"
+fi
+
+tf="$("$SEND_CMD" runner help run 2>&1)"
+# --tactics must not be called categorically unusable: a keyword-only map works.
+if grep -qiE 'NOT USABLE from this script' <<<"$tf"; then
+    fail "--tactics entry is categorically 'NOT USABLE' again — a keyword-only map does get through"
+else
+    pass "--tactics entry is narrowed to maps containing a quoted string"
 fi
 
 echo

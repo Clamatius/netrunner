@@ -140,7 +140,7 @@ did_you_mean() {
         # as one mangled command — a seat model tried to run it verbatim.
         echo -e "${YELLOW}💡 Did you mean: ${hits//|/ | }${NC}" >&2
     else
-        echo -e "${YELLOW}💡 Run './send_command <side> help' for your commands, 'help --full' for the player commands, or 'help --dev' for the dev/test ones.${NC}" >&2
+        echo -e "${YELLOW}💡 Run './send_command <side> help' for your commands, 'help --full' for player commands, or 'help --dev' for dev/test ones.${NC}" >&2
     fi
 }
 
@@ -408,7 +408,7 @@ show_help_command() {
         echo "(Dev/test command — not used when playing a game. The list: help --dev)"
         return
     fi
-    echo "No help entry for '$cmd'. 'help' lists your side's commands; 'help --full' the player commands; 'help --dev' the dev/test ones."
+    echo "No help entry for '$cmd'. 'help' lists your side's commands; 'help --full' documents player commands, 'help --dev' dev/test ones. Some dispatcher commands have no entry yet."
 }
 
 # Cut one command's entry (and any Flags block naming it) out of ONE rendered
@@ -566,8 +566,8 @@ ${GREEN}Lobby:${NC}
 ${YELLOW}Examples:${NC}
 ${role_examples}
 
-${BLUE}All player commands:${NC} ./send_command help --full
-${BLUE}Dev / test commands:${NC} ./send_command help --dev
+${BLUE}Player reference:${NC}   ./send_command help --full
+${BLUE}Dev / test reference:${NC} ./send_command help --dev
 ${BLUE}One command and its flags:${NC} ./send_command help <command>   (e.g. help monitor-run)
 
 EOF
@@ -591,8 +591,8 @@ ${YELLOW}Examples:${NC}
 
 ${GREEN}Help:${NC}
   help            - Your side's commands, the short list
-  help --full     - The PLAYER commands (this page)
-  help --dev      - The dev / test / infra commands (not used when playing)
+  help --full     - Player reference: commands usable while playing a game
+  help --dev      - Dev / test / infra reference (not used when playing)
   help <command>  - Just that command's entry and the Flags block naming it,
                     from whichever of the two pages documents it
 

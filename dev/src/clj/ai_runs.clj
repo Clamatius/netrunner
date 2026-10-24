@@ -110,11 +110,12 @@
    --tank <ice-name> : Runner pre-authorizes letting subs fire on specified ICE
                        (repeatable; accumulates into a set)
    --tank-all        : Runner pre-authorizes letting subs fire on ALL ICE (yolo)
-   --tactics <edn>   : Runner per-ICE break plan as an EDN map. NOTE: unusable
-                       from dev/send_command — the arms interpolate each flag
-                       into a Clojure string without clj_str (#255), so any map
-                       containing a card title breaks the form. Use
-                       --tactics-file from the CLI.
+   --tactics <edn>   : Runner per-ICE break plan as an EDN map. From
+                       dev/send_command this only works for a map with NO
+                       quoted strings: the arms interpolate each flag into a
+                       Clojure string without clj_str (#255), so a card title
+                       breaks the form while {:default :pause} survives. Any
+                       plan naming a card must use --tactics-file.
    --tactics-file <path> : the same map, slurped from a file
    --no-continue     : Don't auto-continue after run start (run! only — it is
                        the sole consumer of :no-continue)
@@ -352,7 +353,10 @@
    --tank <ice-name> : pre-authorize letting subs fire on that ICE (repeatable)
    --tank-all        : pre-authorize it on every ICE this run
    --tactics-file <path> : per-ICE break plan from a file (see parse-run-flags;
-                       the inline --tactics form is unusable from the CLI, #255)
+                       prefer this from the CLI — the inline --tactics form
+                       cannot carry a map containing a QUOTED string, #255, so
+                       any plan naming a card must come from a file; a
+                       keyword-only map like {:default :pause} does get through)
    --force           : bypass ALL smart checks for this whole run. set-strategy!
                        below stores every flag except :no-continue, so :force
                        reaches the strategy and handle-force-mode (Priority 0)
