@@ -182,8 +182,8 @@ UUIDs from `list-lobbies`. Example: `1806d5c9-f540-4158-ab66-8182433dcf10`
 
 ### Error Recovery
 ```bash
-./send_command connect              # Reconnect WebSocket
-./send_command resync <game-id>     # Rejoin game in progress
+./send_command <side> connect       # Reconnect WebSocket
+./send_command <side> resync <game-id>   # Rejoin game in progress
 ```
 Both are required
 
@@ -195,6 +195,6 @@ Shows internal WebSocket messages for debugging.
 
 ### If confused on what to plan
 ```bash
-./send_command dashboard-compact
+./send_command <side> dashboard-compact
 ```
 Shows the default plan for the heuristic-based player.

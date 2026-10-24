@@ -362,8 +362,11 @@ done
 # with a budget error is the worst available answer. The check now lives at the
 # top of ensure_connection, so it follows the network work rather than a
 # hand-kept list of which commands do network work.
-for local_cmd in help peer-status clear-heartbeats; do
-    OUT=$(TIMEOUT=abc "$SEND_CMD" "$local_cmd" 2>&1) && CODE=0 || CODE=$?
+# peer-status takes a side like every command since #279; help and
+# clear-heartbeats are the two that run without one.
+for local_cmd in "help" "corp peer-status" "clear-heartbeats"; do
+    # Unquoted on purpose: "corp peer-status" is two words.
+    OUT=$(TIMEOUT=abc "$SEND_CMD" $local_cmd 2>&1) && CODE=0 || CODE=$?
     if [[ "$CODE" -ne 0 ]]; then
         fail "timeout-local" "$local_cmd exited $CODE under a malformed budget, but it
        never reaches an eval backend — there is no budget for it to refuse.

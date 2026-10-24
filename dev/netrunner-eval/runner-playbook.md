@@ -271,7 +271,7 @@ Draws needed: 4 - 3 = 1 draw before running
 **Type matching is mandatory:**
 **Always check ICE type first:**
 ```
-./send_command card-text "Palisade"
+./send_command runner card-text "Palisade"
 Output: ICE - Barrier
 Conclusion: Need Cleaver to break
 ```

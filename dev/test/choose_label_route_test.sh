@@ -183,7 +183,7 @@ run_command corp take-credit lots
 [[ "$code" -ne 0 ]] && code=nonzero
 check 'non-numeric-count-refuses' "$code" 'nonzero'
 check 'non-numeric-count-sends-nothing' "$actions" ''
-check 'non-numeric-count-says-why' "$(grep -c 'send_command take-credit' "$TMP/output")" '1'
+check 'non-numeric-count-says-why' "$(grep -c 'send_command corp take-credit' "$TMP/output")" '1'
 
 # num_or's other half: a malformed DISPLAY count falls back to the default
 # rather than refusing, because a bad `log` argument should still show a log.
