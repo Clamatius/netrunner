@@ -2788,6 +2788,24 @@ case "$COMMAND" in
                 info "Patient mode ON (${loop_next:-default} min wall-clock bail)"
             fi
         done
+        # #286: this loop lives in the REPL, so the heartbeat toucher forked
+        # above dies with THIS invocation while the bot plays on — and 300s later
+        # the opponent is told "SILENT — likely disconnected … conclude" about a
+        # bot that is still playing. Hand the loop the path so it can refresh its
+        # own side's clock; bash stays the single owner of the path (so the
+        # HEARTBEAT_DIR seam keeps working and the contract isn't duplicated in
+        # Clojure). Through clj_str, not bare interpolation: #255 is open against
+        # exactly this shape, and HEARTBEAT_DIR is caller-settable, so a path
+        # containing a quote would otherwise close the string and execute.
+        # ABSOLUTE, always. We hand this string to the REPL, which resolves it
+        # against ITS working directory — a different tree (the client REPLs are
+        # rooted in the main checkout, not in a worktree). A relative
+        # HEARTBEAT_DIR would make bash touch one file and the loop refresh
+        # another, and the symptom is #286 all over again. Unreachable on the
+        # NETRUNNER_ROOT-derived default; reachable through the env seam.
+        HB_FILE="${HEARTBEAT_DIR}/${CLIENT_NAME}"
+        case "$HB_FILE" in /*) ;; *) HB_FILE="$PWD/$HB_FILE" ;; esac
+        LOOP_ARGS="$LOOP_ARGS :heartbeat-file \"$(clj_str "$HB_FILE")\""
         # Refuse to relaunch over a still-running loop, else the old future is
         # orphaned (unreachable by bot-loop-status/stop). NOTE: we resolve the VAR
         # and deref THE VAR (var-deref -> the Future object, non-blocking) before

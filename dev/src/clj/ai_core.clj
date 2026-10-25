@@ -3279,3 +3279,94 @@
                           "")))
         (state/mark-card-seen! card-title)
         true))))
+
+;; ============================================================================
+;; Peer-liveness heartbeat (for loops that live INSIDE the REPL)
+;; ============================================================================
+;; #286: the liveness clock the other seat reads is a per-side file under
+;; logs/.heartbeats, and `dev/send_command` owns it. Every sided invocation
+;; touches that file once and then forks a background toucher bound to the
+;; invocation's own lifetime (`kill -0 $$`), so a long block — `wait`,
+;; `monitor-run --persistent` — cannot read as a dead driver.
+;;
+;; `bot-loop` breaks that: it launches a detached future in THIS REPL and
+;; returns, so the launching invocation's toucher dies while the bot plays on.
+;; 300s later the heuristic bot reads as "SILENT — likely disconnected … verify
+;; game-over-status / conclude" to the opponent, however fast it is playing, and
+;; that line is an INSTRUCTION a new model seat is learning to trust.
+;;
+;; Why a thread and not a touch per action (where the issue first pointed):
+;; `monitor-active-run!`'s `:timeout-ms` default is 300000 (ai_runs.clj ~2022),
+;; which is exactly send_command's `PEER_STALE_SECS`. One tick of a bot loop can
+;; therefore occupy the whole stale window on its own, before any opponent
+;; slowness, so a per-action touch would still manufacture the false verdict in
+;; the rung-1 config the issue was filed from. (It is NOT `--patient` that does
+;; this: `stall/patient-bail?` measures the current opponent-wait ACROSS ticks,
+;; so patience never makes one tick block. Design panel corrected that reason.)
+;;
+;; REFRESH ONLY — mirrors the bash toucher's rule and exists for the same
+;; reason: `clear-heartbeats` (reset.sh) DELETES these files so a seat from the
+;; previous game cannot read as live in a fresh one. A toucher that re-created
+;; its file would undo that for as long as an old loop survived, so an absent
+;; file ends the thread instead.
+
+(def heartbeat-touch-interval-ms
+  "How often an in-REPL loop refreshes its own side's heartbeat. Matches
+   send_command's HEARTBEAT_TOUCH_SECS default (60s): comfortably inside
+   PEER_STALE_SECS (300s), cheap enough to ignore."
+  60000)
+
+(defn start-heartbeat-toucher!
+  "Keep PATH's mtime fresh while the caller's loop is running. Returns a
+   zero-arg stop fn; call it in a `finally` so a cancelled or finished loop
+   stops claiming to be alive.
+
+   - A blank/nil path is a no-op (a loop driven straight from a REPL has no
+     heartbeat and must still run), and still returns a callable stop fn, so no
+     call site needs to branch on it.
+   - Touches ONCE synchronously before returning, so a loop that exits on its
+     first tick has still reported itself alive — and so a test can observe the
+     wiring without waiting out an interval.
+   - REFRESH ONLY: if the file is absent now, or disappears later, nothing is
+     created and the thread ends.
+   - The stop flag is checked BEFORE each touch and the sleeping thread is
+     interrupted, so a thread asleep at stop! dies without touching again, and
+     one already past the sleep stops at the flag. NOT a hard guarantee: a
+     toucher that has already read the flag as false and been descheduled can
+     still land its touch after stop! returns, because file ops do not consume
+     an interrupt (code panel). The window is NOT bounded by one interval — a
+     descheduled thread can land that touch arbitrarily later — so this is a
+     race left open deliberately, not a bounded one: closing it exactly means
+     joining the toucher on every loop exit, and a scheduling stall long enough
+     to matter against a 300s threshold means the JVM has worse problems.
+   - Best-effort throughout: nothing here may throw into the caller's loop, and
+     a daemon thread cannot hold the JVM open."
+  ([path] (start-heartbeat-toucher! path heartbeat-touch-interval-ms))
+  ([path interval-ms]
+   (if (str/blank? (str path))
+     (fn [] nil)
+     (let [f (java.io.File. (str path))
+           stop? (atom false)
+           touch! (fn []
+                    (try
+                      (when (.exists f)
+                        (.setLastModified f (System/currentTimeMillis)))
+                      (catch Throwable _ nil)))]
+       (touch!)
+       (let [t (doto (Thread.
+                      (fn []
+                        (try
+                          (loop []
+                            (Thread/sleep interval-ms)
+                            (when (and (not @stop?) (.exists f))
+                              (touch!)
+                              (recur)))
+                          (catch InterruptedException _ nil)
+                          (catch Throwable _ nil)))
+                      "ai-heartbeat-toucher")
+                 (.setDaemon true)
+                 (.start))]
+         (fn []
+           (reset! stop? true)
+           (try (.interrupt t) (catch Throwable _ nil))
+           nil))))))

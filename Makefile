@@ -47,6 +47,7 @@ test:
 	  ai-display-test \
 	  ai-encounter-identity-test \
 	  ai-forced-encounter-test \
+	  ai-heartbeat-test \
 	  ai-heuristic-corp-test \
 	  ai-heuristic-runner-test \
 	  ai-loop-sync-test \

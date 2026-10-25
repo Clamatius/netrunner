@@ -23,6 +23,7 @@
             [ai-connection :as conn]
             [ai-loop-sync :as loop-sync]
             [ai-stall :as stall]
+            [ai-core :as core]
             [clojure.string :as str]))
 
 ;; ============================================================================
@@ -393,9 +394,18 @@
                    instead of the tight iteration count, so a SLOW (thinking-model)
                    Corp opponent isn't killed mid-decision. Own-turn spin bail
                    (catches OUR bugs) stays tight either way.
-     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)."
-  [& {:keys [patient? patient-ms]
+     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)
+     :heartbeat-file - path to THIS side's peer-liveness heartbeat (#286). Same
+                   hole as the Corp loop: this runs inside the REPL, so the
+                   launching send_command invocation's toucher dies while we play
+                   on and the opponent is told we disconnected. Refresh it for as
+                   long as we run. See ai-core/start-heartbeat-toucher!."
+  [& {:keys [patient? patient-ms heartbeat-file]
       :or {patient? false patient-ms stall/default-patient-bail-ms}}]
+  ;; Under the heartbeat toucher; body keeps its original indentation so the
+  ;; change stays readable as a change (see the Corp loop's note).
+  (let [stop-heartbeat! (core/start-heartbeat-toucher! heartbeat-file)]
+   (try
   (println "🏃 HEURISTIC RUNNER - Starting autonomous loop"
            (if patient? (str "(PATIENT: run-wait bail after "
                              (long (/ patient-ms 1000)) "s wall-clock)") ""))
@@ -537,7 +547,10 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur next-stall next-spin tracker)))))
+        (recur next-stall next-spin tracker))))
+   ;; A stopped loop must stop claiming to be alive — including bot-loop-stop's
+   ;; future-cancel, which arrives as an interrupt.
+   (finally (stop-heartbeat!)))))
 
 ;; ============================================================================
 ;; Turn Driver + Status (send_command parity with ai-heuristic-corp)

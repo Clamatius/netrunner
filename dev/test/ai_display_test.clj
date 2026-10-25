@@ -4367,3 +4367,98 @@
       (let [again (with-out-str (display/show-prompt-detailed))]
         (is (str/includes? again "unchanged since shown above") "premise: this is the collapsed repeat")
         (is (re-find #"Server 2 holds Send a Message" again))))))
+
+;; ============================================================================
+;; #285 — the full-reprint header must not call a CHANGED block "unchanged"
+;; ============================================================================
+;; Three states reach that println and the header had two forms, so one was a
+;; lie. A run prompt holds ONE eid and ONE msg for the whole run while its body
+;; moves (Approach -> Encounter, the ▶ marker, new subroutine and breaker lines),
+;; and that is the state that was mislabelled.
+;;
+;; The discriminator is ai-state/prompt-render-fingerprint = [eid msg], NOT the
+;; eid alone as issue #285 first said. The design panel's MAJOR was exactly this:
+;; a state-C test that changes :msg changes the fingerprint, lands in state A,
+;; and passes with or without the fix. So the prompts below hold :eid AND :msg
+;; fixed and change something outside the fingerprint, as the Argon repro did.
+
+(defn- prompt-header-line
+  "The 🔔 header line of a prompt block, which is the whole claim under test."
+  [out]
+  (->> (str/split-lines out)
+       (filter #(str/starts-with? % "🔔"))
+       first))
+
+(defn- render-prompt
+  "Render a prompt block for `prompt` and return the output. opts -> show-prompt-detailed."
+  ([prompt] (render-prompt prompt {}))
+  ([prompt opts]
+   (with-out-str
+     (display/show-prompt-detailed
+      (mock-client-state
+       :side "corp"
+       :game-state {:active-player "corp" :turn 5
+                    :corp {:click 2 :credit 5 :hand [] :prompt-state prompt}
+                    :runner {:click 0 :credit 4 :hand []}})
+      opts))))
+
+(deftest prompt-reprint-header-states
+  ;; A render marker surviving from another test would mark the first render
+  ;; below as already-shown and silently move every case one state along.
+  (ai-state/reset-rendered-prompt!)
+  (let [base {:eid 4242 :msg "Choose a subroutine to break"
+              :prompt-type "choice"
+              :choices [{:value "Sub 1"} {:value "Sub 2"}]}
+        ;; same [eid msg] -> same prompt INSTANCE; different choices -> different
+        ;; block. This is #285's shape: one prompt object, a body that moved.
+        changed (assoc base :choices [{:value "Sub 2"}])]
+
+    (testing "state A — a prompt not shown before gets the plain header"
+      (ai-state/reset-rendered-prompt!)
+      (let [out (render-prompt base)]
+        (is (= "🔔 Current Prompt:" (prompt-header-line out))
+            (str "a first render must claim nothing about repetition, got: " out))
+        ;; absence assertions: the defect is a WRONG WORD, which a presence-only
+        ;; assertion cannot see.
+        (is (not (str/includes? out "unchanged"))
+            (str "a first render must not say unchanged, got: " out))
+        (is (not (str/includes? out "same prompt, updated"))
+            (str "a first render must not say updated, got: " out))))
+
+    (testing "state C — same prompt, CHANGED block: must not be called unchanged (#285)"
+      (ai-state/reset-rendered-prompt!)
+      (render-prompt base)
+      (let [out (render-prompt changed)]
+        (is (not (str/includes? out "unchanged"))
+            (str "the block changed, so 'unchanged' is false, got: " out))
+        (is (= "🔔 Current Prompt (same prompt, updated since shown above — not a second one):"
+               (prompt-header-line out))
+            (str "must say the prompt is the same one and the block moved, got: " out))
+        ;; "not a second one" is the load-bearing half (#104/#244: stop a seat
+        ;; counting one decision as two) and must survive the rewording.
+        (is (str/includes? out "not a second one")
+            (str "the anti-double-count clause must survive, got: " out))
+        ;; and the new body must actually be printed, not just labelled
+        (is (str/includes? out "Sub 2")
+            (str "the reprint must carry the CHANGED body, got: " out))))
+
+    (testing "state B — byte-identical reprint under --full keeps 'unchanged'"
+      ;; Only reachable via --full: the short-repeat form owns the
+      ;; (same-block? AND not full?) case, so a test that omits :full? here would
+      ;; exercise the short form and prove nothing about this header.
+      (ai-state/reset-rendered-prompt!)
+      (render-prompt base {:full? true})
+      (let [out (render-prompt base {:full? true})]
+        (is (= "🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
+               (prompt-header-line out))
+            (str "an identical reprint is genuinely unchanged, got: " out))))
+
+    (testing "a STACKED duplicate (#75: same msg, NEW eid) is still a new prompt"
+      ;; Guard on the fingerprint's other half: calling one of two separately
+      ;; answerable prompts 'the same one' is the bug #75 exists to prevent, and
+      ;; the new wording must not reintroduce it.
+      (ai-state/reset-rendered-prompt!)
+      (render-prompt base)
+      (let [out (render-prompt (assoc base :eid 9999))]
+        (is (= "🔔 Current Prompt:" (prompt-header-line out))
+            (str "a new eid is a new prompt, got: " out))))))

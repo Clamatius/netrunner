@@ -3137,9 +3137,36 @@
                                 (when (seq phantom) (format " (+%d not selectable by you)" (count phantom)))))))
               (println "  (`prompt --full` reprints the whole block.)"))
             (do
-              (println (if already-shown?
+              ;; #285: three states reach this println and the header used to have
+              ;; two forms, so one of them was a lie. `already-shown?` is a match on
+              ;; the render FINGERPRINT — [eid msg] (ai-state/prompt-render-
+              ;; fingerprint), not the eid alone as the issue first said — and a run
+              ;; prompt holds one eid AND one msg for the whole run while its body
+              ;; moves (Approach -> Encounter, the ▶ marker, new subroutine and
+              ;; breaker lines). Calling that "unchanged" told a seat the block it
+              ;; was looking at was the one it had already read.
+              ;;
+              ;;   already-shown? false                -> new prompt
+              ;;   already-shown? true,  same-block?   -> byte-identical reprint;
+              ;;                                          only reachable via --full,
+              ;;                                          since the short form owns
+              ;;                                          the (same-block? AND not
+              ;;                                          full?) case above
+              ;;   already-shown? true,  body differs  -> same prompt, new block
+              ;;
+              ;; Branching (rather than one sentence weak enough for all three) is
+              ;; safe here because the discriminator is not a prediction: same-block?
+              ;; is an exact comparison of the two rendered bodies, computed above and
+              ;; already trusted for the bigger decision. "not a second one" is the
+              ;; load-bearing half (#104/#244 — stop a seat counting one decision as
+              ;; two) and is true in both reprint states, so both keep it.
+              (println (cond
+                         (not already-shown?)
+                         "\n🔔 Current Prompt:"
+                         same-block?
                          "\n🔔 Current Prompt (unchanged — the same one just shown, not a second one):"
-                         "\n🔔 Current Prompt:"))
+                         :else
+                         "\n🔔 Current Prompt (same prompt, updated since shown above — not a second one):"))
               (print body)
               (flush)))))
       ;; No prompt object. "No active prompt" alone is technically true but

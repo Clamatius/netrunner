@@ -148,6 +148,114 @@ else
 fi
 assert_contains "cmd-substitution-still-works" "$CS_OUT" "you (corp): active"
 
+# ---------------------------------------------------------------------------
+# #286: bot-loop must hand the REPL-side loop its own heartbeat path.
+#
+# The toucher forked above is bound to THIS invocation (`kill -0 $$`), and
+# bot-loop launches a detached future in the REPL and RETURNS — so the clock
+# stopped while the heuristic bot played on, and 300s later every waiting
+# command told the opponent the bot had disconnected and to `conclude`, in the
+# same output that showed it had just acted.
+#
+# Why these assertions live here and not in send_command_clj_string_test.sh:
+# that sweep matches "$VAR" literally inside an `execute` line, and LOOP_ARGS is
+# assembled separately and interpolated whole, so the sweep is structurally
+# blind to this site. These are the only guard, including for the escaping.
+BOT_STUB="$HEARTBEAT_DIR/stub-eval.sh"
+cat > "$BOT_STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--stdin" ]]; then expr="$(cat)"; else expr="${!#}"; fi
+printf '%s\n' "$expr" >> "$BOT_STUB_LOG"
+printf 'STUB-EXECUTED\n'
+STUBEOF
+chmod +x "$BOT_STUB"
+export BOT_STUB_LOG="$HEARTBEAT_DIR/bot-stub.log"
+
+# drive_bot_loop [env-prefixed args...] — run bot-loop against the stub and put
+# the captured expression in BOT_EXPR.
+drive_bot_loop() {
+    : > "$BOT_STUB_LOG"
+    AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop "$@" >/dev/null 2>&1 || true
+    BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+}
+
+# bot_form_reached — did the bot-loop form actually get to the eval backend?
+#
+# This gate exists because a code-review seat ran this file in a sandbox that
+# denied `execute`'s mktemp: the stub log then held only ensure_connection's
+# probes, and the assertions below reported "a quote in HEARTBEAT_DIR was not
+# escaped" and "expected :patient? true" for a failure that had nothing to do
+# with either. The misleading-output class, inside the test written to catch
+# one. Round 3 then caught that merely PRINTING a precondition failure was half
+# a fix — the dependent assertions still ran and still blamed the path — and
+# that the check had been copy-pasted into three drifting shapes. So it is one
+# function, and every dependent assertion is GATED on it.
+bot_form_reached() {
+    if [[ "$BOT_EXPR" == *"ai-self-play-future"* ]]; then
+        return 0
+    fi
+    echo "FAIL [$1]: the bot-loop form never reached the eval backend, so this assertion"
+    echo "     says NOTHING about :heartbeat-file or its escaping. Something failed between"
+    echo "     ensure_connection and execute (a denied mktemp does exactly this). stub log:"
+    printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+    return 1
+}
+
+# gated_contains NAME NEEDLE — assert only if the form reached the backend.
+gated_contains() {
+    bot_form_reached "$1" || return 0
+    assert_contains "$1" "$BOT_EXPR" "$2"
+}
+
+drive_bot_loop --patient 10
+if bot_form_reached "bot-loop-form-reached-the-backend"; then
+    echo "ok   [bot-loop-form-reached-the-backend]"
+fi
+gated_contains "bot-loop-passes-heartbeat-file" ":heartbeat-file"
+gated_contains "bot-loop-passes-this-sides-path" "$HEARTBEAT_DIR/corp"
+# The existing option must survive beside it (a clobbered LOOP_ARGS would make
+# the patient defender impatient and nothing else would notice).
+gated_contains "bot-loop-keeps-patient-args" ":patient? true"
+
+# ABSOLUTE, and absolute to the RIGHT path. The REPL resolves this string
+# against its own working directory — a different tree — so a relative path has
+# bash touching one file while the loop refreshes another: #286 again. Asserting
+# only a leading "/" is not enough (round 3): the mutant HB_FILE="/$HB_FILE"
+# hands the REPL /rel-hb-N/corp while bash touches $PWD/rel-hb-N/corp and still
+# starts with "/". The expected path is known exactly, so assert the string.
+REL_DIR="rel-hb-$$"
+mkdir -p "$HEARTBEAT_DIR/$REL_DIR" && touch "$HEARTBEAT_DIR/$REL_DIR/corp"
+# Expected path comes from `pwd`, not from $HEARTBEAT_DIR: mktemp -d inherits
+# TMPDIR's trailing slash and yields ".../T//nr-heartbeat-test.XXXX", while the
+# resolution under test uses $PWD, which is normalised. Comparing against the
+# raw variable fails on a double slash that is the TEST's artifact, not a defect.
+REL_EXPECT="$(cd "$HEARTBEAT_DIR" && pwd)/$REL_DIR/corp"
+: > "$BOT_STUB_LOG"
+( cd "$HEARTBEAT_DIR" && HEARTBEAT_DIR="$REL_DIR" AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1 ) || true
+BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+gated_contains "bot-loop-resolves-relative-path-to-the-same-file" \
+    ":heartbeat-file \"$REL_EXPECT\""
+
+# Escaping: HEARTBEAT_DIR is a caller-settable seam, so a path containing a
+# double quote must not close the Clojure string and execute. #255 is open
+# against exactly this shape elsewhere in the dispatcher.
+QDIR="$HEARTBEAT_DIR/q\"uote"
+mkdir -p "$QDIR" 2>/dev/null || true
+touch "$QDIR/corp" 2>/dev/null || true
+: > "$BOT_STUB_LOG"
+HEARTBEAT_DIR="$QDIR" AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1 || true
+BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+if bot_form_reached "bot-loop-escapes-quote-in-path"; then
+    if [[ "$BOT_EXPR" == *':heartbeat-file "'*'\"uote/corp"'* ]]; then
+        echo "ok   [bot-loop-escapes-quote-in-path]"
+    else
+        echo "FAIL [bot-loop-escapes-quote-in-path]: a quote in HEARTBEAT_DIR was not escaped, got:"
+        printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+        fails=$((fails+1))
+    fi
+fi
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0
