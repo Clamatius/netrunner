@@ -45,12 +45,17 @@
     (reset! temp-dirs [])))
 
 (defn- toucher-threads
-  "Live toucher threads, found by the name the helper gives them. Lets a test
-   OBSERVE that the thread exited instead of inferring it from a sleep."
+  "The SET of live toucher threads, found by the name the helper gives them.
+   Lets a test OBSERVE that its own thread exited instead of inferring it from a
+   sleep — and a set, not a count, because a count cannot tell MY thread from a
+   predecessor test's: a neighbour's just-interrupted toucher that is still alive
+   when the baseline is taken and dies during the wait returns the count to its
+   baseline while my thread is still asleep. A seat reproduced that false red."
   []
   (->> (keys (Thread/getAllStackTraces))
        (filter #(= "ai-heartbeat-toucher" (.getName ^Thread %)))
-       (filter #(.isAlive ^Thread %))))
+       (filter #(.isAlive ^Thread %))
+       set))
 
 (defn- completes-without-throwing
   "Run thunk with its output swallowed; nil if it returned, the throwable if not.
@@ -134,11 +139,13 @@
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)
-      (let [before (count (toucher-threads))
+      (let [before (toucher-threads)
             stop! (core/start-heartbeat-toucher! (.getPath f) 20)]
         (try
           (.delete f)
-          (is (wait-until 5000 #(<= (count (toucher-threads)) before))
+          ;; "every toucher that was not already running has gone" — identifies
+          ;; this test's thread instead of counting threads it does not own.
+          (is (wait-until 5000 #(empty? (remove before (toucher-threads))))
               "a toucher whose file was cleared must EXIT, not spin on a missing file")
           (is (not (.exists f)) "and it must not have re-created the file")
           ;; the fresh game's seat re-appears at the same path: a thread that had
@@ -153,21 +160,17 @@
 
 (deftest toucher-stop-fn-ends-the-refreshing
   (testing "after stop! no further touch lands"
-    ;; CORRECTION (round 3, and the reason matters more than the test). An
-    ;; earlier version of this comment said File.lastModified has ~1s
-    ;; granularity here, so a touch 20ms after stop! could not be seen. That is
-    ;; FALSE and was measured false: setLastModified/lastModified round-trips
-    ;; exactly to the millisecond on this filesystem, two touches 25ms apart are
-    ;; distinguishable, and replaying the both-guards-removed mutant against the
-    ;; ORIGINAL version of this test gives a failure reading
-    ;; `(not (= 1792905482463 1792905482493))` — 30ms apart, plainly visible.
-    ;; The mutation run that reported that mutant as a survivor was simply
-    ;; wrong, and a false diagnosis is worse than the gap it claimed to explain.
+    ;; CORRECTION, kept short on purpose. An earlier version of this comment
+    ;; explained a mutation survivor by "File.lastModified has ~1s granularity
+    ;; here". That is false — measured, and recorded in the commit that fixed it
+    ;; (review(#285,#286) r3) rather than re-argued beside the code, because a
+    ;; comment carrying numbers nobody can re-derive is how the wrong lesson
+    ;; outlives the run. The reproducible form: revert BOTH stop guards in
+    ;; ai-core/start-heartbeat-toucher! and run this deftest.
     ;;
-    ;; The shape below is kept anyway, on its true merits: a LONG interval puts
-    ;; the thread reliably mid-sleep at stop!, and a ten-minute backdate makes
-    ;; any touch unmistakable rather than a 30ms delta — and, unlike the
-    ;; original, it pins the loops' `finally` (reverting either one goes red).
+    ;; The shape below needs no claim about granularity: a LONG interval puts
+    ;; the thread reliably mid-sleep at stop!, and the ten-minute backdate makes
+    ;; any touch at all unmistakable at any resolution.
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)
@@ -231,9 +234,12 @@
         (is (> (.lastModified f) was)
             "the Corp loop must refresh its own side's heartbeat — this is #286 itself")
         ;; ...and the `finally` must retire the toucher with the loop, or a dead
-        ;; bot goes on looking alive. Observable only because the loop's toucher
-        ;; was redefined to a short interval above: at the production 60s one,
-        ;; no test-length sleep could tell a retired thread from a sleeping one.
+        ;; bot goes on looking alive. THIS deftest (and its Runner twin) is what
+        ;; pins that: reverting either loop's `finally (stop-heartbeat!)` turns
+        ;; this block red, and nothing else in the suite notices. Observable only
+        ;; because the loop's toucher was redefined to a short interval above: at
+        ;; the production 60s one, no test-length sleep could tell a retired
+        ;; thread from a sleeping one.
         (let [after (backdate! f 600000)]
           (Thread/sleep 400)
           (is (= after (.lastModified f))
