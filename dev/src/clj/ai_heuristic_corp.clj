@@ -37,6 +37,7 @@
             [ai-connection :as conn]
             [ai-loop-sync :as loop-sync]
             [ai-stall :as stall]
+            [ai-core :as core]
             [clojure.string :as str]))
 
 (declare keep-or-mull)
@@ -1349,9 +1350,21 @@
                    when a SLOW (thinking-model) opponent is in the other seat so a
                    multi-minute decision is not mistaken for a wedged game. The
                    own-turn spin bail (which catches OUR bugs) stays tight either way.
-     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)."
-  [& {:keys [patient? patient-ms]
+     :patient-ms - patience window in ms (default stall/default-patient-bail-ms)
+     :heartbeat-file - path to THIS side's peer-liveness heartbeat (#286). This
+                   loop lives inside the REPL, so the launching send_command
+                   invocation's toucher dies while we play on and the opponent is
+                   told we disconnected. Refresh it for as long as we run. Passed
+                   by `send_command bot-loop`; absent when driven by hand, which
+                   is a no-op. See ai-core/start-heartbeat-toucher!."
+  [& {:keys [patient? patient-ms heartbeat-file]
       :or {patient? false patient-ms stall/default-patient-bail-ms}}]
+  ;; Everything below runs under the heartbeat toucher. The body keeps its
+  ;; original indentation on purpose: re-indenting ~130 lines would bury a
+  ;; two-line change in a whitespace diff and the next reviewer would be reading
+  ;; the wrong thing.
+  (let [stop-heartbeat! (core/start-heartbeat-toucher! heartbeat-file)]
+   (try
   (when patient?
     (log-message "HEURISTIC CORP - PATIENT mode: run-wait bail after"
                  (long (/ patient-ms 1000)) "s wall-clock (slow-opponent tolerant)"))
@@ -1482,4 +1495,8 @@
 
       (when (and continue? (not bail?))
         (Thread/sleep 500)
-        (recur (inc iter) next-stall next-spin tracker)))))
+        (recur (inc iter) next-stall next-spin tracker))))
+   ;; A stopped loop must stop claiming to be alive — including the
+   ;; future-cancel path (bot-loop-stop), which arrives as an interrupt and is
+   ;; re-raised by the tick body's own handler.
+   (finally (stop-heartbeat!)))))

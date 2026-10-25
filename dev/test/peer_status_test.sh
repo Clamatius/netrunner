@@ -148,6 +148,57 @@ else
 fi
 assert_contains "cmd-substitution-still-works" "$CS_OUT" "you (corp): active"
 
+# ---------------------------------------------------------------------------
+# #286: bot-loop must hand the REPL-side loop its own heartbeat path.
+#
+# The toucher forked above is bound to THIS invocation (`kill -0 $$`), and
+# bot-loop launches a detached future in the REPL and RETURNS — so the clock
+# stopped while the heuristic bot played on, and 300s later every waiting
+# command told the opponent the bot had disconnected and to `conclude`, in the
+# same output that showed it had just acted.
+#
+# Why the assertion lives here and not in send_command_clj_string_test.sh: that
+# sweep matches "$VAR" literally inside an `execute` line, and LOOP_ARGS is
+# assembled separately and interpolated whole, so the sweep is structurally
+# blind to this site (design panel MINOR). This is the only guard, including for
+# the escaping.
+BOT_STUB="$HEARTBEAT_DIR/stub-eval.sh"
+cat > "$BOT_STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--stdin" ]]; then expr="$(cat)"; else expr="${!#}"; fi
+printf '%s\n' "$expr" >> "$BOT_STUB_LOG"
+printf 'STUB-EXECUTED\n'
+STUBEOF
+chmod +x "$BOT_STUB"
+
+export BOT_STUB_LOG="$HEARTBEAT_DIR/bot-stub.log"
+: > "$BOT_STUB_LOG"
+AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --patient 10 >/dev/null 2>&1 || true
+BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+
+assert_contains "bot-loop-passes-heartbeat-file" "$BOT_EXPR" ":heartbeat-file"
+assert_contains "bot-loop-passes-this-sides-path" "$BOT_EXPR" "$HEARTBEAT_DIR/corp"
+# The existing option must survive beside it (a clobbered LOOP_ARGS would make
+# the patient defender impatient and nothing else would notice).
+assert_contains "bot-loop-keeps-patient-args" "$BOT_EXPR" ":patient? true"
+
+# Escaping: HEARTBEAT_DIR is a caller-settable seam, so a path containing a
+# double quote must not close the Clojure string and execute. #255 is open
+# against exactly this shape elsewhere in the dispatcher.
+QDIR="$HEARTBEAT_DIR/q\"uote"
+mkdir -p "$QDIR" 2>/dev/null || true
+touch "$QDIR/corp" 2>/dev/null || true
+: > "$BOT_STUB_LOG"
+HEARTBEAT_DIR="$QDIR" AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1 || true
+Q_EXPR="$(cat "$BOT_STUB_LOG")"
+if [[ "$Q_EXPR" == *':heartbeat-file "'*'\"uote/corp"'* ]]; then
+    echo "ok   [bot-loop-escapes-quote-in-path]"
+else
+    echo "FAIL [bot-loop-escapes-quote-in-path]: a quote in HEARTBEAT_DIR was not escaped, got:"
+    printf '%s\n' "$Q_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+fi
+
 echo "---"
 if [[ $fails -eq 0 ]]; then
     echo "peer_status_test: ALL PASSED"; exit 0
