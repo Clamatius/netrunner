@@ -44,6 +44,14 @@
       (try (.delete file) (catch Throwable _ nil)))
     (reset! temp-dirs [])))
 
+(defn- toucher-threads
+  "Live toucher threads, found by the name the helper gives them. Lets a test
+   OBSERVE that the thread exited instead of inferring it from a sleep."
+  []
+  (->> (keys (Thread/getAllStackTraces))
+       (filter #(= "ai-heartbeat-toucher" (.getName ^Thread %)))
+       (filter #(.isAlive ^Thread %))))
+
 (defn- completes-without-throwing
   "Run thunk with its output swallowed; nil if it returned, the throwable if not.
    Exists so a test can say 'this does not blow up' and mean it."
@@ -117,33 +125,49 @@
     ;; game's keep-hand recreates the same path, which is exactly the
     ;; resurrection clear-heartbeats exists to prevent. So re-create the file
     ;; and prove nobody touches it.
+    ;; Round 3, both seats: the first cut inferred "the thread exited" from a
+    ;; fixed 150ms sleep, so a GC or scheduling stall past that let the thread
+    ;; wake AFTER the re-create and fail the test while the code was correct —
+    ;; a false red blaming production, in a suite that runs beside other JVMs.
+    ;; The thread is named, so observe it leaving the live set instead of timing
+    ;; it: no race, and it pins the claim ("ends the thread") directly.
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)
-      (let [stop! (core/start-heartbeat-toucher! (.getPath f) 20)]
+      (let [before (count (toucher-threads))
+            stop! (core/start-heartbeat-toucher! (.getPath f) 20)]
         (try
           (.delete f)
-          (Thread/sleep 150)                     ; several intervals
-          (is (not (.exists f)) "the file must stay deleted")
-          ;; the fresh game's seat re-appears at the same path
+          (is (wait-until 5000 #(<= (count (toucher-threads)) before))
+              "a toucher whose file was cleared must EXIT, not spin on a missing file")
+          (is (not (.exists f)) "and it must not have re-created the file")
+          ;; the fresh game's seat re-appears at the same path: a thread that had
+          ;; merely kept spinning would adopt it, which is the resurrection
+          ;; clear-heartbeats exists to prevent.
           (.createNewFile f)
           (let [was (backdate! f 600000)]
-            (Thread/sleep 200)                   ; several more intervals
+            (Thread/sleep 200)                   ; several intervals
             (is (= was (.lastModified f))
-                "a toucher whose file was cleared must be GONE, not waiting to adopt the next one"))
+                "nothing may adopt the next game's heartbeat"))
           (finally (stop!)))))))
 
 (deftest toucher-stop-fn-ends-the-refreshing
   (testing "after stop! no further touch lands"
-    ;; Comparing mtime before/after stop! does NOT work, and the first cut of
-    ;; this test was green against a mutant with BOTH stop guards removed:
-    ;; File.lastModified has ~1s granularity on this filesystem, so a touch
-    ;; landing 20ms after stop! is indistinguishable from no touch at all.
+    ;; CORRECTION (round 3, and the reason matters more than the test). An
+    ;; earlier version of this comment said File.lastModified has ~1s
+    ;; granularity here, so a touch 20ms after stop! could not be seen. That is
+    ;; FALSE and was measured false: setLastModified/lastModified round-trips
+    ;; exactly to the millisecond on this filesystem, two touches 25ms apart are
+    ;; distinguishable, and replaying the both-guards-removed mutant against the
+    ;; ORIGINAL version of this test gives a failure reading
+    ;; `(not (= 1792905482463 1792905482493))` — 30ms apart, plainly visible.
+    ;; The mutation run that reported that mutant as a survivor was simply
+    ;; wrong, and a false diagnosis is worse than the gap it claimed to explain.
     ;;
-    ;; Instead: a LONG interval so the thread is reliably mid-sleep at stop!,
-    ;; then backdate the file by ten minutes and watch past when that sleep
-    ;; would have ended. Any touch at all is then a ten-minute jump, far outside
-    ;; any granularity.
+    ;; The shape below is kept anyway, on its true merits: a LONG interval puts
+    ;; the thread reliably mid-sleep at stop!, and a ten-minute backdate makes
+    ;; any touch unmistakable rather than a 30ms delta — and, unlike the
+    ;; original, it pins the loops' `finally` (reverting either one goes red).
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)

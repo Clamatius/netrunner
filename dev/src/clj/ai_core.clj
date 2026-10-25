@@ -3334,10 +3334,11 @@
      one already past the sleep stops at the flag. NOT a hard guarantee: a
      toucher that has already read the flag as false and been descheduled can
      still land its touch after stop! returns, because file ops do not consume
-     an interrupt (code panel). Left open deliberately — the whole consequence
-     is that a stopped loop looks alive up to one interval (60s) longer against
-     a 300s threshold, and closing it exactly means joining the thread on every
-     loop exit.
+     an interrupt (code panel). The window is NOT bounded by one interval — a
+     descheduled thread can land that touch arbitrarily later — so this is a
+     race left open deliberately, not a bounded one: closing it exactly means
+     joining the toucher on every loop exit, and a scheduling stall long enough
+     to matter against a 300s threshold means the JVM has worse problems.
    - Best-effort throughout: nothing here may throw into the caller's loop, and
      a daemon thread cannot hold the JVM open."
   ([path] (start-heartbeat-toucher! path heartbeat-touch-interval-ms))
