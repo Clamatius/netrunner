@@ -2797,7 +2797,15 @@ case "$COMMAND" in
         # Clojure). Through clj_str, not bare interpolation: #255 is open against
         # exactly this shape, and HEARTBEAT_DIR is caller-settable, so a path
         # containing a quote would otherwise close the string and execute.
-        LOOP_ARGS="$LOOP_ARGS :heartbeat-file \"$(clj_str "${HEARTBEAT_DIR}/${CLIENT_NAME}")\""
+        # ABSOLUTE, always. We hand this string to the REPL, which resolves it
+        # against ITS working directory — a different tree (the client REPLs are
+        # rooted in the main checkout, not in a worktree). A relative
+        # HEARTBEAT_DIR would make bash touch one file and the loop refresh
+        # another, and the symptom is #286 all over again. Unreachable on the
+        # NETRUNNER_ROOT-derived default; reachable through the env seam.
+        HB_FILE="${HEARTBEAT_DIR}/${CLIENT_NAME}"
+        case "$HB_FILE" in /*) ;; *) HB_FILE="$PWD/$HB_FILE" ;; esac
+        LOOP_ARGS="$LOOP_ARGS :heartbeat-file \"$(clj_str "$HB_FILE")\""
         # Refuse to relaunch over a still-running loop, else the old future is
         # orphaned (unreachable by bot-loop-status/stop). NOTE: we resolve the VAR
         # and deref THE VAR (var-deref -> the Future object, non-blocking) before

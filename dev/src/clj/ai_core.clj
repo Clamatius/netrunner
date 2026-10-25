@@ -3330,8 +3330,14 @@
    - REFRESH ONLY: if the file is absent now, or disappears later, nothing is
      created and the thread ends.
    - The stop flag is checked BEFORE each touch and the sleeping thread is
-     interrupted, so no touch lands after stop! returns (design panel: a
-     flag-only stop left one more touch up to an interval late).
+     interrupted, so a thread asleep at stop! dies without touching again, and
+     one already past the sleep stops at the flag. NOT a hard guarantee: a
+     toucher that has already read the flag as false and been descheduled can
+     still land its touch after stop! returns, because file ops do not consume
+     an interrupt (code panel). Left open deliberately — the whole consequence
+     is that a stopped loop looks alive up to one interval (60s) longer against
+     a 300s threshold, and closing it exactly means joining the thread on every
+     loop exit.
    - Best-effort throughout: nothing here may throw into the caller's loop, and
      a daemon thread cannot hold the JVM open."
   ([path] (start-heartbeat-toucher! path heartbeat-touch-interval-ms))

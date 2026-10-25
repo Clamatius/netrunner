@@ -26,9 +26,29 @@
 ;; Helpers
 ;; ============================================================================
 
+(def ^:private temp-dirs (atom []))
+
 (defn- temp-dir! []
-  (str (java.nio.file.Files/createTempDirectory
-        "nr-heartbeat-test" (into-array java.nio.file.attribute.FileAttribute []))))
+  (let [d (str (java.nio.file.Files/createTempDirectory
+                "nr-heartbeat-test" (into-array java.nio.file.attribute.FileAttribute [])))]
+    (swap! temp-dirs conj d)
+    d))
+
+(use-fixtures :once
+  (fn [run]
+    (run)
+    ;; The shell test next door traps and rm -rf's; this suite was leaving a
+    ;; directory per test under TMPDIR forever.
+    (doseq [d @temp-dirs
+            file (reverse (file-seq (java.io.File. d)))]
+      (try (.delete file) (catch Throwable _ nil)))
+    (reset! temp-dirs [])))
+
+(defn- completes-without-throwing
+  "Run thunk with its output swallowed; nil if it returned, the throwable if not.
+   Exists so a test can say 'this does not blow up' and mean it."
+  [thunk]
+  (try (with-out-str (thunk)) nil (catch Throwable t t)))
 
 (defn- backdate!
   "Set MTIME well into the past so 'was refreshed' is unambiguous. Returns the
@@ -88,15 +108,29 @@
         (finally (stop!))))))
 
 (deftest toucher-stops-when-the-file-is-deleted-mid-run
-  (testing "a heartbeat deleted under a running loop (clear-heartbeats) is not re-created"
+  (testing "a heartbeat deleted under a running loop (clear-heartbeats) ENDS the thread"
+    ;; The first cut asserted only that the file was not re-created, and a seat
+    ;; showed that passes with `(.exists f)` dropped from the loop condition —
+    ;; touch! has its own exists guard, so nothing reappears and the thread just
+    ;; keeps spinning. That leaves the rule unpinned, and the rule is
+    ;; load-bearing: a surviving thread RESUMES touching the moment a fresh
+    ;; game's keep-hand recreates the same path, which is exactly the
+    ;; resurrection clear-heartbeats exists to prevent. So re-create the file
+    ;; and prove nobody touches it.
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)
       (let [stop! (core/start-heartbeat-toucher! (.getPath f) 20)]
         (try
           (.delete f)
-          (Thread/sleep 150)
+          (Thread/sleep 150)                     ; several intervals
           (is (not (.exists f)) "the file must stay deleted")
+          ;; the fresh game's seat re-appears at the same path
+          (.createNewFile f)
+          (let [was (backdate! f 600000)]
+            (Thread/sleep 200)                   ; several more intervals
+            (is (= was (.lastModified f))
+                "a toucher whose file was cleared must be GONE, not waiting to adopt the next one"))
           (finally (stop!)))))))
 
 (deftest toucher-stop-fn-ends-the-refreshing
@@ -202,8 +236,12 @@
     ;; The no-op stop fn exists so this needs no branch at the call site; if the
     ;; helper ever returned nil for a blank path, the finally would NPE here.
     (with-mock-state (finished-game-state "corp")
-      (is (string? (with-out-str (hcorp/start-autonomous!)))
-          "the Corp loop must not require a heartbeat path"))
+      ;; `with-out-str` always returns a string, so the only thing these can
+      ;; fail on is a THROW — which is the whole point: a helper that returned
+      ;; nil for a blank path would NPE in the loop's `finally`. Named for what
+      ;; it checks rather than dressed up as an output-shape assertion.
+      (is (nil? (completes-without-throwing #(hcorp/start-autonomous!)))
+          "the Corp loop must run with no heartbeat path"))
     (with-mock-state (finished-game-state "runner")
-      (is (string? (with-out-str (hrunner/loop!)))
-          "the Runner loop must not require a heartbeat path"))))
+      (is (nil? (completes-without-throwing #(hrunner/loop!)))
+          "the Runner loop must run with no heartbeat path"))))

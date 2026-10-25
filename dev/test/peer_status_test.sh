@@ -176,8 +176,44 @@ export BOT_STUB_LOG="$HEARTBEAT_DIR/bot-stub.log"
 AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --patient 10 >/dev/null 2>&1 || true
 BOT_EXPR="$(cat "$BOT_STUB_LOG")"
 
+# PRECONDITION FIRST. A code-review seat ran this test in a sandbox that denied
+# execute's mktemp: the stub log then held only ensure_connection's probes, and
+# the four assertions below printed "a quote in HEARTBEAT_DIR was not escaped"
+# for a failure that had nothing to do with escaping. That is the misleading-
+# output class this repo keeps filing, committed inside the test written to
+# catch one. So prove the bot-loop form reached the backend before saying
+# anything about its contents.
+if [[ "$BOT_EXPR" != *"ai-self-play-future"* ]]; then
+    echo "FAIL [bot-loop-form-reached-the-backend]: the bot-loop expression never got to the eval"
+    echo "     backend. The assertions below say NOTHING about :heartbeat-file — something"
+    echo "     failed between ensure_connection and execute (a denied mktemp does this)."
+    echo "     stub log was:"; printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+else
+    echo "ok   [bot-loop-form-reached-the-backend]"
+fi
+
 assert_contains "bot-loop-passes-heartbeat-file" "$BOT_EXPR" ":heartbeat-file"
 assert_contains "bot-loop-passes-this-sides-path" "$BOT_EXPR" "$HEARTBEAT_DIR/corp"
+# ABSOLUTE: the REPL resolves this against its own working directory, which is a
+# different tree, so a relative path would refresh a file nobody reads (#286
+# again). HEARTBEAT_DIR is already absolute here (mktemp -d), so assert the
+# property directly with a relative one.
+: > "$BOT_STUB_LOG"
+REL_DIR="rel-hb-$$"
+mkdir -p "$HEARTBEAT_DIR/$REL_DIR" && touch "$HEARTBEAT_DIR/$REL_DIR/corp"
+REL_EXPR="$(cd "$HEARTBEAT_DIR" && HEARTBEAT_DIR="$REL_DIR" AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1; cat "$BOT_STUB_LOG")"
+if [[ "$REL_EXPR" != *"ai-self-play-future"* ]]; then
+    echo "FAIL [bot-loop-emits-absolute-path]: the bot-loop form never reached the eval backend"
+    fails=$((fails+1))
+elif [[ "$REL_EXPR" == *":heartbeat-file \"/"* ]]; then
+    echo "ok   [bot-loop-emits-absolute-path]"
+else
+    echo "FAIL [bot-loop-emits-absolute-path]: a relative HEARTBEAT_DIR was forwarded unresolved;"
+    echo "     the REPL would refresh a different file than bash touches. Got:"
+    printf '%s\n' "$REL_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+fi
 # The existing option must survive beside it (a clobbered LOOP_ARGS would make
 # the patient defender impatient and nothing else would notice).
 assert_contains "bot-loop-keeps-patient-args" "$BOT_EXPR" ":patient? true"
@@ -191,7 +227,12 @@ touch "$QDIR/corp" 2>/dev/null || true
 : > "$BOT_STUB_LOG"
 HEARTBEAT_DIR="$QDIR" AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1 || true
 Q_EXPR="$(cat "$BOT_STUB_LOG")"
-if [[ "$Q_EXPR" == *':heartbeat-file "'*'\"uote/corp"'* ]]; then
+if [[ "$Q_EXPR" != *"ai-self-play-future"* ]]; then
+    echo "FAIL [bot-loop-escapes-quote-in-path]: SKIPPED-AS-FAIL — the bot-loop form never reached"
+    echo "     the eval backend, so this says nothing about escaping. stub log was:"
+    printf '%s\n' "$Q_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+elif [[ "$Q_EXPR" == *':heartbeat-file "'*'\"uote/corp"'* ]]; then
     echo "ok   [bot-loop-escapes-quote-in-path]"
 else
     echo "FAIL [bot-loop-escapes-quote-in-path]: a quote in HEARTBEAT_DIR was not escaped, got:"
