@@ -101,18 +101,24 @@
 
 (deftest toucher-stop-fn-ends-the-refreshing
   (testing "after stop! no further touch lands"
+    ;; Comparing mtime before/after stop! does NOT work, and the first cut of
+    ;; this test was green against a mutant with BOTH stop guards removed:
+    ;; File.lastModified has ~1s granularity on this filesystem, so a touch
+    ;; landing 20ms after stop! is indistinguishable from no touch at all.
+    ;;
+    ;; Instead: a LONG interval so the thread is reliably mid-sleep at stop!,
+    ;; then backdate the file by ten minutes and watch past when that sleep
+    ;; would have ended. Any touch at all is then a ten-minute jump, far outside
+    ;; any granularity.
     (let [dir (temp-dir!)
           f (java.io.File. dir "corp")]
       (.createNewFile f)
-      (let [stop! (core/start-heartbeat-toucher! (.getPath f) 20)]
-        (Thread/sleep 100)
+      (let [stop! (core/start-heartbeat-toucher! (.getPath f) 1500)]
+        (Thread/sleep 100)        ; thread is now asleep for ~1.4s
         (stop!)
-        ;; The stop flag is checked BEFORE the touch and the sleeping thread is
-        ;; interrupted, so nothing may land after this point (design panel: a
-        ;; flag-only stop allowed one more touch up to an interval late).
-        (let [at-stop (.lastModified f)]
-          (Thread/sleep 150)
-          (is (= at-stop (.lastModified f))
+        (let [was (backdate! f 600000)]
+          (Thread/sleep 2500)     ; past the end of that sleep
+          (is (= was (.lastModified f))
               "a stopped loop must stop claiming to be alive"))))))
 
 (deftest toucher-tolerates-no-path
@@ -158,14 +164,21 @@
           f (java.io.File. dir "corp")]
       (.createNewFile f)
       (let [was (backdate! f 600000)]
-        (with-mock-state (finished-game-state "corp")
-          (with-out-str (hcorp/start-autonomous! :heartbeat-file (.getPath f))))
+        ;; The loops call the 1-arity, which reads this def at call time, so a
+        ;; redef here reaches the real production call site without giving the
+        ;; loops a test-only argument.
+        (with-redefs [core/heartbeat-touch-interval-ms 50]
+          (with-mock-state (finished-game-state "corp")
+            (with-out-str (hcorp/start-autonomous! :heartbeat-file (.getPath f)))))
         (is (> (.lastModified f) was)
             "the Corp loop must refresh its own side's heartbeat — this is #286 itself")
-        ;; and the finally must have retired the toucher with the loop
-        (let [at-exit (.lastModified f)]
-          (Thread/sleep 120)
-          (is (= at-exit (.lastModified f))
+        ;; ...and the `finally` must retire the toucher with the loop, or a dead
+        ;; bot goes on looking alive. Observable only because the loop's toucher
+        ;; was redefined to a short interval above: at the production 60s one,
+        ;; no test-length sleep could tell a retired thread from a sleeping one.
+        (let [after (backdate! f 600000)]
+          (Thread/sleep 400)
+          (is (= after (.lastModified f))
               "a loop that has RETURNED must not go on looking alive"))))))
 
 (deftest runner-loop-wires-the-heartbeat
@@ -174,13 +187,14 @@
           f (java.io.File. dir "runner")]
       (.createNewFile f)
       (let [was (backdate! f 600000)]
-        (with-mock-state (finished-game-state "runner")
-          (with-out-str (hrunner/loop! :heartbeat-file (.getPath f))))
+        (with-redefs [core/heartbeat-touch-interval-ms 50]
+          (with-mock-state (finished-game-state "runner")
+            (with-out-str (hrunner/loop! :heartbeat-file (.getPath f)))))
         (is (> (.lastModified f) was)
             "the Runner loop has the identical hole and must refresh too")
-        (let [at-exit (.lastModified f)]
-          (Thread/sleep 120)
-          (is (= at-exit (.lastModified f))
+        (let [after (backdate! f 600000)]
+          (Thread/sleep 400)
+          (is (= after (.lastModified f))
               "a loop that has RETURNED must not go on looking alive"))))))
 
 (deftest loops-run-without-a-heartbeat-file
