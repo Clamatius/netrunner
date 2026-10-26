@@ -650,19 +650,23 @@ SCEOF
         fails=$((fails+1))
     else
         echo "ok   [run-match-inject-block-found]"
-        assert_contains "run-match-injection-is-guarded" "$INJECT_BLOCK" \
+        # COMMENTS STRIPPED FIRST, for the POSITIVE assertions as much as the
+        # negative ones. The comment above the guard names both `bot-loop-stop`
+        # and `leave-game` (explaining why they are safe to call there), so a raw
+        # text check was satisfied by the prose: a mutant that deleted the whole
+        # teardown loop SURVIVED this block until the strip was applied here too.
+        # Keyword-matches-prose — found on the negative side first and then left
+        # standing on the positive side, which is the same defect twice in one
+        # guard.
+        INJECT_CODE="$(printf '%s\n' "$INJECT_BLOCK" | grep -v '^[[:space:]]*#')"
+        assert_contains "run-match-injection-is-guarded" "$INJECT_CODE" \
             'if ! load_agent "corp" "$corp_agent" || ! load_agent "runner" "$runner_agent"; then'
-        assert_contains "run-match-teardown-stops-the-loops" "$INJECT_BLOCK" 'bot-loop-stop'
-        assert_contains "run-match-teardown-leaves-the-lobby" "$INJECT_BLOCK" 'leave-game'
-        assert_contains "run-match-injection-failure-returns" "$INJECT_BLOCK" 'return 1'
+        assert_contains "run-match-teardown-stops-the-loops" "$INJECT_CODE" 'bot-loop-stop'
+        assert_contains "run-match-teardown-leaves-the-lobby" "$INJECT_CODE" 'leave-game'
+        assert_contains "run-match-injection-failure-returns" "$INJECT_CODE" 'return 1'
         # The teardown must be INSIDE the failure branch: run unconditionally it
         # would leave the lobby of every healthy game it just set up.
-        # COMMENTS STRIPPED FIRST. The comment above the guard explains why
-        # leave-game is safe here, so a raw text check found "leave-game" before
-        # the branch and failed on a correct tree — the keyword-matches-prose
-        # trap this repo has filed twice.
-        PRE_GUARD="$(printf '%s\n' "$INJECT_BLOCK" | grep -v '^[[:space:]]*#' \
-                     | sed -n '/if ! load_agent/,$!p')"
+        PRE_GUARD="$(printf '%s\n' "$INJECT_CODE" | sed -n '/if ! load_agent/,$!p')"
         assert_not_contains "run-match-teardown-is-not-unconditional" "$PRE_GUARD" 'leave-game'
         assert_not_contains "run-match-stop-is-not-unconditional"     "$PRE_GUARD" 'bot-loop-stop'
     fi
