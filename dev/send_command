@@ -270,9 +270,18 @@ require_valid_budget() {
 # Pass --allow-dead for commands that must still work with no usable state: the
 # diagnostics a seat uses to CONFIRM the death (wait, get-cursor — the babysit
 # loop's only exit condition), the lobby commands that RECOVER from it
-# (create-game/join/leave-game/list-lobbies), and local control that must never
-# be hostage to server state (bot-loop-stop). Everything else is gated, so a
-# newly added command inherits the honest default instead of the lying one.
+# (create-game/join/leave-game/list-lobbies), local control that must never be
+# hostage to server state (bot-loop-stop), and — the one that fits none of those
+# three, so do not read this list as closed — `bot-loop` itself, since #290: the
+# loop it launches REPAIRS a boardless seat on its first tick
+# (ai-loop-sync/ensure-board!) and stops with its own diagnostic when it cannot,
+# so the refusal was redundant there while being able to end a whole match run
+# under run-match.sh's `set -e`. The full reasoning is at the bot-loop arm.
+# Everything else is gated, so a newly added command inherits the honest default
+# instead of the lying one. A command added to the --allow-dead side belongs in
+# this sentence too: an enumerating comment that is not updated is how a
+# maintainer comes to audit against a list that is quietly wrong (#281's shape,
+# in a comment instead of a help view).
 ensure_connection() {
     require_valid_budget
     local allow_dead=0 allow_decided=0
@@ -818,7 +827,14 @@ ${GREEN}Heuristic Bot (Corp infra / self-play):${NC}
   bot-turn         - Play a full turn with the heuristic AI
   bot-respond      - Respond to active run (rez/fire decisions)
   bot-watch        - Continuously watch for and respond to runs
-  bot-loop [--patient N] - Autonomous loop (used by the match harness)
+  bot-loop [--patient N] [--agent TYPE] - Autonomous loop (used by the match harness)
+                     --patient [N] - tolerate a SLOW (thinking-model) opponent: the
+                     run-wait backstop bails on wall-clock minutes (default 10)
+                     instead of the tight self-play iteration count.
+                     --agent TYPE - which bot to launch: heuristic (the default),
+                     goldfish, or passive (a synonym for goldfish, which is the
+                     word the match harness uses). --patient has no effect on a
+                     goldfish loop and says so.
   bot-loop-status  - Is the autonomous loop alive?
   bot-loop-stop    - Stop the autonomous loop
   bot-status       - The heuristic bot's own decision-relevant readout for THIS
@@ -2758,16 +2774,38 @@ case "$COMMAND" in
         ;;
 
     bot-loop)
-        ensure_connection
-        info "Heuristic ${CLIENT_NAME}: Launching autonomous loop (detached future)..."
         # start-autonomous! (corp) / loop! (runner) block until a winner; run
         # detached in the REPL so the eval returns immediately. Both sides poll
         # shared server state, so launching one per REPL = hands-off self-play.
+        # The GOLDFISH loops carry the same two names, so --agent below changes
+        # only which namespace is resolved, never which function.
         if [[ "$CLIENT_NAME" == "corp" ]]; then
             LOOP_FN="start-autonomous!"
         else
             LOOP_FN="loop!"
         fi
+
+        # Flags are parsed and validated HERE, before ensure_connection, because
+        # ensure_connection is not free: it makes two REPL round trips and a
+        # stale seat goes through do-rejoin-resync!, which CLEARS the cached
+        # board. --agent is new here, so nothing "used to" do this: the version
+        # of it that a design seat read validated AFTER the gate, which would
+        # have cost a stale seat its board and only then refused the typo.
+        # Nothing in this block touches the REPL, so a refusal leaves the seat
+        # exactly as it was, which is what the refusal text claims and what
+        # peer_status_test asserts.
+        #
+        # --agent: WHICH bot to launch. The match harness runs passive
+        # ("goldfish") agents as well as heuristic ones; before #290 it
+        # hand-rolled all four launches through ai-eval.sh, so none of them was
+        # handed :heartbeat-file and every one of them read as disconnected 300s
+        # in. LOOP_NS is LOCAL on purpose: the global $BOT_NS is also read by
+        # `bot`, `bot-turn`, `bot-status` and `bot-respond`, and the goldfish
+        # namespaces have no `status` or `respond-to-run!` — moving the global
+        # would point those arms at vars that do not exist.
+        LOOP_NS="$BOT_NS"
+        LOOP_AGENT="heuristic"
+        LOOP_PATIENT=0
         # --patient [minutes]: tolerate a SLOW (thinking-model) opponent. The
         # run-wait backstop then bails on a generous wall-clock window instead of
         # the tight self-play iteration count. Optional integer = minutes (default
@@ -2775,8 +2813,42 @@ case "$COMMAND" in
         LOOP_ARGS=""
         loop_argv=("$@")
         for ((li=0; li<${#loop_argv[@]}; li++)); do
-            if [[ "${loop_argv[li]}" == "--patient" ]]; then
-                LOOP_ARGS=":patient? true"
+            case "${loop_argv[li]}" in
+            --agent)
+                LOOP_AGENT="${loop_argv[li+1]:-}"
+                case "$LOOP_AGENT" in
+                    heuristic)
+                        LOOP_NS="$BOT_NS" ;;
+                    goldfish|passive)
+                        # Spelled out per side rather than interpolated from
+                        # $CLIENT_NAME: these two strings are what a grep for
+                        # "who launches the goldfish bot" has to find.
+                        if [[ "$CLIENT_NAME" == "corp" ]]; then
+                            LOOP_NS="ai-goldfish-corp"
+                        else
+                            LOOP_NS="ai-goldfish-runner"
+                        fi ;;
+                    "")
+                        echo "❌ bot-loop: --agent needs a value" >&2
+                        echo "   Accepted: heuristic (the default), goldfish, passive (= goldfish)" >&2
+                        echo "   Nothing was sent to the REPL." >&2
+                        exit 1 ;;
+                    *)
+                        # STRICT. A typo that silently launched the heuristic bot
+                        # would make a match report an agent that never played —
+                        # and the match log would look clean. `exit 1` because
+                        # that is this dispatcher's status for a bad argument
+                        # (see `error`); 3/4/78/124 are taken and mean other
+                        # things, so a new code here would be a second vocabulary.
+                        echo "❌ bot-loop: unknown --agent '${LOOP_AGENT}'" >&2
+                        echo "   Accepted: heuristic (the default), goldfish, passive (= goldfish)" >&2
+                        echo "   Nothing was sent to the REPL." >&2
+                        exit 1 ;;
+                esac
+                ;;
+            --patient)
+                LOOP_PATIENT=1
+                LOOP_ARGS="$LOOP_ARGS :patient? true"
                 loop_next="${loop_argv[li+1]:-}"
                 if is_num "$loop_next"; then
                     loop_next="$NUM_ARG"
@@ -2786,8 +2858,16 @@ case "$COMMAND" in
                     LOOP_ARGS="$LOOP_ARGS :patient-ms $((loop_next * 60000))"
                 fi
                 info "Patient mode ON (${loop_next:-default} min wall-clock bail)"
-            fi
+                ;;
+            esac
         done
+        # The goldfish loops have no patience dial and no :patient? kwarg, and
+        # kwarg destructuring drops what it does not name — so the flag would be
+        # accepted and silently do nothing. Said out loud, after the loop,
+        # because --agent may appear after --patient in argv.
+        if [[ "$LOOP_PATIENT" -eq 1 && "$LOOP_AGENT" != "heuristic" ]]; then
+            echo "⚠️  --patient has no effect on the '${LOOP_AGENT}' loop (no patience dial); launching anyway" >&2
+        fi
         # #286: this loop lives in the REPL, so the heartbeat toucher forked
         # above dies with THIS invocation while the bot plays on — and 300s later
         # the opponent is told "SILENT — likely disconnected … conclude" about a
@@ -2806,22 +2886,46 @@ case "$COMMAND" in
         HB_FILE="${HEARTBEAT_DIR}/${CLIENT_NAME}"
         case "$HB_FILE" in /*) ;; *) HB_FILE="$PWD/$HB_FILE" ;; esac
         LOOP_ARGS="$LOOP_ARGS :heartbeat-file \"$(clj_str "$HB_FILE")\""
+
+        # --allow-dead, since #290. The default gate refuses `resync-failed` with
+        # `exit 4`, and the one caller that launches four of these in a row is
+        # run-match.sh, which runs under `set -e`: it injects both bots
+        # immediately after `start-game`, so a board that has not landed yet took
+        # down the whole match run (lobby and both REPLs left up, no result
+        # extracted). The gate is also redundant HERE specifically — the loops'
+        # first act is ai-loop-sync/ensure-board!, which REPAIRS a boardless
+        # seat, and a loop launched into a decided or vanished game reads the
+        # winner / fails to repair and stops with its own diagnostic. So this
+        # weakens a refusal, not a report: ensure_connection still prints the
+        # Stale / Kicked / Resync / teardown lines it found.
+        ensure_connection --allow-dead
+        info "Launching autonomous loop for ${CLIENT_NAME} — agent '${LOOP_AGENT}' (${LOOP_NS}/${LOOP_FN}), detached future..."
         # Refuse to relaunch over a still-running loop, else the old future is
         # orphaned (unreachable by bot-loop-status/stop). NOTE: we resolve the VAR
         # and deref THE VAR (var-deref -> the Future object, non-blocking) before
         # future-done?. Referencing the bare symbol would fail to COMPILE on a
         # fresh REPL where the var isn't def'd yet; @<future> would block until the
         # loop exits.
-        # requiring-resolve loads $BOT_NS and resolves the loop fn at RUNTIME. A
+        # requiring-resolve loads $LOOP_NS and resolves the loop fn at RUNTIME. A
         # bare bot/$LOOP_FN alias would be resolved at COMPILE time - before the
         # require runs - inside this non-top-level let, giving "No such namespace".
+        #
+        # It resolves OUTSIDE the future, and that placement is the fix for a
+        # design-panel MAJOR (guest-unique): inside the future, a namespace that
+        # fails to load has its exception CAPTURED by the future and surfaced only
+        # on a deref nobody performs — after the launch line has already printed.
+        # The hand-rolled injection #290 replaces loaded at the top level of its
+        # eval, so a broken bot failed the injection; this keeps that property.
+        # `or`+throw because requiring-resolve returns nil (it does not throw)
+        # when the namespace loads but the var is absent.
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v) (not (future-done? (deref v))))
                      (println \"⚠️  Autonomous loop already running for ${CLIENT_NAME} - use 'bot-loop-stop' first\")
-                     (do
+                     (let [loop-fn (or (requiring-resolve (quote $LOOP_NS/$LOOP_FN))
+                                       (throw (ex-info \"bot-loop: no such var $LOOP_NS/$LOOP_FN\" {})))]
                        (def ai-self-play-future
-                         (future ((requiring-resolve (quote $BOT_NS/$LOOP_FN)) $LOOP_ARGS)))
-                       (println \"🔁 Autonomous loop launched for ${CLIENT_NAME}\"))))"
+                         (future (loop-fn $LOOP_ARGS)))
+                       (println \"🔁 Autonomous loop launched for ${CLIENT_NAME} ($LOOP_NS/$LOOP_FN)\"))))"
         ;;
 
     bot-loop-status)

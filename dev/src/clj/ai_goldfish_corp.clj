@@ -7,6 +7,7 @@
             [ai-loop-sync :as loop-sync]
             [ai-prompts :as prompts]
             [ai-runs :as runs]
+            [ai-core :as core]
             [clojure.string :as str]))
 
 (defn play-turn
@@ -55,8 +56,22 @@
       (prompts/choose-by-index! 0))))
 
 (defn start-autonomous!
-  "Main autonomous loop."
-  []
+  "Main autonomous loop.
+
+   Options:
+     :heartbeat-file - path to THIS side's peer-liveness heartbeat (#286/#290).
+                   The loop lives inside the REPL, so the launching
+                   send_command invocation's toucher dies the moment the eval
+                   returns while we play on — and 300s later the opponent is
+                   told we disconnected. Passed by `send_command bot-loop
+                   --agent goldfish`; absent when driven by hand, which is a
+                   no-op. See ai-core/start-heartbeat-toucher!."
+  [& {:keys [heartbeat-file]}]
+  ;; Everything below runs under the heartbeat toucher. The body keeps its
+  ;; original indentation on purpose: re-indenting the whole loop would bury a
+  ;; two-line change in a whitespace diff.
+  (let [stop-heartbeat! (core/start-heartbeat-toucher! heartbeat-file)]
+   (try
   (println "🐠 GOLDFISH CORP - Starting autonomous loop")
   (loop [resync loop-sync/initial-tracker]
     ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap when
@@ -110,4 +125,18 @@
                 {:continue? true})))]
       (when continue?
         (Thread/sleep 1000)
-        (recur tracker)))))
+        (recur tracker))))
+   ;; A stopped loop must stop claiming to be alive, and `finally` is the whole
+   ;; of that claim: it covers every way this fn can end — a winner, the error
+   ;; arm, and bot-loop-stop's future-cancel, whose interrupt can arrive
+   ;; ANYWHERE in the body, inside the tick-body try (caught there, flag
+   ;; re-set) or outside it (ensure-board!, either sleep), and propagate.
+   ;;
+   ;; THREE earlier versions of this comment were wrong, and every one of them
+   ;; was wrong by ENUMERATING: first that the propagating paths did not exist,
+   ;; then that the heuristic loops differ (they do not), then that there were
+   ;; exactly three places the interrupt could land (the error arm's own sleep
+   ;; is a fourth, and an exception raised inside a catch clause is not caught
+   ;; by its sibling catch). Hence no list and no comparison — the only thing
+   ;; stated here is the thing `finally` actually guarantees.
+   (finally (stop-heartbeat!)))))

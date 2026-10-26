@@ -159,40 +159,84 @@ restart_clients() {
 }
 
 # Helper to load agent code
+#
+# #290: every arm used to hand-roll `(future (ns/fn))` through ai-eval.sh, which
+# bypassed send_command entirely — so no arm was handed the `:heartbeat-file`
+# that `bot-loop` passes (#286) and all four read as "SILENT — likely
+# disconnected" to anything watching the liveness clock 300s in. Routing through
+# send_command also picks up the relaunch guard and `bot-loop-status` /
+# `bot-loop-stop`, which the hand-rolled future could not be reached by at all:
+# it bound no var.
+#
+# No port argument. send_command fixes the port from the side (runner 7889 /
+# corp 7890) and offers no override, so a port passed in here could only be a
+# SECOND copy of that mapping — the two-owner shape, and it would agree on the
+# defaults while the real divergence (start-ai-client-repl.sh honours
+# CLIENT_1_PORT via load-env.sh; send_command ignores it) stayed unguarded. A
+# design seat killed the version of this function that took one.
+#
+# stdout is NOT discarded, and the exit status is not trusted on its own. The
+# relaunch guard prints "already running" and exits 0, and the
+# --patient-on-a-goldfish warning is a print too; under `> /dev/null` the
+# harness could not tell a refused relaunch from a launch. So: show what
+# send_command said, and require the launch confirmation.
 load_agent() {
     local side=$1
-    local port=$2
-    local agent_type=$3
-    
+    local agent_type=$2
+    local agent_flag out
+
     echo "      Injecting $side agent ($agent_type)..."
-    
-    if [ "$side" == "corp" ]; then
-        case "$agent_type" in
-            "heuristic")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
-                ;;
-            "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_corp.clj\") (require '[ai-goldfish-corp]) (future (ai-goldfish-corp/start-autonomous!)))" > /dev/null
-                ;;
-            *)
+
+    # The SIDE is validated, the agent label is not. Before this check the
+    # agent-default arm below read `if corp ... else ...`, so an unknown side
+    # was silently treated as the runner and the warning blamed the AGENT, which
+    # was fine — a code review called that out and it is cheaper to remove the
+    # arm than to document it.
+    case "$side" in
+        corp|runner) ;;
+        *)
+            echo "      ❌ load_agent: unknown side '$side' (expected corp or runner)"
+            echo "         Nothing was injected."
+            return 1
+            ;;
+    esac
+
+    # The harness keeps its own lenient vocabulary (and its per-side default);
+    # `bot-loop --agent` is strict, so a bad value never reaches it from here.
+    case "$agent_type" in
+        "heuristic")
+            agent_flag="heuristic"
+            ;;
+        "passive"|"goldfish")
+            agent_flag="goldfish"
+            ;;
+        *)
+            if [ "$side" == "corp" ]; then
                 echo "      ⚠️  Unknown Corp agent '$agent_type', defaulting to heuristic"
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
-                ;;
-        esac
-    elif [ "$side" == "runner" ]; then
-        case "$agent_type" in
-            "heuristic")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_runner.clj\") (require '[ai-heuristic-runner]) (future (ai-heuristic-runner/loop!)))" > /dev/null
-                ;;
-            "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
-                ;;
-            *)
+                agent_flag="heuristic"
+            else
                 echo "      ⚠️  Unknown Runner agent '$agent_type', defaulting to goldfish"
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
-                ;;
-        esac
+                agent_flag="goldfish"
+            fi
+            ;;
+    esac
+
+    if ! out=$("$DEV_DIR/send_command" "$side" bot-loop --agent "$agent_flag" 2>&1); then
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "      ❌ $side agent ($agent_flag) was NOT launched: send_command failed."
+        echo "         Nothing is playing that seat; aborting rather than timing out in 600s."
+        return 1
     fi
+    printf '%s\n' "$out" | sed 's/^/      /'
+    case "$out" in
+        *"Autonomous loop launched"*)
+            ;;
+        *)
+            echo "      ❌ $side agent ($agent_flag): send_command exited 0 but printed no launch"
+            echo "         confirmation — a refused relaunch, or a loop that never started."
+            return 1
+            ;;
+    esac
 }
 
 run_game() {
@@ -270,9 +314,28 @@ run_game() {
     "$DEV_DIR/send_command" corp start-game > /dev/null
 
     # Inject Brains
+    #
+    # A failed injection ends the match run, because `set -e` (:6) is on and
+    # run_game is called plainly — and that is the right outcome: a seat with
+    # nothing playing it yields a 600s timeout and a log of one bot moving.
+    #
+    # The PARTIAL case is what needs teardown, and it is a state this change
+    # created: before it, load_agent discarded its output and never failed. Corp
+    # launched, runner refused, and a corp loop plays on alone in a lobby nobody
+    # leaves (code review). So stop both loops and leave both seats before the
+    # failure propagates. `bot-loop-stop` and `leave-game` both take
+    # `ensure_connection --allow-dead`, so neither can be refused for the same
+    # reason the injection just was; `|| true` because teardown must not replace
+    # the diagnosis above it with one of its own.
     echo "   🧠 Injecting brains..."
-    load_agent "corp" 7890 "$corp_agent"
-    load_agent "runner" 7889 "$runner_agent"
+    if ! load_agent "corp" "$corp_agent" || ! load_agent "runner" "$runner_agent"; then
+        echo "   🧹 Brain injection failed — stopping any launched loop and leaving the lobby"
+        for inj_side in corp runner; do
+            "$DEV_DIR/send_command" "$inj_side" bot-loop-stop > /dev/null 2>&1 || true
+            "$DEV_DIR/send_command" "$inj_side" leave-game    > /dev/null 2>&1 || true
+        done
+        return 1
+    fi
     
     # Monitor Loop
     echo "   Monitoring..."

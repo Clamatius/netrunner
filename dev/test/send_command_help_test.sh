@@ -280,6 +280,12 @@ assert_flag() {
 for f in --tank --tank-all --tactics --tactics-file --return-on-signal --since --force; do
     assert_flag "$f"
 done
+# bot-loop's two (#290). --agent is new; --patient is an EIGHTH flag that #281 did
+# not list and that failed this same measure the whole time — its only mention was
+# mid-line in `bot-loop [--patient N]`, which has_flag_entry rejects on purpose.
+for f in --agent --patient; do
+    assert_flag "$f"
+done
 # The assertion must be able to TELL that difference: --since and --force appear
 # mid-line as other commands' flags, so a head-of-line test must reject those
 # lines on their own. Pin it, so the weaker form cannot come back silently.

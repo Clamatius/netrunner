@@ -1496,7 +1496,12 @@
       (when (and continue? (not bail?))
         (Thread/sleep 500)
         (recur (inc iter) next-stall next-spin tracker))))
-   ;; A stopped loop must stop claiming to be alive — including the
-   ;; future-cancel path (bot-loop-stop), which arrives as an interrupt and is
-   ;; re-raised by the tick body's own handler.
+   ;; A stopped loop must stop claiming to be alive, and `finally` is the whole
+   ;; of that claim: it covers every way this fn can end, including
+   ;; bot-loop-stop's future-cancel, whose interrupt can arrive anywhere in the
+   ;; body — inside the tick-body try (caught at :1448-1451, which re-sets the
+   ;; thread's flag and returns {:continue? false}; it does NOT re-raise, which
+   ;; is what this comment said for three cycles) or outside it, where it
+   ;; propagates. Corrected from the goldfish side (#290), whose own comment was
+   ;; wrong three times by copying this one.
    (finally (stop-heartbeat!)))))
