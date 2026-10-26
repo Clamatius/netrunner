@@ -187,6 +187,20 @@ load_agent() {
 
     echo "      Injecting $side agent ($agent_type)..."
 
+    # The SIDE is validated, the agent label is not. Before this check the
+    # agent-default arm below read `if corp ... else ...`, so an unknown side
+    # was silently treated as the runner and the warning blamed the AGENT, which
+    # was fine — a code review called that out and it is cheaper to remove the
+    # arm than to document it.
+    case "$side" in
+        corp|runner) ;;
+        *)
+            echo "      ❌ load_agent: unknown side '$side' (expected corp or runner)"
+            echo "         Nothing was injected."
+            return 1
+            ;;
+    esac
+
     # The harness keeps its own lenient vocabulary (and its per-side default);
     # `bot-loop --agent` is strict, so a bad value never reaches it from here.
     case "$agent_type" in

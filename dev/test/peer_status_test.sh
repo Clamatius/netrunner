@@ -398,25 +398,20 @@ gated_contains "patient-on-goldfish-still-launches" "ai-goldfish-corp/start-auto
 # of its eval, and that property is kept.
 drive_bot_loop_side corp --agent goldfish
 if bot_form_reached "resolve-happens-outside-the-future"; then
-    # The property is an ORDERING, so assert the ordering rather than the absence
-    # of one literal spelling: `!= *"(future ((requiring-resolve"*` passed for any
-    # other way of writing the same defect (a line break between the two, a deref
-    # of the var inside the future). A membership test is not an ordering test —
-    # #220 is that lesson, filed against a guard of ours that made it.
-    LAUNCH_FORM="$(printf '%s\n' "$BOT_EXPR" | tr '\n' ' ')"
-    rr_at="${LAUNCH_FORM%%requiring-resolve*}"
-    fu_at="${LAUNCH_FORM%%(future *}"
-    if [[ "$LAUNCH_FORM" == *"requiring-resolve"* && "$LAUNCH_FORM" == *"(future "* \
-          && ${#rr_at} -lt ${#fu_at} ]]; then
-        echo "ok   [resolve-happens-outside-the-future]"
-    else
-        echo "FAIL [resolve-happens-outside-the-future]: requiring-resolve must appear"
-        echo "     BEFORE the first (future in the emitted form. Inside it, a bot namespace"
-        echo "     that fails to load has its exception captured by the future and the"
-        echo "     launch line prints anyway."
-        printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
-        fails=$((fails+1))
-    fi
+    # The property is the SHAPE of the form, and two earlier versions of this
+    # assertion got that wrong in opposite directions: first the absence of one
+    # literal spelling, then (after a review finding) the textual ORDER of two
+    # tokens — which a `delay` satisfies while deferring the resolve into the
+    # future, exactly the defect being guarded against
+    # (`(let [loop-fn (delay (or (requiring-resolve ...)))] ... (future (@loop-fn ...)))`).
+    # So pin the two pieces the form must have: the binding is a DIRECT resolve,
+    # and the future calls the already-bound fn. Whitespace is normalised first so
+    # re-indenting the emitted string is not a failure.
+    LAUNCH_FORM="$(printf '%s\n' "$BOT_EXPR" | tr '\n' ' ' | tr -s ' ')"
+    assert_contains "resolve-is-bound-directly-not-deferred" "$LAUNCH_FORM" \
+        '(let [loop-fn (or (requiring-resolve'
+    assert_contains "future-calls-the-already-resolved-fn" "$LAUNCH_FORM" \
+        '(future (loop-fn '
 fi
 
 # A resync-failed verdict must NOT stop the launch (bot-loop takes
@@ -635,6 +630,18 @@ SCEOF
     drive_load_agent runner banana
     assert_contains "load_agent-runner-default-warns"  "$LA_OUT"  "defaulting to goldfish"
     assert_contains "load_agent-runner-default-is-sent" "$LA_ARGS" "runner bot-loop --agent goldfish"
+    # 5. An unknown SIDE is refused by load_agent itself, before anything is sent.
+    #    The arm this replaces treated a bad side as the runner and blamed the
+    #    AGENT in its warning.
+    drive_load_agent bogusside heuristic
+    if [[ "$LA_STATUS" -ne 0 && -z "$LA_ARGS" ]]; then
+        echo "ok   [load_agent-refuses-an-unknown-side]"
+    else
+        echo "FAIL [load_agent-refuses-an-unknown-side]: status=$LA_STATUS, stub saw: $LA_ARGS"
+        fails=$((fails+1))
+    fi
+    assert_contains "load_agent-names-the-side-not-the-agent" "$LA_OUT" "unknown side 'bogusside'"
+    assert_not_contains "load_agent-does-not-blame-the-agent" "$LA_OUT" "Unknown Runner agent"
     unset SC_STUB_OUT SC_STUB_RC
 
     # A partial injection (corp launched, runner refused) must not leave a corp
@@ -664,11 +671,30 @@ SCEOF
         assert_contains "run-match-teardown-stops-the-loops" "$INJECT_CODE" 'bot-loop-stop'
         assert_contains "run-match-teardown-leaves-the-lobby" "$INJECT_CODE" 'leave-game'
         assert_contains "run-match-injection-failure-returns" "$INJECT_CODE" 'return 1'
-        # The teardown must be INSIDE the failure branch: run unconditionally it
-        # would leave the lobby of every healthy game it just set up.
-        PRE_GUARD="$(printf '%s\n' "$INJECT_CODE" | sed -n '/if ! load_agent/,$!p')"
-        assert_not_contains "run-match-teardown-is-not-unconditional" "$PRE_GUARD" 'leave-game'
-        assert_not_contains "run-match-stop-is-not-unconditional"     "$PRE_GUARD" 'bot-loop-stop'
+        # The teardown must be INSIDE the failure branch, and nowhere ELSE in the
+        # block: run unconditionally it would stop both bots and leave the lobby
+        # of every healthy game before the monitor loop.
+        #
+        # "Everything before the guard" was not that test. A seat (and the judge
+        # harness, reproducing it) appended the same loop AFTER the guard's `fi`
+        # and both assertions stayed green while their names claimed the
+        # opposite. So: take the guard's BODY, and take the block MINUS that
+        # body, and assert on each.
+        GUARD_BODY="$(printf '%s\n' "$INJECT_CODE" \
+            | awk '/if ! load_agent/{inb=1;next} inb && /^    fi$/{inb=0;next} inb')"
+        OUTSIDE_GUARD="$(printf '%s\n' "$INJECT_CODE" \
+            | awk '/if ! load_agent/{inb=1;print;next} inb && /^    fi$/{inb=0;next} !inb')"
+        if [[ -n "$GUARD_BODY" ]]; then
+            echo "ok   [run-match-guard-body-extracted]"
+        else
+            echo "FAIL [run-match-guard-body-extracted]: the failure branch is empty or the"
+            echo "     awk range missed it, so the two assertions below say nothing."
+            fails=$((fails+1))
+        fi
+        assert_contains "run-match-teardown-is-in-the-failure-branch"  "$GUARD_BODY" 'leave-game'
+        assert_contains "run-match-stop-is-in-the-failure-branch"      "$GUARD_BODY" 'bot-loop-stop'
+        assert_not_contains "run-match-teardown-is-not-unconditional" "$OUTSIDE_GUARD" 'leave-game'
+        assert_not_contains "run-match-stop-is-not-unconditional"     "$OUTSIDE_GUARD" 'bot-loop-stop'
     fi
 fi
 

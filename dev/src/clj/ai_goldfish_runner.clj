@@ -122,17 +122,17 @@
       (when continue?
         (Thread/sleep 1000)
         (recur tracker))))
-   ;; A stopped loop must stop claiming to be alive, on EVERY exit path: a
-   ;; winner, the stall/error arms, and bot-loop-stop's future-cancel. The
-   ;; cancel arrives as an interrupt and can land in three different places —
-   ;; inside the tick-body try (caught, flag re-set, {:continue? false}), in
-   ;; ensure-board!, or in the between-tick sleep below, and the last two are
-   ;; outside that try, so they propagate. `finally` is what makes all of them
-   ;; the same for the toucher, which is the only claim needed here.
+   ;; A stopped loop must stop claiming to be alive, and `finally` is the whole
+   ;; of that claim: it covers every way this fn can end — a winner, the error
+   ;; arm, and bot-loop-stop's future-cancel, whose interrupt can arrive
+   ;; ANYWHERE in the body, inside the tick-body try (caught there, flag
+   ;; re-set) or outside it (ensure-board!, either sleep), and propagate.
    ;;
-   ;; Two earlier versions of this comment were wrong, both by comparing this
-   ;; loop to the heuristic ones (they handle the interrupt identically —
-   ;; ai_heuristic_corp.clj:1448-1451, ai_heuristic_runner.clj:504-507) and by
-   ;; calling the propagating paths nonexistent. Hence: no comparison, and
-   ;; nothing asserted that is not in this fn.
+   ;; THREE earlier versions of this comment were wrong, and every one of them
+   ;; was wrong by ENUMERATING: first that the propagating paths did not exist,
+   ;; then that the heuristic loops differ (they do not), then that there were
+   ;; exactly three places the interrupt could land (the error arm's own sleep
+   ;; is a fourth, and an exception raised inside a catch clause is not caught
+   ;; by its sibling catch). Hence no list and no comparison — the only thing
+   ;; stated here is the thing `finally` actually guarantees.
    (finally (stop-heartbeat!)))))
