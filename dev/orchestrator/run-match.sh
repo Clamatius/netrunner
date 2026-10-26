@@ -159,40 +159,70 @@ restart_clients() {
 }
 
 # Helper to load agent code
+#
+# #290: every arm used to hand-roll `(future (ns/fn))` through ai-eval.sh, which
+# bypassed send_command entirely — so no arm was handed the `:heartbeat-file`
+# that `bot-loop` passes (#286) and all four read as "SILENT — likely
+# disconnected" to anything watching the liveness clock 300s in. Routing through
+# send_command also picks up the relaunch guard and `bot-loop-status` /
+# `bot-loop-stop`, which the hand-rolled future could not be reached by at all:
+# it bound no var.
+#
+# No port argument. send_command fixes the port from the side (runner 7889 /
+# corp 7890) and offers no override, so a port passed in here could only be a
+# SECOND copy of that mapping — the two-owner shape, and it would agree on the
+# defaults while the real divergence (start-ai-client-repl.sh honours
+# CLIENT_1_PORT via load-env.sh; send_command ignores it) stayed unguarded. A
+# design seat killed the version of this function that took one.
+#
+# stdout is NOT discarded, and the exit status is not trusted on its own. The
+# relaunch guard prints "already running" and exits 0, and the
+# --patient-on-a-goldfish warning is a print too; under `> /dev/null` the
+# harness could not tell a refused relaunch from a launch. So: show what
+# send_command said, and require the launch confirmation.
 load_agent() {
     local side=$1
-    local port=$2
-    local agent_type=$3
-    
+    local agent_type=$2
+    local agent_flag out
+
     echo "      Injecting $side agent ($agent_type)..."
-    
-    if [ "$side" == "corp" ]; then
-        case "$agent_type" in
-            "heuristic")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
-                ;;
-            "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_corp.clj\") (require '[ai-goldfish-corp]) (future (ai-goldfish-corp/start-autonomous!)))" > /dev/null
-                ;;
-            *)
+
+    # The harness keeps its own lenient vocabulary (and its per-side default);
+    # `bot-loop --agent` is strict, so a bad value never reaches it from here.
+    case "$agent_type" in
+        "heuristic")
+            agent_flag="heuristic"
+            ;;
+        "passive"|"goldfish")
+            agent_flag="goldfish"
+            ;;
+        *)
+            if [ "$side" == "corp" ]; then
                 echo "      ⚠️  Unknown Corp agent '$agent_type', defaulting to heuristic"
-                "$DEV_DIR/ai-eval.sh" corp "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_corp.clj\") (require '[ai-heuristic-corp]) (future (ai-heuristic-corp/start-autonomous!)))" > /dev/null
-                ;;
-        esac
-    elif [ "$side" == "runner" ]; then
-        case "$agent_type" in
-            "heuristic")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_heuristic_runner.clj\") (require '[ai-heuristic-runner]) (future (ai-heuristic-runner/loop!)))" > /dev/null
-                ;;
-            "passive"|"goldfish")
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
-                ;;
-            *)
+                agent_flag="heuristic"
+            else
                 echo "      ⚠️  Unknown Runner agent '$agent_type', defaulting to goldfish"
-                "$DEV_DIR/ai-eval.sh" runner "$port" "(do (load-file \"$DEV_DIR/src/clj/ai_goldfish_runner.clj\") (require '[ai-goldfish-runner]) (future (ai-goldfish-runner/loop!)))" > /dev/null
-                ;;
-        esac
+                agent_flag="goldfish"
+            fi
+            ;;
+    esac
+
+    if ! out=$("$DEV_DIR/send_command" "$side" bot-loop --agent "$agent_flag" 2>&1); then
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "      ❌ $side agent ($agent_flag) was NOT launched: send_command failed."
+        echo "         Nothing is playing that seat; aborting rather than timing out in 600s."
+        return 1
     fi
+    printf '%s\n' "$out" | sed 's/^/      /'
+    case "$out" in
+        *"Autonomous loop launched"*)
+            ;;
+        *)
+            echo "      ❌ $side agent ($agent_flag): send_command exited 0 but printed no launch"
+            echo "         confirmation — a refused relaunch, or a loop that never started."
+            return 1
+            ;;
+    esac
 }
 
 run_game() {
@@ -271,8 +301,8 @@ run_game() {
 
     # Inject Brains
     echo "   🧠 Injecting brains..."
-    load_agent "corp" 7890 "$corp_agent"
-    load_agent "runner" 7889 "$runner_agent"
+    load_agent "corp" "$corp_agent"
+    load_agent "runner" "$runner_agent"
     
     # Monitor Loop
     echo "   Monitoring..."

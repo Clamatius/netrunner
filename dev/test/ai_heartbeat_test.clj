@@ -20,7 +20,9 @@
             [test-helpers :refer [mock-client-state with-mock-state]]
             [ai-core :as core]
             [ai-heuristic-corp :as hcorp]
-            [ai-heuristic-runner :as hrunner]))
+            [ai-heuristic-runner :as hrunner]
+            [ai-goldfish-corp :as gcorp]
+            [ai-goldfish-runner :as grunner]))
 
 ;; ============================================================================
 ;; Helpers
@@ -275,3 +277,56 @@
     (with-mock-state (finished-game-state "runner")
       (is (nil? (completes-without-throwing #(hrunner/loop!)))
           "the Runner loop must run with no heartbeat path"))))
+
+;; ---------------------------------------------------------------------------
+;; #290: the two GOLDFISH loops had no :heartbeat-file option at all, so routing
+;; the match harness through `bot-loop` would have emitted the kwarg into a form
+;; that dropped it — kwarg destructuring silently ignores what it does not name,
+;; so the passive seats would have gone stale exactly as #286 describes while
+;; every test passed. These are the twins of the two heuristic deftests above and
+;; exist for the same reason the design panel gave: the helper working and
+;; send_command emitting the path still leave the bug live if the loop never
+;; calls the toucher.
+
+(deftest goldfish-corp-loop-wires-the-heartbeat
+  (testing "the goldfish Corp loop refreshes the heartbeat it was given, then stops"
+    (let [dir (temp-dir!)
+          f (java.io.File. dir "corp")]
+      (.createNewFile f)
+      (let [was (backdate! f 600000)]
+        (with-redefs [core/heartbeat-touch-interval-ms 50]
+          (with-mock-state (finished-game-state "corp")
+            (with-out-str (gcorp/start-autonomous! :heartbeat-file (.getPath f)))))
+        (is (> (.lastModified f) was)
+            "the goldfish Corp loop must refresh its own side's heartbeat (#290)")
+        (let [after (backdate! f 600000)]
+          (Thread/sleep 400)
+          (is (= after (.lastModified f))
+              "a goldfish loop that has RETURNED must not go on looking alive"))))))
+
+(deftest goldfish-runner-loop-wires-the-heartbeat
+  (testing "the goldfish Runner loop refreshes the heartbeat it was given, then stops"
+    (let [dir (temp-dir!)
+          f (java.io.File. dir "runner")]
+      (.createNewFile f)
+      (let [was (backdate! f 600000)]
+        (with-redefs [core/heartbeat-touch-interval-ms 50]
+          (with-mock-state (finished-game-state "runner")
+            (with-out-str (grunner/loop! :heartbeat-file (.getPath f)))))
+        (is (> (.lastModified f) was)
+            "the goldfish Runner loop has the identical hole and must refresh too")
+        (let [after (backdate! f 600000)]
+          (Thread/sleep 400)
+          (is (= after (.lastModified f))
+              "a goldfish loop that has RETURNED must not go on looking alive"))))))
+
+(deftest goldfish-loops-run-without-a-heartbeat-file
+  (testing "a goldfish loop driven by hand (no :heartbeat-file) still runs"
+    ;; Both were zero-arity before #290 and both are still called that way from a
+    ;; REPL, so the kwarg arity must not have made the old call a compile error.
+    (with-mock-state (finished-game-state "corp")
+      (is (nil? (completes-without-throwing #(gcorp/start-autonomous!)))
+          "the goldfish Corp loop must run with no heartbeat path"))
+    (with-mock-state (finished-game-state "runner")
+      (is (nil? (completes-without-throwing #(grunner/loop!)))
+          "the goldfish Runner loop must run with no heartbeat path"))))

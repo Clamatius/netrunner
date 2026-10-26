@@ -173,11 +173,24 @@ export BOT_STUB_LOG="$HEARTBEAT_DIR/bot-stub.log"
 
 # drive_bot_loop [env-prefixed args...] — run bot-loop against the stub and put
 # the captured expression in BOT_EXPR.
-drive_bot_loop() {
+drive_bot_loop() { drive_bot_loop_side corp "$@"; }
+
+# drive_bot_loop_side SIDE [args...] — the same, for either seat. #290 routes the
+# match harness's four launches (two sides x two agent types) through this arm, so
+# every assertion below has to be made per side as well as per agent: a corp arm
+# that named the RUNNER's namespace, or vice versa, would pass a corp-only test.
+BOT_STATUS=0
+drive_bot_loop_side() {
+    local side="$1"; shift
     : > "$BOT_STUB_LOG"
-    AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop "$@" >/dev/null 2>&1 || true
+    BOT_STATUS=0
+    AI_EVAL="$BOT_STUB" "$SEND_CMD" "$side" bot-loop "$@" >/dev/null 2>&1 || BOT_STATUS=$?
     BOT_EXPR="$(cat "$BOT_STUB_LOG")"
 }
+
+# count_in HAYSTACK NEEDLE — occurrences, so "exactly one launch form" is
+# assertable. grep -o -F, not a bash loop: the needle holds Clojure punctuation.
+count_in() { printf '%s\n' "$1" | grep -o -F -- "$2" | wc -l | tr -d ' '; }
 
 # bot_form_reached — did the bot-loop form actually get to the eval backend?
 #
@@ -254,6 +267,177 @@ if bot_form_reached "bot-loop-escapes-quote-in-path"; then
         printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
         fails=$((fails+1))
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# #290: --agent routes the PASSIVE (goldfish) bots through this same arm.
+#
+# The mutant a design seat described, and the reason these assertions are shaped
+# the way they are: give the goldfish case its own `execute` line, copied from the
+# hand-rolled injection run-match.sh used to carry, with no $LOOP_ARGS. A test
+# that only looked for the namespace NAME would pass; peer_status_test's older
+# assertions pass too (they drive bare bot-loop, corp only); and the Clojure
+# kwarg tests pass because the kwarg exists. The passive seats would then go
+# stale exactly as #290 describes, with a green suite.
+#
+# So for each (side, agent): exactly ONE launch form, carrying BOTH the namespace
+# it claims to launch AND that side's heartbeat path — and not the other agent's
+# namespace.
+assert_launch_form() {   # SIDE  AGENT  [TAG]   (ns/fn and path are derived)
+    local side="$1" agent="$2" ns fn other
+    case "$side" in
+        corp)   fn="start-autonomous!" ;;
+        runner) fn="loop!" ;;
+    esac
+    case "$agent" in
+        heuristic) ns="ai-heuristic-$side"; other="ai-goldfish-$side" ;;
+        goldfish|passive) ns="ai-goldfish-$side"; other="ai-heuristic-$side" ;;
+    esac
+    local tag="$side/${3:-$agent}"
+    bot_form_reached "launch-form-$tag" || return 0
+    assert_contains "launch-form-names-the-agents-ns [$tag]" "$BOT_EXPR" "(quote $ns/$fn)"
+    assert_not_contains "launch-form-excludes-the-other-agent [$tag]" "$BOT_EXPR" "$other"
+    assert_contains "launch-form-carries-this-sides-heartbeat [$tag]" "$BOT_EXPR" \
+        ":heartbeat-file \"$HEARTBEAT_DIR/$side\""
+    local n
+    n="$(count_in "$BOT_EXPR" ':heartbeat-file')"
+    if [[ "$n" == "1" ]]; then
+        echo "ok   [exactly-one-launch-form-with-the-kwarg [$tag]]"
+    else
+        echo "FAIL [exactly-one-launch-form-with-the-kwarg [$tag]]: found $n occurrences of"
+        echo "     :heartbeat-file, expected exactly 1. Two forms means a second execute;"
+        echo "     zero means this agent's arm emits a form that drops LOOP_ARGS (#290)."
+        printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+        fails=$((fails+1))
+    fi
+}
+
+for side in corp runner; do
+    drive_bot_loop_side "$side"
+    assert_launch_form "$side" heuristic no-flag         # the default is unchanged
+    drive_bot_loop_side "$side" --agent heuristic
+    assert_launch_form "$side" heuristic
+    drive_bot_loop_side "$side" --agent goldfish
+    assert_launch_form "$side" goldfish
+    drive_bot_loop_side "$side" --agent passive          # the harness's own word
+    assert_launch_form "$side" passive
+done
+
+# The loop fn is picked by SIDE, not by agent, and the goldfish namespaces happen
+# to carry the same two names. Pin that, so a future rename cannot quietly make
+# both sides launch the same function.
+drive_bot_loop_side runner --agent goldfish
+gated_contains "goldfish-runner-launches-loop!" "ai-goldfish-runner/loop!"
+drive_bot_loop_side corp --agent goldfish
+gated_contains "goldfish-corp-launches-start-autonomous!" "ai-goldfish-corp/start-autonomous!"
+
+# A typo must be REFUSED, and refused before anything reaches the REPL. The error
+# message says "Nothing was sent to the REPL" — that is a claim about state, so it
+# is asserted rather than trusted: the stub log must be completely empty, which is
+# only true because the flag is validated AHEAD of ensure_connection (a design
+# seat found that validating after it cost a stale seat a board-clearing resync
+# before the refusal).
+drive_bot_loop_side corp --agent nonsense
+if [[ "$BOT_STATUS" -ne 0 ]]; then
+    echo "ok   [unknown-agent-is-refused]"
+else
+    echo "FAIL [unknown-agent-is-refused]: bot-loop --agent nonsense exited 0"
+    fails=$((fails+1))
+fi
+if [[ -z "$BOT_EXPR" ]]; then
+    echo "ok   [unknown-agent-reaches-no-repl]"
+else
+    echo "FAIL [unknown-agent-reaches-no-repl]: the refusal claims nothing was sent, but"
+    echo "     the eval backend was called:"
+    printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+fi
+# ...and --agent with no value at all is its own arm, so it gets its own check:
+# "unknown --agent ''" would be a worse sentence than "needs a value".
+drive_bot_loop_side corp --agent
+if [[ "$BOT_STATUS" -ne 0 && -z "$BOT_EXPR" ]]; then
+    echo "ok   [agent-with-no-value-is-refused-before-the-repl]"
+else
+    echo "FAIL [agent-with-no-value-is-refused-before-the-repl]: status=$BOT_STATUS, stub log:"
+    printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+fi
+EMPTY_ERR="$(AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --agent 2>&1 || true)"
+assert_contains "agent-with-no-value-says-so" "$EMPTY_ERR" "--agent needs a value"
+
+ERR="$(AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --agent nonsense 2>&1 || true)"
+assert_contains "unknown-agent-lists-what-is-accepted" "$ERR" "heuristic"
+assert_contains "unknown-agent-names-goldfish-too"     "$ERR" "goldfish"
+
+# --patient on a goldfish loop is accepted and does nothing (kwarg destructuring
+# drops what it does not name), so it has to SAY so. Silently-ignored flag is the
+# class this project files bugs about.
+PATIENT_OUT="$(AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --agent goldfish --patient 5 2>&1 || true)"
+assert_contains "patient-on-goldfish-warns" "$PATIENT_OUT" "no effect on the 'goldfish' loop"
+# ...and still launches, rather than refusing: a wedge for no safety gain.
+BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+gated_contains "patient-on-goldfish-still-launches" "ai-goldfish-corp/start-autonomous!"
+
+# The namespace must be resolved OUTSIDE the future. Inside it, a namespace that
+# fails to load has its exception captured by the future and surfaced only on a
+# deref nobody performs — after the launch line has printed, so the harness reads
+# a successful injection and then times out with no bot (design-panel MAJOR,
+# guest-unique). The hand-rolled injection this replaces loaded at the top level
+# of its eval, and that property is kept.
+drive_bot_loop_side corp --agent goldfish
+if bot_form_reached "resolve-happens-outside-the-future"; then
+    # `(future (loop-fn ...))` — the resolve must not be the thing inside future.
+    if [[ "$BOT_EXPR" != *"(future ((requiring-resolve"* ]]; then
+        echo "ok   [resolve-happens-outside-the-future]"
+    else
+        echo "FAIL [resolve-happens-outside-the-future]: requiring-resolve is inside the"
+        echo "     future again, so a bot namespace that fails to load reports a launch."
+        fails=$((fails+1))
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# #290 wiring: the match harness must actually CALL this arm.
+#
+# A working --agent plus a correct emission still leaves #290 live if
+# run-match.sh goes on hand-rolling its futures — #109's shape, and the finding a
+# guest seat alone made on the #286 cycle. load_agent is not sourceable
+# (run-match.sh parses a config file at top level), so this is structural: it
+# anchors on the agent-type case labels INSIDE load_agent, so an ADDED arm is
+# visible instead of slipping under a pinned count (#260).
+RUN_MATCH="$SCRIPT_DIR/../orchestrator/run-match.sh"
+LOAD_AGENT_FN="$(awk '/^load_agent\(\) \{/,/^\}/' "$RUN_MATCH")"
+if [[ -z "$LOAD_AGENT_FN" ]]; then
+    echo "FAIL [run-match-load_agent-found]: could not extract load_agent from $RUN_MATCH —"
+    echo "     every assertion below would vacuously pass, so this is the gate."
+    fails=$((fails+1))
+else
+    echo "ok   [run-match-load_agent-found]"
+    assert_contains "run-match-launches-via-bot-loop" "$LOAD_AGENT_FN" 'bot-loop --agent "$agent_flag"'
+    assert_not_contains "run-match-hand-rolls-no-future" "$LOAD_AGENT_FN" '(future (ai-'
+    assert_not_contains "run-match-does-not-bypass-send_command" "$LOAD_AGENT_FN" 'ai-eval.sh'
+    # Every agent label the harness accepts must map to an --agent value. The
+    # labels are the anchor: a NEW one with no mapping shows up as a miss here.
+    for label in heuristic passive goldfish; do
+        if [[ "$LOAD_AGENT_FN" == *"\"$label\""* ]]; then
+            echo "ok   [run-match-knows-agent-label: $label]"
+        else
+            echo "FAIL [run-match-knows-agent-label: $label]: load_agent no longer handles '$label'"
+            fails=$((fails+1))
+        fi
+    done
+    assert_contains "run-match-maps-passive-to-goldfish" "$LOAD_AGENT_FN" 'agent_flag="goldfish"'
+    assert_contains "run-match-maps-heuristic"           "$LOAD_AGENT_FN" 'agent_flag="heuristic"'
+    # The side is passed through, not derived twice, and no port is passed: a port
+    # argument could only be a second copy of send_command's fixed side->port map.
+    assert_contains "run-match-passes-the-side" "$LOAD_AGENT_FN" '"$DEV_DIR/send_command" "$side" bot-loop'
+    CALLS="$(grep -n 'load_agent "' "$RUN_MATCH")"
+    assert_contains "run-match-calls-corp-arm"   "$CALLS" 'load_agent "corp" "$corp_agent"'
+    assert_contains "run-match-calls-runner-arm" "$CALLS" 'load_agent "runner" "$runner_agent"'
+    assert_not_contains "run-match-passes-no-port" "$CALLS" '7890'
+    # send_command exiting 0 is not a launch: the relaunch guard prints and exits
+    # 0, so the harness checks for the confirmation line.
+    assert_contains "run-match-requires-the-launch-line" "$LOAD_AGENT_FN" 'Autonomous loop launched'
 fi
 
 echo "---"

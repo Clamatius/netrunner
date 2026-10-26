@@ -7,6 +7,7 @@
             [ai-loop-sync :as loop-sync]
             [ai-prompts :as prompts]
             [ai-runs :as runs]
+            [ai-core :as core]
             [clojure.string :as str]))
 
 (defn play-turn
@@ -55,8 +56,22 @@
       (prompts/choose-by-index! 0))))
 
 (defn start-autonomous!
-  "Main autonomous loop."
-  []
+  "Main autonomous loop.
+
+   Options:
+     :heartbeat-file - path to THIS side's peer-liveness heartbeat (#286/#290).
+                   The loop lives inside the REPL, so the launching
+                   send_command invocation's toucher dies the moment the eval
+                   returns while we play on — and 300s later the opponent is
+                   told we disconnected. Passed by `send_command bot-loop
+                   --agent goldfish`; absent when driven by hand, which is a
+                   no-op. See ai-core/start-heartbeat-toucher!."
+  [& {:keys [heartbeat-file]}]
+  ;; Everything below runs under the heartbeat toucher. The body keeps its
+  ;; original indentation on purpose: re-indenting the whole loop would bury a
+  ;; two-line change in a whitespace diff.
+  (let [stop-heartbeat! (core/start-heartbeat-toucher! heartbeat-file)]
+   (try
   (println "🐠 GOLDFISH CORP - Starting autonomous loop")
   (loop [resync loop-sync/initial-tracker]
     ;; #144: reach the SAME authority the CLI gate uses before acting. Cheap when
@@ -110,4 +125,11 @@
                 {:continue? true})))]
       (when continue?
         (Thread/sleep 1000)
-        (recur tracker)))))
+        (recur tracker))))
+   ;; A stopped loop must stop claiming to be alive — including the
+   ;; future-cancel path (bot-loop-stop). NOTE the mechanism here is not the
+   ;; heuristic loops': this body CATCHES InterruptedException, re-sets the
+   ;; thread's interrupt flag and returns {:continue? false} rather than
+   ;; re-raising, so the loop unwinds normally and `finally` runs on that path
+   ;; too. Either way the toucher is retired before this fn returns.
+   (finally (stop-heartbeat!)))))
