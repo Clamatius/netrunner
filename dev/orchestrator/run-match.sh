@@ -300,9 +300,28 @@ run_game() {
     "$DEV_DIR/send_command" corp start-game > /dev/null
 
     # Inject Brains
+    #
+    # A failed injection ends the match run, because `set -e` (:6) is on and
+    # run_game is called plainly — and that is the right outcome: a seat with
+    # nothing playing it yields a 600s timeout and a log of one bot moving.
+    #
+    # The PARTIAL case is what needs teardown, and it is a state this change
+    # created: before it, load_agent discarded its output and never failed. Corp
+    # launched, runner refused, and a corp loop plays on alone in a lobby nobody
+    # leaves (code review). So stop both loops and leave both seats before the
+    # failure propagates. `bot-loop-stop` and `leave-game` both take
+    # `ensure_connection --allow-dead`, so neither can be refused for the same
+    # reason the injection just was; `|| true` because teardown must not replace
+    # the diagnosis above it with one of its own.
     echo "   🧠 Injecting brains..."
-    load_agent "corp" "$corp_agent"
-    load_agent "runner" "$runner_agent"
+    if ! load_agent "corp" "$corp_agent" || ! load_agent "runner" "$runner_agent"; then
+        echo "   🧹 Brain injection failed — stopping any launched loop and leaving the lobby"
+        for inj_side in corp runner; do
+            "$DEV_DIR/send_command" "$inj_side" bot-loop-stop > /dev/null 2>&1 || true
+            "$DEV_DIR/send_command" "$inj_side" leave-game    > /dev/null 2>&1 || true
+        done
+        return 1
+    fi
     
     # Monitor Loop
     echo "   Monitoring..."

@@ -122,10 +122,17 @@
       (when continue?
         (Thread/sleep 1000)
         (recur tracker))))
-   ;; A stopped loop must stop claiming to be alive — including the
-   ;; future-cancel path (bot-loop-stop). NOTE the mechanism here is not the
-   ;; heuristic loops': this body CATCHES InterruptedException, re-sets the
-   ;; thread's interrupt flag and returns {:continue? false} rather than
-   ;; re-raising, so the loop unwinds normally and `finally` runs on that path
-   ;; too. Either way the toucher is retired before this fn returns.
+   ;; A stopped loop must stop claiming to be alive, on EVERY exit path: a
+   ;; winner, the stall/error arms, and bot-loop-stop's future-cancel. The
+   ;; cancel arrives as an interrupt and can land in three different places —
+   ;; inside the tick-body try (caught, flag re-set, {:continue? false}), in
+   ;; ensure-board!, or in the between-tick sleep below, and the last two are
+   ;; outside that try, so they propagate. `finally` is what makes all of them
+   ;; the same for the toucher, which is the only claim needed here.
+   ;;
+   ;; Two earlier versions of this comment were wrong, both by comparing this
+   ;; loop to the heuristic ones (they handle the interrupt identically —
+   ;; ai_heuristic_corp.clj:1448-1451, ai_heuristic_runner.clj:504-507) and by
+   ;; calling the propagating paths nonexistent. Hence: no comparison, and
+   ;; nothing asserted that is not in this fn.
    (finally (stop-heartbeat!)))))

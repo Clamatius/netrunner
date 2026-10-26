@@ -162,10 +162,22 @@ assert_contains "cmd-substitution-still-works" "$CS_OUT" "you (corp): active"
 # assembled separately and interpolated whole, so the sweep is structurally
 # blind to this site. These are the only guard, including for the escaping.
 BOT_STUB="$HEARTBEAT_DIR/stub-eval.sh"
+# BOT_STUB_VERDICT makes the stub answer ensure_connection's sync-verdict probe
+# with a chosen verdict. Without it the stub answers every eval with
+# STUB-EXECUTED, so ensure_connection's sed finds no SYNC-VERDICT token, the
+# verdict parses EMPTY and no case arm matches — which means the gate is never
+# reached and a test cannot tell `ensure_connection` from
+# `ensure_connection --allow-dead`. A review seat reverted bot-loop's
+# --allow-dead and watched this file and game_gone_gate_test.sh both stay green:
+# the suite was resting on the absence of the change.
 cat > "$BOT_STUB" <<'STUBEOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--stdin" ]]; then expr="$(cat)"; else expr="${!#}"; fi
 printf '%s\n' "$expr" >> "$BOT_STUB_LOG"
+if [[ -n "${BOT_STUB_VERDICT:-}" && "$expr" == *"sync-verdict!"* ]]; then
+    printf 'SYNC-VERDICT %s\n' "$BOT_STUB_VERDICT"
+    exit 0
+fi
 printf 'STUB-EXECUTED\n'
 STUBEOF
 chmod +x "$BOT_STUB"
@@ -386,14 +398,86 @@ gated_contains "patient-on-goldfish-still-launches" "ai-goldfish-corp/start-auto
 # of its eval, and that property is kept.
 drive_bot_loop_side corp --agent goldfish
 if bot_form_reached "resolve-happens-outside-the-future"; then
-    # `(future (loop-fn ...))` — the resolve must not be the thing inside future.
-    if [[ "$BOT_EXPR" != *"(future ((requiring-resolve"* ]]; then
+    # The property is an ORDERING, so assert the ordering rather than the absence
+    # of one literal spelling: `!= *"(future ((requiring-resolve"*` passed for any
+    # other way of writing the same defect (a line break between the two, a deref
+    # of the var inside the future). A membership test is not an ordering test —
+    # #220 is that lesson, filed against a guard of ours that made it.
+    LAUNCH_FORM="$(printf '%s\n' "$BOT_EXPR" | tr '\n' ' ')"
+    rr_at="${LAUNCH_FORM%%requiring-resolve*}"
+    fu_at="${LAUNCH_FORM%%(future *}"
+    if [[ "$LAUNCH_FORM" == *"requiring-resolve"* && "$LAUNCH_FORM" == *"(future "* \
+          && ${#rr_at} -lt ${#fu_at} ]]; then
         echo "ok   [resolve-happens-outside-the-future]"
     else
-        echo "FAIL [resolve-happens-outside-the-future]: requiring-resolve is inside the"
-        echo "     future again, so a bot namespace that fails to load reports a launch."
+        echo "FAIL [resolve-happens-outside-the-future]: requiring-resolve must appear"
+        echo "     BEFORE the first (future in the emitted form. Inside it, a bot namespace"
+        echo "     that fails to load has its exception captured by the future and the"
+        echo "     launch line prints anyway."
+        printf '%s\n' "$BOT_EXPR" | sed 's/^/    /'
         fails=$((fails+1))
     fi
+fi
+
+# A resync-failed verdict must NOT stop the launch (bot-loop takes
+# `ensure_connection --allow-dead` since #290). The reason is in send_command's
+# own comment: run-match.sh injects both bots immediately after start-game, runs
+# under `set -e`, and a board that had not landed yet refused with exit 4 and took
+# the whole match run down with it — while the loops repair a boardless seat
+# themselves on their first tick (loop-sync/ensure-board!).
+#
+# The DIFFERENTIAL is the point. A bare "bot-loop still launched" proves nothing
+# unless the stub's verdict actually reaches the gate, so the same stub and the
+# same verdict are first pointed at `dashboard`, which still takes a plain
+# `ensure_connection`: that one MUST be refused. Then bot-loop's success is
+# attributable to --allow-dead and not to a verdict that never arrived.
+DASH_STATUS=0
+: > "$BOT_STUB_LOG"
+BOT_STUB_VERDICT=resync-failed AI_EVAL="$BOT_STUB" "$SEND_CMD" corp dashboard >/dev/null 2>&1 \
+    || DASH_STATUS=$?
+DASH_EXPR="$(cat "$BOT_STUB_LOG")"
+if [[ "$DASH_STATUS" -eq 4 ]]; then
+    echo "ok   [stub-verdict-reaches-the-gate (dashboard refused with 4)]"
+else
+    echo "FAIL [stub-verdict-reaches-the-gate]: a gated command got status $DASH_STATUS,"
+    echo "     expected 4 (refuse_no_state on resync-failed). Until this holds, the"
+    echo "     bot-loop assertion below says NOTHING about --allow-dead — that is how"
+    echo "     the un-asserted version of this change shipped green."
+    printf '%s\n' "$DASH_EXPR" | sed 's/^/    /'
+    fails=$((fails+1))
+fi
+assert_not_contains "gated-command-sent-nothing" "$DASH_EXPR" "ai-heuristic-corp :as bot"
+
+if [[ "$DASH_STATUS" -eq 4 ]]; then
+    RF_STATUS=0
+    : > "$BOT_STUB_LOG"
+    BOT_STUB_VERDICT=resync-failed AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop --agent goldfish \
+        >/dev/null 2>&1 || RF_STATUS=$?
+    BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+    if [[ "$RF_STATUS" -eq 0 ]]; then
+        echo "ok   [resync-failed-does-not-refuse-bot-loop]"
+    else
+        echo "FAIL [resync-failed-does-not-refuse-bot-loop]: exit $RF_STATUS. Under"
+        echo "     run-match.sh's set -e this ends the whole match run on a board that"
+        echo "     simply had not landed yet (#290)."
+        fails=$((fails+1))
+    fi
+    gated_contains "resync-failed-still-launches" "ai-goldfish-corp/start-autonomous!"
+    # ...and a GONE game is not special-cased into a refusal either: same arm.
+    GG_STATUS=0
+    : > "$BOT_STUB_LOG"
+    BOT_STUB_VERDICT=game-gone AI_EVAL="$BOT_STUB" "$SEND_CMD" corp bot-loop >/dev/null 2>&1 \
+        || GG_STATUS=$?
+    BOT_EXPR="$(cat "$BOT_STUB_LOG")"
+    if [[ "$GG_STATUS" -eq 0 ]]; then
+        echo "ok   [game-gone-does-not-refuse-bot-loop]"
+    else
+        echo "FAIL [game-gone-does-not-refuse-bot-loop]: exit $GG_STATUS — the loop stops"
+        echo "     itself with a diagnostic when it cannot repair a board; the refusal"
+        echo "     here only costs the match run."
+        fails=$((fails+1))
+    fi
+    gated_contains "game-gone-still-launches" "ai-heuristic-corp/start-autonomous!"
 fi
 
 # ---------------------------------------------------------------------------
@@ -434,10 +518,154 @@ else
     CALLS="$(grep -n 'load_agent "' "$RUN_MATCH")"
     assert_contains "run-match-calls-corp-arm"   "$CALLS" 'load_agent "corp" "$corp_agent"'
     assert_contains "run-match-calls-runner-arm" "$CALLS" 'load_agent "runner" "$runner_agent"'
-    assert_not_contains "run-match-passes-no-port" "$CALLS" '7890'
+    # BOTH call lines, by shape. The earlier version asserted only that "7890" was
+    # absent, so reinstating the port on the RUNNER line alone passed it — and my
+    # own mutant used 7890, so it confirmed the one case it covered.
+    for n in 7889 7890; do
+        assert_not_contains "run-match-passes-no-port: $n" "$CALLS" "$n"
+    done
+    # Occurrences, not lines: both calls sit on ONE line now, inside the failure
+    # guard. Counting lines made this read 1 and fail for a correct tree.
+    CALL_COUNT="$(count_in "$CALLS" 'load_agent "')"
+    if [[ "$CALL_COUNT" == "2" ]]; then
+        echo "ok   [run-match-calls-load_agent-exactly-twice]"
+    else
+        echo "FAIL [run-match-calls-load_agent-exactly-twice]: found $CALL_COUNT calls"
+        printf '%s\n' "$CALLS" | sed 's/^/    /'
+        fails=$((fails+1))
+    fi
     # send_command exiting 0 is not a launch: the relaunch guard prints and exits
     # 0, so the harness checks for the confirmation line.
     assert_contains "run-match-requires-the-launch-line" "$LOAD_AGENT_FN" 'Autonomous loop launched'
+
+    # ...and that assertion is the presence of a STRING, which a review seat
+    # showed is not the same as the gate working: replacing the confirmation
+    # case's `return 1` with a no-op left this whole file green (reproduced).
+    # So DRIVE the function. It cannot be sourced from run-match.sh (that script
+    # parses a config file at top level), but the text extracted above is a
+    # complete function definition, so write it out, source THAT in a subshell,
+    # and point its $DEV_DIR at a stub send_command. No production code changes
+    # to make it testable.
+    LA_LIB="$HEARTBEAT_DIR/load_agent.sh"
+    printf '%s\n' "$LOAD_AGENT_FN" > "$LA_LIB"
+    # The extraction is an awk range, so a `}` at column 0 INSIDE the function
+    # would truncate it and the driver below would source a fragment. Prove we
+    # got a whole function before trusting anything it does: parseable, and the
+    # name is actually defined afterwards.
+    if bash -n "$LA_LIB" 2>/dev/null \
+       && bash -c 'source "$1"; declare -F load_agent >/dev/null' _ "$LA_LIB"; then
+        echo "ok   [load_agent-extracted-whole]"
+    else
+        echo "FAIL [load_agent-extracted-whole]: the awk extraction did not yield a"
+        echo "     complete, parseable function, so every assertion below would be"
+        echo "     testing a fragment. Extracted:"
+        sed 's/^/    /' "$LA_LIB"
+        fails=$((fails+1))
+    fi
+    mkdir -p "$HEARTBEAT_DIR/devstub"
+    cat > "$HEARTBEAT_DIR/devstub/send_command" <<'SCEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SC_ARGS_LOG"
+printf '%s\n' "${SC_STUB_OUT:-}"
+exit "${SC_STUB_RC:-0}"
+SCEOF
+    chmod +x "$HEARTBEAT_DIR/devstub/send_command"
+    export SC_ARGS_LOG="$HEARTBEAT_DIR/sc-args.log"
+
+    # drive_load_agent SIDE AGENT  — runs load_agent against the stub.
+    # LA_STATUS is its return value, LA_OUT its output, LA_ARGS what the stub saw.
+    drive_load_agent() {
+        : > "$SC_ARGS_LOG"
+        LA_STATUS=0
+        LA_OUT="$(DEV_DIR="$HEARTBEAT_DIR/devstub" bash -c '
+            source "$1"; load_agent "$2" "$3"' _ "$LA_LIB" "$1" "$2" 2>&1)" || LA_STATUS=$?
+        LA_ARGS="$(cat "$SC_ARGS_LOG")"
+    }
+
+    # 1. A launch that confirms itself succeeds, and the flag is passed through.
+    SC_STUB_OUT="🔁 Autonomous loop launched for corp (ai-heuristic-corp/start-autonomous!)"
+    export SC_STUB_OUT SC_STUB_RC=0
+    drive_load_agent corp heuristic
+    if [[ "$LA_STATUS" -eq 0 ]]; then
+        echo "ok   [load_agent-accepts-a-confirmed-launch]"
+    else
+        echo "FAIL [load_agent-accepts-a-confirmed-launch]: returned $LA_STATUS"
+        printf '%s\n' "$LA_OUT" | sed 's/^/    /'
+        fails=$((fails+1))
+    fi
+    assert_contains "load_agent-passes-side-and-flag" "$LA_ARGS" "corp bot-loop --agent heuristic"
+
+    # 2. THE GATE. The relaunch guard prints and exits 0; that is not a launch.
+    SC_STUB_OUT="⚠️  Autonomous loop already running for corp - use 'bot-loop-stop' first"
+    export SC_STUB_OUT SC_STUB_RC=0
+    drive_load_agent corp heuristic
+    if [[ "$LA_STATUS" -ne 0 ]]; then
+        echo "ok   [load_agent-rejects-a-refused-relaunch]"
+    else
+        echo "FAIL [load_agent-rejects-a-refused-relaunch]: returned 0 for the relaunch"
+        echo "     guard's own output. The harness would proceed as if a bot had started"
+        echo "     and then time out in 600s with nothing playing that seat."
+        fails=$((fails+1))
+    fi
+
+    # 3. A non-zero send_command is a failure even if it printed the magic words.
+    SC_STUB_OUT="🔁 Autonomous loop launched for corp"
+    export SC_STUB_OUT SC_STUB_RC=4
+    drive_load_agent corp heuristic
+    if [[ "$LA_STATUS" -ne 0 ]]; then
+        echo "ok   [load_agent-rejects-a-nonzero-send_command]"
+    else
+        echo "FAIL [load_agent-rejects-a-nonzero-send_command]: returned 0 on exit 4"
+        fails=$((fails+1))
+    fi
+
+    # 4. The harness's own vocabulary maps onto --agent, including its two lenient
+    #    defaults — which are what make send_command's STRICT --agent arm
+    #    unreachable from here, a fact this change leans on in a comment and that
+    #    nothing pinned before.
+    SC_STUB_OUT="🔁 Autonomous loop launched"
+    export SC_STUB_OUT SC_STUB_RC=0
+    drive_load_agent corp passive
+    assert_contains "load_agent-maps-passive-to-goldfish" "$LA_ARGS" "corp bot-loop --agent goldfish"
+    drive_load_agent runner goldfish
+    assert_contains "load_agent-maps-goldfish-runner" "$LA_ARGS" "runner bot-loop --agent goldfish"
+    drive_load_agent corp banana
+    assert_contains "load_agent-corp-default-warns"  "$LA_OUT"  "defaulting to heuristic"
+    assert_contains "load_agent-corp-default-is-sent" "$LA_ARGS" "corp bot-loop --agent heuristic"
+    drive_load_agent runner banana
+    assert_contains "load_agent-runner-default-warns"  "$LA_OUT"  "defaulting to goldfish"
+    assert_contains "load_agent-runner-default-is-sent" "$LA_ARGS" "runner bot-loop --agent goldfish"
+    unset SC_STUB_OUT SC_STUB_RC
+
+    # A partial injection (corp launched, runner refused) must not leave a corp
+    # loop playing alone in a lobby nobody leaves — a state this change created,
+    # since load_agent could not fail before it. The teardown lives in run_game,
+    # which is not extractable the way load_agent is (it is 100 lines of lobby
+    # bring-up), so this is structural and says so: it pins that the two
+    # load_agent calls are inside a failure branch, and that the branch tears
+    # both sides down.
+    INJECT_BLOCK="$(awk '/# Inject Brains/,/^    # Monitor Loop/' "$RUN_MATCH")"
+    if [[ -z "$INJECT_BLOCK" ]]; then
+        echo "FAIL [run-match-inject-block-found]: could not extract the injection block"
+        fails=$((fails+1))
+    else
+        echo "ok   [run-match-inject-block-found]"
+        assert_contains "run-match-injection-is-guarded" "$INJECT_BLOCK" \
+            'if ! load_agent "corp" "$corp_agent" || ! load_agent "runner" "$runner_agent"; then'
+        assert_contains "run-match-teardown-stops-the-loops" "$INJECT_BLOCK" 'bot-loop-stop'
+        assert_contains "run-match-teardown-leaves-the-lobby" "$INJECT_BLOCK" 'leave-game'
+        assert_contains "run-match-injection-failure-returns" "$INJECT_BLOCK" 'return 1'
+        # The teardown must be INSIDE the failure branch: run unconditionally it
+        # would leave the lobby of every healthy game it just set up.
+        # COMMENTS STRIPPED FIRST. The comment above the guard explains why
+        # leave-game is safe here, so a raw text check found "leave-game" before
+        # the branch and failed on a correct tree — the keyword-matches-prose
+        # trap this repo has filed twice.
+        PRE_GUARD="$(printf '%s\n' "$INJECT_BLOCK" | grep -v '^[[:space:]]*#' \
+                     | sed -n '/if ! load_agent/,$!p')"
+        assert_not_contains "run-match-teardown-is-not-unconditional" "$PRE_GUARD" 'leave-game'
+        assert_not_contains "run-match-stop-is-not-unconditional"     "$PRE_GUARD" 'bot-loop-stop'
+    fi
 fi
 
 echo "---"

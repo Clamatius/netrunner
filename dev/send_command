@@ -270,9 +270,18 @@ require_valid_budget() {
 # Pass --allow-dead for commands that must still work with no usable state: the
 # diagnostics a seat uses to CONFIRM the death (wait, get-cursor — the babysit
 # loop's only exit condition), the lobby commands that RECOVER from it
-# (create-game/join/leave-game/list-lobbies), and local control that must never
-# be hostage to server state (bot-loop-stop). Everything else is gated, so a
-# newly added command inherits the honest default instead of the lying one.
+# (create-game/join/leave-game/list-lobbies), local control that must never be
+# hostage to server state (bot-loop-stop), and — the one that fits none of those
+# three, so do not read this list as closed — `bot-loop` itself, since #290: the
+# loop it launches REPAIRS a boardless seat on its first tick
+# (ai-loop-sync/ensure-board!) and stops with its own diagnostic when it cannot,
+# so the refusal was redundant there while being able to end a whole match run
+# under run-match.sh's `set -e`. The full reasoning is at the bot-loop arm.
+# Everything else is gated, so a newly added command inherits the honest default
+# instead of the lying one. A command added to the --allow-dead side belongs in
+# this sentence too: an enumerating comment that is not updated is how a
+# maintainer comes to audit against a list that is quietly wrong (#281's shape,
+# in a comment instead of a help view).
 ensure_connection() {
     require_valid_budget
     local allow_dead=0 allow_decided=0
