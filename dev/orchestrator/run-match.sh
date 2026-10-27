@@ -1,21 +1,489 @@
 #!/bin/bash
 # run-match.sh
 # Orchestrates a Level 2 "Duelling Pistols" match between two agents.
-# Usage: ./run-match.sh [config-file]
+# Usage: ./run-match.sh [--force] [config-file]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR/../.."
+# `pwd -P` normalizes what used to be the literal string "$SCRIPT_DIR/../..".
+# Honest about why: this is hygiene, NOT the gate's authority. An earlier design
+# round had register_client_pid compare a listener's cwd against this path, and
+# two seats reproduced that ".../dev/orchestrator/../.." never compares equal to
+# the canonical path lsof reports — it would have refused every clean launch.
+# That comparison is gone (ownership is the owner tag below, because cwd cannot
+# tell our REPL from any other launcher's). What is left is DEV_DIR, LOG_DIR and
+# the paths printed in diagnostics, where a canonical path is simply the one an
+# operator can compare by eye against lsof's.
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 DEV_DIR="$ROOT_DIR/dev"
-CONFIG_FILE="${1:-$SCRIPT_DIR/match-config.json}"
+DEFAULT_CONFIG="$SCRIPT_DIR/match-config.json"
 LOG_DIR="$ROOT_DIR/logs/matches"
+# Where the script's own scratch logs go. A seam, because the test runs this
+# REAL script and the fixed /tmp paths meant every run truncated
+# /tmp/game-server.log and /tmp/ai-client-{corp,runner}.log — the live REPLs'
+# logs, which is exactly where a marquee's disconnect evidence would be. So the
+# #292 test was damaging the thing #292 protects, ten-plus times per
+# `make test-shell` and 23 times per mutation battery. Default unchanged.
+RUN_MATCH_TMP="${RUN_MATCH_TMP:-/tmp}"
+
+# Where start-ai-client-repl.sh:70-77 writes the client pidfile, and where
+# ai-eval.sh:109 reads it. SEPARATE from RUN_MATCH_TMP, which is this script's
+# own scratch dir: reusing that one meant an operator who set RUN_MATCH_TMP got
+# a teardown that looked for the pidfile somewhere the launcher never wrote it,
+# so the cleanup silently became a no-op and the "(stale PID file)" complaint it
+# exists to prevent came back. This variable mirrors somebody else's path and is
+# overridden only so the test does not delete real pidfiles.
+#
+# Not fixable from here, and stated rather than implied: the launcher also
+# truncates /tmp/ai-client-<side>.log itself (:38), whatever this script
+# redirects its stdout to. That path is the launcher's to move, not ours.
+CLIENT_PIDFILE_DIR="${CLIENT_PIDFILE_DIR:-/tmp}"
+
+# ----------------------------------------------------------------------------
+# #292: this script kills whatever holds the two client REPL ports. Those REPLs
+# are a machine-wide singleton shared by every checkout, and marquee games are
+# driven on them by model seats for hours. Killing them unasked loses somebody
+# else's game, and the person who loses it is not the person who ran this.
+#
+# One fact, one place: the ports this script will KILL and the seat each one
+# belongs to. The kill loop, the launches, the registration and the gate all
+# read CLIENT_SEATS, so the gate cannot end up watching a port the kill does not
+# touch. Deliberately literals and deliberately NOT CLIENT_1_PORT/CLIENT_2_PORT
+# from load-env.sh: send_command fixes the port from the side with no env seam
+# (#291), so honouring the env here would make this script dial a REPL that
+# nothing answers on. #291 is where that mapping gets one home.
+CLIENT_SEATS=("7890:corp" "7889:runner")
+
+# Pids of listeners THIS invocation launched and verified (see
+# register_client_pid). Scoped to one live process on purpose: a claim of
+# ownership must not outlive the only process that can honour it. An earlier
+# design recorded this in a file, and a review round showed what that buys —
+# the record goes on vouching for a REPL during exactly the period when nobody
+# is watching it, so a marquee that adopted our leftover got killed by the next
+# run with the file's blessing.
+OUR_CLIENT_PIDS=()
+
+# The holders preflight_client_ports inspected and approved on its last pass.
+# The kill iterates THIS, not a fresh `lsof`: re-inventorying meant a process
+# that took a client port between the gate and the kill was killed having never
+# been gated, in the one code path whose purpose is to gate that kill. Every
+# effect in a guarded batch has to answer to the guard that ran, not to a second
+# observation.
+APPROVED_KILL_PIDS=()
+
+# Foreign pids the operator accepted with --force, captured at the moment they
+# were shown. Spent by the first restart_clients and then cleared: consent is
+# scoped in time as well as identity, so a pid recycled three hours later cannot
+# inherit it.
+CONSENTED_PIDS=()
+FORCE=0
+
+# Ownership is PROVED, not inferred. Every other launcher on this box
+# (ai-bounce.sh, resume.sh, reset.sh) cds to a checkout root and leaves a fresh
+# listener on the same port, so "new since the last inventory, and rooted here"
+# is satisfied by a stranger that won a bind race. This tag goes into the client
+# JVM's own command line via JVM_OPTS, and a listener counts as ours only if it
+# carries it. Measured: JVM_OPTS reaches the project JVM through
+# `nohup lein with-profile ai-client run`, and `ps -o command=` shows the -D.
+OWNER_TAG="run-match-$$-${RANDOM}${RANDOM}"
+
+usage() {
+    echo "Usage: $(basename "$0") [--force] [config-file]" >&2
+    echo "" >&2
+    echo "  --force   Kill client REPLs this match did not start. Only the ones" >&2
+    echo "            listed in the refusal you are overriding; anything that" >&2
+    echo "            takes a port later still stops the match." >&2
+    exit 2
+}
+
+# parse_match_args — sets FORCE and CONFIG_FILE. Its own function so the arg
+# arms are testable without running a match. The unknown-flag arm matters: `$1`
+# used to be the config path unconditionally, so `--forse` became a filename and
+# the script died later with "Config file not found", which is a bad way to find
+# out you did not get the behaviour you asked for.
+parse_match_args() {
+    local seen_positional=0
+    FORCE=0
+    CONFIG_FILE=""
+    # Remembered separately from CONFIG_FILE, which always ends up set: the
+    # --force hint should echo back what the operator typed, not add a default
+    # path that reads as if it were part of what they must repeat.
+    CONFIG_GIVEN=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --force)
+                FORCE=1
+                ;;
+            -*)
+                echo "Error: unknown option: $1" >&2
+                usage
+                ;;
+            *)
+                if [ "$seen_positional" -ne 0 ]; then
+                    echo "Error: more than one config file given ('$CONFIG_FILE' and '$1')" >&2
+                    usage
+                fi
+                CONFIG_FILE="$1"
+                CONFIG_GIVEN="$1"
+                seen_positional=1
+                ;;
+        esac
+        shift
+    done
+    [ -n "$CONFIG_FILE" ] || CONFIG_FILE="$DEFAULT_CONFIG"
+}
+
+# ---- process facts, all best-effort -----------------------------------------
+#
+# `|| true` on every one of these is DEFENSIVE, not load-bearing — and the
+# distinction is here because a mutation test caught the comment that claimed
+# otherwise. lsof exits NON-ZERO when nothing matches, and under `set -e` (:6) a
+# bare `h=$(lsof -i :59999 -t)` on a free port aborts the whole script
+# (measured: `bash -c 'set -e; echo before; h=$(lsof ...); echo after'` prints
+# only "before"). That was a real defect in an earlier DESIGN of this gate,
+# which captured holders into a variable. Nothing here does: every call site is
+# a `for pid in $(...)` word list or a `[ -n "$(...)" ]` test, where the
+# substitution's status is discarded. Removing the `|| true` today changes no
+# behaviour and no test goes red. It stays so that the first caller who DOES
+# assign the result does not reintroduce the abort.
+#
+# -sTCP:LISTEN (as dev/ai-bounce.sh:44 already spells it) because `-i :PORT`
+# alone selects sockets at EITHER end: an in-flight ai-eval.sh connection would
+# count as a holder, and can exit between the lsof and the per-pid lookup.
+listen_holders() {
+    lsof -i ":$1" -sTCP:LISTEN -t 2>/dev/null || true
+}
+
+# lsof -Fn prints three lines (p<pid>, fcwd, n<path>); the cwd is the n one.
+pid_cwd() {
+    lsof -p "$1" -a -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1 || true
+}
+
+pid_etime() {
+    ps -o etime= -p "$1" 2>/dev/null | tr -d ' ' || true
+}
+
+# Bounded on purpose: a client REPL's command line is kilobytes of java
+# classpath and unbounded it buries the message it is evidence for.
+pid_cmd_excerpt() {
+    ps -o command= -p "$1" 2>/dev/null | cut -c1-100 || true
+}
+
+pid_carries_owner_tag() {
+    ps -o command= -p "$1" 2>/dev/null | grep -q -- "$OWNER_TAG"
+}
+
+pid_in_list() {
+    local needle="$1"; shift
+    local candidate
+    for candidate in "$@"; do
+        [ "$candidate" = "$needle" ] && return 0
+    done
+    return 1
+}
+
+# client_lobby_claim — ask a listening REPL whether it is in a game, and say so
+# in its own voice. This is the REPL's claim, not a verdict: a seat in hour 3 of
+# a marquee and an idle leftover from last night look identical in cwd and
+# etime (both are 19-hour-old JVMs rooted in the same checkout), and telling
+# them apart is exactly the judgement --force asks the operator to make.
+#
+# It is a plain atom read through ai-eval.sh with a timeout, the same shape this
+# script already uses to find a game id, NOT a send_command action: nothing here
+# can block on a prompt. Three outcomes, and all three are printed as given.
+client_lobby_claim() {
+    local side="$1" port="$2" raw out
+    # The live expression is `(if-let [g …] (str g) "nil")`: `(str g)` on the
+    # UUID gives a plain, pasteable id, and the explicit "nil" keeps IDLE
+    # distinguishable from SILENT. Two simpler spellings were tried and are
+    # wrong, recorded here because each shipped once:
+    #   `(str …)` alone     — `(str nil)` is the EMPTY STRING, so an idle REPL
+    #                         read as "did not answer" and the "no lobby" arm
+    #                         was unreachable on a real REPL.
+    #   `(pr-str …)` alone  — :gameid is a java.util.UUID (ai_state.clj:122-130),
+    #                         so this renders `#uuid "b0f6…"` and the
+    #                         quote-stripping below leaves `#uuid \b0f6…\`, an
+    #                         id that cannot be pasted into list-game-ids.
+    # TIMEOUT_GRACE=0 because ai-eval.sh's backstop is TIMEOUT + TIMEOUT_GRACE
+    # (:19, :78 — grace defaults to 15), so a socket that accepts and never
+    # answers would hold this for 20s, not the 5 the timeout suggests.
+    # The exit status is taken BEFORE the pipeline, because a pipeline's status
+    # is `tail`'s and a failed ai-eval.sh would read as a successful empty
+    # answer — i.e. "no lobby", the reassuring one, for a REPL that said
+    # nothing. "did not answer" and "no lobby" must not collapse into each
+    # other: one of them is used below to decide a kill.
+    # ai-eval.sh:108-121 answers "not running (stale PID file)" and exits 1 when
+    # the GLOBAL, cross-checkout pidfile names a dead pid — which says nothing
+    # about the REPL actually listening on this port, and which it also DELETES
+    # (#293). Folding that into "did not answer" would report a live foreign
+    # marquee seat as silent, so it gets its own answer. That message is on
+    # STDOUT (:117 is a plain echo), which is why stderr stays discarded here: an
+    # earlier version redirected 2>&1 "so the refusal is visible", which was
+    # false and whose only effect was merging stderr into the success-path value
+    # that `tail -1` reads.
+    if ! raw="$(TIMEOUT=5 TIMEOUT_GRACE=0 "$DEV_DIR/ai-eval.sh" "$side" "$port" \
+                 '(if-let [g (:gameid @ai-state/client-state)] (str g) "nil")' 2>/dev/null)"; then
+        case "$raw" in
+            *"stale PID file"*)
+                echo "cannot ask — dev/ai-eval.sh refused on a stale pidfile in $CLIENT_PIDFILE_DIR (#293)"
+                ;;
+            *)
+                echo "did not answer"
+                ;;
+        esac
+        return 0
+    fi
+    out="$(printf '%s' "$raw" | tail -1 | tr -d '"' | tr -d '\n')"
+    case "$out" in
+        "")                  echo "did not answer" ;;
+        nil)                 echo "no lobby" ;;
+        *Exception*|*ERROR*) echo "did not answer" ;;
+        *)                   echo "in lobby $out" ;;
+    esac
+}
+
+# print_holder PORT PID SIDE [CLAIM]
+#
+# CLAIM is passed in when the caller already has it. It used to re-probe, which
+# cost a second timeout AND let the line argue with the message above it: a REPL
+# that left its lobby between the two calls produced "reports that it is seated
+# in a game" followed by "says: no lobby", at the moment the operator most needs
+# to trust what they are reading.
+print_holder() {
+    local port="$1" pid="$2" side="$3" claim="${4:-}"
+    [ -n "$claim" ] || claim="$(client_lobby_claim "$side" "$port")"
+    echo "      • port $port ($side seat): pid $pid"
+    echo "        cwd:   $(pid_cwd "$pid")"
+    echo "        up:    $(pid_etime "$pid")"
+    echo "        says:  $claim"
+    echo "        cmd:   $(pid_cmd_excerpt "$pid")"
+}
+
+# preflight_client_ports PHASE  (PHASE: startup | restart)
+#
+# The gate. Two call sites, one function: once at startup so a refusal costs
+# nothing and does not first boot a game server, and once as restart_clients'
+# first act so games 2..N are covered too — ownership cannot be inferred from
+# position in the script, because from game 2 onward the holders are the ones
+# this script launched itself.
+#
+# Everything it prints, it prints BEFORE anything dies. The message this
+# replaces ("Port 7890 still in use, force killing...") was printed after the
+# decision was made, which is the wrong order for a destructive one.
+preflight_client_ports() {
+    local phase="$1"
+    local entry port side pid claim
+    local -a foreign_pids=() foreign_rows=() busy_rows=() busy_pids=() seen_pids=()
+    APPROVED_KILL_PIDS=()
+
+    for entry in "${CLIENT_SEATS[@]}"; do
+        port="${entry%%:*}"
+        side="${entry##*:}"
+        for pid in $(listen_holders "$port"); do
+            if pid_in_list "$pid" ${OUR_CLIENT_PIDS[@]+"${OUR_CLIENT_PIDS[@]}"}; then
+                # Ours — but "I launched it" is not "nobody else is using it".
+                # run_game leaves both lobbies before it returns, so one of our
+                # idle REPLs should report no lobby here. A lobby means another
+                # driver adopted it between games (send_command and resume.sh
+                # both take whatever is listening), and restarting it would
+                # disconnect a game we did not create.
+                claim="$(client_lobby_claim "$side" "$port")"
+                case "$claim" in
+                    "in lobby "*)
+                        busy_rows+=("$port|$pid|$side|$claim")
+                        busy_pids+=("$pid")
+                        ;;
+                    "cannot ask"*)
+                        # N1: this value was added one round before this arm
+                        # existed, and the seat fell through in SILENCE — killed
+                        # after nothing but "stopping pid", where the state
+                        # before it printed "treating it as wedged". Widening
+                        # what a function can return obliges every consumer.
+                        #
+                        # Treated like "did not answer" — we restart it — but
+                        # said differently, because the reason differs: the REPL
+                        # was never asked. ai-eval refused on a pidfile that
+                        # belongs to whichever checkout wrote it last (#293).
+                        echo "   ℹ️  could not ask our $side REPL (pid $pid) whether it is in a game:"
+                        echo "      $claim"
+                        echo "      Restarting it as this match's own seat."
+                        ;;
+                    "did not answer")
+                        # Deliberate asymmetry, stated rather than silent: a
+                        # FOREIGN holder that will not answer is somebody
+                        # else's problem and the operator decides, but one of
+                        # OURS that will not answer is a wedged REPL, which is
+                        # the thing restart_clients exists to clear. So this
+                        # proceeds — out loud, so the log says which of the two
+                        # happened.
+                        echo "   ℹ️  our $side REPL (pid $pid) did not answer the lobby probe;"
+                        echo "      treating it as wedged and restarting it."
+                        ;;
+                esac
+            else
+                foreign_pids+=("$pid")
+                foreign_rows+=("$port|$pid|$side")
+            fi
+            seen_pids+=("$pid")
+        done
+    done
+
+    if [ "${#busy_rows[@]}" -ne 0 ]; then
+        # L7: a non-nil :gameid is the REPL's CLAIM, not proof somebody else
+        # seated it. ai_connection's leave-game can fail to take (run_game sends
+        # it to /dev/null and send_command still exits 0) and a late
+        # :lobby/state can re-set the field, in which case this would be our own
+        # lobby. Refusing is right either way — we are not restarting a seat
+        # that says it is in a game — so the sentence weakens to what was
+        # actually said instead of growing a branch for a state nobody can
+        # distinguish from here.
+        echo "❌ A client REPL this match started reports that it is seated in a game:"
+        for entry in "${busy_rows[@]}"; do
+            IFS='|' read -r port pid side claim <<< "$entry"
+            print_holder "$port" "$pid" "$side" "$claim"
+        done
+        echo "   Not restarting it, in case another driver is playing on it."
+        echo "   Abandoning the remaining games of this match; results already"
+        echo "   extracted are saved under $LOG_DIR."
+        # L1 — the defect this gate was committing itself. The script is about
+        # to exit under set -e, and the EXIT trap stops everything in
+        # OUR_CLIENT_PIDS. Leaving a busy pid there means printing "not
+        # restarting it" and then killing it a moment later: the exact harm
+        # #292 exists to prevent, introduced by #292's fix. Disown it, so the
+        # teardown cannot reach it.
+        local keep
+        local -a survivors=()
+        for keep in ${OUR_CLIENT_PIDS[@]+"${OUR_CLIENT_PIDS[@]}"}; do
+            pid_in_list "$keep" ${busy_pids[@]+"${busy_pids[@]}"} || survivors+=("$keep")
+        done
+        OUR_CLIENT_PIDS=(${survivors[@]+"${survivors[@]}"})
+        return 1
+    fi
+
+    if [ "${#foreign_rows[@]}" -eq 0 ]; then
+        APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
+        return 0
+    fi
+
+    echo "⚠️  Client ports are held by ${#foreign_rows[@]} process(es) this match did not start:"
+    for entry in "${foreign_rows[@]}"; do
+        IFS='|' read -r port pid side <<< "$entry"
+        print_holder "$port" "$pid" "$side"
+    done
+
+    if [ "$phase" = "restart" ]; then
+        # Between games. Consent given at startup covered the pids the operator
+        # was shown then; these may not be those.
+        for pid in "${foreign_pids[@]}"; do
+            if ! pid_in_list "$pid" ${CONSENTED_PIDS[@]+"${CONSENTED_PIDS[@]}"}; then
+                echo "   This appeared after the match started, so --force does not cover it:"
+                echo "   you consented to killing what you were shown, not to a standing licence."
+                echo "   Abandoning the remaining games; results so far are under $LOG_DIR."
+                return 1
+            fi
+        done
+        echo "   Already consented to at startup — stopping them."
+        APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
+        return 0
+    fi
+
+    if [ "$FORCE" -ne 1 ]; then
+        echo "   Refusing to start: killing these would end whatever is using those seats."
+        echo "   A marquee seat or another worktree drives the same two REPLs, and the"
+        echo "   only trace left in ITS log would be a disconnect."
+        echo ""
+        echo "   If they are yours to kill, re-run with --force:"
+        echo "       $(basename "$0") --force${CONFIG_GIVEN:+ $CONFIG_FILE}"
+        return 1
+    fi
+
+    CONSENTED_PIDS=(${foreign_pids[@]+"${foreign_pids[@]}"})
+    APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
+    echo "   --force given: killing the ${#CONSENTED_PIDS[@]} process(es) listed above."
+    return 0
+}
+
+# teardown_our_clients — stop the REPLs this invocation started, and only those.
+#
+# MATCH_ORCHESTRATOR_DESIGN.md:56 has always said "Teardown: Stops agents"; the
+# script never did it. It matters for the gate as well as for tidiness: without
+# it, this script's own leftovers are foreign to the NEXT invocation, so the
+# second run on a clean box refuses, --force becomes the habitual spelling, and
+# the unconditional kill is back wearing a flag.
+#
+# `set +e` first: errexit is live inside a trap handler, so one kill of a pid
+# that exited between the inventory and the signal would abort the handler and
+# orphan the other seat.
+teardown_our_clients() {
+    set +e
+    [ "${#OUR_CLIENT_PIDS[@]}" -eq 0 ] && return 0
+
+    local pid entry side pidfile recorded alive i
+    echo "🧹 Stopping the ${#OUR_CLIENT_PIDS[@]} client REPL(s) this match started..."
+    for pid in "${OUR_CLIENT_PIDS[@]}"; do
+        kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null
+    done
+    for ((i=1; i<=5; i++)); do
+        alive=0
+        for pid in "${OUR_CLIENT_PIDS[@]}"; do
+            kill -0 "$pid" 2>/dev/null && alive=1
+        done
+        [ "$alive" -eq 0 ] && break
+        sleep 1
+    done
+    for pid in "${OUR_CLIENT_PIDS[@]}"; do
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done
+
+    # start-ai-client-repl.sh:70-77 left the pidfile naming the pids we just
+    # killed, and ai-eval.sh reports a dead one as "(stale PID file)" — a
+    # misleading complaint about a cleanup that worked. Remove only the files
+    # whose content is a pid we owned; another REPL's file is not ours to
+    # delete.
+    for entry in "${CLIENT_SEATS[@]}"; do
+        side="${entry##*:}"
+        pidfile="$CLIENT_PIDFILE_DIR/ai-client-${side}.pid"
+        [ -f "$pidfile" ] || continue
+        recorded="$(cat "$pidfile" 2>/dev/null)"
+        pid_in_list "$recorded" "${OUR_CLIENT_PIDS[@]}" && rm -f "$pidfile"
+    done
+
+    OUR_CLIENT_PIDS=()
+    return 0
+}
+
+# A handler that only tears down does NOT end the script: bash resumes after the
+# interrupted command, with dead REPLs and a match still to play
+# (`bash -c 'trap "echo trapped" TERM; kill -TERM $$; echo continued'` prints
+# "continued"). So the signal arms tear down, disarm EXIT, and exit. HUP is in
+# the list because a closed terminal, not kill -9, is the realistic way a
+# 20-minute foreground script dies.
+on_fatal_signal() {
+    teardown_our_clients
+    trap - EXIT
+    exit "$1"
+}
+trap teardown_our_clients EXIT
+trap 'on_fatal_signal 130' INT
+trap 'on_fatal_signal 143' TERM
+trap 'on_fatal_signal 129' HUP
+# ----------------------------------------------------------------------------
+
+parse_match_args "$@"
 
 mkdir -p "$LOG_DIR"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Error: Config file not found: $CONFIG_FILE" >&2
     exit 1
+fi
+
+# The gate goes here: after the config check (a bogus config should not be
+# reported as a port problem) and before the game server, so a refusal has not
+# started anything.
+if ! preflight_client_ports startup; then
+    exit 3
 fi
 
 echo "🥊 Starting Match Orchestrator"
@@ -26,7 +494,7 @@ echo "🔌 Checking Game Server..."
 if ! lsof -i :1042 > /dev/null; then
     echo "   Starting Game Server (lein run)..."
     # Run lein from the project root
-    (cd "$ROOT_DIR" && nohup lein run > /tmp/game-server.log 2>&1 &)
+    (cd "$ROOT_DIR" && nohup lein run > "$RUN_MATCH_TMP/game-server.log" 2>&1 &)
     
     # Wait for server
     echo "   Waiting for game server to listen on 1042..."
@@ -38,7 +506,7 @@ if ! lsof -i :1042 > /dev/null; then
         fi
         if [ $i -eq $MAX_WAIT_SERVER ]; then
             echo "   ❌ Timeout waiting for game server"
-            echo "   Check /tmp/game-server.log for details"
+            echo "   Check $RUN_MATCH_TMP/game-server.log for details"
             exit 1
         fi
         sleep 1
@@ -47,32 +515,16 @@ else
     echo "   ✅ Game Server already running"
 fi
 
-# 1. Start AI Clients (if not running)
-echo "🔌 Checking AI Clients..."
-if ! lsof -i :7889 > /dev/null; then
-    echo "   Starting Runner Client..."
-    "$DEV_DIR/start-ai-client-repl.sh" runner 7889 > /tmp/ai-client-runner.log 2>&1 &
-fi
-if ! lsof -i :7890 > /dev/null; then
-    echo "   Starting Corp Client..."
-    "$DEV_DIR/start-ai-client-repl.sh" corp 7890 > /tmp/ai-client-corp.log 2>&1 &
-fi
-
-# Wait for clients to be ready
-echo "   Waiting for clients to listen..."
-MAX_WAIT=60
-for ((i=1; i<=MAX_WAIT; i++)); do
-    if lsof -i :7889 > /dev/null && lsof -i :7890 > /dev/null; then
-        echo "   ✅ Clients ready!"
-        break
-    fi
-    if [ $i -eq $MAX_WAIT ]; then
-        echo "   ❌ Timeout waiting for clients"
-        exit 1
-    fi
-    sleep 1
-done
-sleep 5 # Extra buffer for initialization
+# 1. AI clients are NOT started here.
+#
+# This used to adopt-or-start them, and restart_clients killed and restarted the
+# same two REPLs seconds later at the top of the first run_game — so the adopt
+# was undone immediately. Worse, the adopt arm would have written a REPL this
+# script did NOT start into OUR_CLIENT_PIDS, which is the one write path that can
+# launder a stranger into the ownership list the kill trusts. Nothing between
+# here and the match loop touches a client (config parsing only), so the block
+# is deleted rather than guarded. Review round 2 named it; the gate above is
+# what makes the deletion safe to notice.
 
 # 2. Parse Config (Simple grep/sed for now, JSON parsing later)
 MATCH_ID=$(grep "match_id" "$CONFIG_FILE" | cut -d '"' -f 4)
@@ -103,38 +555,164 @@ echo "🎮 Gateway: $GATEWAY_TYPE"
 echo "🤖 Agent A: $AGENT_A"
 echo "🤖 Agent B: $AGENT_B"
 
+# register_client_pid PORT SIDE — adopt a listener only on proof it is ours.
+#
+# start-ai-client-repl.sh is launched with `&` and its exit status is never
+# checked, and the readiness check accepts ANY socket on the port. So if our
+# nREPL loses a bind race to another launcher, the wait loop sees the winner.
+# "New since the last inventory, and rooted in this checkout" does not tell them
+# apart — ai-bounce.sh, resume.sh and reset.sh all cd to a checkout root too.
+# The owner tag does: it is in our JVM's command line and in nobody else's.
+#
+# Refusing to adopt is also refusing to kill. A listener without the tag is left
+# exactly where it is, and the match stops.
+register_client_pid() {
+    local port="$1" side="$2" pid found=0 stranger=0
+    # EVERY listener on the port is inspected before deciding. Returning on the
+    # first untagged one abandoned our own tagged listener if it came later in
+    # lsof order — the same "a failure abandons its peer" shape that the wait
+    # loop has across ports, still open within one port. It needs two listeners
+    # on one port (separate IPv4 and IPv6 binds, say), which is rare in
+    # production and is a state the test fixture already models.
+    for pid in $(listen_holders "$port"); do
+        if pid_carries_owner_tag "$pid"; then
+            OUR_CLIENT_PIDS+=("$pid")
+            found=1
+            echo "   ✅ $side REPL is ours: pid $pid on port $port"
+        else
+            stranger=1
+            echo "   ❌ port $port is held by pid $pid, which does not carry this match's"
+            echo "      owner tag — another launcher won the bind race."
+            print_holder "$port" "$pid" "$side"
+            echo "      Leaving it alone."
+        fi
+    done
+    if [ "$stranger" -ne 0 ]; then
+        echo "      Stopping the match rather than killing or adopting it."
+        return 1
+    fi
+    if [ "$found" -ne 1 ]; then
+        echo "   ❌ nothing is listening on port $port after starting the $side client"
+        echo "      (see $RUN_MATCH_TMP/ai-client-${side}.log)"
+        return 1
+    fi
+}
+
 # Helper to restart AI clients
 restart_clients() {
     echo "♻️  Restarting AI Clients to clear previous brains..."
-    "$DEV_DIR/stop-ai-client.sh" corp > /dev/null 2>&1
-    "$DEV_DIR/stop-ai-client.sh" runner > /dev/null 2>&1
-    sleep 2
-    
-    # Aggressive cleanup: Kill anything holding the ports
-    for port in 7890 7889; do
-        if lsof -i :$port -t >/dev/null; then
-            echo "   ⚠️  Port $port still in use, force killing..."
-            lsof -i :$port -t | xargs kill -9 || true
-        fi
-    done
 
-    "$DEV_DIR/start-ai-client-repl.sh" corp 7890 > /tmp/ai-client-corp.log 2>&1 &
-    "$DEV_DIR/start-ai-client-repl.sh" runner 7889 > /tmp/ai-client-runner.log 2>&1 &
-    
-    # Wait for clients
-    echo "   Waiting for clients to listen..."
-    MAX_WAIT=60
-    for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
-        if lsof -i :7889 > /dev/null && lsof -i :7890 > /dev/null; then
-            echo "   ✅ Clients listening on ports!"
-            break
-        fi
-        if [ $wait_i -eq $MAX_WAIT ]; then
-            echo "   ❌ Timeout waiting for clients"
-            exit 1
-        fi
+    # The gate runs FIRST, before anything dies, and it can refuse. Under set -e
+    # (:6) and a plain call site, that ends the match — which is the intent: the
+    # alternative is playing on over somebody else's game.
+    if ! preflight_client_ports restart; then
+        return 1
+    fi
+
+    # Kill by PORT, not by pidfile. The two `stop-ai-client.sh` calls that used
+    # to be here killed whatever /tmp/ai-client-<side>.pid named — a global path
+    # any checkout's launcher wrote, naming a pid that may hold a different port
+    # or none at all — and they ran BEFORE the port inventory, so they were two
+    # unguarded kills in front of the guard. They are deleted, not gated: the
+    # kill below covers the same ground, from the same list the gate used.
+    local entry port side pid i alive _inherited_jvm_opts
+    _inherited_jvm_opts="${JVM_OPTS:-${JAVA_OPTS:-}}"
+    local -a doomed=(${APPROVED_KILL_PIDS[@]+"${APPROVED_KILL_PIDS[@]}"})
+    for pid in ${doomed[@]+"${doomed[@]}"}; do
+        echo "   ⏹  stopping pid $pid"
+    done
+    # TERM, a grace window, then -9 — politer than the straight `kill -9` this
+    # replaces, and announced above before any of it happens.
+    for pid in ${doomed[@]+"${doomed[@]}"}; do
+        kill "$pid" 2>/dev/null || true
+    done
+    for ((i=1; i<=5; i++)); do
+        alive=0
+        for pid in ${doomed[@]+"${doomed[@]}"}; do
+            kill -0 "$pid" 2>/dev/null && alive=1
+        done
+        [ "$alive" -eq 0 ] && break
         sleep 1
     done
+    for pid in ${doomed[@]+"${doomed[@]}"}; do
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done
+
+    # Everything we owned has just been killed, and the consent that authorized
+    # killing the foreign ones is spent — a pid recycled later must not inherit
+    # it.
+    OUR_CLIENT_PIDS=()
+    CONSENTED_PIDS=()
+
+    # JVM_OPTS carries the owner tag into the client JVM's command line; see
+    # OWNER_TAG. It starts from ${JVM_OPTS:-$JAVA_OPTS} and not from JVM_OPTS
+    # alone: lein itself does `export JVM_OPTS="${JVM_OPTS:-"$JAVA_OPTS"}"`
+    # (verified at leiningen 2.12.0 libexec/bin/lein:238), so once this script
+    # always sets JVM_OPTS non-empty, an operator with only JAVA_OPTS set would
+    # silently lose it from the client JVMs. An earlier comment here said "an
+    # operator's own JVM_OPTS survives" and covered only the variable I thought
+    # of.
+    for entry in "${CLIENT_SEATS[@]}"; do
+        port="${entry%%:*}"
+        side="${entry##*:}"
+        JVM_OPTS="${_inherited_jvm_opts:+$_inherited_jvm_opts }-Drun-match.owner=$OWNER_TAG" \
+            "$DEV_DIR/start-ai-client-repl.sh" "$side" "$port" \
+            > "$RUN_MATCH_TMP/ai-client-${side}.log" 2>&1 &
+    done
+
+    # Wait and register PER SEAT. Registering only after BOTH are up would leave
+    # a client that started fine outside OUR_CLIENT_PIDS when its peer timed
+    # out — so the teardown would walk past it and the next match would refuse
+    # this one's own orphan.
+    # Wait for BOTH seats, registering each the moment its own port is up, and
+    # only then decide whether to fail. Two separate reasons, both of them
+    # review findings:
+    #   - Registering after the PAIR is ready leaves a client that started fine
+    #     outside OUR_CLIENT_PIDS when its peer times out, so the teardown walks
+    #     past it and the next match refuses this run's own orphan.
+    #   - Waiting per seat in sequence has the same hole one layer up: the first
+    #     seat's timeout returns before the second is ever examined. The loop
+    #     below is over TIME, not over seats, so whichever one comes up is
+    #     registered whichever one fails.
+    echo "   Waiting for clients to listen..."
+    MAX_WAIT=60
+    local register_failed=0
+    local -a pending=("${CLIENT_SEATS[@]}") still_pending=()
+    for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
+        still_pending=()
+        for entry in ${pending[@]+"${pending[@]}"}; do
+            port="${entry%%:*}"
+            side="${entry##*:}"
+            if [ -n "$(listen_holders "$port")" ]; then
+                # A FAILURE here must not return either — that is the third
+                # instance of one shape. A seat that loses a bind race fails
+                # registration, and returning now leaves a peer that was still
+                # starting unregistered: teardown has no pid for it, it binds
+                # afterwards, and the next match refuses this run's orphan.
+                # Record the failure, let the other seats finish arriving so
+                # they can be owned and torn down, and fail at the end.
+                register_client_pid "$port" "$side" || register_failed=1
+            else
+                still_pending+=("$entry")
+            fi
+        done
+        pending=(${still_pending[@]+"${still_pending[@]}"})
+        [ "${#pending[@]}" -eq 0 ] && break
+        sleep 1
+    done
+    if [ "$register_failed" -ne 0 ]; then
+        echo "   ❌ A client port was taken by something this match did not start."
+        echo "      The ${#OUR_CLIENT_PIDS[@]} seat(s) this match DID start are owned and will"
+        echo "      be stopped on the way out, so nothing is left listening behind us."
+        return 1
+    fi
+    if [ "${#pending[@]}" -ne 0 ]; then
+        for entry in "${pending[@]}"; do
+            echo "   ❌ Timeout waiting for the ${entry##*:} client on port ${entry%%:*}"
+        done
+        return 1
+    fi
+    echo "   ✅ Clients listening on ports!"
     
     # Wait for WebSocket connection
     echo "   Waiting for WebSocket connections..."
@@ -254,10 +832,10 @@ run_game() {
     # Create Game
     LOBBY_TITLE="Match ${MATCH_ID} R${round}${game_suffix}"
     echo "   Creating lobby: $LOBBY_TITLE ($GATEWAY_TYPE)..."
-    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" "$GATEWAY_TYPE" > /tmp/create-game.log 2>&1
+    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" "$GATEWAY_TYPE" > "$RUN_MATCH_TMP/create-game.log" 2>&1
     if [ $? -ne 0 ]; then
         echo "   ❌ Failed to create game. Output:"
-        cat /tmp/create-game.log
+        cat "$RUN_MATCH_TMP/create-game.log"
     fi
     sleep 2
     
@@ -284,7 +862,7 @@ run_game() {
         fi
 
         # Fallback 2: Server Log Scrape
-        SERVER_LOG="/tmp/game-server.log"
+        SERVER_LOG="$RUN_MATCH_TMP/game-server.log"
         if [ -f "$SERVER_LOG" ]; then
             GAME_ID_RAW=$(grep -A 1 "$LOBBY_TITLE" "$SERVER_LOG" | tail -n 1 | grep "gameid:" | sed 's/.*gameid: #uuid "\([^"]*\)".*/\1/')
             if [ -n "$GAME_ID_RAW" ] && [ "$GAME_ID_RAW" != "" ] && [[ "$GAME_ID_RAW" != *"DEBUG"* ]]; then

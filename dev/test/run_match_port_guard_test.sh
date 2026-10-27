@@ -1,0 +1,870 @@
+#!/usr/bin/env bash
+# run_match_port_guard_test.sh — regression guard for #292: run-match.sh used to
+# `kill -9` whatever held the two client REPL ports without asking whose they
+# were.
+#
+# Why this exists. The two client REPLs are a machine-wide singleton — one
+# runner on 7889, one corp on 7890, shared by every checkout — and marquee games
+# are driven on them by model seats with timeouts measured in hours.
+# `restart_clients` ran at the top of every game and killed both, so starting a
+# match destroyed any game in progress; the only trace was "Port 7890 still in
+# use, force killing...", printed by the killer, in the killer's log, AFTER the
+# decision. The previous cycle worked around it by checking `ps` by hand, which
+# is a convention held in one session's head.
+#
+# HOW it tests, and why this way. An earlier test plan drove awk-extracted
+# functions, the way peer_status_test.sh drives `load_agent`. A review round
+# killed that: extraction cannot reach the top-level wiring, so "the trap is
+# gone", "the startup gate call is gone" and "step 1's client start came back"
+# would have had no killer except a grep over the source — the
+# comment-satisfied-guard shape this repo has filed twice. So the WHOLE SCRIPT
+# runs here, in a scratch tree whose `dev/` holds stubs, and the assertions are
+# over what the stubs recorded: what was killed, in what order, relative to the
+# first launch, and at exit.
+#
+# Two things the stubs must get right, both of them review findings:
+#   - `lsof` is called in two shapes (`-i :P -sTCP:LISTEN -t` and
+#     `-p PID -a -d cwd -Fn`). An argument-blind stub feeds a pid list to the cwd
+#     read, every registration fails, and the pressure lands on loosening the
+#     production check.
+#   - `kill` is a bash BUILTIN, so a PATH stub is never reached. It is replaced
+#     per-run by a wrapper on PATH only for `xargs kill`; the signals the script
+#     sends directly are observed through the fixture's own process table
+#     instead, using pids that do not exist on this box.
+
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REAL_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+REAL_SCRIPT="$REAL_ROOT/dev/orchestrator/run-match.sh"
+
+fails=0
+pass() { echo "ok   [$1]"; }
+fail() { echo "FAIL [$1]: $2"; fails=$((fails + 1)); }
+
+assert_contains() {
+    case "$2" in *"$3"*) pass "$1" ;; *) fail "$1" "expected to find: $3
+--- actual ---
+$2
+--- end ---" ;; esac
+}
+assert_not_contains() {
+    case "$2" in *"$3"*) fail "$1" "did NOT expect to find: $3
+--- actual ---
+$2
+--- end ---" ;; *) pass "$1" ;; esac
+}
+assert_eq() {
+    if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "expected '$3', got '$2'"; fi
+}
+# assert_before NAME HAYSTACK EARLIER LATER — ORDERING, not membership. The
+# half of #292 that is about ordering ("the message is printed AFTER the
+# decision") is invisible to two membership assertions: both are green when the
+# warning follows the kill.
+assert_before() {
+    local name="$1" hay="$2" earlier="$3" later="$4" a b
+    a="$(printf '%s\n' "$hay" | grep -n -- "$earlier" | head -1 | cut -d: -f1)"
+    b="$(printf '%s\n' "$hay" | grep -n -- "$later"   | head -1 | cut -d: -f1)"
+    if [ -z "$a" ]; then fail "$name" "never found earlier marker: $earlier"; return; fi
+    if [ -z "$b" ]; then fail "$name" "never found later marker: $later"; return; fi
+    if [ "$a" -lt "$b" ]; then pass "$name"; else
+        fail "$name" "'$earlier' (line $a) should precede '$later' (line $b)
+--- actual ---
+$hay
+--- end ---"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# The fixture tree.
+#
+# PORTS   — "port pid" lines; the fake process table's listeners.
+# PROCS   — "pid cmdline" lines; what `ps -o command=` answers.
+# LOBBIES — "port claim" lines; what a seat's ai-eval.sh gameid read answers.
+# Stubs read these files on every call, so a test can change the world between
+# games (a pid appearing mid-match, a REPL joining a lobby) the way the real one
+# can.
+# ---------------------------------------------------------------------------
+make_tree() {
+    T="$(mktemp -d "${TMPDIR:-/tmp}/nr-292.XXXXXX")"
+    mkdir -p "$T/dev/orchestrator" "$T/bin" "$T/logs/matches" "$T/state" "$T/tmp" "$T/pidfiles"
+    cp "$REAL_SCRIPT" "$T/dev/orchestrator/run-match.sh"
+    chmod +x "$T/dev/orchestrator/run-match.sh"
+
+    : > "$T/state/ports"
+    : > "$T/state/procs"
+    : > "$T/state/lobbies"
+    : > "$T/state/killed"
+    : > "$T/state/launched"
+    : > "$T/state/sendcmd"
+    : > "$T/state/lein"
+    : > "$T/state/connected"
+
+    cat > "$T/dev/orchestrator/match-config.json" <<'JSON'
+{
+  "match_id": "t292",
+  "rounds": 1,
+  "gateway_type": "Beginner",
+  "agents": { "agent_a": "heuristic", "agent_b": "goldfish" }
+}
+JSON
+
+    # lsof: dispatches on the shape it was called with.
+    cat > "$T/bin/lsof" <<'LSOF'
+#!/usr/bin/env bash
+S="$NR292_STATE"
+if [ "${1:-}" = "-p" ]; then
+    # -p PID -a -d cwd -Fn
+    pid="$2"
+    printf 'p%s\nfcwd\nn%s\n' "$pid" "$NR292_FAKE_CWD"
+    exit 0
+fi
+# -i :PORT -sTCP:LISTEN -t    (and the bare -i :PORT the game-server check uses)
+#
+# state/ports holds LISTENers; state/connected holds processes with a socket on
+# the port at the OTHER end (an in-flight ai-eval.sh, say). Real lsof reports
+# both for `-i :PORT` and only the first for `-i :PORT -sTCP:LISTEN`, so this
+# stub does too — otherwise dropping the flag in production changes nothing
+# here and the mutant survives.
+port="${2#:}"
+# NR292_DEFER_PORT: report nothing for this port on the FIRST listener query,
+# modelling a client that is still starting. Without it, case 10p's two
+# backgrounded launcher stubs race and the peer may already be registered when
+# the raced seat fails — so the case passed either way, nondeterministically.
+if [ "${NR292_DEFER_PORT:-}" = "$port" ]; then
+    d=$(( $(cat "$S/defer.$port" 2>/dev/null || echo 0) + 1 ))
+    echo "$d" > "$S/defer.$port"
+    [ "$d" -eq 1 ] && exit 1
+fi
+listen_only=0
+for a in "$@"; do [ "$a" = "-sTCP:LISTEN" ] && listen_only=1; done
+out="$(awk -v p="$port" '$1==p {print $2}' "$S/ports")"
+if [ "$listen_only" -eq 0 ]; then
+    extra="$(awk -v p="$port" '$1==p {print $2}' "$S/connected" 2>/dev/null)"
+    out="$(printf '%s\n%s\n' "$out" "$extra" | grep -v '^$' || true)"
+fi
+[ -z "$out" ] && exit 1
+printf '%s\n' "$out"
+LSOF
+
+    # ps -o command= -p PID  /  ps -o etime= -p PID
+    cat > "$T/bin/ps" <<'PS'
+#!/usr/bin/env bash
+S="$NR292_STATE"
+what="${2:-}"
+pid="${4:-}"
+case "$what" in
+  command=) awk -v q="$pid" '$1==q {$1=""; sub(/^ /,""); print}' "$S/procs" ;;
+  etime=)   grep -q "^$pid " "$S/procs" && echo "19:24:43" ;;
+esac
+grep -q "^$pid " "$S/procs" || exit 1
+PS
+
+    # The fixture's process table IS the truth about liveness, so the script's
+    # direct `kill` calls have to reach it. kill is a builtin; the driver below
+    # redefines it as a shell function before sourcing nothing — instead the
+    # script runs as a child, so the wrapper is installed through a BASH_ENV
+    # file that bash reads for non-interactive shells.
+    cat > "$T/killwrap.sh" <<'KW'
+kill() {
+    local sig="" pid
+    if [ "${1:0:1}" = "-" ]; then sig="$1"; shift; fi
+    for pid in "$@"; do
+        if [ "$sig" = "-0" ]; then
+            grep -q "^$pid " "$NR292_STATE/procs" || return 1
+            continue
+        fi
+        echo "${sig:--TERM} $pid" >> "$NR292_STATE/killed"
+        # And on STDOUT, which run_match captures: an ordering assertion needs
+        # the kill interleaved with the script's own output, and asserting only
+        # that the inventory precedes the "stopping" line let a mutant that
+        # moved the announcement below the TERM survive. stdout and not stderr
+        # because every call site spells it `kill "$pid" 2>/dev/null`, which
+        # would send this straight to /dev/null — the first attempt did exactly
+        # that and the two assertions failed for that reason, not the bug's.
+        echo "FIXTURE-KILL ${sig:--TERM} $pid"
+        # -9 removes it from the world; TERM only if the fixture says it obeys.
+        if [ "$sig" = "-9" ] || [ "${NR292_TERM_OBEYED:-1}" = "1" ]; then
+            grep -v "^$pid " "$NR292_STATE/procs" > "$NR292_STATE/procs.tmp" 2>/dev/null
+            mv "$NR292_STATE/procs.tmp" "$NR292_STATE/procs"
+            awk -v q="$pid" '$2!=q' "$NR292_STATE/ports" > "$NR292_STATE/ports.tmp"
+            mv "$NR292_STATE/ports.tmp" "$NR292_STATE/ports"
+        fi
+    done
+    return 0
+}
+KW
+
+    cat > "$T/dev/start-ai-client-repl.sh" <<'LAUNCH'
+#!/usr/bin/env bash
+# Records the launch AND the JVM_OPTS it was handed, then puts a listener in the
+# fixture carrying whatever owner tag it was given — unless the test asked for a
+# bind race (NR292_RACE_PORT), in which case a stranger with no tag gets there
+# first.
+S="$NR292_STATE"
+side="$1"; port="$2"
+echo "$side $port JVM_OPTS=${JVM_OPTS:-}" >> "$S/launched"
+if [ "${NR292_FAIL_PORT:-}" = "$port" ]; then
+    # Started, never bound. No listener appears for this port.
+    exit 0
+fi
+if [ "${NR292_RACE_PORT:-}" = "$port" ]; then
+    pid="9${port}"
+    echo "$pid /usr/bin/java -classpath /elsewhere/netrunner nrepl.cmdline --port $port" >> "$S/procs"
+else
+    pid="8${port}"
+    echo "$pid /usr/bin/java ${JVM_OPTS:-} -classpath /x nrepl.cmdline --port $port" >> "$S/procs"
+fi
+echo "$port $pid" >> "$S/ports"
+# The real launcher records the listener's pid (start-ai-client-repl.sh:70-77).
+# Written here so the teardown's pidfile cleanup has something to find.
+[ -n "${CLIENT_PIDFILE_DIR:-}" ] && echo "$pid" > "$CLIENT_PIDFILE_DIR/ai-client-${side}.pid"
+LAUNCH
+
+    cat > "$T/dev/ai-eval.sh" <<'EVAL'
+#!/usr/bin/env bash
+S="$NR292_STATE"
+side="$1"; port="$2"; expr="$3"
+# ai-eval.sh:108-120 refuses, exits 1 and DELETES the pidfile when the global
+# /tmp/ai-client-<side>.pid names a dead pid — whatever is actually listening on
+# the port (#293). NR292_STALE_PIDFILE makes the stub answer that way.
+if [ -n "${NR292_STALE_PIDFILE:-}" ] && [ "$NR292_STALE_PIDFILE" = "$side" ] \
+   && { [ -z "${NR292_STALE_FROM:-}" ] || [ -f "$S/stale-on" ]; }; then
+    echo "❌ AI Client REPL '$side' not running (stale PID file)"
+    exit 1
+fi
+case "$expr" in
+  *lobby-list*)  echo '"fixture-game-id"' ;;
+  *gameid*)
+      claim="$(awk -v p="$port" '$1==p {$1=""; sub(/^ /,""); print}' "$S/lobbies")"
+      [ "$claim" = "DEAD" ] && exit 1
+      # Count the probes per port. Two triggers hang off this, because the
+      # lobby probe is the only thing the gate calls that a stub can see — so
+      # it is the only place a test can change the world at a point INSIDE the
+      # gate, between its inventory and the kill that follows.
+      n=$(( $(cat "$S/probes.$port" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$S/probes.$port"
+      if [ "${NR292_INJECT_AFTER_PROBE:-}" = "$port" ] && [ "$n" -eq 1 ]; then
+          # A newcomer takes a port the gate has ALREADY inventoried. The
+          # trigger port must be the LAST seat in CLIENT_SEATS and the injected
+          # port an EARLIER one, or the gate's own loop still reaches it and the
+          # case passes for the wrong reason — which is how the first version of
+          # this case let the mutant live: injecting while the gate still had a
+          # seat to go simply made the gate refuse, so no kill happened at all,
+          # with the fix or without it.
+          echo "7890 7777" >> "$S/ports"
+          echo "7777 /usr/bin/java -classpath /newcomer nrepl.cmdline" >> "$S/procs"
+      fi
+      if [ -n "${NR292_CLAIM_FLIP:-}" ] && [ "$n" -gt 1 ]; then
+          # The seat has left its lobby by the time anyone asks again.
+          claim=""
+      fi
+      # An idle seat has :gameid nil, and the two probe spellings print it
+      # DIFFERENTLY: (str nil) is the empty string, (pr-str nil) is the three
+      # characters n-i-l. Answering "nil" to both is what let the production
+      # code read every idle REPL as unresponsive while this test stayed green.
+      if [ -z "$claim" ] || [ "$claim" = "nil" ]; then
+          # The three probe spellings print an absent :gameid DIFFERENTLY, and
+          # the production code has worn all three. (str nil) is the empty
+          # string; (pr-str nil) is n-i-l; the if-let form answers the literal
+          # "nil". Answering "nil" to all of them is what let two different
+          # production bugs ship green.
+          case "$expr" in
+              *if-let*) printf '"nil"\n' ;;
+              *pr-str*) printf '"nil"\n' ;;
+              *)        printf '""\n' ;;
+          esac
+      else
+          case "$expr" in
+              # :gameid is a java.util.UUID, so pr-str renders it as
+              # #uuid "…" with escaped quotes — the thing that made the
+              # refusal print an id nobody can paste anywhere.
+              *pr-str*) printf '"#uuid \\"%s\\""\n' "$claim" ;;
+              *)        printf '"%s"\n' "$claim" ;;
+          esac
+      fi
+      ;;
+  *connected?*) echo "true" ;;
+  *) echo "nil" ;;
+esac
+EVAL
+
+    cat > "$T/dev/send_command" <<'SEND'
+#!/usr/bin/env bash
+echo "$*" >> "$NR292_STATE/sendcmd"
+# Deterministic signal delivery for the trap case: no racing a background
+# sleeper against a script whose sleeps are stubbed out. /bin/kill BY PATH,
+# because BASH_ENV has replaced the `kill` BUILTIN in every bash child here.
+if [ -n "${NR292_SIGNAL_AT:-}" ] && [ "$2" = "$NR292_SIGNAL_AT" ]; then
+    /bin/kill -TERM "$PPID"
+fi
+case "$2" in
+  bot-loop) echo "🤖 Autonomous loop launched" ;;
+  log)      echo "GAME OVER - test harness" ;;
+  *)        echo "ok" ;;
+esac
+SEND
+
+    cat > "$T/dev/orchestrator/extract-results.sh" <<'EX'
+#!/usr/bin/env bash
+echo "results extracted"
+EX
+
+    # The game server. Kept OUT of state/launched, which is the client-launch
+    # ledger the "nothing was launched" assertions read.
+    # Every `sleep` in the script is waiting for something the stubs have
+    # already done. Stubbed to nothing, or 11 whole-script runs take an hour.
+    cat > "$T/bin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+exit 0
+SLEEP
+
+    cat > "$T/bin/lein" <<'LEIN'
+#!/usr/bin/env bash
+echo "lein $*" >> "$NR292_STATE/lein"
+echo "1042 1042042" >> "$NR292_STATE/ports"
+echo "1042042 lein run (game server stub)" >> "$NR292_STATE/procs"
+LEIN
+
+    chmod +x "$T/bin/"* "$T/dev/"*.sh "$T/dev/send_command" "$T/dev/orchestrator/extract-results.sh"
+}
+
+# NOTE on a coupling two cases depend on (10k and 10l): both hang off the
+# per-port PROBE COUNT in the ai-eval stub, because the lobby probe is the only
+# thing the gate calls that a stub can observe from inside. If the production
+# code ever probes a different number of times per holder per pass, those two
+# cases stop testing what their names say and nothing announces it. Asserting
+# the cadence would freeze an implementation detail, so this is a known limit
+# written down rather than guarded.
+#
+# run_match ARGS... — run the whole script in the fixture and capture it.
+run_match() {
+    OUT="$(cd "$T" && \
+        NR292_STATE="$T/state" \
+        NR292_FAKE_CWD="${NR292_FAKE_CWD:-$T}" \
+        NR292_RACE_PORT="${NR292_RACE_PORT:-}" \
+        NR292_SIGNAL_AT="${NR292_SIGNAL_AT:-}" \
+        NR292_FAIL_PORT="${NR292_FAIL_PORT:-}" \
+        NR292_INJECT_AFTER_PROBE="${NR292_INJECT_AFTER_PROBE:-}" \
+        NR292_CLAIM_FLIP="${NR292_CLAIM_FLIP:-}" \
+        NR292_STALE_PIDFILE="${NR292_STALE_PIDFILE:-}" \
+        NR292_STALE_FROM="${NR292_STALE_FROM:-}" \
+        NR292_DEFER_PORT="${NR292_DEFER_PORT:-}" \
+        NR292_DOUBLE_BIND="${NR292_DOUBLE_BIND:-}" \
+        JAVA_OPTS="${NR292_JAVA_OPTS:-}" \
+        RUN_MATCH_TMP="$T/tmp" \
+        CLIENT_PIDFILE_DIR="$T/pidfiles" \
+        BASH_ENV="$T/killwrap.sh" \
+        PATH="$T/bin:$PATH" \
+        bash "$T/dev/orchestrator/run-match.sh" "$@" 2>&1)"
+    CODE=$?
+    KILLED="$(cat "$T/state/killed" 2>/dev/null)"
+    LAUNCHED="$(cat "$T/state/launched" 2>/dev/null)"
+}
+
+listener() { echo "$1 $2" >> "$T/state/ports"; echo "$2 ${3:-/usr/bin/java -classpath /x nrepl.cmdline}" >> "$T/state/procs"; }
+# A process with a socket on the port that is NOT listening on it.
+connected() { echo "$1 $2" >> "$T/state/connected"; echo "$2 ${3:-ai-eval client}" >> "$T/state/procs"; }
+lobby()    { echo "$1 $2" >> "$T/state/lobbies"; }
+cleanup()  { [ -n "${T:-}" ] && rm -rf "$T"; }
+trap cleanup EXIT
+
+echo "=== #292: run-match.sh port ownership gate ==="
+
+# --- 1. free ports: the gate must not refuse, and must not abort under set -e.
+# The lsof stub EXITS 1 on a free port, which is what real lsof does and what a
+# stub that printed nothing and exited 0 would hide: a bare `h=$(lsof ...)`
+# capture aborts the whole script under `set -e` on the HAPPY path.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "free-ports-no-refusal"      "$OUT" "Refusing to start"
+assert_not_contains "free-ports-no-abort"        "$OUT" "Client ports are held"
+assert_contains     "free-ports-reached-the-match" "$OUT" "Starting Match Orchestrator"
+assert_contains     "free-ports-launched-clients"  "$LAUNCHED" "corp 7890"
+cleanup
+
+# --- 2. a foreign holder, no --force: refuse, name it, kill nothing.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_eq       "foreign-refusal-exit-3" "$CODE" "3"
+assert_contains "foreign-refusal-names-port" "$OUT" "port 7890 (corp seat): pid 4242"
+assert_contains "foreign-refusal-shows-cwd"  "$OUT" "cwd:"
+assert_contains "foreign-refusal-shows-age"  "$OUT" "up:    19:24:43"
+assert_contains "foreign-refusal-offers-force" "$OUT" "--force"
+# The suggested re-run must echo back what the operator TYPED. CONFIG_FILE is
+# always set (parse_match_args defaults it), so using it here put a path they
+# never typed into the suggestion — and the fix for that shipped with nothing
+# asserting it.
+assert_contains     "force-hint-is-bare-when-no-path-given" "$OUT" "run-match.sh --force"
+assert_not_contains "force-hint-invents-no-path"            "$OUT" "--force /"
+assert_eq       "foreign-refusal-killed-nothing" "$KILLED" ""
+assert_eq       "foreign-refusal-launched-nothing" "$LAUNCHED" ""
+cleanup
+
+# --- 3. a foreign holder with --force: proceed, and ANNOUNCE BEFORE KILLING.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match --force
+assert_contains "force-proceeds"        "$OUT" "--force given"
+assert_contains "force-killed-the-pid"  "$KILLED" "4242"
+assert_before   "force-announces-before-stopping" "$OUT" \
+                "stopping pid 4242" "FIXTURE-KILL -TERM 4242"
+assert_before   "force-inventory-precedes-the-kill" "$OUT" \
+                "Client ports are held" "FIXTURE-KILL -TERM 4242"
+assert_before   "force-inventory-precedes-consent" "$OUT" \
+                "pid 4242" "--force given"
+cleanup
+
+# --- 3b. ... and when a path WAS given, the hint repeats that path.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match "$T/dev/orchestrator/match-config.json"
+assert_contains "force-hint-repeats-the-given-path" "$OUT" "--force $T/dev/orchestrator/match-config.json"
+cleanup
+
+# --- 4. the self-recovery path: our own clients, restarted between games,
+# need no flag. This is the finding that broke two earlier designs — a gate
+# that refuses the harness's own leftovers trains the operator to always pass
+# --force. The 1-round config plays two games, so restart_clients runs twice
+# and the second run meets listeners this script started.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "own-clients-not-refused" "$OUT" "Refusing to start"
+assert_not_contains "own-clients-not-foreign" "$OUT" "this match did not start"
+assert_contains     "own-clients-restarted"   "$OUT" "stopping pid 87890"
+assert_contains     "two-games-ran"           "$OUT" "Match Complete"
+cleanup
+
+# --- 5. the bind race: after the kill, a stranger takes the port. It is NEW,
+# and in the real world it is rooted in a checkout just like ours, so only the
+# owner tag can tell them apart. The script must neither adopt it nor kill it.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_RACE_PORT=7890 run_match
+assert_contains     "race-refuses-to-adopt" "$OUT" "does not carry this match's"
+assert_contains     "race-leaves-it-alone"  "$OUT" "Leaving it alone"
+assert_not_contains "race-did-not-kill-the-stranger" "$KILLED" "97890"
+cleanup
+
+# --- 6. the owner tag actually travels: the launcher is handed JVM_OPTS
+# carrying this invocation's tag. Without it, ownership would be "whoever is
+# listening", which is what case 5 exists to refuse.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_contains "launcher-got-the-owner-tag" "$LAUNCHED" "-Drun-match.owner=run-match-"
+cleanup
+
+# --- 7. an owned REPL that joined somebody else's lobby between games is NOT
+# restarted. "I launched it" is not "nobody else is using it": run_game leaves
+# both lobbies before returning, so a lobby here means another driver adopted
+# the seat (send_command and resume.sh take whatever is listening).
+make_tree
+lobby 7890 nil; lobby 7889 nil
+# The stubs read their fixture files on every call, so rewriting one mid-run
+# changes the world the script sees — here, the corp seat joins a lobby after
+# game 1 has left its own.
+# The change is made BY a stub rather than by a background sleeper, so it lands
+# at a known point: when game 1 leaves its lobby, somebody else gives the corp
+# seat one.
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    printf '7890 abc-123\n7889 nil\n' > "$NR292_STATE/lobbies"
+fi
+HOOK
+run_match
+assert_contains "busy-own-repl-refused"   "$OUT" "reports that it is seated in a game"
+assert_contains "busy-own-repl-abandons"  "$OUT" "Abandoning the remaining games"
+# The refusal must not be followed by the teardown killing the very REPL it
+# refused to disturb. That was this fix's own worst defect: "Not restarting it",
+# then TERM/-9 from the EXIT trap a moment later — #292's harm, committed by
+# #292's fix, with the log saying the opposite.
+assert_not_contains "busy-own-repl-survives-teardown" "$KILLED" "87890"
+assert_contains     "busy-own-repl-peer-still-stopped" "$KILLED" "87889"
+cleanup
+
+# --- 8. consent is spent. --force covers the pids the operator was SHOWN; a
+# different foreign pid that appears later is not covered, flag or no flag.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    echo "7889 5555" >> "$NR292_STATE/ports"
+    echo "5555 /usr/bin/java -classpath /someone-else nrepl.cmdline" >> "$NR292_STATE/procs"
+fi
+HOOK
+run_match --force
+assert_contains     "late-foreign-pid-refused" "$OUT" "appeared after the match started"
+assert_contains     "late-foreign-pid-says-force-does-not-cover" "$OUT" "--force does not cover it"
+assert_not_contains "late-foreign-pid-not-killed" "$KILLED" "5555"
+cleanup
+
+# --- 9. teardown: the clients this run started are stopped when it ends, and
+# nothing else is. Without the teardown the harness's own leftovers are foreign
+# to the NEXT invocation and --force becomes habitual.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_contains "teardown-ran"              "$OUT" "client REPL(s) this match started"
+assert_contains "teardown-stopped-corp"     "$KILLED" "87890"
+assert_contains "teardown-stopped-runner"   "$KILLED" "87889"
+cleanup
+
+# --- 10. teardown fires on a SIGNAL too, and ends the script. A handler that
+# only tears down lets bash resume after the interrupted command, with dead
+# REPLs and a match still to play.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_SIGNAL_AT=start-game run_match
+assert_contains     "signal-tore-down"     "$OUT" "client REPL(s) this match started"
+assert_not_contains "signal-ended-the-run" "$OUT" "Match Complete"
+assert_contains     "signal-stopped-corp"  "$KILLED" "87890"
+cleanup
+
+# --- 10b. the gate asks for LISTENERS, not for sockets. `lsof -i :PORT` alone
+# selects a socket at EITHER end, so an in-flight ai-eval.sh connection would
+# count as a holder — and can exit between the inventory and the per-pid lookup.
+# Nothing is listening here; there is only a client connection on 7890.
+make_tree
+connected 7890 6001
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "connection-is-not-a-holder" "$OUT" "pid 6001"
+assert_not_contains "connection-does-not-refuse" "$OUT" "Refusing to start"
+assert_contains     "connection-match-proceeds"  "$OUT" "Starting Match Orchestrator"
+cleanup
+
+# --- 10c. a REPL that will not answer the lobby probe must be reported as
+# silent, not as idle. "did not answer" and "no lobby" must not collapse: for a
+# foreign holder the operator reads one of them to decide a kill.
+make_tree
+listener 7890 4242
+lobby 7890 DEAD; lobby 7889 nil
+run_match
+assert_contains     "silent-foreign-repl-says-so" "$OUT" "says:  did not answer"
+assert_not_contains "silent-foreign-repl-not-idle" "$OUT" "says:  no lobby"
+cleanup
+
+# --- 10d. ... and one of OURS that will not answer is a wedged REPL, which is
+# what restart_clients exists to clear. Deliberate asymmetry, so it is pinned
+# out loud rather than left to a reader of the code.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    printf '7890 DEAD\n7889 nil\n' > "$NR292_STATE/lobbies"
+fi
+HOOK
+run_match
+assert_contains "wedged-own-repl-noticed"  "$OUT" "did not answer the lobby probe"
+assert_contains "wedged-own-repl-restarted" "$OUT" "treating it as wedged"
+assert_contains "wedged-own-repl-ran-game-2" "$OUT" "Match Complete"
+cleanup
+
+# --- 10e. a seat that starts while its PEER times out must still be owned, or
+# the teardown walks past it and the NEXT match refuses this one's own orphan.
+# (Registering only after both listeners are up is exactly that defect.)
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_FAIL_PORT=7889 run_match
+assert_contains "half-start-timed-out"       "$OUT" "Timeout waiting for the runner client"
+assert_contains "half-start-owns-the-corp"   "$KILLED" "87890"
+assert_contains "half-start-tore-down"       "$OUT" "client REPL(s) this match started"
+cleanup
+
+# --- 10f. an idle REPL is idle, not silent. `(str nil)` is the EMPTY STRING,
+# so probing with `str` made every idle seat read as "did not answer" — the
+# wrong half of the distinction that decides a kill, and the one the operator
+# is being asked to judge.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_contains     "idle-foreign-repl-says-no-lobby" "$OUT" "says:  no lobby"
+assert_not_contains "idle-foreign-repl-not-silent"    "$OUT" "says:  did not answer"
+cleanup
+
+# --- 10g. ... and our own idle seats are not announced as wedged every game.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "idle-own-repl-not-called-wedged" "$OUT" "treating it as wedged"
+assert_contains     "idle-own-repl-ran-both-games"    "$OUT" "Match Complete"
+cleanup
+
+# --- 10i. the MIRROR of 10e: when the FIRST seat in CLIENT_SEATS is the one
+# that never binds, the other must still be owned. A per-seat wait that returns
+# on the first timeout never looks at the second seat at all.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_FAIL_PORT=7890 run_match
+assert_contains "mirror-half-start-timed-out"     "$OUT" "Timeout waiting for the corp client"
+assert_contains "mirror-half-start-owns-the-peer" "$KILLED" "87889"
+cleanup
+
+# --- 10j. the script's scratch logs go where it is told, not into the live
+# /tmp paths. Before the seam, every run of this test truncated
+# /tmp/game-server.log and both /tmp/ai-client-*.log — the real REPLs' logs,
+# which is where a marquee's disconnect evidence would be.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+if [ -s "$T/tmp/ai-client-corp.log" ] || [ -f "$T/tmp/game-server.log" ]; then
+    pass "scratch-logs-land-in-the-fixture"
+else
+    fail "scratch-logs-land-in-the-fixture" "nothing was written under \$T/tmp — the seam is not being used
+$(ls -la "$T/tmp" 2>&1)"
+fi
+cleanup
+
+# --- 10k. the kill acts on the set the GATE approved, not on a second look.
+# A process that takes a client port after the gate has inspected it has not
+# been gated, so it must not be killed — in the one code path whose purpose is
+# to gate that kill. The newcomer is injected by the lobby probe, which runs
+# INSIDE the gate, so it lands in exactly that window.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_INJECT_AFTER_PROBE=7889 run_match
+assert_not_contains "newcomer-after-the-gate-is-not-killed" "$KILLED" "7777"
+assert_contains     "own-seats-still-stopped"               "$KILLED" "87890"
+# And because it was not killed, it is still holding 7890 when the launch tries
+# to register that seat — so the match stops rather than adopting a stranger.
+assert_contains     "newcomer-stops-the-match"              "$OUT" "does not carry this match's"
+cleanup
+
+# --- 10l. a refusal must not argue with itself. The message is triggered by a
+# claim the gate captured; printing a FRESH probe underneath it meant a REPL
+# that left its lobby in between produced "reports that it is seated in a game"
+# followed by "says: no lobby", at the moment the operator most needs to trust
+# what they are reading.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    printf '7890 abc-123\n7889 nil\n' > "$NR292_STATE/lobbies"
+    rm -f "$NR292_STATE/probes.7890"
+fi
+HOOK
+NR292_CLAIM_FLIP=1 run_match
+assert_contains     "refusal-quotes-the-claim-it-acted-on" "$OUT" "says:  in lobby abc-123"
+assert_not_contains "refusal-does-not-contradict-itself"   "$OUT" "says:  no lobby
+        cmd"
+cleanup
+
+# --- 10m. an operator's JAVA_OPTS reaches the client JVMs. lein only falls back
+# to JAVA_OPTS when JVM_OPTS is EMPTY (leiningen 2.12.0 libexec/bin/lein:238),
+# so a script that always sets JVM_OPTS has to carry the fallback itself.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_JAVA_OPTS="-Xmx4g" run_match
+assert_contains "java_opts-reaches-the-client" "$LAUNCHED" "-Xmx4g"
+assert_contains "owner-tag-still-there"        "$LAUNCHED" "-Drun-match.owner=run-match-"
+cleanup
+
+# --- 10n. the lobby id in the refusal has to be an id the operator can USE.
+# :gameid is a java.util.UUID, so pr-str renders it #uuid "…" with escaped
+# quotes and the quote-stripping leaves `#uuid \…\` — unpasteable, in the one
+# line #292 asked to name the lobby in.
+make_tree
+listener 7890 4242
+lobby 7890 b0f6aa11-2222-3333-4444-555566667777; lobby 7889 nil
+run_match
+assert_contains     "lobby-id-is-pasteable"  "$OUT" "says:  in lobby b0f6aa11-2222-3333-4444-555566667777"
+assert_not_contains "lobby-id-not-pr-str"    "$OUT" "#uuid"
+cleanup
+
+# --- 10o. ai-eval refusing on a STALE GLOBAL pidfile is not the REPL being
+# silent. The pidfile is cross-checkout (#293) and names a pid that may have
+# nothing to do with whatever holds this port, so laundering that refusal into
+# "did not answer" would describe a live marquee seat as unresponsive.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+NR292_STALE_PIDFILE=corp run_match
+assert_contains     "stale-pidfile-is-its-own-state" "$OUT" "stale"
+assert_not_contains "stale-pidfile-is-not-silence"   "$OUT" "says:  did not answer"
+assert_contains     "stale-pidfile-names-the-issue"  "$OUT" "#293"
+cleanup
+
+# --- 10p. a registration FAILURE must not abandon the peers either. A seat that
+# loses a bind race fails registration; returning there leaves a peer that was
+# still starting unowned, so it binds afterwards as an orphan the next match
+# refuses. (Third instance of this shape: the timeout path was 10e/10i.)
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_DEFER_PORT=7889 NR292_RACE_PORT=7890 run_match
+assert_contains     "race-failure-still-owns-the-peer" "$KILLED" "87889"
+assert_not_contains "race-failure-spared-the-stranger" "$KILLED" "97890"
+cleanup
+
+# --- 10q. the teardown removes the pidfiles of the seats it owned, and ONLY
+# those. They name pids we just killed, so ai-eval would otherwise greet the
+# operator with "(stale PID file)" about a cleanup that worked — while a file
+# naming somebody else's REPL is not ours to delete. The two directories differ
+# in this fixture on purpose: folding the launcher's pidfile path into this
+# script's scratch dir made the whole removal loop a silent no-op.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+echo "31337" > "$T/pidfiles/ai-client-someone-else.pid"
+run_match
+if [ -f "$T/pidfiles/ai-client-corp.pid" ]; then
+    fail "teardown-removes-our-pidfile" "our corp pidfile survived: $(cat "$T/pidfiles/ai-client-corp.pid")"
+else
+    pass "teardown-removes-our-pidfile"
+fi
+if [ -f "$T/pidfiles/ai-client-someone-else.pid" ]; then
+    pass "teardown-spares-a-foreign-pidfile"
+else
+    fail "teardown-spares-a-foreign-pidfile" "a pidfile this match never wrote was deleted"
+fi
+cleanup
+
+# --- 10r. ... and a pidfile naming a pid we did NOT own is left alone even when
+# it is in the directory we clean, because the match's own seat is identified by
+# content and not by filename.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "start-game" ]; then
+    echo "99999" > "$CLIENT_PIDFILE_DIR/ai-client-corp.pid"
+fi
+HOOK
+run_match
+if [ -f "$T/pidfiles/ai-client-corp.pid" ]; then
+    pass "foreign-content-pidfile-survives"
+else
+    fail "foreign-content-pidfile-survives" "a pidfile naming pid 99999 (never ours) was deleted"
+fi
+cleanup
+
+# --- 10s. the OUR-pid side of the stale-pidfile state. 10o covered a FOREIGN
+# holder; one of OURS in that state used to print "treating it as wedged" and,
+# after the state was added without an arm for it, printed nothing at all and
+# was killed in silence.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+# The pidfile goes stale MID-MATCH — which is the #293 scenario: another
+# checkout's launcher overwrites the one global file. Turning it on from the
+# start would also break game 1's own game-id lookup, and the gate under test
+# would never be reached.
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    : > "$NR292_STATE/stale-on"
+fi
+HOOK
+NR292_STALE_PIDFILE=corp NR292_STALE_FROM=leave-game run_match
+assert_contains     "own-stale-pidfile-is-announced" "$OUT" "could not ask our corp REPL"
+assert_contains     "own-stale-pidfile-names-why"    "$OUT" "#293"
+assert_not_contains "own-stale-pidfile-not-silent"   "$OUT" "treating it as wedged"
+cleanup
+
+# --- 10t. two listeners on one port: our tagged one must be registered even
+# when a stranger comes FIRST in lsof order, or a failure inside one port
+# abandons our own seat the same way a failure across ports used to abandon its
+# peer.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/start-ai-client-repl.sh" <<'HOOK'
+if [ "${NR292_DOUBLE_BIND:-}" = "$port" ]; then
+    # A stranger listed BEFORE ours on the same port.
+    sed -i.bak "1i\\
+$port 6${port}
+" "$S/ports" && rm -f "$S/ports.bak"
+    echo "6${port} /usr/bin/java -classpath /stranger nrepl.cmdline" >> "$S/procs"
+fi
+HOOK
+NR292_DOUBLE_BIND=7890 run_match
+assert_contains "double-bind-registers-ours"   "$OUT" "corp REPL is ours: pid 87890"
+assert_contains "double-bind-refuses-stranger" "$OUT" "does not carry this match's"
+assert_contains "double-bind-owns-ours"        "$KILLED" "87890"
+cleanup
+
+# --- 11. argument parsing, driven directly (no match needed).
+make_tree
+AP="$(awk '/^parse_match_args\(\) \{/,/^\}/' "$REAL_SCRIPT")"
+USG="$(awk '/^usage\(\) \{/,/^\}/' "$REAL_SCRIPT")"
+if [ -z "$AP" ] || ! bash -c "$AP"$'\n''declare -F parse_match_args >/dev/null'; then
+    fail "parse_match_args-extracted" "awk extraction did not yield a sourceable function"
+else
+    pass "parse_match_args-extracted"
+    drive() { bash -c "DEFAULT_CONFIG=/d/default.json
+$USG
+$AP
+parse_match_args \"\$@\" || exit \$?
+echo \"FORCE=\$FORCE CONFIG=\$CONFIG_FILE\"" _ "$@" 2>&1; }
+    assert_contains "args-none"          "$(drive)"                       "FORCE=0 CONFIG=/d/default.json"
+    assert_contains "args-force-only"    "$(drive --force)"               "FORCE=1 CONFIG=/d/default.json"
+    assert_contains "args-force-first"   "$(drive --force /x/c.json)"     "FORCE=1 CONFIG=/x/c.json"
+    assert_contains "args-force-last"    "$(drive /x/c.json --force)"     "FORCE=1 CONFIG=/x/c.json"
+    assert_contains "args-path-only"     "$(drive /x/c.json)"             "FORCE=0 CONFIG=/x/c.json"
+    assert_contains "args-typo-refused"  "$(drive --forse)"               "unknown option: --forse"
+    assert_not_contains "args-typo-is-not-a-config" "$(drive --forse)"    "CONFIG=--forse"
+    assert_contains "args-two-paths-refused" "$(drive /a.json /b.json)"   "more than one config file"
+fi
+cleanup
+
+# --- 12. structural, over the source with COMMENTS STRIPPED. Every claim below
+# is about what RUNS; this repo has twice filed a guard that its own explanatory
+# comment satisfied, and both of the strings here appear in the comments.
+CODE_ONLY="$(sed 's/#.*$//' "$REAL_SCRIPT")"
+RESTART_FN="$(printf '%s\n' "$CODE_ONLY" | awk '/^restart_clients\(\) \{/,/^\}/')"
+assert_not_contains "restart-no-pidfile-kill"  "$RESTART_FN" "stop-ai-client.sh"
+assert_not_contains "restart-no-literal-loop"  "$RESTART_FN" "7890 7889"
+assert_contains     "restart-iterates-one-list" "$RESTART_FN" 'CLIENT_SEATS[@]'
+# The gate now owns the list the kill trusts, so the drift guard has to cover
+# it too: a literal loop restored HERE puts the two back out of step, and the
+# restart_clients-only assertions could not see it.
+GATE_FN="$(printf '%s\n' "$CODE_ONLY" | awk '/^preflight_client_ports\(\) \{/,/^\}/')"
+assert_contains     "gate-iterates-one-list"  "$GATE_FN" 'CLIENT_SEATS[@]'
+assert_not_contains "gate-no-literal-ports"   "$GATE_FN" "7890"
+assert_not_contains "gate-no-literal-ports-2" "$GATE_FN" "7889"
+assert_before       "restart-gates-before-killing" "$RESTART_FN" \
+                    "preflight_client_ports restart" "kill "
+assert_contains     "trap-is-armed"            "$CODE_ONLY" "trap teardown_our_clients EXIT"
+assert_contains     "trap-covers-hup"          "$CODE_ONLY" "on_fatal_signal 129"
+assert_contains     "startup-gate-is-called"   "$CODE_ONLY" "preflight_client_ports startup"
+# step 1's adopt-or-start must not come back: outside restart_clients, nothing
+# starts a client.
+OUTSIDE="$(printf '%s\n' "$CODE_ONLY" | awk '/^restart_clients\(\) \{/,/^\}/ {next} {print}')"
+assert_not_contains "no-client-start-outside-restart" "$OUTSIDE" "start-ai-client-repl.sh"
+# Every scratch path must go through the seam, or this test starts truncating
+# the live REPLs' logs again.
+assert_not_contains "no-bare-tmp-paths" "$(printf '%s\n' "$CODE_ONLY" | grep -v 'RUN_MATCH_TMP:-')" "/tmp/"
+# The probe must use neither a bare `str` (an idle REPL answers "" and reads as
+# silent) nor `pr-str` (a UUID renders as #uuid "…" and the id becomes
+# unpasteable). Both have shipped here; the assertion names both.
+assert_contains     "probe-uses-if-let"   "$CODE_ONLY" 'if-let [g (:gameid'
+assert_not_contains "probe-avoids-pr-str" "$CODE_ONLY" "pr-str (:gameid"
+assert_contains     "probe-caps-the-grace" "$CODE_ONLY" "TIMEOUT_GRACE=0"
+# Every value client_lobby_claim can return must have an arm in the owned-REPL
+# consumer. The third one shipped without one and the seat fell through in
+# silence; this is the cheap structural half of case 10s.
+GATE_FN2="$(printf '%s\n' "$CODE_ONLY" | awk '/^preflight_client_ports\(\) \{/,/^\}/')"
+assert_contains "gate-handles-cannot-ask"     "$GATE_FN2" '"cannot ask"*)'
+assert_contains "gate-handles-did-not-answer" "$GATE_FN2" '"did not answer")'
+assert_contains "gate-handles-in-lobby"       "$GATE_FN2" '"in lobby "*)'
+# The probe's stderr stays discarded: the stale-pidfile answer is on stdout
+# (ai-eval.sh:117), so 2>&1 bought nothing and merged stderr into the value.
+# The pattern below was wrong on its first writing — it said `(str g)]` where
+# the code says `(str g) "nil")`, so it could never match and the assertion was
+# vacuously true. A mutation test caught it: putting `2>&1` back survived.
+# An absence assertion that cannot match anything tests nothing.
+assert_not_contains "probe-does-not-merge-stderr" "$CODE_ONLY" "(str g) \"nil\")' 2>&1"
+# ... and the positive half, so the pattern above is anchored to text that
+# really is in the file:
+assert_contains     "probe-discards-stderr"       "$CODE_ONLY" "(str g) \"nil\")' 2>/dev/null"
+
+echo ""
+if [ "$fails" -eq 0 ]; then
+    echo "✅ #292 port guard: all assertions passed"
+    exit 0
+else
+    echo "❌ #292 port guard: $fails assertion(s) failed"
+    exit 1
+fi
