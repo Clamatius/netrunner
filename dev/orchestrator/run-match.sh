@@ -103,12 +103,17 @@ parse_match_args() {
 
 # ---- process facts, all best-effort -----------------------------------------
 #
-# `|| true` on every one of these is load-bearing under `set -e` (:6). lsof
-# exits NON-ZERO when nothing matches, so a bare `h=$(lsof ...)` on a FREE port
-# aborts the whole script — the gate failing closed on the happy path, which is
-# how an operator learns to pass --force every time. Measured:
-# `bash -c 'set -e; echo before; h=$(lsof -i :59999 -t); echo after'` prints
-# only "before".
+# `|| true` on every one of these is DEFENSIVE, not load-bearing — and the
+# distinction is here because a mutation test caught the comment that claimed
+# otherwise. lsof exits NON-ZERO when nothing matches, and under `set -e` (:6) a
+# bare `h=$(lsof -i :59999 -t)` on a free port aborts the whole script
+# (measured: `bash -c 'set -e; echo before; h=$(lsof ...); echo after'` prints
+# only "before"). That was a real defect in an earlier DESIGN of this gate,
+# which captured holders into a variable. Nothing here does: every call site is
+# a `for pid in $(...)` word list or a `[ -n "$(...)" ]` test, where the
+# substitution's status is discarded. Removing the `|| true` today changes no
+# behaviour and no test goes red. It stays so that the first caller who DOES
+# assign the result does not reintroduce the abort.
 #
 # -sTCP:LISTEN (as dev/ai-bounce.sh:44 already spells it) because `-i :PORT`
 # alone selects sockets at EITHER end: an in-flight ai-eval.sh connection would

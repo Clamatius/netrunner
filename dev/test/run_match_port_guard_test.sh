@@ -97,6 +97,7 @@ make_tree() {
     : > "$T/state/launched"
     : > "$T/state/sendcmd"
     : > "$T/state/lein"
+    : > "$T/state/connected"
 
     cat > "$T/dev/orchestrator/match-config.json" <<'JSON'
 {
@@ -118,8 +119,20 @@ if [ "${1:-}" = "-p" ]; then
     exit 0
 fi
 # -i :PORT -sTCP:LISTEN -t    (and the bare -i :PORT the game-server check uses)
+#
+# state/ports holds LISTENers; state/connected holds processes with a socket on
+# the port at the OTHER end (an in-flight ai-eval.sh, say). Real lsof reports
+# both for `-i :PORT` and only the first for `-i :PORT -sTCP:LISTEN`, so this
+# stub does too — otherwise dropping the flag in production changes nothing
+# here and the mutant survives.
 port="${2#:}"
+listen_only=0
+for a in "$@"; do [ "$a" = "-sTCP:LISTEN" ] && listen_only=1; done
 out="$(awk -v p="$port" '$1==p {print $2}' "$S/ports")"
+if [ "$listen_only" -eq 0 ]; then
+    extra="$(awk -v p="$port" '$1==p {print $2}' "$S/connected" 2>/dev/null)"
+    out="$(printf '%s\n%s\n' "$out" "$extra" | grep -v '^$' || true)"
+fi
 [ -z "$out" ] && exit 1
 printf '%s\n' "$out"
 LSOF
@@ -152,6 +165,14 @@ kill() {
             continue
         fi
         echo "${sig:--TERM} $pid" >> "$NR292_STATE/killed"
+        # And on STDOUT, which run_match captures: an ordering assertion needs
+        # the kill interleaved with the script's own output, and asserting only
+        # that the inventory precedes the "stopping" line let a mutant that
+        # moved the announcement below the TERM survive. stdout and not stderr
+        # because every call site spells it `kill "$pid" 2>/dev/null`, which
+        # would send this straight to /dev/null — the first attempt did exactly
+        # that and the two assertions failed for that reason, not the bug's.
+        echo "FIXTURE-KILL ${sig:--TERM} $pid"
         # -9 removes it from the world; TERM only if the fixture says it obeys.
         if [ "$sig" = "-9" ] || [ "${NR292_TERM_OBEYED:-1}" = "1" ]; then
             grep -v "^$pid " "$NR292_STATE/procs" > "$NR292_STATE/procs.tmp" 2>/dev/null
@@ -173,6 +194,10 @@ KW
 S="$NR292_STATE"
 side="$1"; port="$2"
 echo "$side $port JVM_OPTS=${JVM_OPTS:-}" >> "$S/launched"
+if [ "${NR292_FAIL_PORT:-}" = "$port" ]; then
+    # Started, never bound. No listener appears for this port.
+    exit 0
+fi
 if [ "${NR292_RACE_PORT:-}" = "$port" ]; then
     pid="9${port}"
     echo "$pid /usr/bin/java -classpath /elsewhere/netrunner nrepl.cmdline --port $port" >> "$S/procs"
@@ -246,6 +271,7 @@ run_match() {
         NR292_FAKE_CWD="${NR292_FAKE_CWD:-$T}" \
         NR292_RACE_PORT="${NR292_RACE_PORT:-}" \
         NR292_SIGNAL_AT="${NR292_SIGNAL_AT:-}" \
+        NR292_FAIL_PORT="${NR292_FAIL_PORT:-}" \
         BASH_ENV="$T/killwrap.sh" \
         PATH="$T/bin:$PATH" \
         bash "$T/dev/orchestrator/run-match.sh" "$@" 2>&1)"
@@ -255,6 +281,8 @@ run_match() {
 }
 
 listener() { echo "$1 $2" >> "$T/state/ports"; echo "$2 ${3:-/usr/bin/java -classpath /x nrepl.cmdline}" >> "$T/state/procs"; }
+# A process with a socket on the port that is NOT listening on it.
+connected() { echo "$1 $2" >> "$T/state/connected"; echo "$2 ${3:-ai-eval client}" >> "$T/state/procs"; }
 lobby()    { echo "$1 $2" >> "$T/state/lobbies"; }
 cleanup()  { [ -n "${T:-}" ] && rm -rf "$T"; }
 trap cleanup EXIT
@@ -296,7 +324,9 @@ run_match --force
 assert_contains "force-proceeds"        "$OUT" "--force given"
 assert_contains "force-killed-the-pid"  "$KILLED" "4242"
 assert_before   "force-announces-before-stopping" "$OUT" \
-                "Client ports are held" "stopping pid 4242"
+                "stopping pid 4242" "FIXTURE-KILL -TERM 4242"
+assert_before   "force-inventory-precedes-the-kill" "$OUT" \
+                "Client ports are held" "FIXTURE-KILL -TERM 4242"
 assert_before   "force-inventory-precedes-consent" "$OUT" \
                 "pid 4242" "--force given"
 cleanup
@@ -394,6 +424,57 @@ NR292_SIGNAL_AT=start-game run_match
 assert_contains     "signal-tore-down"     "$OUT" "client REPL(s) this match started"
 assert_not_contains "signal-ended-the-run" "$OUT" "Match Complete"
 assert_contains     "signal-stopped-corp"  "$KILLED" "87890"
+cleanup
+
+# --- 10b. the gate asks for LISTENERS, not for sockets. `lsof -i :PORT` alone
+# selects a socket at EITHER end, so an in-flight ai-eval.sh connection would
+# count as a holder — and can exit between the inventory and the per-pid lookup.
+# Nothing is listening here; there is only a client connection on 7890.
+make_tree
+connected 7890 6001
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "connection-is-not-a-holder" "$OUT" "pid 6001"
+assert_not_contains "connection-does-not-refuse" "$OUT" "Refusing to start"
+assert_contains     "connection-match-proceeds"  "$OUT" "Starting Match Orchestrator"
+cleanup
+
+# --- 10c. a REPL that will not answer the lobby probe must be reported as
+# silent, not as idle. "did not answer" and "no lobby" must not collapse: for a
+# foreign holder the operator reads one of them to decide a kill.
+make_tree
+listener 7890 4242
+lobby 7890 DEAD; lobby 7889 nil
+run_match
+assert_contains     "silent-foreign-repl-says-so" "$OUT" "says:  did not answer"
+assert_not_contains "silent-foreign-repl-not-idle" "$OUT" "says:  no lobby"
+cleanup
+
+# --- 10d. ... and one of OURS that will not answer is a wedged REPL, which is
+# what restart_clients exists to clear. Deliberate asymmetry, so it is pinned
+# out loud rather than left to a reader of the code.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    printf '7890 DEAD\n7889 nil\n' > "$NR292_STATE/lobbies"
+fi
+HOOK
+run_match
+assert_contains "wedged-own-repl-noticed"  "$OUT" "did not answer the lobby probe"
+assert_contains "wedged-own-repl-restarted" "$OUT" "treating it as wedged"
+assert_contains "wedged-own-repl-ran-game-2" "$OUT" "Match Complete"
+cleanup
+
+# --- 10e. a seat that starts while its PEER times out must still be owned, or
+# the teardown walks past it and the NEXT match refuses this one's own orphan.
+# (Registering only after both listeners are up is exactly that defect.)
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_FAIL_PORT=7889 run_match
+assert_contains "half-start-timed-out"       "$OUT" "Timeout waiting for the runner client"
+assert_contains "half-start-owns-the-corp"   "$KILLED" "87890"
+assert_contains "half-start-tore-down"       "$OUT" "client REPL(s) this match started"
 cleanup
 
 # --- 11. argument parsing, driven directly (no match needed).
