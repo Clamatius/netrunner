@@ -86,7 +86,7 @@ $hay
 # ---------------------------------------------------------------------------
 make_tree() {
     T="$(mktemp -d "${TMPDIR:-/tmp}/nr-292.XXXXXX")"
-    mkdir -p "$T/dev/orchestrator" "$T/bin" "$T/logs/matches" "$T/state" "$T/tmp"
+    mkdir -p "$T/dev/orchestrator" "$T/bin" "$T/logs/matches" "$T/state" "$T/tmp" "$T/pidfiles"
     cp "$REAL_SCRIPT" "$T/dev/orchestrator/run-match.sh"
     chmod +x "$T/dev/orchestrator/run-match.sh"
 
@@ -126,6 +126,15 @@ fi
 # stub does too — otherwise dropping the flag in production changes nothing
 # here and the mutant survives.
 port="${2#:}"
+# NR292_DEFER_PORT: report nothing for this port on the FIRST listener query,
+# modelling a client that is still starting. Without it, case 10p's two
+# backgrounded launcher stubs race and the peer may already be registered when
+# the raced seat fails — so the case passed either way, nondeterministically.
+if [ "${NR292_DEFER_PORT:-}" = "$port" ]; then
+    d=$(( $(cat "$S/defer.$port" 2>/dev/null || echo 0) + 1 ))
+    echo "$d" > "$S/defer.$port"
+    [ "$d" -eq 1 ] && exit 1
+fi
 listen_only=0
 for a in "$@"; do [ "$a" = "-sTCP:LISTEN" ] && listen_only=1; done
 out="$(awk -v p="$port" '$1==p {print $2}' "$S/ports")"
@@ -206,6 +215,9 @@ else
     echo "$pid /usr/bin/java ${JVM_OPTS:-} -classpath /x nrepl.cmdline --port $port" >> "$S/procs"
 fi
 echo "$port $pid" >> "$S/ports"
+# The real launcher records the listener's pid (start-ai-client-repl.sh:70-77).
+# Written here so the teardown's pidfile cleanup has something to find.
+[ -n "${CLIENT_PIDFILE_DIR:-}" ] && echo "$pid" > "$CLIENT_PIDFILE_DIR/ai-client-${side}.pid"
 LAUNCH
 
     cat > "$T/dev/ai-eval.sh" <<'EVAL'
@@ -215,7 +227,8 @@ side="$1"; port="$2"; expr="$3"
 # ai-eval.sh:108-120 refuses, exits 1 and DELETES the pidfile when the global
 # /tmp/ai-client-<side>.pid names a dead pid — whatever is actually listening on
 # the port (#293). NR292_STALE_PIDFILE makes the stub answer that way.
-if [ -n "${NR292_STALE_PIDFILE:-}" ] && [ "$NR292_STALE_PIDFILE" = "$side" ]; then
+if [ -n "${NR292_STALE_PIDFILE:-}" ] && [ "$NR292_STALE_PIDFILE" = "$side" ] \
+   && { [ -z "${NR292_STALE_FROM:-}" ] || [ -f "$S/stale-on" ]; }; then
     echo "❌ AI Client REPL '$side' not running (stale PID file)"
     exit 1
 fi
@@ -334,9 +347,12 @@ run_match() {
         NR292_INJECT_AFTER_PROBE="${NR292_INJECT_AFTER_PROBE:-}" \
         NR292_CLAIM_FLIP="${NR292_CLAIM_FLIP:-}" \
         NR292_STALE_PIDFILE="${NR292_STALE_PIDFILE:-}" \
+        NR292_STALE_FROM="${NR292_STALE_FROM:-}" \
+        NR292_DEFER_PORT="${NR292_DEFER_PORT:-}" \
+        NR292_DOUBLE_BIND="${NR292_DOUBLE_BIND:-}" \
         JAVA_OPTS="${NR292_JAVA_OPTS:-}" \
         RUN_MATCH_TMP="$T/tmp" \
-        CLIENT_PIDFILE_DIR="$T/tmp" \
+        CLIENT_PIDFILE_DIR="$T/pidfiles" \
         BASH_ENV="$T/killwrap.sh" \
         PATH="$T/bin:$PATH" \
         bash "$T/dev/orchestrator/run-match.sh" "$@" 2>&1)"
@@ -682,9 +698,91 @@ cleanup
 # refuses. (Third instance of this shape: the timeout path was 10e/10i.)
 make_tree
 lobby 7890 nil; lobby 7889 nil
-NR292_RACE_PORT=7890 run_match
+NR292_DEFER_PORT=7889 NR292_RACE_PORT=7890 run_match
 assert_contains     "race-failure-still-owns-the-peer" "$KILLED" "87889"
 assert_not_contains "race-failure-spared-the-stranger" "$KILLED" "97890"
+cleanup
+
+# --- 10q. the teardown removes the pidfiles of the seats it owned, and ONLY
+# those. They name pids we just killed, so ai-eval would otherwise greet the
+# operator with "(stale PID file)" about a cleanup that worked — while a file
+# naming somebody else's REPL is not ours to delete. The two directories differ
+# in this fixture on purpose: folding the launcher's pidfile path into this
+# script's scratch dir made the whole removal loop a silent no-op.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+echo "31337" > "$T/pidfiles/ai-client-someone-else.pid"
+run_match
+if [ -f "$T/pidfiles/ai-client-corp.pid" ]; then
+    fail "teardown-removes-our-pidfile" "our corp pidfile survived: $(cat "$T/pidfiles/ai-client-corp.pid")"
+else
+    pass "teardown-removes-our-pidfile"
+fi
+if [ -f "$T/pidfiles/ai-client-someone-else.pid" ]; then
+    pass "teardown-spares-a-foreign-pidfile"
+else
+    fail "teardown-spares-a-foreign-pidfile" "a pidfile this match never wrote was deleted"
+fi
+cleanup
+
+# --- 10r. ... and a pidfile naming a pid we did NOT own is left alone even when
+# it is in the directory we clean, because the match's own seat is identified by
+# content and not by filename.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "start-game" ]; then
+    echo "99999" > "$CLIENT_PIDFILE_DIR/ai-client-corp.pid"
+fi
+HOOK
+run_match
+if [ -f "$T/pidfiles/ai-client-corp.pid" ]; then
+    pass "foreign-content-pidfile-survives"
+else
+    fail "foreign-content-pidfile-survives" "a pidfile naming pid 99999 (never ours) was deleted"
+fi
+cleanup
+
+# --- 10s. the OUR-pid side of the stale-pidfile state. 10o covered a FOREIGN
+# holder; one of OURS in that state used to print "treating it as wedged" and,
+# after the state was added without an arm for it, printed nothing at all and
+# was killed in silence.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+# The pidfile goes stale MID-MATCH — which is the #293 scenario: another
+# checkout's launcher overwrites the one global file. Turning it on from the
+# start would also break game 1's own game-id lookup, and the gate under test
+# would never be reached.
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    : > "$NR292_STATE/stale-on"
+fi
+HOOK
+NR292_STALE_PIDFILE=corp NR292_STALE_FROM=leave-game run_match
+assert_contains     "own-stale-pidfile-is-announced" "$OUT" "could not ask our corp REPL"
+assert_contains     "own-stale-pidfile-names-why"    "$OUT" "#293"
+assert_not_contains "own-stale-pidfile-not-silent"   "$OUT" "treating it as wedged"
+cleanup
+
+# --- 10t. two listeners on one port: our tagged one must be registered even
+# when a stranger comes FIRST in lsof order, or a failure inside one port
+# abandons our own seat the same way a failure across ports used to abandon its
+# peer.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/start-ai-client-repl.sh" <<'HOOK'
+if [ "${NR292_DOUBLE_BIND:-}" = "$port" ]; then
+    # A stranger listed BEFORE ours on the same port.
+    sed -i.bak "1i\\
+$port 6${port}
+" "$S/ports" && rm -f "$S/ports.bak"
+    echo "6${port} /usr/bin/java -classpath /stranger nrepl.cmdline" >> "$S/procs"
+fi
+HOOK
+NR292_DOUBLE_BIND=7890 run_match
+assert_contains "double-bind-registers-ours"   "$OUT" "corp REPL is ours: pid 87890"
+assert_contains "double-bind-refuses-stranger" "$OUT" "does not carry this match's"
+assert_contains "double-bind-owns-ours"        "$KILLED" "87890"
 cleanup
 
 # --- 11. argument parsing, driven directly (no match needed).
@@ -744,6 +842,16 @@ assert_not_contains "no-bare-tmp-paths" "$(printf '%s\n' "$CODE_ONLY" | grep -v 
 assert_contains     "probe-uses-if-let"   "$CODE_ONLY" 'if-let [g (:gameid'
 assert_not_contains "probe-avoids-pr-str" "$CODE_ONLY" "pr-str (:gameid"
 assert_contains     "probe-caps-the-grace" "$CODE_ONLY" "TIMEOUT_GRACE=0"
+# Every value client_lobby_claim can return must have an arm in the owned-REPL
+# consumer. The third one shipped without one and the seat fell through in
+# silence; this is the cheap structural half of case 10s.
+GATE_FN2="$(printf '%s\n' "$CODE_ONLY" | awk '/^preflight_client_ports\(\) \{/,/^\}/')"
+assert_contains "gate-handles-cannot-ask"     "$GATE_FN2" '"cannot ask"*)'
+assert_contains "gate-handles-did-not-answer" "$GATE_FN2" '"did not answer")'
+assert_contains "gate-handles-in-lobby"       "$GATE_FN2" '"in lobby "*)'
+# The probe's stderr stays discarded: the stale-pidfile answer is on stdout
+# (ai-eval.sh:117), so 2>&1 bought nothing and merged stderr into the value.
+assert_not_contains "probe-does-not-merge-stderr" "$CODE_ONLY" "(str g)] \"nil\")' 2>&1"
 
 echo ""
 if [ "$fails" -eq 0 ]; then

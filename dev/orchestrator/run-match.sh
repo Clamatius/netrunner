@@ -194,23 +194,17 @@ pid_in_list() {
 # can block on a prompt. Three outcomes, and all three are printed as given.
 client_lobby_claim() {
     local side="$1" port="$2" raw out
-    # The expression is `(if-let [g …] (str g) "nil")`, and both halves of that
-    # are load-bearing, each one a review finding:
-    #
-    #   - NOT a bare `(str …)`: `(str nil)` is the EMPTY STRING, so an idle REPL
-    #     answered "" and was reported as "did not answer". The "no lobby" arm
-    #     was unreachable on a real REPL — every idle foreign leftover was
-    #     described to the operator as unresponsive at the moment that
-    #     distinction decides a kill, and every one of our own idle seats was
-    #     called wedged, every game.
-    #   - NOT `pr-str` either, which was the first fix. :gameid is normalized to
-    #     a java.util.UUID (ai_state.clj:122-130), so `(pr-str uuid)` is
-    #     `#uuid "b0f6…"`, the nREPL prints it escaped, and the quote-stripping
-    #     below leaves `#uuid \b0f6…\` — an id that cannot be pasted into
-    #     list-game-ids, in the one line that exists to NAME the lobby.
-    #
-    # `(str g)` on the UUID gives the plain id, and the explicit "nil" keeps
-    # idle distinguishable from silent.
+    # The live expression is `(if-let [g …] (str g) "nil")`: `(str g)` on the
+    # UUID gives a plain, pasteable id, and the explicit "nil" keeps IDLE
+    # distinguishable from SILENT. Two simpler spellings were tried and are
+    # wrong, recorded here because each shipped once:
+    #   `(str …)` alone     — `(str nil)` is the EMPTY STRING, so an idle REPL
+    #                         read as "did not answer" and the "no lobby" arm
+    #                         was unreachable on a real REPL.
+    #   `(pr-str …)` alone  — :gameid is a java.util.UUID (ai_state.clj:122-130),
+    #                         so this renders `#uuid "b0f6…"` and the
+    #                         quote-stripping below leaves `#uuid \b0f6…\`, an
+    #                         id that cannot be pasted into list-game-ids.
     # TIMEOUT_GRACE=0 because ai-eval.sh's backstop is TIMEOUT + TIMEOUT_GRACE
     # (:19, :78 — grace defaults to 15), so a socket that accepts and never
     # answers would hold this for 20s, not the 5 the timeout suggests.
@@ -219,17 +213,20 @@ client_lobby_claim() {
     # answer — i.e. "no lobby", the reassuring one, for a REPL that said
     # nothing. "did not answer" and "no lobby" must not collapse into each
     # other: one of them is used below to decide a kill.
-    # stderr is kept, not discarded, for one reason: ai-eval.sh:108-120 answers
-    # "not running (stale PID file)" and exits 1 when the GLOBAL, cross-checkout
-    # /tmp/ai-client-<side>.pid names a dead pid — which says nothing about the
-    # REPL actually listening on this port, and which it also DELETES (#293).
-    # Folding that into "did not answer" would report a live foreign marquee
-    # seat as silent, so it gets its own answer instead.
+    # ai-eval.sh:108-121 answers "not running (stale PID file)" and exits 1 when
+    # the GLOBAL, cross-checkout pidfile names a dead pid — which says nothing
+    # about the REPL actually listening on this port, and which it also DELETES
+    # (#293). Folding that into "did not answer" would report a live foreign
+    # marquee seat as silent, so it gets its own answer. That message is on
+    # STDOUT (:117 is a plain echo), which is why stderr stays discarded here: an
+    # earlier version redirected 2>&1 "so the refusal is visible", which was
+    # false and whose only effect was merging stderr into the success-path value
+    # that `tail -1` reads.
     if ! raw="$(TIMEOUT=5 TIMEOUT_GRACE=0 "$DEV_DIR/ai-eval.sh" "$side" "$port" \
-                 '(if-let [g (:gameid @ai-state/client-state)] (str g) "nil")' 2>&1)"; then
+                 '(if-let [g (:gameid @ai-state/client-state)] (str g) "nil")' 2>/dev/null)"; then
         case "$raw" in
             *"stale PID file"*)
-                echo "cannot ask — $(basename "$DEV_DIR")/ai-eval.sh refused on a stale $CLIENT_PIDFILE_DIR pidfile (#293)"
+                echo "cannot ask — dev/ai-eval.sh refused on a stale pidfile in $CLIENT_PIDFILE_DIR (#293)"
                 ;;
             *)
                 echo "did not answer"
@@ -296,6 +293,21 @@ preflight_client_ports() {
                     "in lobby "*)
                         busy_rows+=("$port|$pid|$side|$claim")
                         busy_pids+=("$pid")
+                        ;;
+                    "cannot ask"*)
+                        # N1: this value was added one round before this arm
+                        # existed, and the seat fell through in SILENCE — killed
+                        # after nothing but "stopping pid", where the state
+                        # before it printed "treating it as wedged". Widening
+                        # what a function can return obliges every consumer.
+                        #
+                        # Treated like "did not answer" — we restart it — but
+                        # said differently, because the reason differs: the REPL
+                        # was never asked. ai-eval refused on a pidfile that
+                        # belongs to whichever checkout wrote it last (#293).
+                        echo "   ℹ️  could not ask our $side REPL (pid $pid) whether it is in a game:"
+                        echo "      $claim"
+                        echo "      Restarting it as this match's own seat."
                         ;;
                     "did not answer")
                         # Deliberate asymmetry, stated rather than silent: a
@@ -555,20 +567,30 @@ echo "🤖 Agent B: $AGENT_B"
 # Refusing to adopt is also refusing to kill. A listener without the tag is left
 # exactly where it is, and the match stops.
 register_client_pid() {
-    local port="$1" side="$2" pid found=0
+    local port="$1" side="$2" pid found=0 stranger=0
+    # EVERY listener on the port is inspected before deciding. Returning on the
+    # first untagged one abandoned our own tagged listener if it came later in
+    # lsof order — the same "a failure abandons its peer" shape that the wait
+    # loop has across ports, still open within one port. It needs two listeners
+    # on one port (separate IPv4 and IPv6 binds, say), which is rare in
+    # production and is a state the test fixture already models.
     for pid in $(listen_holders "$port"); do
         if pid_carries_owner_tag "$pid"; then
             OUR_CLIENT_PIDS+=("$pid")
             found=1
             echo "   ✅ $side REPL is ours: pid $pid on port $port"
         else
+            stranger=1
             echo "   ❌ port $port is held by pid $pid, which does not carry this match's"
             echo "      owner tag — another launcher won the bind race."
             print_holder "$port" "$pid" "$side"
-            echo "      Leaving it alone and stopping the match."
-            return 1
+            echo "      Leaving it alone."
         fi
     done
+    if [ "$stranger" -ne 0 ]; then
+        echo "      Stopping the match rather than killing or adopting it."
+        return 1
+    fi
     if [ "$found" -ne 1 ]; then
         echo "   ❌ nothing is listening on port $port after starting the $side client"
         echo "      (see $RUN_MATCH_TMP/ai-client-${side}.log)"
@@ -680,7 +702,8 @@ restart_clients() {
     done
     if [ "$register_failed" -ne 0 ]; then
         echo "   ❌ A client port was taken by something this match did not start."
-        echo "      Stopping, with the seats this match did own torn down."
+        echo "      The ${#OUR_CLIENT_PIDS[@]} seat(s) this match DID start are owned and will"
+        echo "      be stopped on the way out, so nothing is left listening behind us."
         return 1
     fi
     if [ "${#pending[@]}" -ne 0 ]; then
