@@ -19,6 +19,13 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 DEV_DIR="$ROOT_DIR/dev"
 DEFAULT_CONFIG="$SCRIPT_DIR/match-config.json"
 LOG_DIR="$ROOT_DIR/logs/matches"
+# Where the script's own scratch logs go. A seam, because the test runs this
+# REAL script and the fixed /tmp paths meant every run truncated
+# /tmp/game-server.log and /tmp/ai-client-{corp,runner}.log — the live REPLs'
+# logs, which is exactly where a marquee's disconnect evidence would be. So the
+# #292 test was damaging the thing #292 protects, ten-plus times per
+# `make test-shell` and 23 times per mutation battery. Default unchanged.
+RUN_MATCH_TMP="${RUN_MATCH_TMP:-/tmp}"
 
 # ----------------------------------------------------------------------------
 # #292: this script kills whatever holds the two client REPL ports. Those REPLs
@@ -43,6 +50,14 @@ CLIENT_SEATS=("7890:corp" "7889:runner")
 # is watching it, so a marquee that adopted our leftover got killed by the next
 # run with the file's blessing.
 OUR_CLIENT_PIDS=()
+
+# The holders preflight_client_ports inspected and approved on its last pass.
+# The kill iterates THIS, not a fresh `lsof`: re-inventorying meant a process
+# that took a client port between the gate and the kill was killed having never
+# been gated, in the one code path whose purpose is to gate that kill. Every
+# effect in a guarded batch has to answer to the guard that ran, not to a second
+# observation.
+APPROVED_KILL_PIDS=()
 
 # Foreign pids the operator accepted with --force, captured at the moment they
 # were shown. Spent by the first restart_clients and then cleared: consent is
@@ -78,6 +93,10 @@ parse_match_args() {
     local seen_positional=0
     FORCE=0
     CONFIG_FILE=""
+    # Remembered separately from CONFIG_FILE, which always ends up set: the
+    # --force hint should echo back what the operator typed, not add a default
+    # path that reads as if it were part of what they must repeat.
+    CONFIG_GIVEN=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --force)
@@ -93,6 +112,7 @@ parse_match_args() {
                     usage
                 fi
                 CONFIG_FILE="$1"
+                CONFIG_GIVEN="$1"
                 seen_positional=1
                 ;;
         esac
@@ -161,13 +181,23 @@ pid_in_list() {
 # can block on a prompt. Three outcomes, and all three are printed as given.
 client_lobby_claim() {
     local side="$1" port="$2" raw out
+    # pr-str, NOT str. `(str nil)` is the EMPTY STRING, so an idle REPL answered
+    # "" and was reported as "did not answer" — the "no lobby" arm could never
+    # be reached on a real REPL, every idle foreign leftover was described to
+    # the operator as unresponsive at the moment that distinction decides a
+    # kill, and every one of our own idle seats was called wedged, every game.
+    # `(pr-str nil)` is the four characters n-i-l, which is also what the test
+    # fixture used to return unconditionally — so the stub agreed with the bug.
+    # TIMEOUT_GRACE=0 because ai-eval.sh's backstop is TIMEOUT + TIMEOUT_GRACE
+    # (:19, :78 — grace defaults to 15), so a socket that accepts and never
+    # answers would hold this for 20s, not the 5 the timeout suggests.
     # The exit status is taken BEFORE the pipeline, because a pipeline's status
     # is `tail`'s and a failed ai-eval.sh would read as a successful empty
     # answer — i.e. "no lobby", the reassuring one, for a REPL that said
     # nothing. "did not answer" and "no lobby" must not collapse into each
     # other: one of them is used below to decide a kill.
-    if ! raw="$(TIMEOUT=5 "$DEV_DIR/ai-eval.sh" "$side" "$port" \
-                 '(str (:gameid @ai-state/client-state))' 2>/dev/null)"; then
+    if ! raw="$(TIMEOUT=5 TIMEOUT_GRACE=0 "$DEV_DIR/ai-eval.sh" "$side" "$port" \
+                 '(pr-str (:gameid @ai-state/client-state))' 2>/dev/null)"; then
         echo "did not answer"
         return 0
     fi
@@ -180,12 +210,20 @@ client_lobby_claim() {
     esac
 }
 
+# print_holder PORT PID SIDE [CLAIM]
+#
+# CLAIM is passed in when the caller already has it. It used to re-probe, which
+# cost a second timeout AND let the line argue with the message above it: a REPL
+# that left its lobby between the two calls produced "reports that it is seated
+# in a game" followed by "says: no lobby", at the moment the operator most needs
+# to trust what they are reading.
 print_holder() {
-    local port="$1" pid="$2" side="$3"
+    local port="$1" pid="$2" side="$3" claim="${4:-}"
+    [ -n "$claim" ] || claim="$(client_lobby_claim "$side" "$port")"
     echo "      • port $port ($side seat): pid $pid"
     echo "        cwd:   $(pid_cwd "$pid")"
     echo "        up:    $(pid_etime "$pid")"
-    echo "        says:  $(client_lobby_claim "$side" "$port")"
+    echo "        says:  $claim"
     echo "        cmd:   $(pid_cmd_excerpt "$pid")"
 }
 
@@ -203,7 +241,8 @@ print_holder() {
 preflight_client_ports() {
     local phase="$1"
     local entry port side pid claim
-    local -a foreign_pids=() foreign_rows=() busy_rows=()
+    local -a foreign_pids=() foreign_rows=() busy_rows=() busy_pids=() seen_pids=()
+    APPROVED_KILL_PIDS=()
 
     for entry in "${CLIENT_SEATS[@]}"; do
         port="${entry%%:*}"
@@ -220,6 +259,7 @@ preflight_client_ports() {
                 case "$claim" in
                     "in lobby "*)
                         busy_rows+=("$port|$pid|$side|$claim")
+                        busy_pids+=("$pid")
                         ;;
                     "did not answer")
                         # Deliberate asymmetry, stated rather than silent: a
@@ -237,21 +277,46 @@ preflight_client_ports() {
                 foreign_pids+=("$pid")
                 foreign_rows+=("$port|$pid|$side")
             fi
+            seen_pids+=("$pid")
         done
     done
 
     if [ "${#busy_rows[@]}" -ne 0 ]; then
-        echo "❌ A client REPL this match started is now in a game it did not create:"
+        # L7: a non-nil :gameid is the REPL's CLAIM, not proof somebody else
+        # seated it. ai_connection's leave-game can fail to take (run_game sends
+        # it to /dev/null and send_command still exits 0) and a late
+        # :lobby/state can re-set the field, in which case this would be our own
+        # lobby. Refusing is right either way — we are not restarting a seat
+        # that says it is in a game — so the sentence weakens to what was
+        # actually said instead of growing a branch for a state nobody can
+        # distinguish from here.
+        echo "❌ A client REPL this match started reports that it is seated in a game:"
         for entry in "${busy_rows[@]}"; do
             IFS='|' read -r port pid side claim <<< "$entry"
-            print_holder "$port" "$pid" "$side"
+            print_holder "$port" "$pid" "$side" "$claim"
         done
-        echo "   Not restarting it. Abandoning the remaining games of this match;"
-        echo "   results already extracted are saved under $LOG_DIR."
+        echo "   Not restarting it, in case another driver is playing on it."
+        echo "   Abandoning the remaining games of this match; results already"
+        echo "   extracted are saved under $LOG_DIR."
+        # L1 — the defect this gate was committing itself. The script is about
+        # to exit under set -e, and the EXIT trap stops everything in
+        # OUR_CLIENT_PIDS. Leaving a busy pid there means printing "not
+        # restarting it" and then killing it a moment later: the exact harm
+        # #292 exists to prevent, introduced by #292's fix. Disown it, so the
+        # teardown cannot reach it.
+        local keep
+        local -a survivors=()
+        for keep in ${OUR_CLIENT_PIDS[@]+"${OUR_CLIENT_PIDS[@]}"}; do
+            pid_in_list "$keep" ${busy_pids[@]+"${busy_pids[@]}"} || survivors+=("$keep")
+        done
+        OUR_CLIENT_PIDS=(${survivors[@]+"${survivors[@]}"})
         return 1
     fi
 
-    [ "${#foreign_rows[@]}" -eq 0 ] && return 0
+    if [ "${#foreign_rows[@]}" -eq 0 ]; then
+        APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
+        return 0
+    fi
 
     echo "⚠️  Client ports are held by ${#foreign_rows[@]} process(es) this match did not start:"
     for entry in "${foreign_rows[@]}"; do
@@ -271,6 +336,7 @@ preflight_client_ports() {
             fi
         done
         echo "   Already consented to at startup — stopping them."
+        APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
         return 0
     fi
 
@@ -280,11 +346,12 @@ preflight_client_ports() {
         echo "   only trace left in ITS log would be a disconnect."
         echo ""
         echo "   If they are yours to kill, re-run with --force:"
-        echo "       $(basename "$0") --force${CONFIG_FILE:+ $CONFIG_FILE}"
+        echo "       $(basename "$0") --force${CONFIG_GIVEN:+ $CONFIG_FILE}"
         return 1
     fi
 
     CONSENTED_PIDS=(${foreign_pids[@]+"${foreign_pids[@]}"})
+    APPROVED_KILL_PIDS=(${seen_pids[@]+"${seen_pids[@]}"})
     echo "   --force given: killing the ${#CONSENTED_PIDS[@]} process(es) listed above."
     return 0
 }
@@ -328,7 +395,7 @@ teardown_our_clients() {
     # to delete.
     for entry in "${CLIENT_SEATS[@]}"; do
         side="${entry##*:}"
-        pidfile="/tmp/ai-client-${side}.pid"
+        pidfile="$RUN_MATCH_TMP/ai-client-${side}.pid"
         [ -f "$pidfile" ] || continue
         recorded="$(cat "$pidfile" 2>/dev/null)"
         pid_in_list "$recorded" "${OUR_CLIENT_PIDS[@]}" && rm -f "$pidfile"
@@ -379,7 +446,7 @@ echo "🔌 Checking Game Server..."
 if ! lsof -i :1042 > /dev/null; then
     echo "   Starting Game Server (lein run)..."
     # Run lein from the project root
-    (cd "$ROOT_DIR" && nohup lein run > /tmp/game-server.log 2>&1 &)
+    (cd "$ROOT_DIR" && nohup lein run > "$RUN_MATCH_TMP/game-server.log" 2>&1 &)
     
     # Wait for server
     echo "   Waiting for game server to listen on 1042..."
@@ -391,7 +458,7 @@ if ! lsof -i :1042 > /dev/null; then
         fi
         if [ $i -eq $MAX_WAIT_SERVER ]; then
             echo "   ❌ Timeout waiting for game server"
-            echo "   Check /tmp/game-server.log for details"
+            echo "   Check $RUN_MATCH_TMP/game-server.log for details"
             exit 1
         fi
         sleep 1
@@ -468,7 +535,7 @@ register_client_pid() {
     done
     if [ "$found" -ne 1 ]; then
         echo "   ❌ nothing is listening on port $port after starting the $side client"
-        echo "      (see /tmp/ai-client-${side}.log)"
+        echo "      (see $RUN_MATCH_TMP/ai-client-${side}.log)"
         return 1
     fi
 }
@@ -490,14 +557,11 @@ restart_clients() {
     # or none at all — and they ran BEFORE the port inventory, so they were two
     # unguarded kills in front of the guard. They are deleted, not gated: the
     # kill below covers the same ground, from the same list the gate used.
-    local entry port side pid i alive
-    local -a doomed=()
-    for entry in "${CLIENT_SEATS[@]}"; do
-        port="${entry%%:*}"
-        for pid in $(listen_holders "$port"); do
-            doomed+=("$pid")
-            echo "   ⏹  stopping pid $pid on port $port"
-        done
+    local entry port side pid i alive _inherited_jvm_opts
+    _inherited_jvm_opts="${JVM_OPTS:-${JAVA_OPTS:-}}"
+    local -a doomed=(${APPROVED_KILL_PIDS[@]+"${APPROVED_KILL_PIDS[@]}"})
+    for pid in ${doomed[@]+"${doomed[@]}"}; do
+        echo "   ⏹  stopping pid $pid"
     done
     # TERM, a grace window, then -9 — politer than the straight `kill -9` this
     # replaces, and announced above before any of it happens.
@@ -523,36 +587,59 @@ restart_clients() {
     CONSENTED_PIDS=()
 
     # JVM_OPTS carries the owner tag into the client JVM's command line; see
-    # OWNER_TAG. Appended, so an operator's own JVM_OPTS survives.
+    # OWNER_TAG. It starts from ${JVM_OPTS:-$JAVA_OPTS} and not from JVM_OPTS
+    # alone: lein itself does `export JVM_OPTS="${JVM_OPTS:-"$JAVA_OPTS"}"`
+    # (verified at leiningen 2.12.0 libexec/bin/lein:238), so once this script
+    # always sets JVM_OPTS non-empty, an operator with only JAVA_OPTS set would
+    # silently lose it from the client JVMs. An earlier comment here said "an
+    # operator's own JVM_OPTS survives" and covered only the variable I thought
+    # of.
     for entry in "${CLIENT_SEATS[@]}"; do
         port="${entry%%:*}"
         side="${entry##*:}"
-        JVM_OPTS="${JVM_OPTS:+$JVM_OPTS }-Drun-match.owner=$OWNER_TAG" \
+        JVM_OPTS="${_inherited_jvm_opts:+$_inherited_jvm_opts }-Drun-match.owner=$OWNER_TAG" \
             "$DEV_DIR/start-ai-client-repl.sh" "$side" "$port" \
-            > "/tmp/ai-client-${side}.log" 2>&1 &
+            > "$RUN_MATCH_TMP/ai-client-${side}.log" 2>&1 &
     done
 
     # Wait and register PER SEAT. Registering only after BOTH are up would leave
     # a client that started fine outside OUR_CLIENT_PIDS when its peer timed
     # out — so the teardown would walk past it and the next match would refuse
     # this one's own orphan.
+    # Wait for BOTH seats, registering each the moment its own port is up, and
+    # only then decide whether to fail. Two separate reasons, both of them
+    # review findings:
+    #   - Registering after the PAIR is ready leaves a client that started fine
+    #     outside OUR_CLIENT_PIDS when its peer times out, so the teardown walks
+    #     past it and the next match refuses this run's own orphan.
+    #   - Waiting per seat in sequence has the same hole one layer up: the first
+    #     seat's timeout returns before the second is ever examined. The loop
+    #     below is over TIME, not over seats, so whichever one comes up is
+    #     registered whichever one fails.
     echo "   Waiting for clients to listen..."
     MAX_WAIT=60
-    for entry in "${CLIENT_SEATS[@]}"; do
-        port="${entry%%:*}"
-        side="${entry##*:}"
-        for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
+    local -a pending=("${CLIENT_SEATS[@]}") still_pending=()
+    for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
+        still_pending=()
+        for entry in ${pending[@]+"${pending[@]}"}; do
+            port="${entry%%:*}"
+            side="${entry##*:}"
             if [ -n "$(listen_holders "$port")" ]; then
-                break
+                register_client_pid "$port" "$side" || return 1
+            else
+                still_pending+=("$entry")
             fi
-            if [ $wait_i -eq $MAX_WAIT ]; then
-                echo "   ❌ Timeout waiting for the $side client on port $port"
-                return 1
-            fi
-            sleep 1
         done
-        register_client_pid "$port" "$side" || return 1
+        pending=(${still_pending[@]+"${still_pending[@]}"})
+        [ "${#pending[@]}" -eq 0 ] && break
+        sleep 1
     done
+    if [ "${#pending[@]}" -ne 0 ]; then
+        for entry in "${pending[@]}"; do
+            echo "   ❌ Timeout waiting for the ${entry##*:} client on port ${entry%%:*}"
+        done
+        return 1
+    fi
     echo "   ✅ Clients listening on ports!"
     
     # Wait for WebSocket connection
@@ -673,10 +760,10 @@ run_game() {
     # Create Game
     LOBBY_TITLE="Match ${MATCH_ID} R${round}${game_suffix}"
     echo "   Creating lobby: $LOBBY_TITLE ($GATEWAY_TYPE)..."
-    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" "$GATEWAY_TYPE" > /tmp/create-game.log 2>&1
+    "$DEV_DIR/send_command" corp create-game "$LOBBY_TITLE" "Corp" "gateway-beginner-corp" "$GATEWAY_TYPE" > "$RUN_MATCH_TMP/create-game.log" 2>&1
     if [ $? -ne 0 ]; then
         echo "   ❌ Failed to create game. Output:"
-        cat /tmp/create-game.log
+        cat "$RUN_MATCH_TMP/create-game.log"
     fi
     sleep 2
     
@@ -703,7 +790,7 @@ run_game() {
         fi
 
         # Fallback 2: Server Log Scrape
-        SERVER_LOG="/tmp/game-server.log"
+        SERVER_LOG="$RUN_MATCH_TMP/game-server.log"
         if [ -f "$SERVER_LOG" ]; then
             GAME_ID_RAW=$(grep -A 1 "$LOBBY_TITLE" "$SERVER_LOG" | tail -n 1 | grep "gameid:" | sed 's/.*gameid: #uuid "\([^"]*\)".*/\1/')
             if [ -n "$GAME_ID_RAW" ] && [ "$GAME_ID_RAW" != "" ] && [[ "$GAME_ID_RAW" != *"DEBUG"* ]]; then

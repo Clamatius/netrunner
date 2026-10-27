@@ -86,7 +86,7 @@ $hay
 # ---------------------------------------------------------------------------
 make_tree() {
     T="$(mktemp -d "${TMPDIR:-/tmp}/nr-292.XXXXXX")"
-    mkdir -p "$T/dev/orchestrator" "$T/bin" "$T/logs/matches" "$T/state"
+    mkdir -p "$T/dev/orchestrator" "$T/bin" "$T/logs/matches" "$T/state" "$T/tmp"
     cp "$REAL_SCRIPT" "$T/dev/orchestrator/run-match.sh"
     chmod +x "$T/dev/orchestrator/run-match.sh"
 
@@ -217,7 +217,18 @@ case "$expr" in
   *gameid*)
       claim="$(awk -v p="$port" '$1==p {$1=""; sub(/^ /,""); print}' "$S/lobbies")"
       [ "$claim" = "DEAD" ] && exit 1
-      printf '"%s"\n' "${claim:-nil}"
+      # An idle seat has :gameid nil, and the two probe spellings print it
+      # DIFFERENTLY: (str nil) is the empty string, (pr-str nil) is the three
+      # characters n-i-l. Answering "nil" to both is what let the production
+      # code read every idle REPL as unresponsive while this test stayed green.
+      if [ -z "$claim" ] || [ "$claim" = "nil" ]; then
+          case "$expr" in
+              *pr-str*) printf '"nil"\n' ;;
+              *)        printf '""\n' ;;
+          esac
+      else
+          printf '"%s"\n' "$claim"
+      fi
       ;;
   *connected?*) echo "true" ;;
   *) echo "nil" ;;
@@ -272,6 +283,7 @@ run_match() {
         NR292_RACE_PORT="${NR292_RACE_PORT:-}" \
         NR292_SIGNAL_AT="${NR292_SIGNAL_AT:-}" \
         NR292_FAIL_PORT="${NR292_FAIL_PORT:-}" \
+        RUN_MATCH_TMP="$T/tmp" \
         BASH_ENV="$T/killwrap.sh" \
         PATH="$T/bin:$PATH" \
         bash "$T/dev/orchestrator/run-match.sh" "$@" 2>&1)"
@@ -383,8 +395,14 @@ if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
 fi
 HOOK
 run_match
-assert_contains "busy-own-repl-refused"   "$OUT" "is now in a game it did not create"
+assert_contains "busy-own-repl-refused"   "$OUT" "reports that it is seated in a game"
 assert_contains "busy-own-repl-abandons"  "$OUT" "Abandoning the remaining games"
+# The refusal must not be followed by the teardown killing the very REPL it
+# refused to disturb. That was this fix's own worst defect: "Not restarting it",
+# then TERM/-9 from the EXIT trap a moment later — #292's harm, committed by
+# #292's fix, with the log saying the opposite.
+assert_not_contains "busy-own-repl-survives-teardown" "$KILLED" "87890"
+assert_contains     "busy-own-repl-peer-still-stopped" "$KILLED" "87889"
 cleanup
 
 # --- 8. consent is spent. --force covers the pids the operator was SHOWN; a
@@ -477,6 +495,51 @@ assert_contains "half-start-owns-the-corp"   "$KILLED" "87890"
 assert_contains "half-start-tore-down"       "$OUT" "client REPL(s) this match started"
 cleanup
 
+# --- 10f. an idle REPL is idle, not silent. `(str nil)` is the EMPTY STRING,
+# so probing with `str` made every idle seat read as "did not answer" — the
+# wrong half of the distinction that decides a kill, and the one the operator
+# is being asked to judge.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_contains     "idle-foreign-repl-says-no-lobby" "$OUT" "says:  no lobby"
+assert_not_contains "idle-foreign-repl-not-silent"    "$OUT" "says:  did not answer"
+cleanup
+
+# --- 10g. ... and our own idle seats are not announced as wedged every game.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+assert_not_contains "idle-own-repl-not-called-wedged" "$OUT" "treating it as wedged"
+assert_contains     "idle-own-repl-ran-both-games"    "$OUT" "Match Complete"
+cleanup
+
+# --- 10i. the MIRROR of 10e: when the FIRST seat in CLIENT_SEATS is the one
+# that never binds, the other must still be owned. A per-seat wait that returns
+# on the first timeout never looks at the second seat at all.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_FAIL_PORT=7890 run_match
+assert_contains "mirror-half-start-timed-out"     "$OUT" "Timeout waiting for the corp client"
+assert_contains "mirror-half-start-owns-the-peer" "$KILLED" "87889"
+cleanup
+
+# --- 10j. the script's scratch logs go where it is told, not into the live
+# /tmp paths. Before the seam, every run of this test truncated
+# /tmp/game-server.log and both /tmp/ai-client-*.log — the real REPLs' logs,
+# which is where a marquee's disconnect evidence would be.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+run_match
+if [ -s "$T/tmp/ai-client-corp.log" ] || [ -f "$T/tmp/game-server.log" ]; then
+    pass "scratch-logs-land-in-the-fixture"
+else
+    fail "scratch-logs-land-in-the-fixture" "nothing was written under \$T/tmp — the seam is not being used
+$(ls -la "$T/tmp" 2>&1)"
+fi
+cleanup
+
 # --- 11. argument parsing, driven directly (no match needed).
 make_tree
 AP="$(awk '/^parse_match_args\(\) \{/,/^\}/' "$REAL_SCRIPT")"
@@ -518,6 +581,11 @@ assert_contains     "startup-gate-is-called"   "$CODE_ONLY" "preflight_client_po
 # starts a client.
 OUTSIDE="$(printf '%s\n' "$CODE_ONLY" | awk '/^restart_clients\(\) \{/,/^\}/ {next} {print}')"
 assert_not_contains "no-client-start-outside-restart" "$OUTSIDE" "start-ai-client-repl.sh"
+# Every scratch path must go through the seam, or this test starts truncating
+# the live REPLs' logs again.
+assert_not_contains "no-bare-tmp-paths" "$(printf '%s\n' "$CODE_ONLY" | grep -v 'RUN_MATCH_TMP:-')" "/tmp/"
+assert_contains     "probe-uses-pr-str" "$CODE_ONLY" "pr-str (:gameid"
+assert_contains     "probe-caps-the-grace" "$CODE_ONLY" "TIMEOUT_GRACE=0"
 
 echo ""
 if [ "$fails" -eq 0 ]; then
