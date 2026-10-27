@@ -27,6 +27,19 @@ LOG_DIR="$ROOT_DIR/logs/matches"
 # `make test-shell` and 23 times per mutation battery. Default unchanged.
 RUN_MATCH_TMP="${RUN_MATCH_TMP:-/tmp}"
 
+# Where start-ai-client-repl.sh:70-77 writes the client pidfile, and where
+# ai-eval.sh:109 reads it. SEPARATE from RUN_MATCH_TMP, which is this script's
+# own scratch dir: reusing that one meant an operator who set RUN_MATCH_TMP got
+# a teardown that looked for the pidfile somewhere the launcher never wrote it,
+# so the cleanup silently became a no-op and the "(stale PID file)" complaint it
+# exists to prevent came back. This variable mirrors somebody else's path and is
+# overridden only so the test does not delete real pidfiles.
+#
+# Not fixable from here, and stated rather than implied: the launcher also
+# truncates /tmp/ai-client-<side>.log itself (:38), whatever this script
+# redirects its stdout to. That path is the launcher's to move, not ours.
+CLIENT_PIDFILE_DIR="${CLIENT_PIDFILE_DIR:-/tmp}"
+
 # ----------------------------------------------------------------------------
 # #292: this script kills whatever holds the two client REPL ports. Those REPLs
 # are a machine-wide singleton shared by every checkout, and marquee games are
@@ -181,13 +194,23 @@ pid_in_list() {
 # can block on a prompt. Three outcomes, and all three are printed as given.
 client_lobby_claim() {
     local side="$1" port="$2" raw out
-    # pr-str, NOT str. `(str nil)` is the EMPTY STRING, so an idle REPL answered
-    # "" and was reported as "did not answer" — the "no lobby" arm could never
-    # be reached on a real REPL, every idle foreign leftover was described to
-    # the operator as unresponsive at the moment that distinction decides a
-    # kill, and every one of our own idle seats was called wedged, every game.
-    # `(pr-str nil)` is the four characters n-i-l, which is also what the test
-    # fixture used to return unconditionally — so the stub agreed with the bug.
+    # The expression is `(if-let [g …] (str g) "nil")`, and both halves of that
+    # are load-bearing, each one a review finding:
+    #
+    #   - NOT a bare `(str …)`: `(str nil)` is the EMPTY STRING, so an idle REPL
+    #     answered "" and was reported as "did not answer". The "no lobby" arm
+    #     was unreachable on a real REPL — every idle foreign leftover was
+    #     described to the operator as unresponsive at the moment that
+    #     distinction decides a kill, and every one of our own idle seats was
+    #     called wedged, every game.
+    #   - NOT `pr-str` either, which was the first fix. :gameid is normalized to
+    #     a java.util.UUID (ai_state.clj:122-130), so `(pr-str uuid)` is
+    #     `#uuid "b0f6…"`, the nREPL prints it escaped, and the quote-stripping
+    #     below leaves `#uuid \b0f6…\` — an id that cannot be pasted into
+    #     list-game-ids, in the one line that exists to NAME the lobby.
+    #
+    # `(str g)` on the UUID gives the plain id, and the explicit "nil" keeps
+    # idle distinguishable from silent.
     # TIMEOUT_GRACE=0 because ai-eval.sh's backstop is TIMEOUT + TIMEOUT_GRACE
     # (:19, :78 — grace defaults to 15), so a socket that accepts and never
     # answers would hold this for 20s, not the 5 the timeout suggests.
@@ -196,9 +219,22 @@ client_lobby_claim() {
     # answer — i.e. "no lobby", the reassuring one, for a REPL that said
     # nothing. "did not answer" and "no lobby" must not collapse into each
     # other: one of them is used below to decide a kill.
+    # stderr is kept, not discarded, for one reason: ai-eval.sh:108-120 answers
+    # "not running (stale PID file)" and exits 1 when the GLOBAL, cross-checkout
+    # /tmp/ai-client-<side>.pid names a dead pid — which says nothing about the
+    # REPL actually listening on this port, and which it also DELETES (#293).
+    # Folding that into "did not answer" would report a live foreign marquee
+    # seat as silent, so it gets its own answer instead.
     if ! raw="$(TIMEOUT=5 TIMEOUT_GRACE=0 "$DEV_DIR/ai-eval.sh" "$side" "$port" \
-                 '(pr-str (:gameid @ai-state/client-state))' 2>/dev/null)"; then
-        echo "did not answer"
+                 '(if-let [g (:gameid @ai-state/client-state)] (str g) "nil")' 2>&1)"; then
+        case "$raw" in
+            *"stale PID file"*)
+                echo "cannot ask — $(basename "$DEV_DIR")/ai-eval.sh refused on a stale $CLIENT_PIDFILE_DIR pidfile (#293)"
+                ;;
+            *)
+                echo "did not answer"
+                ;;
+        esac
         return 0
     fi
     out="$(printf '%s' "$raw" | tail -1 | tr -d '"' | tr -d '\n')"
@@ -388,14 +424,14 @@ teardown_our_clients() {
         kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
     done
 
-    # start-ai-client-repl.sh:70-77 left /tmp/ai-client-<side>.pid naming the
-    # pids we just killed, and ai-eval.sh reports a dead one as "(stale PID
-    # file)" — a misleading complaint about a cleanup that worked. Remove only
-    # the files whose content is a pid we owned; another REPL's file is not ours
-    # to delete.
+    # start-ai-client-repl.sh:70-77 left the pidfile naming the pids we just
+    # killed, and ai-eval.sh reports a dead one as "(stale PID file)" — a
+    # misleading complaint about a cleanup that worked. Remove only the files
+    # whose content is a pid we owned; another REPL's file is not ours to
+    # delete.
     for entry in "${CLIENT_SEATS[@]}"; do
         side="${entry##*:}"
-        pidfile="$RUN_MATCH_TMP/ai-client-${side}.pid"
+        pidfile="$CLIENT_PIDFILE_DIR/ai-client-${side}.pid"
         [ -f "$pidfile" ] || continue
         recorded="$(cat "$pidfile" 2>/dev/null)"
         pid_in_list "$recorded" "${OUR_CLIENT_PIDS[@]}" && rm -f "$pidfile"
@@ -618,6 +654,7 @@ restart_clients() {
     #     registered whichever one fails.
     echo "   Waiting for clients to listen..."
     MAX_WAIT=60
+    local register_failed=0
     local -a pending=("${CLIENT_SEATS[@]}") still_pending=()
     for ((wait_i=1; wait_i<=MAX_WAIT; wait_i++)); do
         still_pending=()
@@ -625,7 +662,14 @@ restart_clients() {
             port="${entry%%:*}"
             side="${entry##*:}"
             if [ -n "$(listen_holders "$port")" ]; then
-                register_client_pid "$port" "$side" || return 1
+                # A FAILURE here must not return either — that is the third
+                # instance of one shape. A seat that loses a bind race fails
+                # registration, and returning now leaves a peer that was still
+                # starting unregistered: teardown has no pid for it, it binds
+                # afterwards, and the next match refuses this run's orphan.
+                # Record the failure, let the other seats finish arriving so
+                # they can be owned and torn down, and fail at the end.
+                register_client_pid "$port" "$side" || register_failed=1
             else
                 still_pending+=("$entry")
             fi
@@ -634,6 +678,11 @@ restart_clients() {
         [ "${#pending[@]}" -eq 0 ] && break
         sleep 1
     done
+    if [ "$register_failed" -ne 0 ]; then
+        echo "   ❌ A client port was taken by something this match did not start."
+        echo "      Stopping, with the seats this match did own torn down."
+        return 1
+    fi
     if [ "${#pending[@]}" -ne 0 ]; then
         for entry in "${pending[@]}"; do
             echo "   ❌ Timeout waiting for the ${entry##*:} client on port ${entry%%:*}"

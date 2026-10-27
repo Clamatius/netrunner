@@ -212,6 +212,13 @@ LAUNCH
 #!/usr/bin/env bash
 S="$NR292_STATE"
 side="$1"; port="$2"; expr="$3"
+# ai-eval.sh:108-120 refuses, exits 1 and DELETES the pidfile when the global
+# /tmp/ai-client-<side>.pid names a dead pid — whatever is actually listening on
+# the port (#293). NR292_STALE_PIDFILE makes the stub answer that way.
+if [ -n "${NR292_STALE_PIDFILE:-}" ] && [ "$NR292_STALE_PIDFILE" = "$side" ]; then
+    echo "❌ AI Client REPL '$side' not running (stale PID file)"
+    exit 1
+fi
 case "$expr" in
   *lobby-list*)  echo '"fixture-game-id"' ;;
   *gameid*)
@@ -243,12 +250,24 @@ case "$expr" in
       # characters n-i-l. Answering "nil" to both is what let the production
       # code read every idle REPL as unresponsive while this test stayed green.
       if [ -z "$claim" ] || [ "$claim" = "nil" ]; then
+          # The three probe spellings print an absent :gameid DIFFERENTLY, and
+          # the production code has worn all three. (str nil) is the empty
+          # string; (pr-str nil) is n-i-l; the if-let form answers the literal
+          # "nil". Answering "nil" to all of them is what let two different
+          # production bugs ship green.
           case "$expr" in
+              *if-let*) printf '"nil"\n' ;;
               *pr-str*) printf '"nil"\n' ;;
               *)        printf '""\n' ;;
           esac
       else
-          printf '"%s"\n' "$claim"
+          case "$expr" in
+              # :gameid is a java.util.UUID, so pr-str renders it as
+              # #uuid "…" with escaped quotes — the thing that made the
+              # refusal print an id nobody can paste anywhere.
+              *pr-str*) printf '"#uuid \\"%s\\""\n' "$claim" ;;
+              *)        printf '"%s"\n' "$claim" ;;
+          esac
       fi
       ;;
   *connected?*) echo "true" ;;
@@ -296,6 +315,14 @@ LEIN
     chmod +x "$T/bin/"* "$T/dev/"*.sh "$T/dev/send_command" "$T/dev/orchestrator/extract-results.sh"
 }
 
+# NOTE on a coupling two cases depend on (10k and 10l): both hang off the
+# per-port PROBE COUNT in the ai-eval stub, because the lobby probe is the only
+# thing the gate calls that a stub can observe from inside. If the production
+# code ever probes a different number of times per holder per pass, those two
+# cases stop testing what their names say and nothing announces it. Asserting
+# the cadence would freeze an implementation detail, so this is a known limit
+# written down rather than guarded.
+#
 # run_match ARGS... — run the whole script in the fixture and capture it.
 run_match() {
     OUT="$(cd "$T" && \
@@ -306,8 +333,10 @@ run_match() {
         NR292_FAIL_PORT="${NR292_FAIL_PORT:-}" \
         NR292_INJECT_AFTER_PROBE="${NR292_INJECT_AFTER_PROBE:-}" \
         NR292_CLAIM_FLIP="${NR292_CLAIM_FLIP:-}" \
+        NR292_STALE_PIDFILE="${NR292_STALE_PIDFILE:-}" \
         JAVA_OPTS="${NR292_JAVA_OPTS:-}" \
         RUN_MATCH_TMP="$T/tmp" \
+        CLIENT_PIDFILE_DIR="$T/tmp" \
         BASH_ENV="$T/killwrap.sh" \
         PATH="$T/bin:$PATH" \
         bash "$T/dev/orchestrator/run-match.sh" "$@" 2>&1)"
@@ -348,6 +377,12 @@ assert_contains "foreign-refusal-names-port" "$OUT" "port 7890 (corp seat): pid 
 assert_contains "foreign-refusal-shows-cwd"  "$OUT" "cwd:"
 assert_contains "foreign-refusal-shows-age"  "$OUT" "up:    19:24:43"
 assert_contains "foreign-refusal-offers-force" "$OUT" "--force"
+# The suggested re-run must echo back what the operator TYPED. CONFIG_FILE is
+# always set (parse_match_args defaults it), so using it here put a path they
+# never typed into the suggestion — and the fix for that shipped with nothing
+# asserting it.
+assert_contains     "force-hint-is-bare-when-no-path-given" "$OUT" "run-match.sh --force"
+assert_not_contains "force-hint-invents-no-path"            "$OUT" "--force /"
 assert_eq       "foreign-refusal-killed-nothing" "$KILLED" ""
 assert_eq       "foreign-refusal-launched-nothing" "$LAUNCHED" ""
 cleanup
@@ -365,6 +400,14 @@ assert_before   "force-inventory-precedes-the-kill" "$OUT" \
                 "Client ports are held" "FIXTURE-KILL -TERM 4242"
 assert_before   "force-inventory-precedes-consent" "$OUT" \
                 "pid 4242" "--force given"
+cleanup
+
+# --- 3b. ... and when a path WAS given, the hint repeats that path.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+run_match "$T/dev/orchestrator/match-config.json"
+assert_contains "force-hint-repeats-the-given-path" "$OUT" "--force $T/dev/orchestrator/match-config.json"
 cleanup
 
 # --- 4. the self-recovery path: our own clients, restarted between games,
@@ -608,6 +651,42 @@ assert_contains "java_opts-reaches-the-client" "$LAUNCHED" "-Xmx4g"
 assert_contains "owner-tag-still-there"        "$LAUNCHED" "-Drun-match.owner=run-match-"
 cleanup
 
+# --- 10n. the lobby id in the refusal has to be an id the operator can USE.
+# :gameid is a java.util.UUID, so pr-str renders it #uuid "…" with escaped
+# quotes and the quote-stripping leaves `#uuid \…\` — unpasteable, in the one
+# line #292 asked to name the lobby in.
+make_tree
+listener 7890 4242
+lobby 7890 b0f6aa11-2222-3333-4444-555566667777; lobby 7889 nil
+run_match
+assert_contains     "lobby-id-is-pasteable"  "$OUT" "says:  in lobby b0f6aa11-2222-3333-4444-555566667777"
+assert_not_contains "lobby-id-not-pr-str"    "$OUT" "#uuid"
+cleanup
+
+# --- 10o. ai-eval refusing on a STALE GLOBAL pidfile is not the REPL being
+# silent. The pidfile is cross-checkout (#293) and names a pid that may have
+# nothing to do with whatever holds this port, so laundering that refusal into
+# "did not answer" would describe a live marquee seat as unresponsive.
+make_tree
+listener 7890 4242
+lobby 7890 nil; lobby 7889 nil
+NR292_STALE_PIDFILE=corp run_match
+assert_contains     "stale-pidfile-is-its-own-state" "$OUT" "stale"
+assert_not_contains "stale-pidfile-is-not-silence"   "$OUT" "says:  did not answer"
+assert_contains     "stale-pidfile-names-the-issue"  "$OUT" "#293"
+cleanup
+
+# --- 10p. a registration FAILURE must not abandon the peers either. A seat that
+# loses a bind race fails registration; returning there leaves a peer that was
+# still starting unowned, so it binds afterwards as an orphan the next match
+# refuses. (Third instance of this shape: the timeout path was 10e/10i.)
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_RACE_PORT=7890 run_match
+assert_contains     "race-failure-still-owns-the-peer" "$KILLED" "87889"
+assert_not_contains "race-failure-spared-the-stranger" "$KILLED" "97890"
+cleanup
+
 # --- 11. argument parsing, driven directly (no match needed).
 make_tree
 AP="$(awk '/^parse_match_args\(\) \{/,/^\}/' "$REAL_SCRIPT")"
@@ -659,7 +738,11 @@ assert_not_contains "no-client-start-outside-restart" "$OUTSIDE" "start-ai-clien
 # Every scratch path must go through the seam, or this test starts truncating
 # the live REPLs' logs again.
 assert_not_contains "no-bare-tmp-paths" "$(printf '%s\n' "$CODE_ONLY" | grep -v 'RUN_MATCH_TMP:-')" "/tmp/"
-assert_contains     "probe-uses-pr-str" "$CODE_ONLY" "pr-str (:gameid"
+# The probe must use neither a bare `str` (an idle REPL answers "" and reads as
+# silent) nor `pr-str` (a UUID renders as #uuid "…" and the id becomes
+# unpasteable). Both have shipped here; the assertion names both.
+assert_contains     "probe-uses-if-let"   "$CODE_ONLY" 'if-let [g (:gameid'
+assert_not_contains "probe-avoids-pr-str" "$CODE_ONLY" "pr-str (:gameid"
 assert_contains     "probe-caps-the-grace" "$CODE_ONLY" "TIMEOUT_GRACE=0"
 
 echo ""
