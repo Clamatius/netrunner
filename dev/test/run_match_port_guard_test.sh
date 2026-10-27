@@ -851,7 +851,14 @@ assert_contains "gate-handles-did-not-answer" "$GATE_FN2" '"did not answer")'
 assert_contains "gate-handles-in-lobby"       "$GATE_FN2" '"in lobby "*)'
 # The probe's stderr stays discarded: the stale-pidfile answer is on stdout
 # (ai-eval.sh:117), so 2>&1 bought nothing and merged stderr into the value.
-assert_not_contains "probe-does-not-merge-stderr" "$CODE_ONLY" "(str g)] \"nil\")' 2>&1"
+# The pattern below was wrong on its first writing — it said `(str g)]` where
+# the code says `(str g) "nil")`, so it could never match and the assertion was
+# vacuously true. A mutation test caught it: putting `2>&1` back survived.
+# An absence assertion that cannot match anything tests nothing.
+assert_not_contains "probe-does-not-merge-stderr" "$CODE_ONLY" "(str g) \"nil\")' 2>&1"
+# ... and the positive half, so the pattern above is anchored to text that
+# really is in the file:
+assert_contains     "probe-discards-stderr"       "$CODE_ONLY" "(str g) \"nil\")' 2>/dev/null"
 
 echo ""
 if [ "$fails" -eq 0 ]; then
