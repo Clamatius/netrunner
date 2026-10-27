@@ -223,9 +223,15 @@ case "$expr" in
       # gate, between its inventory and the kill that follows.
       n=$(( $(cat "$S/probes.$port" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$S/probes.$port"
-      if [ -n "${NR292_INJECT_AFTER_PROBE:-}" ] && [ "$n" -eq 1 ]; then
-          # A newcomer takes a port after the gate has already looked.
-          echo "7889 7777" >> "$S/ports"
+      if [ "${NR292_INJECT_AFTER_PROBE:-}" = "$port" ] && [ "$n" -eq 1 ]; then
+          # A newcomer takes a port the gate has ALREADY inventoried. The
+          # trigger port must be the LAST seat in CLIENT_SEATS and the injected
+          # port an EARLIER one, or the gate's own loop still reaches it and the
+          # case passes for the wrong reason — which is how the first version of
+          # this case let the mutant live: injecting while the gate still had a
+          # seat to go simply made the gate refuse, so no kill happened at all,
+          # with the fix or without it.
+          echo "7890 7777" >> "$S/ports"
           echo "7777 /usr/bin/java -classpath /newcomer nrepl.cmdline" >> "$S/procs"
       fi
       if [ -n "${NR292_CLAIM_FLIP:-}" ] && [ "$n" -gt 1 ]; then
@@ -565,9 +571,12 @@ cleanup
 # INSIDE the gate, so it lands in exactly that window.
 make_tree
 lobby 7890 nil; lobby 7889 nil
-NR292_INJECT_AFTER_PROBE=1 run_match
+NR292_INJECT_AFTER_PROBE=7889 run_match
 assert_not_contains "newcomer-after-the-gate-is-not-killed" "$KILLED" "7777"
 assert_contains     "own-seats-still-stopped"               "$KILLED" "87890"
+# And because it was not killed, it is still holding 7890 when the launch tries
+# to register that seat — so the match stops rather than adopting a stranger.
+assert_contains     "newcomer-stops-the-match"              "$OUT" "does not carry this match's"
 cleanup
 
 # --- 10l. a refusal must not argue with itself. The message is triggered by a
