@@ -217,6 +217,21 @@ case "$expr" in
   *gameid*)
       claim="$(awk -v p="$port" '$1==p {$1=""; sub(/^ /,""); print}' "$S/lobbies")"
       [ "$claim" = "DEAD" ] && exit 1
+      # Count the probes per port. Two triggers hang off this, because the
+      # lobby probe is the only thing the gate calls that a stub can see — so
+      # it is the only place a test can change the world at a point INSIDE the
+      # gate, between its inventory and the kill that follows.
+      n=$(( $(cat "$S/probes.$port" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$S/probes.$port"
+      if [ -n "${NR292_INJECT_AFTER_PROBE:-}" ] && [ "$n" -eq 1 ]; then
+          # A newcomer takes a port after the gate has already looked.
+          echo "7889 7777" >> "$S/ports"
+          echo "7777 /usr/bin/java -classpath /newcomer nrepl.cmdline" >> "$S/procs"
+      fi
+      if [ -n "${NR292_CLAIM_FLIP:-}" ] && [ "$n" -gt 1 ]; then
+          # The seat has left its lobby by the time anyone asks again.
+          claim=""
+      fi
       # An idle seat has :gameid nil, and the two probe spellings print it
       # DIFFERENTLY: (str nil) is the empty string, (pr-str nil) is the three
       # characters n-i-l. Answering "nil" to both is what let the production
@@ -283,6 +298,9 @@ run_match() {
         NR292_RACE_PORT="${NR292_RACE_PORT:-}" \
         NR292_SIGNAL_AT="${NR292_SIGNAL_AT:-}" \
         NR292_FAIL_PORT="${NR292_FAIL_PORT:-}" \
+        NR292_INJECT_AFTER_PROBE="${NR292_INJECT_AFTER_PROBE:-}" \
+        NR292_CLAIM_FLIP="${NR292_CLAIM_FLIP:-}" \
+        JAVA_OPTS="${NR292_JAVA_OPTS:-}" \
         RUN_MATCH_TMP="$T/tmp" \
         BASH_ENV="$T/killwrap.sh" \
         PATH="$T/bin:$PATH" \
@@ -540,6 +558,47 @@ $(ls -la "$T/tmp" 2>&1)"
 fi
 cleanup
 
+# --- 10k. the kill acts on the set the GATE approved, not on a second look.
+# A process that takes a client port after the gate has inspected it has not
+# been gated, so it must not be killed — in the one code path whose purpose is
+# to gate that kill. The newcomer is injected by the lobby probe, which runs
+# INSIDE the gate, so it lands in exactly that window.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_INJECT_AFTER_PROBE=1 run_match
+assert_not_contains "newcomer-after-the-gate-is-not-killed" "$KILLED" "7777"
+assert_contains     "own-seats-still-stopped"               "$KILLED" "87890"
+cleanup
+
+# --- 10l. a refusal must not argue with itself. The message is triggered by a
+# claim the gate captured; printing a FRESH probe underneath it meant a REPL
+# that left its lobby in between produced "reports that it is seated in a game"
+# followed by "says: no lobby", at the moment the operator most needs to trust
+# what they are reading.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+cat >> "$T/dev/send_command" <<'HOOK'
+if [ "$2" = "leave-game" ] && [ "$1" = "corp" ]; then
+    printf '7890 abc-123\n7889 nil\n' > "$NR292_STATE/lobbies"
+    rm -f "$NR292_STATE/probes.7890"
+fi
+HOOK
+NR292_CLAIM_FLIP=1 run_match
+assert_contains     "refusal-quotes-the-claim-it-acted-on" "$OUT" "says:  in lobby abc-123"
+assert_not_contains "refusal-does-not-contradict-itself"   "$OUT" "says:  no lobby
+        cmd"
+cleanup
+
+# --- 10m. an operator's JAVA_OPTS reaches the client JVMs. lein only falls back
+# to JAVA_OPTS when JVM_OPTS is EMPTY (leiningen 2.12.0 libexec/bin/lein:238),
+# so a script that always sets JVM_OPTS has to carry the fallback itself.
+make_tree
+lobby 7890 nil; lobby 7889 nil
+NR292_JAVA_OPTS="-Xmx4g" run_match
+assert_contains "java_opts-reaches-the-client" "$LAUNCHED" "-Xmx4g"
+assert_contains "owner-tag-still-there"        "$LAUNCHED" "-Drun-match.owner=run-match-"
+cleanup
+
 # --- 11. argument parsing, driven directly (no match needed).
 make_tree
 AP="$(awk '/^parse_match_args\(\) \{/,/^\}/' "$REAL_SCRIPT")"
@@ -572,6 +631,13 @@ RESTART_FN="$(printf '%s\n' "$CODE_ONLY" | awk '/^restart_clients\(\) \{/,/^\}/'
 assert_not_contains "restart-no-pidfile-kill"  "$RESTART_FN" "stop-ai-client.sh"
 assert_not_contains "restart-no-literal-loop"  "$RESTART_FN" "7890 7889"
 assert_contains     "restart-iterates-one-list" "$RESTART_FN" 'CLIENT_SEATS[@]'
+# The gate now owns the list the kill trusts, so the drift guard has to cover
+# it too: a literal loop restored HERE puts the two back out of step, and the
+# restart_clients-only assertions could not see it.
+GATE_FN="$(printf '%s\n' "$CODE_ONLY" | awk '/^preflight_client_ports\(\) \{/,/^\}/')"
+assert_contains     "gate-iterates-one-list"  "$GATE_FN" 'CLIENT_SEATS[@]'
+assert_not_contains "gate-no-literal-ports"   "$GATE_FN" "7890"
+assert_not_contains "gate-no-literal-ports-2" "$GATE_FN" "7889"
 assert_before       "restart-gates-before-killing" "$RESTART_FN" \
                     "preflight_client_ports restart" "kill "
 assert_contains     "trap-is-armed"            "$CODE_ONLY" "trap teardown_our_clients EXIT"
