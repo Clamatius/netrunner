@@ -564,12 +564,42 @@
                   ;; The break ability fired but spawned a sub-prompt that must be
                   ;; resolved first — most commonly "pay from which credit source?"
                   ;; when some credits are hosted on a card (e.g. Overclock). This is
-                  ;; NOT a failure: return nil so the monitor loop auto-resolves the
-                  ;; prompt and the break completes. Crucially, do NOT burn an
-                  ;; unaffordable-retry on it (use-ability! already printed the
-                  ;; "⏳ Ability triggered prompt" line).
+                  ;; NOT a failure, so do NOT burn an unaffordable-retry on it
+                  ;; (use-ability! already printed the "⏳ Ability triggered prompt").
+                  ;;
+                  ;; END THE TICK (#295). This used to return nil, meaning to leave
+                  ;; the prompt to the monitor loop. But nil in
+                  ;; run-first-matching-handler means "not mine, try the next
+                  ;; handler, THIS tick", so the chain carried the pre-ability
+                  ;; snapshot on to handle-auto-continue, whose can-auto-continue?
+                  ;; read the stale empty "run" prompt — type "run", no choices,
+                  ;; nothing selectable, every condition still true — and passed
+                  ;; priority over our OWN open select. send-continue! does read
+                  ;; live state, but it guards only a waiting prompt (#75) and our
+                  ;; own recorded pass (#98); a select prompt is neither. Marquee
+                  ;; A1: Whitespace's subs fired while Unity's payment was still
+                  ;; unresolved, costing 3c and the run.
+                  ;;
+                  ;; :prompt-handled is the status monitor-run already has for
+                  ;; exactly this — sleep quick-delay and recur on the OLD state
+                  ;; history, so it is progress that cannot trip stuck detection
+                  ;; (ai-runs/monitor-run, the :prompt-handled branch). The next
+                  ;; tick's snapshot holds the live prompt, and
+                  ;; handle-auto-select-single-card — which PRECEDES this handler in
+                  ;; the chain — resolves a lone credit source. With several, this
+                  ;; handler's own has-real-decision? guard declines to re-fire the
+                  ;; ability and handle-real-decision pauses for the player.
+                  ;;
+                  ;; Deliberately NOT a new status: monitor-run treats an
+                  ;; unrecognised one as terminal and would stop the run.
                   :waiting-input
-                  nil
+                  {:status :prompt-handled
+                   :wake-reason :break-payment-prompt
+                   :action :awaiting-break-payment
+                   :message (format "%s's break opened a payment prompt - resolving it before any continue"
+                                    card-name)
+                   :ice ice-title
+                   :breaker card-name}
 
                   ;; Genuine failure (:error) - increment failure count and return
                   ;; nil to retry. After max-retries, falls through to let-subs-fire.

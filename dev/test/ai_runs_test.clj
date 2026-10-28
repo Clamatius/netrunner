@@ -787,18 +787,96 @@
 (deftest test-full-break-waiting-input-is-not-an-unaffordable-failure
   (testing "When the break ability spawns a credit-source sub-prompt (e.g. paying
             from credits hosted on Overclock), use-ability! returns :waiting-input.
-            That is NOT an unaffordable failure: the handler must return nil so the
-            monitor loop resolves the prompt, WITHOUT burning a retry on the
-            unaffordable counter or printing the misleading '❌ Ability failed'.
+            That is NOT an unaffordable failure: the handler must not burn a retry
+            on the unaffordable counter or print the misleading '❌ Ability failed'.
             Regression: the old binary success/else check mislabelled the pay-prompt
-            as a failed, possibly-unaffordable break."
+            as a failed, possibly-unaffordable break.
+
+            This test asserted `(nil? result)` from the day of that fix until #295,
+            with the docstring claiming nil was what 'lets the monitor loop resolve
+            the prompt'. The retry-counter half was right and is kept verbatim. The
+            nil was the defect itself: it let the SAME tick fall through to
+            handle-auto-continue and pass priority over the open prompt. The suite
+            rested on the bug for four months because this test drives the handler
+            alone, with :my-prompt nil, so the chain the harm lives in was never
+            exercised here. See
+            test-full-break-pay-prompt-does-not-let-the-same-tick-send-continue,
+            which drives continue-run! instead."
     (runner-handlers/reset-state!)
     (with-redefs [card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
       (let [result (runner-handlers/handle-runner-full-break (full-break-args))]
-        (is (nil? result)
-            "waiting-input lets the loop resolve the prompt -> returns nil")
+        (is (= :prompt-handled (:status result))
+            "waiting-input ENDS the tick with a status the loop re-ticks on (#295)")
         (is (empty? @runner-handlers/failed-ability-attempts)
             "waiting-input must NOT increment the unaffordable retry counter")))))
+
+(deftest test-full-break-pay-prompt-does-not-let-the-same-tick-send-continue
+  (testing "#295: when the break ability opens a payment prompt, the SAME
+            continue-run! tick must not go on to pass priority over it.
+
+            handle-runner-full-break used to return nil here. In
+            run-first-matching-handler nil means 'not mine, try the next handler,
+            THIS tick' - so the chain carried the PRE-ability snapshot on to
+            handle-auto-continue, whose can-auto-continue? read the stale empty
+            'run' prompt (type run, no choices, nothing selectable - every
+            condition still true) and sent a continue over the open select.
+            send-continue! does read live state but guards only a waiting prompt
+            (#75) and our own recorded pass (#98); a select prompt is neither.
+            In marquee game A1 that cost the Runner 3c and the run - Whitespace's
+            subs fired while Unity's payment was still unresolved.
+
+            Driven through continue-run!, not the handler alone: the harm is in
+            the CHAIN, which is why the isolated handler test above could assert
+            the nil return and stay green through the whole defect."
+    (let [sent (atom [])
+          ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}
+          ;; The empty paid-ability-window prompt the Runner holds at an
+          ;; encounter. This is what can-auto-continue? accepts, and it is what
+          ;; the stale snapshot still carries after the ability opened a select.
+          run-prompt {:prompt-type "run" :choices [] :selectable []}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-mock-state
+        (mock-client-state
+         :side "runner"
+         :game-state {:active-player "runner"
+                      :turn 4
+                      :log []
+                      :run {:position 1 :server ["rd"] :phase "encounter-ice"
+                            :no-action false}
+                      :runner {:credit 6 :click 2 :hand []
+                               :rig {:program [program]}
+                               :prompt-state run-prompt}
+                      :corp {:credit 8 :click 3 :hand []
+                             :servers {:rd {:ices [ice]}}
+                             :prompt-state nil}})
+        (try
+          (runs/set-strategy! {:full-break true})
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        ;; The engine answered the break with a credit-source
+                        ;; select prompt; :waiting-input is use-ability!'s report
+                        ;; of exactly that.
+                        card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
+            (let [result (runs/continue-run!)]
+              (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "no continue may be sent while our own payment prompt is "
+                       "open - the whole of #295. Sent: " (pr-str @sent)))
+              (is (some? result)
+                  "the tick must END at full-break, not fall on through the chain")
+              (is (= :prompt-handled (:status result))
+                  (str "the status monitor-run already reads as 'a prompt moved, "
+                       "take a fresh tick, do not count it as run progress'. Got: "
+                       (pr-str result)))
+              (is (not (#'runs/terminal-status? (:status result)))
+                  "a terminal status would stop the loop instead of taking the fresh tick that resolves the prompt")))
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
