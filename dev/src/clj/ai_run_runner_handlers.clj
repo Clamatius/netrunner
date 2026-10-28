@@ -584,11 +584,24 @@
                   ;; exactly this — sleep quick-delay and recur on the OLD state
                   ;; history, so it is progress that cannot trip stuck detection
                   ;; (ai-runs/monitor-run, the :prompt-handled branch). The next
-                  ;; tick's snapshot holds the live prompt, and
-                  ;; handle-auto-select-single-card — which PRECEDES this handler in
-                  ;; the chain — resolves a lone credit source. With several, this
-                  ;; handler's own has-real-decision? guard declines to re-fire the
-                  ;; ability and handle-real-decision pauses for the player.
+                  ;; tick's snapshot holds the live prompt.
+                  ;;
+                  ;; That next tick is covered for the two prompt shapes a credit
+                  ;; source actually takes, and NOT for a third (#296):
+                  ;;   - ONE selectable: handle-auto-select-single-card resolves it,
+                  ;;     and it PRECEDES this handler in the chain.
+                  ;;   - 2+ non-trivial choices, or any selectable: has-real-decision?
+                  ;;     is true, this handler's own entry guard declines rather than
+                  ;;     re-firing, and handle-real-decision pauses for the player.
+                  ;;   - NO selectable and at most ONE non-trivial choice: neither
+                  ;;     holds, so this handler is re-entered and fires the ability
+                  ;;     AGAIN over the still-open prompt. :waiting-input is not
+                  ;;     payment-specific — use-ability! returns it for any prompt the
+                  ;;     ability opens (new-prompt? is eid-based, ai-core/new-prompt?),
+                  ;;     e.g. a "choose a target". handle-auto-choice would resolve a
+                  ;;     lone-choice prompt but sits AFTER this handler. Tracked as
+                  ;;     #296: the fix is widening this handler's entry guard, which
+                  ;;     risks disabling the main break path, so it is its own change.
                   ;;
                   ;; Deliberately NOT a new status: monitor-run treats an
                   ;; unrecognised one as terminal and would stop the run.
@@ -596,7 +609,13 @@
                   {:status :prompt-handled
                    :wake-reason :break-payment-prompt
                    :action :awaiting-break-payment
-                   :message (format "%s's break opened a payment prompt - resolving it before any continue"
+                   ;; Says only what is true in every case this branch covers:
+                   ;; the prompt may not be a payment (any ability prompt lands
+                   ;; here), and nothing here resolves it — under `continue
+                   ;; --single` this call is the whole step and the seat resolves
+                   ;; it themselves. Claiming either was the "message lies about
+                   ;; what happened" class.
+                   :message (format "%s's break opened a prompt - it must be resolved before any continue"
                                     card-name)
                    :ice ice-title
                    :breaker card-name}

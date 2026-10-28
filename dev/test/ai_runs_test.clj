@@ -877,6 +877,75 @@
           (finally
             (runs/reset-strategy!)
             (runner-handlers/reset-state!)))))))
+(deftest test-full-break-pay-prompt-is-resolved-on-the-next-tick
+  (testing "#295, the tick AFTER the one above: the live payment prompt is now in
+            the snapshot, and the chain must RESOLVE it rather than send a
+            continue or re-fire the break.
+
+            This is the second half sol5 asked for on the forum, and it is the
+            half that pins the premise the fix rests on:
+            handle-auto-select-single-card PRECEDES handle-runner-full-break in
+            continue-run!'s chain, so a lone credit source is selected before the
+            break handler can be re-entered. Deleting auto-select from the chain
+            entirely left the whole 1300-test suite green until this test existed
+            (mutation N5), so nothing else holds that ordering.
+
+            use-ability! is stubbed to THROW here: on this tick the break must not
+            be fired again at all, and a stub that merely records would let a
+            re-fire pass as long as nothing was sent to the wire."
+    (let [sent (atom [])
+          selected (atom [])
+          ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          overclock {:cid "oc1" :title "Overclock"}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}
+          ;; What the engine actually left us after the break: the credit-source
+          ;; select, with Overclock as the ONE alternative pool.
+          pay-prompt {:prompt-type "select" :eid "e42" :choices []
+                      :selectable [overclock]}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-mock-state
+        (mock-client-state
+         :side "runner"
+         :game-state {:active-player "runner"
+                      :turn 4
+                      :log []
+                      :run {:position 1 :server ["rd"] :phase "encounter-ice"
+                            :no-action false}
+                      :runner {:credit 6 :click 2 :hand []
+                               :rig {:program [program]}
+                               :prompt-state pay-prompt}
+                      :corp {:credit 8 :click 3 :hand []
+                             :servers {:rd {:ices [ice]}}
+                             :prompt-state nil}})
+        (try
+          (runs/set-strategy! {:full-break true})
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        ws/select-card! (fn [card eid] (swap! selected conj [card eid]) true)
+                        card-actions/use-ability!
+                        (fn [& _]
+                          (throw (ex-info "the break was re-fired over an open prompt" {})))]
+            (let [result (runs/continue-run!)]
+              (is (= 1 (count @selected))
+                  (str "the lone credit source must be selected. Selected: "
+                       (pr-str @selected)))
+              (is (= "Overclock" (:title (ffirst @selected)))
+                  "and it must be the card the engine offered")
+              (is (= "e42" (second (first @selected)))
+                  "carrying the prompt's own :eid, so it answers THIS prompt")
+              (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "still no continue while the prompt is open. Sent: "
+                       (pr-str @sent)))
+              (is (= :prompt-handled (:status result))
+                  (str "and the loop re-ticks to finish the break. Got: "
+                       (pr-str result)))))
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
