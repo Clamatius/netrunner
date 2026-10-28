@@ -897,15 +897,30 @@
           selected (atom [])
           ice {:title "Whitespace" :rezzed true
                :subroutines [{:broken false :fired false}]}
-          overclock {:cid "oc1" :title "Overclock"}
+          overclock {:cid "oc1" :title "Overclock" :type "Resource"}
           program {:title "Unity"
                    :abilities [{:dynamic :auto-pump-and-break
                                 :label "Match strength and fully break Whitespace"
                                 :cost-label "3 [Credits]"}]}
           ;; What the engine actually left us after the break: the credit-source
           ;; select, with Overclock as the ONE alternative pool.
-          pay-prompt {:prompt-type "select" :eid "e42" :choices []
-                      :selectable [overclock]}]
+          ;;
+          ;; :selectable holds a CID STRING, not a card map. The engine builds it
+          ;; with `(map :cid valid)` (game.core.prompts/compute-selectable, and
+          ;; `(map #(->> % :value :cid) choices)` in update-selectable), and
+          ;; game.core.diffs passes the key straight through. A card map here
+          ;; drove the `(string? cid-or-card)` false arm of
+          ;; handle-auto-select-single-card and never reached
+          ;; ai-core/find-card-by-cid — so the production resolution path this
+          ;; test exists to cover was not exercised at all (r2 F3; the project's
+          ;; standing "wire fixtures round-trip through JSON" trap).
+          ;;
+          ;; :choices carries the select's own Done, which show-select sends
+          ;; (prompts.clj). has-real-decision? strips it as trivial and is true
+          ;; anyway on the non-empty :selectable.
+          pay-prompt {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable ["oc1"]}]
       (runs/reset-strategy!)
       (runner-handlers/reset-state!)
       (with-mock-state
@@ -917,7 +932,12 @@
                       :run {:position 1 :server ["rd"] :phase "encounter-ice"
                             :no-action false}
                       :runner {:credit 6 :click 2 :hand []
-                               :rig {:program [program]}
+                               ;; Overclock is in the tree so the real
+                               ;; find-card-by-cid resolves "oc1" to it. That
+                               ;; function walks the whole game state, so the zone
+                               ;; is not what this test pins — only that a cid
+                               ;; STRING resolves to a titled card.
+                               :rig {:program [program] :resource [overclock]}
                                :prompt-state pay-prompt}
                       :corp {:credit 8 :click 3 :hand []
                              :servers {:rd {:ices [ice]}}
@@ -943,6 +963,53 @@
               (is (= :prompt-handled (:status result))
                   (str "and the loop re-ticks to finish the break. Got: "
                        (pr-str result)))))
+          ;; r2 F1: the weakened wording lived only in source, so restoring the
+          ;; old "opened a payment prompt - resolving it before any continue"
+          ;; left the whole suite green. Pin the two claims it must NOT make.
+          ;; Asserted on the FIRST tick's result, which is where the message is
+          ;; built, via a second drive of the same fixture.
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
+
+(deftest test-full-break-pay-prompt-message-claims-neither-payment-nor-resolution
+  (testing "#295 r2 F1/F2: the result the seat is shown must not claim the prompt
+            is a PAYMENT prompt, nor that anything here RESOLVES it. :waiting-input
+            is returned for any prompt the ability opens, and under
+            `continue --single` this call is the whole step, so the seat resolves
+            it. The message, the :action and the :wake-reason are all shown or read
+            downstream, so all three are pinned here - correcting only the message
+            left :awaiting-break-payment asserting what the message had stopped
+            claiming."
+    (let [ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-redefs [card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
+        (try
+          (let [r (runner-handlers/handle-runner-full-break
+                   {:side "runner" :run-phase "encounter-ice"
+                    :state {:game-state
+                            {:run {:position 1 :server ["rd"]}
+                             :corp {:servers {:rd {:ices [ice]}}}
+                             :runner {:rig {:program [program]} :credit 6}}}
+                    :strategy {:full-break true} :gameid "g" :my-prompt nil})
+                msg (str (:message r))
+                whole (pr-str r)]
+            (is (= :prompt-handled (:status r)) "precondition: this is the arm under test")
+            (doseq [banned ["payment" "Payment"]]
+              (is (not (clojure.string/includes? whole banned))
+                  (str "the result must not call the prompt a " banned
+                       " one - it is any ability prompt. Whole result: " whole)))
+            (doseq [banned ["resolving it" "Resolving it"]]
+              (is (not (clojure.string/includes? msg banned))
+                  (str "the message must not claim anything here resolves it. Got: " msg)))
+            (is (clojure.string/includes? msg "must be resolved")
+                (str "it must still say the prompt blocks a continue. Got: " msg)))
           (finally
             (runs/reset-strategy!)
             (runner-handlers/reset-state!)))))))

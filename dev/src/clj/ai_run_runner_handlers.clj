@@ -595,20 +595,35 @@
                   ;;     re-firing, and handle-real-decision pauses for the player.
                   ;;   - NO selectable and at most ONE non-trivial choice: neither
                   ;;     holds, so this handler is re-entered and fires the ability
-                  ;;     AGAIN over the still-open prompt. :waiting-input is not
-                  ;;     payment-specific — use-ability! returns it for any prompt the
-                  ;;     ability opens (new-prompt? is eid-based, ai-core/new-prompt?),
-                  ;;     e.g. a "choose a target". handle-auto-choice would resolve a
-                  ;;     lone-choice prompt but sits AFTER this handler. Tracked as
-                  ;;     #296: the fix is widening this handler's entry guard, which
-                  ;;     risks disabling the main break path, so it is its own change.
+                  ;;     AGAIN over the still-open prompt. Tracked as #296; the fix
+                  ;;     is widening this handler's entry guard, which risks
+                  ;;     disabling the main break path, so it is its own change.
+                  ;;
+                  ;;     This shape is NOT just a non-payment prompt. Two ways in:
+                  ;;     (a) :waiting-input is not payment-specific — use-ability!
+                  ;;     returns it for any prompt the ability opens (new-prompt? is
+                  ;;     eid-based, ai-core/new-prompt?), e.g. "choose a target"; and
+                  ;;     (b) a PAYMENT select itself can have it. When bad publicity
+                  ;;     is spendable and no credit-providing card qualifies,
+                  ;;     pick-credit-providing-cards still shows the prompt to offer
+                  ;;     bad pub (:offer-bad-pub?, game.core.pick-counters), while its
+                  ;;     :choices {:card ...} predicate matches nothing — so
+                  ;;     :selectable is empty and only the select's own Done remains.
+                  ;;     handle-auto-choice would resolve a lone-choice prompt but
+                  ;;     sits AFTER this handler in the chain (r2 F4).
                   ;;
                   ;; Deliberately NOT a new status: monitor-run treats an
                   ;; unrecognised one as terminal and would stop the run.
                   :waiting-input
                   {:status :prompt-handled
-                   :wake-reason :break-payment-prompt
-                   :action :awaiting-break-payment
+                   ;; Not :break-payment-prompt / :awaiting-break-payment. The
+                   ;; message was weakened off the payment claim (r1 F1) and
+                   ;; these two keys kept asserting it — and they are what
+                   ;; `continue --single` prints to the seat and what tooling
+                   ;; reads, so the corrected message sat beside an uncorrected
+                   ;; :action (r2 F2).
+                   :wake-reason :break-prompt
+                   :action :awaiting-break-prompt
                    ;; Says only what is true in every case this branch covers:
                    ;; the prompt may not be a payment (any ability prompt lands
                    ;; here), and nothing here resolves it — under `continue
