@@ -787,18 +787,232 @@
 (deftest test-full-break-waiting-input-is-not-an-unaffordable-failure
   (testing "When the break ability spawns a credit-source sub-prompt (e.g. paying
             from credits hosted on Overclock), use-ability! returns :waiting-input.
-            That is NOT an unaffordable failure: the handler must return nil so the
-            monitor loop resolves the prompt, WITHOUT burning a retry on the
-            unaffordable counter or printing the misleading '❌ Ability failed'.
+            That is NOT an unaffordable failure: the handler must not burn a retry
+            on the unaffordable counter or print the misleading '❌ Ability failed'.
             Regression: the old binary success/else check mislabelled the pay-prompt
-            as a failed, possibly-unaffordable break."
+            as a failed, possibly-unaffordable break.
+
+            This test asserted `(nil? result)` from the day of that fix until #295,
+            with the docstring claiming nil was what 'lets the monitor loop resolve
+            the prompt'. The retry-counter half was right and is kept verbatim. The
+            nil was the defect itself: it let the SAME tick fall through to
+            handle-auto-continue and pass priority over the open prompt. The suite
+            rested on the bug for four months because this test drives the handler
+            alone, with :my-prompt nil, so the chain the harm lives in was never
+            exercised here. See
+            test-full-break-pay-prompt-does-not-let-the-same-tick-send-continue,
+            which drives continue-run! instead."
     (runner-handlers/reset-state!)
     (with-redefs [card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
       (let [result (runner-handlers/handle-runner-full-break (full-break-args))]
-        (is (nil? result)
-            "waiting-input lets the loop resolve the prompt -> returns nil")
+        (is (= :prompt-handled (:status result))
+            "waiting-input ENDS the tick with a status the loop re-ticks on (#295)")
         (is (empty? @runner-handlers/failed-ability-attempts)
             "waiting-input must NOT increment the unaffordable retry counter")))))
+
+(deftest test-full-break-pay-prompt-does-not-let-the-same-tick-send-continue
+  (testing "#295: when the break ability opens a payment prompt, the SAME
+            continue-run! tick must not go on to pass priority over it.
+
+            handle-runner-full-break used to return nil here. In
+            run-first-matching-handler nil means 'not mine, try the next handler,
+            THIS tick' - so the chain carried the PRE-ability snapshot on to
+            handle-auto-continue, whose can-auto-continue? read the stale empty
+            'run' prompt (type run, no choices, nothing selectable - every
+            condition still true) and sent a continue over the open select.
+            send-continue! does read live state but guards only a waiting prompt
+            (#75) and our own recorded pass (#98); a select prompt is neither.
+            In marquee game A1 that cost the Runner 3c and the run - Whitespace's
+            subs fired while Unity's payment was still unresolved.
+
+            Driven through continue-run!, not the handler alone: the harm is in
+            the CHAIN, which is why the isolated handler test above could assert
+            the nil return and stay green through the whole defect."
+    (let [sent (atom [])
+          ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}
+          ;; The empty paid-ability-window prompt the Runner holds at an
+          ;; encounter. This is what can-auto-continue? accepts, and it is what
+          ;; the stale snapshot still carries after the ability opened a select.
+          run-prompt {:prompt-type "run" :choices [] :selectable []}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-mock-state
+        (mock-client-state
+         :side "runner"
+         :game-state {:active-player "runner"
+                      :turn 4
+                      :log []
+                      :run {:position 1 :server ["rd"] :phase "encounter-ice"
+                            :no-action false}
+                      :runner {:credit 6 :click 2 :hand []
+                               :rig {:program [program]}
+                               :prompt-state run-prompt}
+                      :corp {:credit 8 :click 3 :hand []
+                             :servers {:rd {:ices [ice]}}
+                             :prompt-state nil}})
+        (try
+          (runs/set-strategy! {:full-break true})
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        ;; The engine answered the break with a credit-source
+                        ;; select prompt; :waiting-input is use-ability!'s report
+                        ;; of exactly that.
+                        card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
+            (let [result (runs/continue-run!)]
+              (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "no continue may be sent while our own payment prompt is "
+                       "open - the whole of #295. Sent: " (pr-str @sent)))
+              (is (some? result)
+                  "the tick must END at full-break, not fall on through the chain")
+              (is (= :prompt-handled (:status result))
+                  (str "the status monitor-run already reads as 'a prompt moved, "
+                       "take a fresh tick, do not count it as run progress'. Got: "
+                       (pr-str result)))
+              (is (not (#'runs/terminal-status? (:status result)))
+                  "a terminal status would stop the loop instead of taking the fresh tick that resolves the prompt")))
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
+(deftest test-full-break-pay-prompt-is-resolved-on-the-next-tick
+  (testing "#295, the tick AFTER the one above: the live payment prompt is now in
+            the snapshot, and the chain must RESOLVE it rather than send a
+            continue or re-fire the break.
+
+            This is the second half sol5 asked for on the forum, and it is the
+            half that pins the premise the fix rests on:
+            handle-auto-select-single-card PRECEDES handle-runner-full-break in
+            continue-run!'s chain, so a lone credit source is selected before the
+            break handler can be re-entered. Deleting auto-select from the chain
+            entirely left the whole 1300-test suite green until this test existed
+            (mutation N5), so nothing else holds that ordering.
+
+            use-ability! is stubbed to THROW here: on this tick the break must not
+            be fired again at all, and a stub that merely records would let a
+            re-fire pass as long as nothing was sent to the wire."
+    (let [sent (atom [])
+          selected (atom [])
+          ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          overclock {:cid "oc1" :title "Overclock" :type "Resource"}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}
+          ;; What the engine actually left us after the break: the credit-source
+          ;; select, with Overclock as the ONE alternative pool.
+          ;;
+          ;; :selectable holds a CID STRING, not a card map. The engine builds it
+          ;; with `(map :cid valid)` (game.core.prompts/compute-selectable, and
+          ;; `(map #(->> % :value :cid) choices)` in update-selectable), and
+          ;; game.core.diffs passes the key straight through. A card map here
+          ;; drove the `(string? cid-or-card)` false arm of
+          ;; handle-auto-select-single-card and never reached
+          ;; ai-core/find-card-by-cid — so the production resolution path this
+          ;; test exists to cover was not exercised at all (r2 F3; the project's
+          ;; standing "wire fixtures round-trip through JSON" trap).
+          ;;
+          ;; :choices carries the select's own Done, which show-select sends
+          ;; (prompts.clj). has-real-decision? strips it as trivial and is true
+          ;; anyway on the non-empty :selectable.
+          pay-prompt {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable ["oc1"]}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-mock-state
+        (mock-client-state
+         :side "runner"
+         :game-state {:active-player "runner"
+                      :turn 4
+                      :log []
+                      :run {:position 1 :server ["rd"] :phase "encounter-ice"
+                            :no-action false}
+                      :runner {:credit 6 :click 2 :hand []
+                               ;; Overclock is in the tree so the real
+                               ;; find-card-by-cid resolves "oc1" to it. That
+                               ;; function walks the whole game state, so the zone
+                               ;; is not what this test pins — only that a cid
+                               ;; STRING resolves to a titled card.
+                               :rig {:program [program] :resource [overclock]}
+                               :prompt-state pay-prompt}
+                      :corp {:credit 8 :click 3 :hand []
+                             :servers {:rd {:ices [ice]}}
+                             :prompt-state nil}})
+        (try
+          (runs/set-strategy! {:full-break true})
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                        ws/select-card! (fn [card eid] (swap! selected conj [card eid]) true)
+                        card-actions/use-ability!
+                        (fn [& _]
+                          (throw (ex-info "the break was re-fired over an open prompt" {})))]
+            (let [result (runs/continue-run!)]
+              (is (= 1 (count @selected))
+                  (str "the lone credit source must be selected. Selected: "
+                       (pr-str @selected)))
+              (is (= "Overclock" (:title (ffirst @selected)))
+                  "and it must be the card the engine offered")
+              (is (= "e42" (second (first @selected)))
+                  "carrying the prompt's own :eid, so it answers THIS prompt")
+              (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "still no continue while the prompt is open. Sent: "
+                       (pr-str @sent)))
+              (is (= :prompt-handled (:status result))
+                  (str "and the loop re-ticks to finish the break. Got: "
+                       (pr-str result)))))
+          ;; r2 F1: the weakened wording lived only in source, so restoring the
+          ;; old "opened a payment prompt - resolving it before any continue"
+          ;; left the whole suite green. Pin the two claims it must NOT make.
+          ;; Asserted on the FIRST tick's result, which is where the message is
+          ;; built, via a second drive of the same fixture.
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
+
+(deftest test-full-break-pay-prompt-message-claims-neither-payment-nor-resolution
+  (testing "#295 r2 F1/F2: the result the seat is shown must not claim the prompt
+            is a PAYMENT prompt, nor that anything here RESOLVES it. :waiting-input
+            is returned for any prompt the ability opens, and under
+            `continue --single` this call is the whole step, so the seat resolves
+            it. The message, the :action and the :wake-reason are all shown or read
+            downstream, so all three are pinned here - correcting only the message
+            left :awaiting-break-payment asserting what the message had stopped
+            claiming."
+    (let [ice {:title "Whitespace" :rezzed true
+               :subroutines [{:broken false :fired false}]}
+          program {:title "Unity"
+                   :abilities [{:dynamic :auto-pump-and-break
+                                :label "Match strength and fully break Whitespace"
+                                :cost-label "3 [Credits]"}]}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (with-redefs [card-actions/use-ability! (fn [_ _] {:status :waiting-input})]
+        (try
+          (let [r (runner-handlers/handle-runner-full-break
+                   {:side "runner" :run-phase "encounter-ice"
+                    :state {:game-state
+                            {:run {:position 1 :server ["rd"]}
+                             :corp {:servers {:rd {:ices [ice]}}}
+                             :runner {:rig {:program [program]} :credit 6}}}
+                    :strategy {:full-break true} :gameid "g" :my-prompt nil})
+                msg (str (:message r))
+                whole (pr-str r)]
+            (is (= :prompt-handled (:status r)) "precondition: this is the arm under test")
+            (doseq [banned ["payment" "Payment"]]
+              (is (not (clojure.string/includes? whole banned))
+                  (str "the result must not call the prompt a " banned
+                       " one - it is any ability prompt. Whole result: " whole)))
+            (doseq [banned ["resolving it" "Resolving it"]]
+              (is (not (clojure.string/includes? msg banned))
+                  (str "the message must not claim anything here resolves it. Got: " msg)))
+            (is (clojure.string/includes? msg "must be resolved")
+                (str "it must still say the prompt blocks a continue. Got: " msg)))
+          (finally
+            (runs/reset-strategy!)
+            (runner-handlers/reset-state!)))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
