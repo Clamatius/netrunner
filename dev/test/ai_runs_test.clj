@@ -1316,6 +1316,55 @@
               (runs/reset-strategy!)
               (runner-handlers/reset-state!))))))))
 
+(def ^:private bad-pub-offer #'runs/bad-pub-offer)
+
+(deftest test-296-bad-pub-offer-reads-a-positive-number-only
+  (testing "#296: how the client READS :offer-bad-pub? off the wire, which is a
+            claim about our parser rather than about the engine.
+
+            The engine sets the key to the amount available or leaves it nil
+            (pick-credit-providing-cards), and game.core.diffs ships prompt-state
+            through select-non-nil-keys — so on the wire it is a positive integer
+            or the key is ABSENT, never false and never 0. The contract is pinned
+            anyway, because this value decides whether a prompt is auto-answered
+            or handed to the seat: a truthiness read would treat a 0 as an offer
+            and park a run on nothing, and a (pos? \"2\") would throw mid-run.
+
+            Each of these three reads was a surviving mutant before this test
+            existed (M11, M12, M13): dropping the pos? check, dropping the
+            number? check, and reading the key for truthiness alone."
+    (is (= 2 (bad-pub-offer {:offer-bad-pub? 2}))
+        "a positive amount is the offer")
+    (is (nil? (bad-pub-offer {}))
+        "an ABSENT key is no offer - select-non-nil-keys drops the nil")
+    (is (nil? (bad-pub-offer {:offer-bad-pub? nil}))
+        "and an explicit nil is no offer either")
+    (is (nil? (bad-pub-offer {:offer-bad-pub? 0}))
+        "0 is no offer: an offer of nothing must not park a run")
+    (is (nil? (bad-pub-offer {:offer-bad-pub? "2"}))
+        "a non-number is no offer, not an exception thrown mid-run")
+    (is (nil? (bad-pub-offer {:offer-bad-pub? true}))
+        "and neither is a bare true")))
+
+(deftest test-296-zero-bad-pub-offer-is-auto-answered-like-any-lone-choice
+  (testing "#296, the chain half of the read above: a prompt whose :offer-bad-pub?
+            is 0 offers nothing, so it takes the ordinary auto-answer path rather
+            than being surfaced. The differential control for the surfacing test -
+            without it, a handler that surfaced EVERY credit-source prompt would
+            pass that test too."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []
+                      :offer-bad-pub? 0}
+      nil
+      (let [result (runs/continue-run!)
+            choices (filter #(= "choice" (get-in % [:data :command])) @sent)]
+        (is (= 1 (count choices))
+            (str "the Done must be sent. Sent: " (pr-str @sent)))
+        (is (= :action-taken (:status result))
+            (str "and the tick reports an action, not a decision. Got: "
+                 (pr-str result)))))))
+
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
             retry counter (so repeated genuine failures eventually fall through to
