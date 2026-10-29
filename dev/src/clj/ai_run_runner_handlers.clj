@@ -499,7 +499,25 @@
              (core/at-encounter? state run-phase)
              (:full-break strategy)
              ;; Don't break if there's an on-encounter prompt to handle first
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; …and do not break while holding ANY prompt the engine would
+             ;; refuse the ability over (#296). has-real-decision? is a question
+             ;; about the PLAYER — 2+ non-trivial choices, or a selectable — and
+             ;; #296's whole shape is the prompts it scores as trivial: a select
+             ;; with an empty :selectable and a lone Done (an ordinary break
+             ;; payment, whenever the Corp has bad publicity and no card in the
+             ;; rig can provide credits), a `waiting` prompt, a zero-choice
+             ;; "other" prompt. Over any of those, #295's :prompt-handled ended
+             ;; the tick correctly and then the NEXT tick re-entered here and
+             ;; fired the ability again.
+             ;;
+             ;; state/engine-blocking-prompt? mirrors the engine's own gate
+             ;; (game.core.actions/no-blocking-or-prevent-prompt?, read by
+             ;; play-dynamic-ability) rather than re-deriving one: the engine
+             ;; refuses the re-fire anyway, so every re-fire was a wasted
+             ;; unaffordable-retry at best. Declining lets the chain resolve the
+             ;; prompt (handle-auto-choice) or surface it instead.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [run (get-in state [:game-state :run])
           position (:position run)
           ;; The ENCOUNTERED ICE, not the position-derived one — a forced
@@ -853,7 +871,16 @@
              ;; latch stopped being set before the send (guest panel MAJOR,
              ;; #167 round 3). A waiting prompt carries no choices, so
              ;; has-real-decision? does not cover it.
-             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt)))
+             ;; And never pass priority while holding a prompt of our own
+             ;; (#296). Unlike a re-fired ability, the engine does NOT refuse
+             ;; this: `continue :encounter-ice` (game.core.runs) reads the
+             ;; encounter ledger and nothing else, so the pass is HONOURED — and
+             ;; with the Corp already gone it ends the encounter with our own
+             ;; prompt unanswered. That is #295's harm, reached one handler later
+             ;; once full-break correctly declines. Subsumes the waiting-prompt
+             ;; guard above, which is kept for its own history.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
           ;; Unbroken AND unfired — see handle-runner-encounter-ice. Passing here
@@ -999,7 +1026,16 @@
              ;; mid-subroutine "Jack out?" decision is still open - masking it.
              (not (has-real-decision? my-prompt))
              ;; Same waiting-prompt chokepoint mirror as its sibling above.
-             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt)))
+             ;; And never pass priority while holding a prompt of our own
+             ;; (#296). Unlike a re-fired ability, the engine does NOT refuse
+             ;; this: `continue :encounter-ice` (game.core.runs) reads the
+             ;; encounter ledger and nothing else, so the pass is HONOURED — and
+             ;; with the Corp already gone it ends the encounter with our own
+             ;; prompt unanswered. That is #295's harm, reached one handler later
+             ;; once full-break correctly declines. Subsumes the waiting-prompt
+             ;; guard above, which is kept for its own history.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [current-ice (core/encountered-ice state)
           ice-title (:title current-ice "ICE")
           position (get-in state [:game-state :run :position])

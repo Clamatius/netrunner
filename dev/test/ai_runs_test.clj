@@ -1014,6 +1014,308 @@
             (runs/reset-strategy!)
             (runner-handlers/reset-state!)))))))
 
+;; ============================================================================
+;; #296 — a run action must not be taken while this seat holds a blocking prompt
+;; ============================================================================
+;;
+;; #295 made full-break END the tick on :waiting-input, so the NEXT tick's
+;; snapshot holds the live prompt. #296 is what that next tick does with it.
+;;
+;; The client gate mirrors the ENGINE's gate, per line, rather than re-deriving a
+;; "does the seat owe a decision?" rule:
+;;
+;;   game.core.actions/no-blocking-or-prevent-prompt?  (:67-71)
+;;     prompt-type in {nil, :run}
+;;   game.core.actions/play-dynamic-ability            (:599-603)
+;;     refuses outright otherwise, with a toast
+;;
+;; and the engine reads [side :prompt-state :prompt-type] — the very field
+;; `my-prompt` is a copy of. Two consequences the fixtures below pin:
+;;
+;;   - the ENGINE refuses a re-fired break, so #296's own harm is wasted retries;
+;;   - the engine does NOT gate `continue` at all (continue :encounter-ice,
+;;     game.core.runs:424-434, reads the encounter ledger and nothing else), so a
+;;     premature pass IS honoured. That half is the one with a game cost, and the
+;;     client has to gate it itself.
+
+(def ^:private full-break-ice
+  {:title "Whitespace" :rezzed true
+   :subroutines [{:broken false :fired false}]})
+
+(def ^:private full-break-program
+  {:title "Unity"
+   :abilities [{:dynamic :auto-pump-and-break
+                :label "Match strength and fully break Whitespace"
+                :cost-label "3 [Credits]"}]})
+
+(defn- full-break-game-state
+  "The #296 window: a full-break Runner mid-encounter, holding `prompt`.
+   `enc` is the encounter ledger ([:encounters :no-action]); nil leaves it fresh."
+  [prompt & {:keys [enc log]}]
+  (cond-> {:active-player "runner"
+           :turn 4
+           :log (or log [])
+           :run {:position 1 :server ["rd"] :phase "encounter-ice"
+                 :no-action false}
+           :runner {:credit 6 :click 2 :hand []
+                    :rig {:program [full-break-program]}
+                    :prompt-state prompt}
+           :corp {:credit 8 :click 3 :hand []
+                  :servers {:rd {:ices [full-break-ice]}}
+                  :prompt-state nil}}
+    ;; :ice as well as the ledger, always. encountered-ice reads
+    ;; [:encounters :ice] as the authority and answers NIL when the summary is
+    ;; present but unnameable (#198) — so a ledger-only :encounters key is the
+    ;; unnameable-encounter state, which a different handler claims, and the
+    ;; fixture would pass without ever reaching the one under test.
+    enc (assoc :encounters {:ice full-break-ice :no-action enc})))
+
+(defmacro ^:private with-296-window
+  "Drive continue-run! once in the #296 window with `prompt` open, capturing the
+   wire. `use-ability!` THROWS: on this tick the break must not be fired at all,
+   and a recording stub would let a re-fire pass as long as nothing reached the
+   wire (#295's mutation N5)."
+  [prompt opts & body]
+  `(let [~'sent (atom [])]
+     (runs/reset-strategy!)
+     (runner-handlers/reset-state!)
+     (with-mock-state
+       (mock-client-state :side "runner"
+                          :game-state (apply full-break-game-state ~prompt ~opts))
+       (try
+         (runs/set-strategy! {:full-break true})
+         (with-redefs [ws/send-message! (mock-websocket-send! ~'sent)
+                       card-actions/use-ability!
+                       (fn [& ~'_args]
+                         (throw (ex-info "the break was re-fired over an open prompt" {})))]
+           ~@body)
+         (finally
+           (runs/reset-strategy!)
+           (runner-handlers/reset-state!))))))
+
+(deftest test-296-lone-done-select-does-not-re-fire-the-break
+  (testing "#296: the shape #295's fix does NOT cover — no selectable and at most
+            one non-trivial choice. handle-auto-select-single-card wants exactly
+            one selectable, and has-real-decision? strips a lone Done as trivial,
+            so full-break's old entry guard was satisfied and it called
+            use-ability! again over its own open prompt.
+
+            This is the shape an ordinary break payment takes whenever the Corp
+            has bad publicity and no card in the rig can provide credits:
+            pick-credit-providing-cards shows the select to OFFER the bad pub
+            while its :choices {:card ...} predicate matches nothing, so
+            :selectable is empty and only the select's own Done remains
+            (game.core.pick-counters:200-246)."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []}
+      nil
+      (let [result (runs/continue-run!)]
+        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+
+(deftest test-296-waiting-prompt-does-not-re-fire-the-break
+  (testing "#296, the waiting shape (r2 guest-unique): a `waiting` prompt also has
+            no selectable and no non-trivial choice, so it sat inside the same gap.
+            Both pass-handler siblings have carried an explicit waiting-prompt
+            guard since #167 — mirroring send-continue!'s own chokepoint — and
+            full-break had none.
+
+            The engine agrees: prompt-type \"waiting\" is not in
+            no-blocking-or-prevent-prompt?'s {nil, :run}, so it would refuse the
+            ability anyway."
+    (with-296-window {:prompt-type "waiting" :msg "Waiting for Corp"}
+      nil
+      (let [result (runs/continue-run!)]
+        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+
+(deftest test-296-zero-choice-other-prompt-does-not-re-fire-the-break
+  (testing "#296, the shape that killed the FIRST fix design (r2 F7): a prompt with
+            zero choices, zero selectable and type \"other\".
+
+            The first design reused seat-owns-trigger-decision?, which requires
+            (or select-type (seq choices) (seq selectable)) — all three false here,
+            so it would have returned false and full-break would have re-fired
+            anyway. The engine gate has no such hole: \"other\" is simply not in
+            {nil, :run}."
+    (with-296-window {:prompt-type "other" :eid "e99" :msg "Something resolving"}
+      nil
+      (let [result (runs/continue-run!)]
+        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+
+(deftest test-296-pass-broken-ice-does-not-pass-priority-over-our-own-prompt
+  (testing "#296, the half with a game cost. Declining in full-break hands the
+            tick to handle-runner-pass-broken-ice, which send-continue!s when
+            `(or (empty? actionable-subs) corp-declined?)`. The subs are unbroken
+            here (the payment is pending), but the encounter ledger names the Corp
+            — so it fires, and passes priority over the very prompt full-break
+            just declined to act over. That is #295's harm, one handler later.
+
+            The ledger state is the Corp having passed this encounter BEFORE the
+            Runner broke: it declined to fire (no rezzed subs worth firing, or
+            --no-rez), wrote [:encounters :no-action] \"corp\", and the Runner then
+            used its break. Active-player-first makes that the exception rather
+            than the routine, which is why this fixture says so rather than
+            reading as the common path.
+
+            Unlike the re-fired ability, the engine does NOT refuse this:
+            `continue :encounter-ice` (game.core.runs) reads the encounter ledger
+            and nothing else, so the pass is honoured and — with the Corp already
+            passed — ENDS the encounter with the break unresolved.
+
+            Red on the half-fixed tree: run with full-break's guard in and this
+            one out and it fails, which is how it was established rather than
+            shipped green."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []}
+      [:enc "corp"]
+      (let [result (runs/continue-run!)]
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "no continue may be sent while our own prompt is open. Sent: "
+                 (pr-str @sent)))
+        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+
+(deftest test-296-pass-fired-ice-does-not-pass-priority-over-our-own-prompt
+  (testing "#296: handle-runner-pass-fired-ice is the OTHER send-continue! on this
+            path, and it needs its own fixture (r2 F4/F6).
+
+            Its sibling above precedes it in the chain and fires on corp-declined,
+            so a fixture built for that one never reaches this handler at all —
+            reverting this guard alone would leave every other test here green.
+            So: actionable subs remaining, the encounter ledger FRESH (no Corp
+            pass, so the sibling declines), and a log line that satisfies this
+            handler's own subs-resolved? heuristic, which matches
+            `(resolves.*subroutines on|uses) <ICE>`.
+
+            Shares `passed-ice-encounter` with its sibling, so a pass sent here
+            is just as wrong and just as latched."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []}
+      [:log [{:text "Runner uses Whitespace"}]]
+      (let [result (runs/continue-run!)]
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "no continue may be sent while our own prompt is open. Sent: "
+                 (pr-str @sent)))
+        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+
+(deftest test-296-lone-done-select-without-a-bad-pub-offer-is-auto-answered
+  (testing "#296, the landing, asserting what IS sent rather than only absences
+            (r2 F10). With the guards in, the lone-Done select falls through to
+            handle-auto-choice, which answers it with exactly one `choice`
+            carrying the prompt's own :eid.
+
+            That is the right answer for this shape: the select's Done runs the
+            credit-source ability's `:cancel {:effect pay-rest}`
+            (game.core.pick-counters, the END of the ability map) through
+            show-select's wrap and resolve-select's empty branch
+            (game.core.prompts), so Done pays the remainder from the credit pool
+            and the break resolves. Nothing is forfeited — an earlier draft of
+            this fix was built on the opposite belief, and two review seats
+            caught it at the line.
+
+            Absence-only assertions would stay green if the chain PARKED instead
+            of landing (handle-waiting-for-opponent and handle-events sit between
+            full-break and handle-auto-choice), which is the failure mode the
+            fall-through introduces. So this pins the positive."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []}
+      nil
+      (let [result (runs/continue-run!)
+            choices (filter #(= "choice" (get-in % [:data :command])) @sent)]
+        (is (= 1 (count choices))
+            (str "exactly one choice must answer the prompt. Sent: " (pr-str @sent)))
+        (is (= "u-done" (get-in (first choices) [:data :args :choice :uuid]))
+            "and it must be the Done the engine offered")
+        (is (= "e42" (get-in (first choices) [:data :args :eid]))
+            "carrying the prompt's own :eid, so it answers THIS prompt")
+        (is (= :action-taken (:status result))
+            (str "and the tick reports an action. Got: " (pr-str result)))))))
+
+(deftest test-296-bad-pub-offer-is-surfaced-not-silently-answered
+  (testing "#296 + the ask's own constraint (sol5, forum [334]): the SAME prompt
+            shape, but carrying a positive :offer-bad-pub?, must neither re-fire
+            the breaker nor be silently auto-Done.
+
+            The offer is a real action that lives OUTSIDE :choices and
+            :selectable. pick-credit-providing-cards sets :offer-bad-pub? when
+            bad publicity can pay (game.core.pick-counters), show-select passes it
+            through to the wire (it is in diffs/prompt-keys), and the browser
+            renders it as its own button (board.cljs `bad-pub-choice`). The AI
+            client has no sender for that command at all — ENABLE_CONDITIONS.md
+            records `bad-pub-choice` as uncovered — so Done is the only thing the
+            client CAN send, and sending it spends pool credits to decline free
+            run credits, with no one told.
+
+            Two reasons that is not a silent default to take:
+            - it is a spend decision, which the ask reserves;
+            - when the pool cannot cover the cost, Done is not even a valid
+              answer: pay-rest's affordability test reads the pool alone, and its
+              else arm re-enters pick-credit-providing-cards — with 8 positional
+              args against the 9-param fn, so bad-pub-available is bound to
+              bad-pub-spent and the re-shown prompt loses its own offer.
+
+            So the tick surfaces it as a decision instead. Red before the fix:
+            handle-auto-choice sent the Done."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []
+                      :offer-bad-pub? 2}
+      nil
+      (let [result (runs/continue-run!)]
+        (is (not-any? #(= "choice" (get-in % [:data :command])) @sent)
+            (str "the Done must NOT be sent: it declines the offer and spends "
+                 "pool credits instead. Sent: " (pr-str @sent)))
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "and no continue either. Sent: " (pr-str @sent)))
+        (is (= :decision-required (:status result))
+            (str "it is surfaced as the seat's decision. Got: " (pr-str result)))
+        (is (clojure.string/includes? (str (:message result)) "bad publicity")
+            (str "and the message names the option, since nothing else will. "
+                 "Got: " (pr-str (:message result))))))))
+
+(deftest test-296-main-break-path-still-breaks
+  (testing "#296's own named regression risk, which is why it was filed as its own
+            change: the main break path runs WHILE HOLDING the engine's empty
+            run-priority window, so a guard that declined on 'any prompt with
+            choices' would switch breaking off.
+
+            Every pre-existing full-break test passes either :my-prompt nil or
+            that empty run window, so the suite could not have caught it. All
+            three shapes are pinned here — nil, the string \"run\" the wire sends,
+            and the keyword :run the engine sets pre-serialization (fixtures in
+            this repo use both spellings, which is why the gate goes through
+            state/run-prompt-type? rather than comparing to one of them)."
+    (doseq [[label prompt] [["no prompt at all" nil]
+                            ["the wire's run window" {:prompt-type "run" :choices [] :selectable []}]
+                            ["the keyword run window" {:prompt-type :run :choices [] :selectable []}]]]
+      (let [fired (atom [])]
+        (runs/reset-strategy!)
+        (runner-handlers/reset-state!)
+        (with-mock-state
+          (mock-client-state :side "runner"
+                             :game-state (full-break-game-state prompt))
+          (try
+            (runs/set-strategy! {:full-break true})
+            (with-redefs [ws/send-message! (mock-websocket-send! (atom []))
+                          card-actions/use-ability!
+                          (fn [card-name idx]
+                            (swap! fired conj [card-name idx])
+                            {:status :success})]
+              (let [result (runs/continue-run!)]
+                (is (= 1 (count @fired))
+                    (str "the break MUST still be fired with " label
+                         ". Fired: " (pr-str @fired)))
+                (is (= "Unity" (ffirst @fired))
+                    (str "with the breaker the rig offers, with " label))
+                (is (= :ability-used (:status result))
+                    (str "and reported as a break, with " label
+                         ". Got: " (pr-str result)))))
+            (finally
+              (runs/reset-strategy!)
+              (runner-handlers/reset-state!))))))))
+
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
             retry counter (so repeated genuine failures eventually fall through to

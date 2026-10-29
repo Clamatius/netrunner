@@ -572,6 +572,46 @@
   [prompt-type]
   (contains? #{:run "run"} prompt-type))
 
+(defn engine-blocking-prompt?
+  "True when the ENGINE would refuse a paid/dynamic ability from this seat because
+   the seat is holding a prompt.
+
+   A mirror of the engine's own gate, not a re-derivation of it:
+
+     (defn- no-blocking-or-prevent-prompt?
+       [state side]
+       (let [prompt-type (get-in @state [side :prompt-state :prompt-type])]
+         (or (= nil prompt-type)
+             (= :run prompt-type))))
+
+   (game.core.actions, read by `play-dynamic-ability`, which otherwise toasts
+   \"You cannot play abilities while other abilities are resolving.\" and does
+   nothing). It reads `[side :prompt-state :prompt-type]` — the very field the
+   handlers' `my-prompt` is a copy of — so the mirror is exact, and the engine's
+   keyword `:run` is the wire's string \"run\" (`run-prompt-type?`).
+
+   Preferred over asking \"does this seat owe a decision?\" (`has-real-decision?`,
+   `seat-owns-trigger-decision?`): those answer a question about the PLAYER, and
+   both have holes against this one. A prompt with no choices, no selectable and
+   type \"other\" owes the seat nothing by either of them, and the engine still
+   refuses an ability over it. #296's whole shape is prompts those predicates
+   score as trivial.
+
+   Two deliberate imprecisions, both toward refusing:
+   - The engine's INDEXED-ability gate is one type wider — `no-blocking-prompt?`
+     also admits `:prevent` (same file) — and full-break's manual fallback uses
+     indexed abilities. One mirror of the stricter gate is kept rather than two
+     client gates; the cost is declining a `:prevent`-prompt case the engine
+     would have taken.
+   - `continue` is NOT gated by the engine at all: `continue :encounter-ice`
+     (game.core.runs) reads the encounter ledger and nothing else, so a pass sent
+     over an open prompt is HONOURED. Handlers that pass priority therefore use
+     this predicate as a client-side rule of their own, not as a mirror."
+  [prompt]
+  (let [prompt-type (:prompt-type prompt)]
+    (not (or (nil? prompt-type)
+             (run-prompt-type? prompt-type)))))
+
 (defn mulligan-wait-prompt?
   "True when PROMPT is the opening-mulligan 'waiting for opponent to keep hand or
    mulligan' window (engine: show-wait-prompt \"<side> to keep hand or mulligan\",
