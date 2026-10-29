@@ -1255,6 +1255,44 @@
   ;; Always return nil - let subsequent handlers (auto-choice/auto-continue) handle it
   nil)
 
+(defn- bad-pub-offer
+  "The amount of bad publicity the engine is OFFERING as a credit source on this
+   prompt, or nil.
+
+   `pick-credit-providing-cards` sets `:offer-bad-pub?` to the amount available
+   when bad publicity can pay part of a cost (game.core.pick-counters); the
+   browser renders it as its own button, separate from :choices and :selectable
+   (board.cljs, `bad-pub-choice`). So it is a real action that NEITHER
+   has-real-decision? nor the choice count can see.
+
+   Read as a positive NUMBER, never for truthiness: the key is set to the amount
+   or left nil, and game.core.diffs ships prompt-state through
+   select-non-nil-keys, so on the wire it is a positive integer or ABSENT. A
+   non-number (a wire that ever sends it as a string) reads as no offer rather
+   than throwing in the middle of a run."
+  [prompt]
+  (let [n (:offer-bad-pub? prompt)]
+    (when (and (number? n) (pos? n)) n)))
+
+(defn- auto-choose-single!
+  "Answer a one-option prompt with that option. Split out of handle-auto-choice
+   when the bad-publicity arm was added, so the two answers sit side by side
+   rather than nested."
+  [my-prompt gameid]
+  (let [choice (first (:choices my-prompt))
+        choice-uuid (:uuid choice)
+        choice-value (:value choice)
+        card-title (get-in my-prompt [:card :title])
+        msg (:msg my-prompt)
+        is-access-prompt? (and msg (clojure.string/starts-with? (str msg) "You accessed"))]
+    ;; For access prompts, ensure card text is shown for first-time cards
+    ;; (handle-access-display already printed basic info, but this shows full card text)
+    (when (and is-access-prompt? card-title)
+      (core/show-card-on-first-sight! card-title))
+    ;; All single-choice prompts auto-continue (2+ choice access handled by handle-real-decision)
+    (println (format "   → Auto-choosing: %s" choice-value))
+    (send-choice! gameid choice-uuid choice-value (:eid my-prompt))))
+
 (defn handle-auto-choice
   "Priority 5: Auto-handle single mandatory choice.
    For access prompts with only 'Done' as option: show card text (if new), then auto-continue.
@@ -1264,19 +1302,45 @@
   (when (and my-prompt
              (seq (:choices my-prompt))
              (= 1 (count (:choices my-prompt))))
-    (let [choice (first (:choices my-prompt))
-          choice-uuid (:uuid choice)
-          choice-value (:value choice)
-          card-title (get-in my-prompt [:card :title])
-          msg (:msg my-prompt)
-          is-access-prompt? (and msg (clojure.string/starts-with? (str msg) "You accessed"))]
-      ;; For access prompts, ensure card text is shown for first-time cards
-      ;; (handle-access-display already printed basic info, but this shows full card text)
-      (when (and is-access-prompt? card-title)
-        (core/show-card-on-first-sight! card-title))
-      ;; All single-choice prompts auto-continue (2+ choice access handled by handle-real-decision)
-      (println (format "   → Auto-choosing: %s" choice-value))
-      (send-choice! gameid choice-uuid choice-value (:eid my-prompt)))))
+    (if-let [bad-pub (bad-pub-offer my-prompt)]
+      ;; A credit-source prompt offering BAD PUBLICITY is not a mandatory choice,
+      ;; however lonely its only listed option looks (#296, and the constraint in
+      ;; the ask). Answering Done here declines free run credits and pays pool
+      ;; credits instead — a spend decision — and there is no sender for the
+      ;; other answer: `bad-pub-choice` is the one run-flow command we do not
+      ;; mirror (dev/ENABLE_CONDITIONS.md). Which of the three policies to adopt
+      ;; is #298.
+      ;;
+      ;; It is also the shape where Done is not necessarily a valid answer at
+      ;; all: with a pool short of the cost, pay-rest re-enters
+      ;; pick-credit-providing-cards and the re-entry loses this very offer
+      ;; (#299). Auto-answering it was the worse of the two silences.
+      (let [done-label (:value (first (:choices my-prompt)))]
+        (println (format "🛑 Credit source: %d [Credits] of bad publicity offered" bad-pub))
+        (println "   The client cannot send that choice yet (see #298).")
+        ;; choose-value, NOT `choose <N>`: this prompt is always a select (only
+        ;; show-select sets :offer-bad-pub?), and choose-option! refuses a bare
+        ;; index on a select — its first cond arm prints "use choose-card <N>,
+        ;; not choose <N>" and names choose-value for a meta button
+        ;; (ai-prompts/choose-option!). A printed hint that names a command is
+        ;; code, and `choose 0` here was refused every time (r3, both vendors).
+        (println (format "   → choose-value \"%s\"  - answer the prompt without the bad publicity"
+                         done-label))
+        {:status :decision-required
+         :wake-reason :bad-pub-offer
+         :action :awaiting-credit-source
+         ;; Says only what is true in BOTH states this arm can be in. It does
+         ;; not promise that answering pays the rest from the pool: that is the
+         ;; :cancel -> pay-rest path, and pay-rest's affordability test reads the
+         ;; pool alone, so with a pool short of the remaining cost it cannot pay
+         ;; and its re-entry loses this very offer (#299).
+         :message (format (str "Credit-source prompt offers %d [Credits] of bad publicity, "
+                               "which this client cannot spend (#298); its only other answer "
+                               "is \"%s\"")
+                          bad-pub done-label)
+         :bad-pub-available bad-pub
+         :prompt my-prompt})
+      (auto-choose-single! my-prompt gameid))))
 
 ;; #191: `handle-recently-passed-in-log` (priority 5.5) lived here — "detect that
 ;; we passed, from the game log", the documented backup for :no-action.

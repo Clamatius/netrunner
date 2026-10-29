@@ -499,7 +499,25 @@
              (core/at-encounter? state run-phase)
              (:full-break strategy)
              ;; Don't break if there's an on-encounter prompt to handle first
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; …and do not break while holding ANY prompt the engine would
+             ;; refuse the ability over (#296). has-real-decision? is a question
+             ;; about the PLAYER — 2+ non-trivial choices, or a selectable — and
+             ;; #296's whole shape is the prompts it scores as trivial: a select
+             ;; with an empty :selectable and a lone Done (an ordinary break
+             ;; payment, whenever the Corp has bad publicity and no card in the
+             ;; rig can provide credits), a `waiting` prompt, a zero-choice
+             ;; "other" prompt. Over any of those, #295's :prompt-handled ended
+             ;; the tick correctly and then the NEXT tick re-entered here and
+             ;; fired the ability again.
+             ;;
+             ;; state/engine-blocking-prompt? mirrors the engine's own gate
+             ;; (game.core.actions/no-blocking-or-prevent-prompt?, read by
+             ;; play-dynamic-ability) rather than re-deriving one: the engine
+             ;; refuses the re-fire anyway, so every re-fire was a wasted
+             ;; unaffordable-retry at best. Declining lets the chain resolve the
+             ;; prompt (handle-auto-choice) or surface it instead.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [run (get-in state [:game-state :run])
           position (:position run)
           ;; The ENCOUNTERED ICE, not the position-derived one — a forced
@@ -586,31 +604,30 @@
                   ;; (ai-runs/monitor-run, the :prompt-handled branch). The next
                   ;; tick's snapshot holds the live prompt.
                   ;;
-                  ;; That next tick is covered for the two prompt shapes a credit
-                  ;; source actually takes, and NOT for a third (#296):
+                  ;; What that next tick does with the prompt was #296, and it
+                  ;; is now this handler's entry guard — see
+                  ;; state/engine-blocking-prompt? above. Three shapes reach it:
                   ;;   - ONE selectable: handle-auto-select-single-card resolves it,
                   ;;     and it PRECEDES this handler in the chain.
                   ;;   - 2+ non-trivial choices, or any selectable: has-real-decision?
-                  ;;     is true, this handler's own entry guard declines rather than
-                  ;;     re-firing, and handle-real-decision pauses for the player.
-                  ;;   - NO selectable and at most ONE non-trivial choice: neither
-                  ;;     holds, so this handler is re-entered and fires the ability
-                  ;;     AGAIN over the still-open prompt. Tracked as #296; the fix
-                  ;;     is widening this handler's entry guard, which risks
-                  ;;     disabling the main break path, so it is its own change.
+                  ;;     is true, so handle-real-decision pauses for the player.
+                  ;;   - NO selectable and at most ONE non-trivial choice: neither of
+                  ;;     those holds, and the entry guard is what keeps this handler
+                  ;;     from being re-entered and firing the ability AGAIN over the
+                  ;;     still-open prompt (#296).
                   ;;
-                  ;;     This shape is NOT just a non-payment prompt. Two ways in:
-                  ;;     (a) :waiting-input is not payment-specific — use-ability!
-                  ;;     returns it for any prompt the ability opens (new-prompt? is
-                  ;;     eid-based, ai-core/new-prompt?), e.g. "choose a target"; and
-                  ;;     (b) a PAYMENT select itself can have it. When bad publicity
-                  ;;     is spendable and no credit-providing card qualifies,
-                  ;;     pick-credit-providing-cards still shows the prompt to offer
-                  ;;     bad pub (:offer-bad-pub?, game.core.pick-counters), while its
-                  ;;     :choices {:card ...} predicate matches nothing — so
-                  ;;     :selectable is empty and only the select's own Done remains.
-                  ;;     handle-auto-choice would resolve a lone-choice prompt but
-                  ;;     sits AFTER this handler in the chain (r2 F4).
+                  ;;     That third shape is NOT just a non-payment prompt. Two ways
+                  ;;     in: (a) :waiting-input is not payment-specific —
+                  ;;     use-ability! returns it for any prompt the ability opens
+                  ;;     (new-prompt? is eid-based, ai-core/new-prompt?), e.g.
+                  ;;     "choose a target"; and (b) a PAYMENT select itself can have
+                  ;;     it. When bad publicity is spendable and no credit-providing
+                  ;;     card qualifies, pick-credit-providing-cards still shows the
+                  ;;     prompt to offer bad pub (:offer-bad-pub?,
+                  ;;     game.core.pick-counters), while its :choices {:card ...}
+                  ;;     predicate matches nothing — so :selectable is empty and only
+                  ;;     the select's own Done remains. That one is handed to the seat
+                  ;;     rather than answered (handle-auto-choice's bad-pub arm, #298).
                   ;;
                   ;; Deliberately NOT a new status: monitor-run treats an
                   ;; unrecognised one as terminal and would stop the run.
@@ -853,7 +870,16 @@
              ;; latch stopped being set before the send (guest panel MAJOR,
              ;; #167 round 3). A waiting prompt carries no choices, so
              ;; has-real-decision? does not cover it.
-             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt)))
+             ;; And never pass priority while holding a prompt of our own
+             ;; (#296). Unlike a re-fired ability, the engine does NOT refuse
+             ;; this: `continue :encounter-ice` (game.core.runs) reads the
+             ;; encounter ledger and nothing else, so the pass is HONOURED — and
+             ;; with the Corp already gone it ends the encounter with our own
+             ;; prompt unanswered. That is #295's harm, reached one handler later
+             ;; once full-break correctly declines. Subsumes the waiting-prompt
+             ;; guard above, which is kept for its own history.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [current-ice (core/encountered-ice state)
           subroutines (:subroutines current-ice)
           ;; Unbroken AND unfired — see handle-runner-encounter-ice. Passing here
@@ -999,7 +1025,16 @@
              ;; mid-subroutine "Jack out?" decision is still open - masking it.
              (not (has-real-decision? my-prompt))
              ;; Same waiting-prompt chokepoint mirror as its sibling above.
-             (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+             (not (state/waiting-prompt-type? (:prompt-type my-prompt)))
+             ;; And never pass priority while holding a prompt of our own
+             ;; (#296). Unlike a re-fired ability, the engine does NOT refuse
+             ;; this: `continue :encounter-ice` (game.core.runs) reads the
+             ;; encounter ledger and nothing else, so the pass is HONOURED — and
+             ;; with the Corp already gone it ends the encounter with our own
+             ;; prompt unanswered. That is #295's harm, reached one handler later
+             ;; once full-break correctly declines. Subsumes the waiting-prompt
+             ;; guard above, which is kept for its own history.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (let [current-ice (core/encountered-ice state)
           ice-title (:title current-ice "ICE")
           position (get-in state [:game-state :run :position])
