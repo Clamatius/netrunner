@@ -1111,7 +1111,14 @@
                       :selectable []}
       nil
       (let [result (runs/continue-run!)]
-        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
+        ;; later handler can act over the same prompt — and it is the assertion
+        ;; the two pass-handler tests below carry. `(is (some? result))` used to
+        ;; stand here and could not fail: run-first-matching-handler falls back
+        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "no continue may be sent over our own open prompt either. Sent: "
+                 (pr-str @sent)))))))
 
 (deftest test-296-waiting-prompt-does-not-re-fire-the-break
   (testing "#296, the waiting shape (r2 guest-unique): a `waiting` prompt also has
@@ -1126,7 +1133,14 @@
     (with-296-window {:prompt-type "waiting" :msg "Waiting for Corp"}
       nil
       (let [result (runs/continue-run!)]
-        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
+        ;; later handler can act over the same prompt — and it is the assertion
+        ;; the two pass-handler tests below carry. `(is (some? result))` used to
+        ;; stand here and could not fail: run-first-matching-handler falls back
+        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "no continue may be sent over our own open prompt either. Sent: "
+                 (pr-str @sent)))))))
 
 (deftest test-296-zero-choice-other-prompt-does-not-re-fire-the-break
   (testing "#296, the shape that killed the FIRST fix design (r2 F7): a prompt with
@@ -1140,7 +1154,14 @@
     (with-296-window {:prompt-type "other" :eid "e99" :msg "Something resolving"}
       nil
       (let [result (runs/continue-run!)]
-        (is (some? result) "the tick must produce a status, not fall off the chain")))))
+        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
+        ;; later handler can act over the same prompt — and it is the assertion
+        ;; the two pass-handler tests below carry. `(is (some? result))` used to
+        ;; stand here and could not fail: run-first-matching-handler falls back
+        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+            (str "no continue may be sent over our own open prompt either. Sent: "
+                 (pr-str @sent)))))))
 
 (deftest test-296-pass-broken-ice-does-not-pass-priority-over-our-own-prompt
   (testing "#296, the half with a game cost. Declining in full-break hands the
@@ -1218,6 +1239,13 @@
             of landing (handle-waiting-for-opponent and handle-events sit between
             full-break and handle-auto-choice), which is the failure mode the
             fall-through introduces. So this pins the positive."
+    ;; NOT an ordinary break payment, and the earlier draft of this docstring
+    ;; said it was (r3 F2). A payment never takes this shape: with zero provider
+    ;; cards and no usable bad pub the ability skips the prompt altogether
+    ;; (pick-credit-providing-cards' no-prompt shortcut), and with provider cards
+    ;; :selectable is non-empty. The reachable instance is some OTHER select with
+    ;; no valid target — the shape seat-owns-trigger-decision?'s docstring
+    ;; describes, e.g. a rez-a-target select with every ICE already rezzed.
     (with-296-window {:prompt-type "select" :eid "e42"
                       :choices [{:value "Done" :uuid "u-done"}]
                       :selectable []}
@@ -1273,7 +1301,45 @@
             (str "it is surfaced as the seat's decision. Got: " (pr-str result)))
         (is (clojure.string/includes? (str (:message result)) "bad publicity")
             (str "and the message names the option, since nothing else will. "
-                 "Got: " (pr-str (:message result))))))))
+                 "Got: " (pr-str (:message result))))
+        ;; The message must not promise an outcome the engine may not deliver.
+        ;; "pays from your credit pool" is the :cancel -> pay-rest path, and
+        ;; pay-rest's affordability test reads the pool alone — with a pool short
+        ;; of the remaining cost it cannot pay and its re-entry loses this very
+        ;; offer (#299). Same weakening #295's own message needed (r3 F1).
+        (doseq [banned ["credit pool instead" "pays from your credit pool"]]
+          (is (not (clojure.string/includes? (str (:message result)) banned))
+              (str "the message must not promise \"" banned "\" - see #299. Got: "
+                   (pr-str (:message result)))))))))
+
+(deftest test-296-bad-pub-pause-names-a-command-the-client-accepts
+  (testing "#296 r3 (both vendors): the printed guidance named `choose 0`, which
+            this client REFUSES on the prompt this arm can see.
+
+            Only show-select sets :offer-bad-pub?, so the prompt is always a
+            select, and choose-option!'s first cond arm is
+            (state/select-prompt-type? prompt-type) — it prints 'use choose-card
+            <N>, not choose <N>' and names choose-value for a meta button
+            (ai-prompts/choose-option!). So a seat following the hint got a
+            refusal and the prompt stayed open.
+
+            Asserted on the printed OUTPUT, not just the result map, because the
+            hint lives in a println and the result-map assertions above all
+            stayed green with the wrong verb in it. Both the required verb and
+            the banned one are pinned: asserting only that choose-value appears
+            would stay green if both lines were printed."
+    (with-296-window {:prompt-type "select" :eid "e42"
+                      :choices [{:value "Done" :uuid "u-done"}]
+                      :selectable []
+                      :offer-bad-pub? 2}
+      nil
+      (let [out (with-out-str (runs/continue-run!))]
+        (is (clojure.string/includes? out "choose-value \"Done\"")
+            (str "the hint must name the verb this client accepts for a select's "
+                 "meta button, with the label the engine gave. Printed: " out))
+        (is (not (re-find #"(?m)choose\s+\d" out))
+            (str "and must not name `choose <N>`, which choose-option! refuses on "
+                 "a select. Printed: " out))))))
 
 (deftest test-296-main-break-path-still-breaks
   (testing "#296's own named regression risk, which is why it was filed as its own
@@ -1289,7 +1355,15 @@
             state/run-prompt-type? rather than comparing to one of them)."
     (doseq [[label prompt] [["no prompt at all" nil]
                             ["the wire's run window" {:prompt-type "run" :choices [] :selectable []}]
-                            ["the keyword run window" {:prompt-type :run :choices [] :selectable []}]]]
+                            ["the keyword run window" {:prompt-type :run :choices [] :selectable []}]
+                            ;; The shape #296's warning is actually about, and the
+                            ;; one the three above cannot catch (r3 F7): a run
+                            ;; window CARRYING a trivial choice. A guard that
+                            ;; declined on "any prompt with choices" would switch
+                            ;; breaking off here and leave every other case green.
+                            ["a run window carrying a trivial choice"
+                             {:prompt-type "run" :choices [{:value "Continue" :uuid "u-c"}]
+                              :selectable []}]]]
       (let [fired (atom [])]
         (runs/reset-strategy!)
         (runner-handlers/reset-state!)

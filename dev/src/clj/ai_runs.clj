@@ -1315,19 +1315,29 @@
       ;; all: with a pool short of the cost, pay-rest re-enters
       ;; pick-credit-providing-cards and the re-entry loses this very offer
       ;; (#299). Auto-answering it was the worse of the two silences.
-      (do
+      (let [done-label (:value (first (:choices my-prompt)))]
         (println (format "🛑 Credit source: %d [Credits] of bad publicity offered" bad-pub))
         (println "   The client cannot send that choice yet (see #298).")
-        (println (format "   → choose 0  - answer \"%s\" and pay from your credit pool instead"
-                         (:value (first (:choices my-prompt)))))
+        ;; choose-value, NOT `choose <N>`: this prompt is always a select (only
+        ;; show-select sets :offer-bad-pub?), and choose-option! refuses a bare
+        ;; index on a select — its first cond arm prints "use choose-card <N>,
+        ;; not choose <N>" and names choose-value for a meta button
+        ;; (ai-prompts/choose-option!). A printed hint that names a command is
+        ;; code, and `choose 0` here was refused every time (r3, both vendors).
+        (println (format "   → choose-value \"%s\"  - answer the prompt without the bad publicity"
+                         done-label))
         {:status :decision-required
          :wake-reason :bad-pub-offer
          :action :awaiting-credit-source
-         :message (format (str "Credit-source prompt offers %d [Credits] of bad publicity; "
-                               "the client can only answer \"%s\", which pays from your credit "
-                               "pool instead (#298)")
-                          bad-pub
-                          (:value (first (:choices my-prompt))))
+         ;; Says only what is true in BOTH states this arm can be in. It does
+         ;; not promise that answering pays the rest from the pool: that is the
+         ;; :cancel -> pay-rest path, and pay-rest's affordability test reads the
+         ;; pool alone, so with a pool short of the remaining cost it cannot pay
+         ;; and its re-entry loses this very offer (#299).
+         :message (format (str "Credit-source prompt offers %d [Credits] of bad publicity, "
+                               "which this client cannot spend (#298); its only other answer "
+                               "is \"%s\"")
+                          bad-pub done-label)
          :bad-pub-available bad-pub
          :prompt my-prompt})
       (auto-choose-single! my-prompt gameid))))

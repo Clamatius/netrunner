@@ -604,31 +604,30 @@
                   ;; (ai-runs/monitor-run, the :prompt-handled branch). The next
                   ;; tick's snapshot holds the live prompt.
                   ;;
-                  ;; That next tick is covered for the two prompt shapes a credit
-                  ;; source actually takes, and NOT for a third (#296):
+                  ;; What that next tick does with the prompt was #296, and it
+                  ;; is now this handler's entry guard — see
+                  ;; state/engine-blocking-prompt? above. Three shapes reach it:
                   ;;   - ONE selectable: handle-auto-select-single-card resolves it,
                   ;;     and it PRECEDES this handler in the chain.
                   ;;   - 2+ non-trivial choices, or any selectable: has-real-decision?
-                  ;;     is true, this handler's own entry guard declines rather than
-                  ;;     re-firing, and handle-real-decision pauses for the player.
-                  ;;   - NO selectable and at most ONE non-trivial choice: neither
-                  ;;     holds, so this handler is re-entered and fires the ability
-                  ;;     AGAIN over the still-open prompt. Tracked as #296; the fix
-                  ;;     is widening this handler's entry guard, which risks
-                  ;;     disabling the main break path, so it is its own change.
+                  ;;     is true, so handle-real-decision pauses for the player.
+                  ;;   - NO selectable and at most ONE non-trivial choice: neither of
+                  ;;     those holds, and the entry guard is what keeps this handler
+                  ;;     from being re-entered and firing the ability AGAIN over the
+                  ;;     still-open prompt (#296).
                   ;;
-                  ;;     This shape is NOT just a non-payment prompt. Two ways in:
-                  ;;     (a) :waiting-input is not payment-specific — use-ability!
-                  ;;     returns it for any prompt the ability opens (new-prompt? is
-                  ;;     eid-based, ai-core/new-prompt?), e.g. "choose a target"; and
-                  ;;     (b) a PAYMENT select itself can have it. When bad publicity
-                  ;;     is spendable and no credit-providing card qualifies,
-                  ;;     pick-credit-providing-cards still shows the prompt to offer
-                  ;;     bad pub (:offer-bad-pub?, game.core.pick-counters), while its
-                  ;;     :choices {:card ...} predicate matches nothing — so
-                  ;;     :selectable is empty and only the select's own Done remains.
-                  ;;     handle-auto-choice would resolve a lone-choice prompt but
-                  ;;     sits AFTER this handler in the chain (r2 F4).
+                  ;;     That third shape is NOT just a non-payment prompt. Two ways
+                  ;;     in: (a) :waiting-input is not payment-specific —
+                  ;;     use-ability! returns it for any prompt the ability opens
+                  ;;     (new-prompt? is eid-based, ai-core/new-prompt?), e.g.
+                  ;;     "choose a target"; and (b) a PAYMENT select itself can have
+                  ;;     it. When bad publicity is spendable and no credit-providing
+                  ;;     card qualifies, pick-credit-providing-cards still shows the
+                  ;;     prompt to offer bad pub (:offer-bad-pub?,
+                  ;;     game.core.pick-counters), while its :choices {:card ...}
+                  ;;     predicate matches nothing — so :selectable is empty and only
+                  ;;     the select's own Done remains. That one is handed to the seat
+                  ;;     rather than answered (handle-auto-choice's bad-pub arm, #298).
                   ;;
                   ;; Deliberately NOT a new status: monitor-run treats an
                   ;; unrecognised one as terminal and would stop the run.
