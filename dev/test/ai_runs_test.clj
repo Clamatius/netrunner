@@ -1100,22 +1100,33 @@
             so full-break's old entry guard was satisfied and it called
             use-ability! again over its own open prompt.
 
-            This is the shape an ordinary break payment takes whenever the Corp
-            has bad publicity and no card in the rig can provide credits:
-            pick-credit-providing-cards shows the select to OFFER the bad pub
-            while its :choices {:card ...} predicate matches nothing, so
+            The shape itself is what an ordinary break payment takes whenever
+            the Corp has bad publicity and no card in the rig can provide
+            credits: pick-credit-providing-cards shows the select to OFFER the
+            bad pub while its :choices {:card ...} predicate matches nothing, so
             :selectable is empty and only the select's own Done remains
-            (game.core.pick-counters:200-246)."
+            (game.core.pick-counters).
+
+            This fixture is NOT that payment, though: a real one carries
+            :offer-bad-pub?, and with the key present handle-auto-choice hands the
+            prompt to the seat instead of answering it (#298). Here the key is
+            absent, which isolates the one thing under test — that full-break does
+            not re-fire over a prompt of this shape, whatever later handles it."
     (with-296-window {:prompt-type "select" :eid "e42"
                       :choices [{:value "Done" :uuid "u-done"}]
                       :selectable []}
       nil
       (let [result (runs/continue-run!)]
-        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
-        ;; later handler can act over the same prompt — and it is the assertion
-        ;; the two pass-handler tests below carry. `(is (some? result))` used to
-        ;; stand here and could not fail: run-first-matching-handler falls back
-        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        ;; The throwing stub is what pins the re-fire. This second assertion is a
+        ;; CANARY, not a pin, and measured as one: in this fixture (fresh
+        ;; encounter ledger, one unbroken sub) every continue-sender in the chain
+        ;; declines for reasons unrelated to its prompt guard, so reverting
+        ;; either pass-handler guard leaves this green — the battery's M2 and M3
+        ;; each killed exactly one test, and it was the dedicated fixture below,
+        ;; not this one (r4 F2). It is here to fail if a FUTURE sender starts
+        ;; acting over these shapes. What it replaced, `(is (some? result))`,
+        ;; could not fail at all: run-first-matching-handler falls back to
+        ;; handle-unexpected-state, which always returns a map (r3 F4).
         (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
             (str "no continue may be sent over our own open prompt either. Sent: "
                  (pr-str @sent)))))))
@@ -1133,11 +1144,16 @@
     (with-296-window {:prompt-type "waiting" :msg "Waiting for Corp"}
       nil
       (let [result (runs/continue-run!)]
-        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
-        ;; later handler can act over the same prompt — and it is the assertion
-        ;; the two pass-handler tests below carry. `(is (some? result))` used to
-        ;; stand here and could not fail: run-first-matching-handler falls back
-        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        ;; The throwing stub is what pins the re-fire. This second assertion is a
+        ;; CANARY, not a pin, and measured as one: in this fixture (fresh
+        ;; encounter ledger, one unbroken sub) every continue-sender in the chain
+        ;; declines for reasons unrelated to its prompt guard, so reverting
+        ;; either pass-handler guard leaves this green — the battery's M2 and M3
+        ;; each killed exactly one test, and it was the dedicated fixture below,
+        ;; not this one (r4 F2). It is here to fail if a FUTURE sender starts
+        ;; acting over these shapes. What it replaced, `(is (some? result))`,
+        ;; could not fail at all: run-first-matching-handler falls back to
+        ;; handle-unexpected-state, which always returns a map (r3 F4).
         (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
             (str "no continue may be sent over our own open prompt either. Sent: "
                  (pr-str @sent)))))))
@@ -1154,11 +1170,16 @@
     (with-296-window {:prompt-type "other" :eid "e99" :msg "Something resolving"}
       nil
       (let [result (runs/continue-run!)]
-        ;; The throwing stub is what pins the re-fire. This pins the OTHER way a
-        ;; later handler can act over the same prompt — and it is the assertion
-        ;; the two pass-handler tests below carry. `(is (some? result))` used to
-        ;; stand here and could not fail: run-first-matching-handler falls back
-        ;; to handle-unexpected-state, which always returns a map (r3 F4).
+        ;; The throwing stub is what pins the re-fire. This second assertion is a
+        ;; CANARY, not a pin, and measured as one: in this fixture (fresh
+        ;; encounter ledger, one unbroken sub) every continue-sender in the chain
+        ;; declines for reasons unrelated to its prompt guard, so reverting
+        ;; either pass-handler guard leaves this green — the battery's M2 and M3
+        ;; each killed exactly one test, and it was the dedicated fixture below,
+        ;; not this one (r4 F2). It is here to fail if a FUTURE sender starts
+        ;; acting over these shapes. What it replaced, `(is (some? result))`,
+        ;; could not fail at all: run-first-matching-handler falls back to
+        ;; handle-unexpected-state, which always returns a map (r3 F4).
         (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
             (str "no continue may be sent over our own open prompt either. Sent: "
                  (pr-str @sent)))))))
@@ -1226,14 +1247,19 @@
             handle-auto-choice, which answers it with exactly one `choice`
             carrying the prompt's own :eid.
 
-            That is the right answer for this shape: the select's Done runs the
-            credit-source ability's `:cancel {:effect pay-rest}`
-            (game.core.pick-counters, the END of the ability map) through
-            show-select's wrap and resolve-select's empty branch
-            (game.core.prompts), so Done pays the remainder from the credit pool
-            and the break resolves. Nothing is forfeited — an earlier draft of
-            this fix was built on the opposite belief, and two review seats
-            caught it at the line.
+            Answering is the right move for this shape, and the reason is the
+            select's Done running the credit-source ability's
+            `:cancel {:effect pay-rest}` (game.core.pick-counters, the END of the
+            ability map) through show-select's wrap and resolve-select's empty
+            branch (game.core.prompts) — NOT a dead end. An earlier draft of this
+            fix was built on the belief that Done forfeits the payment, and two
+            review seats caught that at the line.
+
+            It does not follow that Done always pays: pay-rest's affordability
+            test reads the credit pool alone, so with a pool short of the
+            remaining cost it cannot, and its re-entry loses the bad-pub offer
+            that made the cost payable (#299). That state is reachable only with
+            an offer present, which this fixture does not have.
 
             Absence-only assertions would stay green if the chain PARKED instead
             of landing (handle-waiting-for-opponent and handle-events sit between
