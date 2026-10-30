@@ -605,15 +605,28 @@
      would have taken.
    - `continue` is NOT gated by the engine at all: `continue :encounter-ice`
      (game.core.runs) reads the encounter ledger and nothing else, so a pass sent
-     over an open prompt is HONOURED. Every pass handler therefore uses this
-     predicate as a client-side rule of its own rather than as a mirror: the two
-     ENCOUNTER senders (`handle-runner-pass-broken-ice`,
+     over an open prompt is HONOURED. The callers that use this predicate
+     therefore use it as a client-side rule of their own rather than as a mirror:
+     the two ENCOUNTER senders (`handle-runner-pass-broken-ice`,
      `handle-runner-pass-fired-ice`) since #296, and `handle-initiation-auto-pass`
      and `handle-stalled-window-self-advance` — which gated on
      `has-real-decision?` alone and carried the same hole at the initiation and
-     stalled-window boundaries — since #301. `handle-runner-tactics` is the one
-     sender in the chain that still has no prompt guard at all (#297); it is a
-     different flag and needs a decision this predicate does not settle.
+     stalled-window boundaries — since #301.
+
+     DO NOT read that list as chain coverage. It is the list of callers, not of
+     senders, and a draft of it claimed the chain was covered — which a review
+     seat refuted at the line (#301 round 1). Senders that reach the wire WITHOUT
+     consulting this predicate, as of #301:
+
+       `handle-runner-tactics`        no prompt guard at all (#297)
+       `handle-runner-approach-ice`   `has-real-decision?` / waiting only
+       the Corp handlers' `send-continue!` sites (ai-run-corp-handlers)
+
+     and `handle-paid-ability-window` does not read `my-prompt` at all, which is
+     why declining is not by itself safe: see `surface-blocking-prompt` (ai-runs).
+     Before adding this predicate to a fourth window, check what the chain does
+     AFTER the decline, and prefer collapsing the senders onto one gate over a
+     fifth hand-maintained copy of this clause.
 
      Callers at a both-pass window depend on the {nil, :run} admission for more
      than exactness: an empty window has no prompt, a seat at a run window holds

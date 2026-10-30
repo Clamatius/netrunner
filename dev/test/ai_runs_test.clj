@@ -1479,17 +1479,31 @@
 ;; handle-stalled-window-self-advance (the #31 self-advance) — so each carried
 ;; #295's harm at its own window.
 ;;
-;; These call the handlers DIRECTLY rather than driving continue-run!, which is
-;; what the issue suggested. Driving the chain cannot reach
+;; The INITIATION tests call the handler DIRECTLY rather than driving
+;; continue-run!, which is what the issue suggested. There the chain cannot reach
 ;; handle-initiation-auto-pass with the issue's lone-Done select:
 ;; handle-auto-choice sits ABOVE it and fires on any prompt with exactly one
 ;; choice, so it answers the Done and returns, and the fixture stays green with
-;; the guard reverted. That is the canary trap #296's own r4 measured on its two
-;; chain-level assertions. The zero-choice "other" prompt used below is a shape
-;; that no earlier handler claims (handle-auto-choice needs `(seq :choices)`,
-;; has-real-decision? scores it trivial) and the engine still refuses an ability
-;; over — #296's third shape, and the one that makes the point that this is not a
-;; question about whether the PLAYER owes a decision.
+;; the guard reverted (measured, round 1). That is the canary trap #296's own r4
+;; hit on its two chain-level assertions. The zero-choice "other" prompt used
+;; there is a shape no earlier handler claims (handle-auto-choice needs
+;; `(seq :choices)`, has-real-decision? scores it trivial) and the engine still
+;; refuses an ability over — #296's third shape, and the one that makes the point
+;; that this is not a question about whether the PLAYER owes a decision.
+;;
+;; That reasoning is initiation-ONLY, which round 1 caught (I3): at the STALLED
+;; window handle-stalled-window-self-advance is reached BEFORE handle-auto-choice,
+;; so the chain-level test the issue asked for is reachable there and is strictly
+;; stronger than a direct call. It is below, with the issue's own named shape (the
+;; lone-Done select), as well as the direct call.
+;;
+;; What each handler does when it declines is NOT nil — see surface-blocking-prompt
+;; (ai-runs). Returning nil was round 1's CRITICAL, found by both vendors: with the
+;; handler silent, handle-paid-ability-window claims the tick off [:run :no-action]
+;; alone (it never reads my-prompt) and reports a wait on the OPPONENT while our own
+;; prompt is the thing stranding us, in a status terminal-status? does not list — so
+;; the loop re-ticks it to the iteration cap. These handlers claim the tick and
+;; surface the prompt instead.
 ;;
 ;; The deadlock cases are pinned beside them, because a new reason for these two
 ;; handlers to decline is a new reason for #31's both-pass wedge to return — and
@@ -1537,14 +1551,20 @@
             with our own prompt still open. The engine honours that pass —
             `continue` is not gated on a prompt at all — so the window closes and
             the prompt is stranded."
-    (let [[result sent] (initiation-pass {:prompt-type "other"
-                                          :msg "Choose a trigger to resolve"
-                                          :eid "e9"})]
-      (is (nil? result)
-          (str "the handler must DECLINE, leaving the prompt to the chain. Got: "
-               (pr-str result)))
+    (let [prompt {:prompt-type "other" :msg "Choose a trigger to resolve" :eid "e9"}
+          [result sent] (initiation-pass prompt)]
       (is (empty? sent)
-          (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
+          (str "no continue may reach the wire. Sent: " (pr-str sent)))
+      ;; NOT nil: a silent decline was round 1's CRITICAL. The tick is claimed and
+      ;; the prompt reported, because handle-paid-ability-window would otherwise
+      ;; claim it and name the wrong side in a non-terminal status.
+      (is (= :decision-required (:status result))
+          (str "the handler must CLAIM the tick with a terminal status. Got: "
+               (pr-str result)))
+      (is (= prompt (:prompt result))
+          "and hand the seat the actual prompt")
+      (is (= :blocking-prompt-at-run-window (:wake-reason result))
+          "with a wake-reason that says why"))))
 
 (deftest test-301-initiation-auto-pass-still-passes-an-empty-window
   (testing "#301's deadlock half: the #62 case the handler exists for. No prompt
@@ -1611,13 +1631,15 @@
             already-passed chokepoint, and the engine's second continue ADVANCES
             the phase with no side-check — so over an open prompt it leaves the
             window behind us with the prompt unanswered."
-    (let [[result sent] (stalled-self-advance {:prompt-type "other"
-                                               :msg "Choose a trigger to resolve"
-                                               :eid "e9"})]
-      (is (nil? result)
-          (str "the handler must DECLINE. Got: " (pr-str result)))
+    (let [prompt {:prompt-type "other" :msg "Choose a trigger to resolve" :eid "e9"}
+          [result sent] (stalled-self-advance prompt)]
       (is (empty? sent)
-          (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
+          (str "no continue may reach the wire. Sent: " (pr-str sent)))
+      (is (= :decision-required (:status result))
+          (str "the handler must CLAIM the tick with a terminal status, not return "
+               "nil — see surface-blocking-prompt. Got: " (pr-str result)))
+      (is (= prompt (:prompt result))
+          "and hand the seat the actual prompt"))))
 
 (deftest test-301-stalled-window-self-advance-still-breaks-the-deadlock
   (testing "#301's deadlock half for the stall-BREAKER: holding the engine's
@@ -1633,6 +1655,68 @@
           (str "must still advance the abandoned window. Got: " (pr-str result)))
       (is (= ["continue"] (mapv #(get-in % [:data :command]) sent))
           (str "with exactly one continue. Sent: " (pr-str sent))))))
+
+(defn- drive-chain-at-stalled-window
+  "Drive the WHOLE chain (continue-run!) at the abandoned approach-ice window
+   holding `prompt`, returning [result sent]. Round 1 I3: at this window the
+   self-advance handler is reached before handle-auto-choice, so unlike the
+   initiation case the chain-level test the issue asked for is reachable here —
+   and it is strictly stronger than the direct call, because it also pins what the
+   REST of the chain does with the decline."
+  [prompt]
+  (let [sent (atom [])]
+    (runs/reset-strategy!)
+    (runner-handlers/reset-state!)
+    (corp-handlers/reset-waiting-status!)
+    (try
+      (with-mock-state (stalled-state prompt)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      runs/self-advance-grace-ms 0]
+          (runs/reset-window-grace!)
+          [(runs/continue-run!) @sent]))
+      (finally
+        (runs/reset-strategy!)
+        (runner-handlers/reset-state!)
+        (corp-handlers/reset-waiting-status!)))))
+
+(deftest test-301-chain-sends-no-continue-over-a-lone-done-select-at-a-stalled-window
+  (testing "#301 round 1 I3 — the test the ISSUE asked for, at the window where it
+            is actually reachable, with the shape the issue names by name: a select
+            with an empty :selectable and a lone Done.
+
+            has-real-decision? strips the Done as trivial and sees no selectable,
+            so the old guard was satisfied and the chain put a second `continue` on
+            the wire — a pass the engine HONOURS, advancing the phase with our own
+            select unanswered. Driving continue-run! rather than the handler pins
+            that no OTHER sender in the chain picks the pass up either."
+    (let [[result sent] (drive-chain-at-stalled-window
+                         {:prompt-type "select" :eid "e42"
+                          :choices [{:value "Done" :uuid "u-done"}]
+                          :selectable []})]
+      (is (not-any? #(= "continue" (get-in % [:data :command])) sent)
+          (str "no continue may be sent over our own open select. Sent: "
+               (pr-str sent)))
+      ;; And the chain must not report a wait on the OPPONENT while the prompt
+      ;; stranding us is ours — round 1's CRITICAL, which a nil decline caused.
+      (is (not= :waiting-for-opponent-paid-abilities (:status result))
+          (str "the chain must not blame the Corp for our own prompt. Got: "
+               (pr-str result)))
+      (is (= :decision-required (:status result))
+          (str "it must surface the prompt, in a status terminal-status? lists so "
+               "the auto-continue loop stops instead of re-ticking. Got: "
+               (pr-str result))))))
+
+(deftest test-301-chain-still-self-advances-an-abandoned-window-with-no-prompt
+  (testing "#301 round 1, the chain-level deadlock pin: the SAME chain, same
+            window, nothing open. #31's stall must still be broken end-to-end, not
+            merely by the handler in isolation — otherwise the surfacing arm could
+            swallow every window and the direct-call tests would not notice."
+    (let [[result sent] (drive-chain-at-stalled-window nil)]
+      (is (= ["continue"] (mapv #(get-in % [:data :command]) sent))
+          (str "exactly one continue must still reach the wire. Sent: "
+               (pr-str sent)))
+      (is (= :action-taken (:status result))
+          (str "and the tick reports the advance. Got: " (pr-str result))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
