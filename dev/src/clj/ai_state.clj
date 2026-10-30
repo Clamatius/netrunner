@@ -605,13 +605,33 @@
      would have taken.
    - `continue` is NOT gated by the engine at all: `continue :encounter-ice`
      (game.core.runs) reads the encounter ledger and nothing else, so a pass sent
-     over an open prompt is HONOURED. The two ENCOUNTER pass handlers
-     (`handle-runner-pass-broken-ice`, `handle-runner-pass-fired-ice`) therefore
-     use this predicate as a client-side rule of their own rather than as a
-     mirror. It is not a chain-wide rule: `handle-initiation-auto-pass` and
-     `handle-stalled-window-self-advance` still gate on `has-real-decision?`
-     alone, so the initiation and stalled-window passes carry the same hole at
-     their own windows (filed separately)."
+     over an open prompt is HONOURED. The callers that use this predicate
+     therefore use it as a client-side rule of their own rather than as a mirror:
+     the two ENCOUNTER senders (`handle-runner-pass-broken-ice`,
+     `handle-runner-pass-fired-ice`) since #296, and `handle-initiation-auto-pass`
+     and `handle-stalled-window-self-advance` — which gated on
+     `has-real-decision?` alone and carried the same hole at the initiation and
+     stalled-window boundaries — since #301.
+
+     DO NOT read that list as chain coverage. It is the list of callers, not of
+     senders, and a draft of it claimed the chain was covered — which a review
+     seat refuted at the line (#301 round 1). Senders that reach the wire WITHOUT
+     consulting this predicate, as of #301:
+
+       `handle-runner-tactics`        no prompt guard at all (#297)
+       `handle-runner-approach-ice`   `has-real-decision?` / waiting only
+       the Corp handlers' `send-continue!` sites (ai-run-corp-handlers)
+
+     and `handle-paid-ability-window` does not read `my-prompt` at all, which is
+     why declining is not by itself safe: see `surface-blocking-prompt` (ai-runs).
+     Before adding this predicate to a fourth window, check what the chain does
+     AFTER the decline, and prefer collapsing the senders onto one gate over a
+     fifth hand-maintained copy of this clause.
+
+     Callers at a both-pass window depend on the {nil, :run} admission for more
+     than exactness: an empty window has no prompt, a seat at a run window holds
+     the engine's dummy RUN prompt, and declining either would restore the #31
+     both-pass wedge that `handle-stalled-window-self-advance` exists to break."
   [prompt]
   (let [prompt-type (:prompt-type prompt)]
     (not (or (nil? prompt-type)

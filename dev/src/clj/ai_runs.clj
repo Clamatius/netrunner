@@ -1475,6 +1475,96 @@
           (warn-tank-not-yet-signalled! ice-title))))
     (send-continue! gameid)))
 
+(defn- surface-blocking-prompt
+  "Claim this tick and SURFACE our own prompt, instead of passing priority over it
+   or declining silently (#301 round 1, the panel's CRITICAL — both vendors).
+
+   The two both-pass senders below must not send a `continue` while we hold a
+   prompt the engine would refuse an ability over. Returning nil for that was the
+   obvious decline and it was WRONG at BOTH windows, measured on the chain — but
+   for two DIFFERENT reasons, which round 2 caught the first draft of this
+   docstring conflating:
+
+   - At the STALLED window, `handle-paid-ability-window` (ai-run-corp-handlers)
+     sits above every prompt-answering handler and reads `[:run :no-action]`
+     ALONE — it never looks at `my-prompt` — so once we have passed it claims the
+     tick and reports `{:status :waiting-for-opponent-paid-abilities, :message
+     \"Waiting for corp to pass or use paid abilities\"}` while the prompt stranding
+     the seat is OURS (#303).
+   - At INITIATION that handler cannot claim the tick at all: this handler only
+     runs when `should-i-act?` is true, so `:no-action` does not name us and its
+     `we-passed?` is false. The fall-through there is `handle-unexpected-state`,
+     whose `:waiting-for-opponent` is just as non-terminal and just as wrong.
+
+   Either way the status is not in `terminal-status?`, so the auto-continue loop
+   re-ticks the same state to its iteration cap under a message naming the wrong
+   side. Declining traded a wrong-but-progressing pass for a silent spin — and
+   these seats run un-babysat.
+
+   So the handler claims the tick and says what is true. `:decision-required` is
+   terminal (`terminal-status?`), which stops the loop and hands the seat the
+   prompt — the same answer #296 chose for full-break's bad-publicity payment:
+   surface a prompt the client cannot answer correctly rather than guess at it.
+
+   WHICH SHAPES actually reach this, which the first two drafts got wrong by
+   repeating #296's example without checking it (round 3 K1). The engine will not
+   queue a prompt at all unless it is `:waiting`/`:run`, its choices are a
+   `:number`/`:card-title`/`:credit`/`:counter` map, or `(pos? (count choices))`
+   (`show-prompt`, game.core.prompts) — so the zero-choice \"other\" prompt used as
+   the example here and as the fixture in ai-runs-test is NOT engine-producible.
+   It is kept as a deliberate boundary case, not because it occurs.
+
+   What reaches here in practice is a prompt with 2+ TRIVIAL choices (say Done and
+   Continue): `has-real-decision?` strips both and sees fewer than 2 non-trivial,
+   and `handle-auto-choice`'s exactly-one-choice gate declines it, so it arrives
+   here. At INITIATION that is the only reachable shape, which makes this arm close
+   to dormant there — a one-choice prompt is auto-answered upstream. At the STALLED
+   window a lone-`Done` select reaches it too, because this handler runs before
+   `handle-auto-choice`.
+
+   NOT for a `waiting` prompt. Callers must exclude `state/waiting-prompt-type?`
+   BEFORE reaching here and fall through instead. A waiting prompt is the
+   OPPONENT's checkpoint: the seat can do nothing about it, so surfacing it as a
+   decision stops the loop on a prompt only the opponent can clear, and the
+   printed hint tells the seat to answer something it cannot. Round 2's MAJOR,
+   found by both vendors — the surfacing arm had inherited
+   `engine-blocking-prompt?`'s whole set rather than the subset the seat owes.
+   There was never anything to fix for that shape anyway: `send-continue!`'s #75
+   chokepoint already suppresses a continue over a waiting prompt.
+
+   COST, deliberately paid: at the STALLED window a lone-`Done` select that
+   `handle-auto-choice` would answer is surfaced instead, because the chain does
+   not reach `handle-auto-choice` from there (it sits below
+   `handle-paid-ability-window`). At INITIATION there is no such cost and no
+   conflict with the canary argument in ai-runs-test: `handle-auto-choice`
+   PRECEDES `handle-initiation-auto-pass`, so a lone-`Done` select is auto-answered
+   before this helper is ever reached (measured, round 2 J2).
+
+   EXIT — delete this and go back to a plain decline once every handler BELOW
+   these two either claims our own prompt or reports it truthfully in a status
+   `terminal-status?` lists. Note what is NOT sufficient, because the first draft
+   said it was and a seat demonstrated otherwise (round 2 J3): merely reordering
+   `handle-auto-choice` / `handle-real-decision` above `handle-paid-ability-window`
+   does not do it — with a zero-choice \"other\" prompt both of those decline too,
+   and the misleading non-terminal wait comes back. #303 is the tracking issue.
+   Guarding `handle-paid-ability-window` instead was the one-clause alternative and
+   was rejected here: below it sit `handle-runner-tactics` (#297, which acts over
+   ANY prompt with no guard at all) and the senders in #302, so a decline there
+   arms a dormant path."
+  [my-prompt window]
+  (println (format "🛑 Holding our own prompt at the %s window - not passing priority over it" window))
+  (when-let [msg (:msg my-prompt)]
+    (println (format "   Prompt: %s" msg)))
+  (println "   → answer it (e.g. `choose-value`/`choose-card`), then continue")
+  {:status :decision-required
+   :wake-reason :blocking-prompt-at-run-window
+   :action :awaiting-own-prompt
+   :message (format (str "Holding our own %s prompt at the %s window; passing priority over it "
+                         "would be honoured by the engine and strand it (#301)")
+                    (or (:prompt-type my-prompt) "unknown")
+                    window)
+   :prompt my-prompt})
+
 (defn handle-initiation-auto-pass
   "Priority 6 (before handle-auto-continue): auto-pass the run INITIATION window
    when I am the active player (#31, step 1).
@@ -1499,8 +1589,41 @@
   (when (and (= run-phase "initiation")
              (should-i-act? state side)
              (not (has-real-decision? my-prompt)))
-    (println "   → Auto-passing initiation window (no run-start decision)")
-    (send-continue! gameid)))
+    ;; …but never pass priority while holding a prompt of our own (#301, the #296
+    ;; rule at this window). has-real-decision? asks a question about the PLAYER —
+    ;; 2+ non-trivial choices, or a selectable — and the shapes it scores TRIVIAL
+    ;; are not all shapes we may pass over: a select with an empty :selectable and
+    ;; a lone Done, and a zero-choice "other" prompt, are both prompts the seat
+    ;; still owes an answer to. (A `waiting` prompt is the opposite case — the
+    ;; opponent's checkpoint, which we owe nothing on — and it is excluded here
+    ;; because a continue from us RE-FIRES that checkpoint and mints duplicate
+    ;; prompts, #75; same shape, different reason. Round 1 I4.)
+    ;;
+    ;; The engine does not save us here the way it does from a re-fired ability:
+    ;; `continue` is not gated on a prompt at all (continue :encounter-ice,
+    ;; game.core.runs, reads the encounter ledger and nothing else), so the pass
+    ;; is HONOURED and the window closes with our prompt stranded.
+    ;; send-continue!'s own chokepoints do not cover it either — they guard a
+    ;; `waiting` prompt (#75) and our own recorded pass (#98), and a select is
+    ;; neither.
+    ;;
+    ;; engine-blocking-prompt? admits {nil, "run"}, which is what keeps #62
+    ;; working: an empty initiation window has no prompt, and a seat at a run
+    ;; window holds the engine's dummy RUN prompt, whose answer IS continue.
+    ;;
+    ;; We SURFACE rather than return nil — see surface-blocking-prompt for why a
+    ;; silent decline was a spin, not a safe no-op.
+    (cond
+      ;; The OPPONENT's checkpoint, not ours: fall through and let the
+      ;; opponent-wait handlers report it (round 2 J1). Surfacing it would stop
+      ;; the loop on a prompt only they can clear.
+      (state/waiting-prompt-type? (:prompt-type my-prompt)) nil
+      (state/engine-blocking-prompt? my-prompt)
+      (surface-blocking-prompt my-prompt "initiation")
+      :else
+      (do
+        (println "   → Auto-passing initiation window (no run-start decision)")
+        (send-continue! gameid)))))
 
 (def self-advance-grace-ms
   "How long the opponent gets to answer a window before we treat it as ABANDONED
@@ -1552,15 +1675,43 @@
              (i-already-passed? state side)
              (not (opponent-has-run-decision? state side run-phase))
              (not (has-real-decision? my-prompt)))
-    ;; Board says there's no rez decision here. Give the opponent the grace period
-    ;; anyway (see docstring) — only an ABANDONED window gets advanced.
-    (let [stalled-ms (core/window-stalled-for-ms state side)]
-      (when (>= stalled-ms self-advance-grace-ms)
-        (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
-                         (/ stalled-ms 1000.0)))
-        ;; Deliberate SECOND pass of an abandoned window — bypasses the #98
-        ;; already-passed guard, which exists to stop accidental repeats.
-        (send-continue! gameid :second-pass? true)))))
+    ;; …but never advance while holding a prompt of our own (#301, the #296 rule
+    ;; at this window). The blast radius is worse here than at initiation: the
+    ;; continue below is a DELIBERATE second pass, which bypasses the #98
+    ;; already-passed chokepoint, and the engine's second continue ADVANCES the
+    ;; phase with no side-check — so over an open prompt it leaves the window
+    ;; behind us with the prompt unanswered. has-real-decision? scores a lone-Done
+    ;; select and a zero-choice "other" prompt as trivial, and both are prompts
+    ;; the seat still owes. (A `waiting` prompt is the opposite case — the
+    ;; opponent's checkpoint, owing us nothing — and is excluded for #75's reason
+    ;; instead: our continue would re-fire it. Round 1 I4.)
+    ;;
+    ;; This cannot restore the #31 stall this handler exists to break:
+    ;; engine-blocking-prompt? admits {nil, "run"}, and "run" is what the seat
+    ;; actually holds at an approach-ice or movement window (show-run-prompts
+    ;; mints the dummy run prompt for BOTH seats on every run). Only a real prompt
+    ;; of our own stops the advance, and the tick is then spent REPORTING that
+    ;; prompt to the seat — not answering it, which this chain cannot do from here
+    ;; (surface-blocking-prompt has the measurement; round 1 I1/F3).
+    (cond
+      ;; The OPPONENT's checkpoint, not ours (round 2 J1, both vendors): fall
+      ;; through, so handle-paid-ability-window reports the wait — which for THIS
+      ;; shape is true, and non-terminal is right because the loop should keep
+      ;; polling for them. send-continue!'s #75 chokepoint already made a pass
+      ;; over a waiting prompt harmless, so there is nothing here to guard.
+      (state/waiting-prompt-type? (:prompt-type my-prompt)) nil
+      (state/engine-blocking-prompt? my-prompt)
+      (surface-blocking-prompt my-prompt run-phase)
+      :else
+      ;; Board says there's no rez decision here. Give the opponent the grace
+      ;; period anyway (see docstring) — only an ABANDONED window gets advanced.
+      (let [stalled-ms (core/window-stalled-for-ms state side)]
+        (when (>= stalled-ms self-advance-grace-ms)
+          (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
+                           (/ stalled-ms 1000.0)))
+          ;; Deliberate SECOND pass of an abandoned window — bypasses the #98
+          ;; already-passed guard, which exists to stop accidental repeats.
+          (send-continue! gameid :second-pass? true))))))
 
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
