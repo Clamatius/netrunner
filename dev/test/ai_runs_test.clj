@@ -1499,11 +1499,18 @@
 ;;
 ;; What each handler does when it declines is NOT nil — see surface-blocking-prompt
 ;; (ai-runs). Returning nil was round 1's CRITICAL, found by both vendors: with the
-;; handler silent, handle-paid-ability-window claims the tick off [:run :no-action]
-;; alone (it never reads my-prompt) and reports a wait on the OPPONENT while our own
-;; prompt is the thing stranding us, in a status terminal-status? does not list — so
-;; the loop re-ticks it to the iteration cap. These handlers claim the tick and
-;; surface the prompt instead.
+;; handler silent the chain reports a wait on the OPPONENT while our own prompt is
+;; the thing stranding us, in a status terminal-status? does not list, so the loop
+;; re-ticks to its iteration cap. The handler that does the misreporting differs by
+;; window (round 2 J2): handle-paid-ability-window at the stalled window (#303), and
+;; handle-unexpected-state at initiation, where handle-paid-ability-window cannot
+;; claim the tick at all because should-i-act? being true means :no-action does not
+;; name us. These handlers claim the tick and surface the prompt instead.
+;;
+;; With ONE exception, which is round 2's MAJOR (both vendors): a `waiting` prompt
+;; falls through instead of being surfaced. It is the opponent's checkpoint, so
+;; surfacing it would stop the loop on a prompt only they can clear — and a pass
+;; over it was already harmless (send-continue!'s #75 chokepoint). Pinned below.
 ;;
 ;; The deadlock cases are pinned beside them, because a new reason for these two
 ;; handlers to decline is a new reason for #31's both-pass wedge to return — and
@@ -1717,6 +1724,65 @@
                (pr-str sent)))
       (is (= :action-taken (:status result))
           (str "and the tick reports the advance. Got: " (pr-str result))))))
+
+(deftest test-301-waiting-prompt-is-not-surfaced-as-our-own-decision
+  (testing "#301 round 2 J1 (MAJOR, both vendors): a `waiting` prompt is the
+            OPPONENT's checkpoint, and the surfacing arm must not claim it.
+
+            Round 1 made these handlers surface a blocking prompt rather than
+            decline silently. The arm inherited engine-blocking-prompt?'s whole
+            set, and \"waiting\" is in it — so holding the Corp's checkpoint
+            returned a TERMINAL :decision-required whose message called it 'our
+            own' and whose printed hint told the seat to answer it with
+            choose-value/choose-card. The seat can do nothing about it, and
+            terminal stops the auto-continue loop (dropping the live run in
+            persistent mode, the #36 shape).
+
+            This is the sharpest form of round 1's I4: that round corrected the
+            COMMENT that wrongly called a waiting prompt ours, and the mechanism
+            built in the same round then treated it as ours.
+
+            Nothing had to be guarded here in the first place:
+            send-continue!'s #75 chokepoint already suppresses a continue over a
+            waiting prompt. So the right answer is to fall through and let the
+            opponent-wait handlers report it — which for THIS shape is true, and
+            non-terminal is correct because the loop should keep polling."
+    (let [waiting {:prompt-type "waiting" :msg "Waiting for Corp" :eid "e7"}]
+      ;; Direct call: the handler must not claim the tick at all.
+      (let [[result sent] (stalled-self-advance waiting)]
+        (is (nil? result)
+            (str "a waiting prompt must fall THROUGH, not be surfaced. Got: "
+                 (pr-str result)))
+        (is (empty? sent)
+            (str "and no continue may be sent either. Sent: " (pr-str sent))))
+      ;; Chain: and the run must be reported as an opponent wait, non-terminally,
+      ;; so the loop keeps polling for the Corp instead of stopping.
+      (let [[result sent] (drive-chain-at-stalled-window waiting)]
+        (is (not-any? #(= "continue" (get-in % [:data :command])) sent)
+            (str "no continue over the Corp's checkpoint. Sent: " (pr-str sent)))
+        (is (not= :decision-required (:status result))
+            (str "the Corp's checkpoint must NOT be reported as our decision "
+                 "- that status is terminal and the seat cannot act on it. Got: "
+                 (pr-str result)))
+        (is (= :waiting-for-opponent-paid-abilities (:status result))
+            (str "it is an opponent wait, and the chain should say so. Got: "
+                 (pr-str result)))))))
+
+(deftest test-301-initiation-waiting-prompt-is-not-surfaced-either
+  (testing "#301 round 2 J1 at the other guarded window. Here the chain already
+            reported it correctly (handle-waiting-for-opponent precedes
+            handle-initiation-auto-pass), so the direct call is what pins the
+            handler's own behaviour: it must decline rather than surface, which is
+            what keeps the two windows' rules the same instead of accidentally
+            symmetric."
+    (let [[result sent] (initiation-pass {:prompt-type "waiting"
+                                          :msg "Waiting for Runner"
+                                          :eid "e7"})]
+      (is (nil? result)
+          (str "a waiting prompt must fall THROUGH at initiation too. Got: "
+               (pr-str result)))
+      (is (empty? sent)
+          (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
