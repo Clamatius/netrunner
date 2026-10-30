@@ -1506,6 +1506,22 @@
    prompt — the same answer #296 chose for full-break's bad-publicity payment:
    surface a prompt the client cannot answer correctly rather than guess at it.
 
+   WHICH SHAPES actually reach this, which the first two drafts got wrong by
+   repeating #296's example without checking it (round 3 K1). The engine will not
+   queue a prompt at all unless it is `:waiting`/`:run`, its choices are a
+   `:number`/`:card-title`/`:credit`/`:counter` map, or `(pos? (count choices))`
+   (`show-prompt`, game.core.prompts) — so the zero-choice \"other\" prompt used as
+   the example here and as the fixture in ai-runs-test is NOT engine-producible.
+   It is kept as a deliberate boundary case, not because it occurs.
+
+   What reaches here in practice is a prompt with 2+ TRIVIAL choices (say Done and
+   Continue): `has-real-decision?` strips both and sees fewer than 2 non-trivial,
+   and `handle-auto-choice`'s exactly-one-choice gate declines it, so it arrives
+   here. At INITIATION that is the only reachable shape, which makes this arm close
+   to dormant there — a one-choice prompt is auto-answered upstream. At the STALLED
+   window a lone-`Done` select reaches it too, because this handler runs before
+   `handle-auto-choice`.
+
    NOT for a `waiting` prompt. Callers must exclude `state/waiting-prompt-type?`
    BEFORE reaching here and fall through instead. A waiting prompt is the
    OPPONENT's checkpoint: the seat can do nothing about it, so surfacing it as a

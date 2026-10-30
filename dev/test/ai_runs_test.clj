@@ -1491,6 +1491,16 @@
 ;; refuses an ability over — #296's third shape, and the one that makes the point
 ;; that this is not a question about whether the PLAYER owes a decision.
 ;;
+;; That fixture is SYNTHETIC, which round 3 (K1) caught after two rounds of these
+;; comments calling it a live engine shape: show-prompt (game.core.prompts) will
+;; not queue a prompt unless it is :waiting/:run, its choices are a
+;; :number/:card-title/:credit/:counter map, or (pos? (count choices)) — and a
+;; zero-choice "other" prompt is none of those. It is kept as the boundary case,
+;; and the shape that actually reaches the arm — a prompt with 2+ TRIVIAL choices,
+;; which has-real-decision? strips below 2 non-trivial and handle-auto-choice's
+;; exactly-one-choice gate declines — is pinned beside it, so the guard is not held
+;; by an impossible input alone.
+;;
 ;; That reasoning is initiation-ONLY, which round 1 caught (I3): at the STALLED
 ;; window handle-stalled-window-self-advance is reached BEFORE handle-auto-choice,
 ;; so the chain-level test the issue asked for is reachable there and is strictly
@@ -1783,6 +1793,69 @@
                (pr-str result)))
       (is (empty? sent)
           (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
+
+(deftest test-301-initiation-surfacing-holds-for-an-ENGINE-PRODUCIBLE-shape
+  (testing "#301 round 3 K1: the three surfacing tests above all use a zero-choice
+            \"other\" prompt, which show-prompt (game.core.prompts) will never
+            queue — it queues only :waiting/:run, a :number/:card-title/:credit/
+            :counter choices map, or (pos? (count choices)). So the arm was pinned
+            entirely by an input the engine cannot produce, and two rounds of
+            comments described it as a live shape.
+
+            This is the shape that DOES reach it: 2+ TRIVIAL choices.
+            has-real-decision? strips Done and Continue and sees fewer than 2
+            non-trivial, so the entry guard is satisfied; handle-auto-choice wants
+            exactly one choice, so it declines and the prompt arrives here."
+    (let [prompt {:prompt-type "other"
+                  :msg "Resolve which trigger first?"
+                  :choices [{:value "Done" :uuid "u-done"}
+                            {:value "Continue" :uuid "u-cont"}]
+                  :selectable []}
+          [result sent] (initiation-pass prompt)]
+      (is (empty? sent)
+          (str "no continue may reach the wire. Sent: " (pr-str sent)))
+      (is (= :decision-required (:status result))
+          (str "and the tick is claimed with a terminal status. Got: "
+               (pr-str result))))))
+
+(deftest test-301-chain-reaches-the-initiation-guard-and-surfaces-not-waits
+  (testing "#301 round 3 K2 — the ask's own suggested shape, finally pinned at the
+            window it asked about. The ask said to drive continue-run! at an
+            initiation window; rounds 1 and 2 accepted my reason for substituting a
+            direct call, and both panels confirmed that reason for the lone-Done
+            select (handle-auto-choice intercepts it, so it would be a canary). But
+            the reason does NOT cover a prompt handle-auto-choice declines, and a
+            round-3 seat measured that path as reachable through the chain.
+
+            What this pins that the direct calls cannot: that the chain still
+            REACHES handle-initiation-auto-pass at all. A future reorder, or a new
+            handler inserted above it that claims this shape, would leave every
+            direct-call test above green while the guard went dead."
+    (let [sent (atom [])
+          prompt {:prompt-type "other"
+                  :msg "Resolve which trigger first?"
+                  :choices [{:value "Done" :uuid "u-done"}
+                            {:value "Continue" :uuid "u-cont"}]
+                  :selectable []}]
+      (runs/reset-strategy!)
+      (runner-handlers/reset-state!)
+      (corp-handlers/reset-waiting-status!)
+      (try
+        (with-mock-state (initiation-state prompt)
+          (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+            (let [result (runs/continue-run!)]
+              (is (not-any? #(= "continue" (get-in % [:data :command])) @sent)
+                  (str "no continue may be sent over our own prompt. Sent: "
+                       (pr-str @sent)))
+              (is (= :decision-required (:status result))
+                  (str "the chain must reach the guard and surface the prompt. A "
+                       "non-terminal :waiting-for-opponent here means it fell "
+                       "through to handle-unexpected-state instead. Got: "
+                       (pr-str result))))))
+        (finally
+          (runs/reset-strategy!)
+          (runner-handlers/reset-state!)
+          (corp-handlers/reset-waiting-status!))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
