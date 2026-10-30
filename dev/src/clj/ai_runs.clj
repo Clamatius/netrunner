@@ -1498,7 +1498,27 @@
   [{:keys [run-phase gameid side state my-prompt]}]
   (when (and (= run-phase "initiation")
              (should-i-act? state side)
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; …and never pass priority while holding a prompt of our own
+             ;; (#301, the #296 rule at this window). has-real-decision? asks a
+             ;; question about the PLAYER — 2+ non-trivial choices, or a
+             ;; selectable — and the prompts it scores as trivial are exactly the
+             ;; ones the seat still owes an answer to: a select with an empty
+             ;; :selectable and a lone Done, a `waiting` prompt, a zero-choice
+             ;; "other" prompt. The engine does not save us here the way it does
+             ;; from a re-fired ability: `continue` is not gated on a prompt at
+             ;; all (continue :encounter-ice, game.core.runs, reads the encounter
+             ;; ledger and nothing else), so the pass is HONOURED and the window
+             ;; closes with our prompt stranded. send-continue!'s own chokepoints
+             ;; do not cover it either — they guard a `waiting` prompt (#75) and
+             ;; our own recorded pass (#98), and a select is neither.
+             ;;
+             ;; The guard admits {nil, "run"} (state/engine-blocking-prompt?,
+             ;; mirroring game.core.actions/no-blocking-or-prevent-prompt?), which
+             ;; is what keeps #62 working: an empty initiation window has no
+             ;; prompt, and a seat at a run window holds the engine's dummy RUN
+             ;; prompt, whose answer IS continue.
+             (not (state/engine-blocking-prompt? my-prompt)))
     (println "   → Auto-passing initiation window (no run-start decision)")
     (send-continue! gameid)))
 
@@ -1551,7 +1571,24 @@
              (contains? #{"approach-ice" "movement"} run-phase)
              (i-already-passed? state side)
              (not (opponent-has-run-decision? state side run-phase))
-             (not (has-real-decision? my-prompt)))
+             (not (has-real-decision? my-prompt))
+             ;; …and never advance while holding a prompt of our own (#301, the
+             ;; #296 rule at this window). The blast radius is worse here than at
+             ;; initiation: the continue below is a DELIBERATE second pass, which
+             ;; bypasses the #98 already-passed chokepoint, and the engine's
+             ;; second continue ADVANCES the phase with no side-check — so over an
+             ;; open prompt this leaves the window behind us with the prompt
+             ;; unanswered. has-real-decision? scores a lone-Done select, a
+             ;; `waiting` prompt and a zero-choice "other" prompt as trivial, and
+             ;; every one of those is a prompt the seat still owes.
+             ;;
+             ;; This cannot restore the #31 stall this handler exists to break:
+             ;; state/engine-blocking-prompt? admits {nil, "run"}, and "run" is
+             ;; what the seat actually holds at an approach-ice or movement window
+             ;; (show-run-prompts mints the dummy run prompt for BOTH seats on
+             ;; every run). Only a real prompt of our own declines, and that is a
+             ;; tick the chain should spend answering it.
+             (not (state/engine-blocking-prompt? my-prompt)))
     ;; Board says there's no rez decision here. Give the opponent the grace period
     ;; anyway (see docstring) — only an ABANDONED window gets advanced.
     (let [stalled-ms (core/window-stalled-for-ms state side)]

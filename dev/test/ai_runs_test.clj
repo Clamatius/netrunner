@@ -1465,6 +1465,175 @@
             (str "and the tick reports an action, not a decision. Got: "
                  (pr-str result)))))))
 
+;; ============================================================================
+;; #301: the chain's OTHER two pass senders
+;; ============================================================================
+;;
+;; #296 gave ai-state/engine-blocking-prompt? to the two ENCOUNTER pass handlers,
+;; because the engine does not gate `continue` on a blocking prompt at all:
+;; `continue :encounter-ice` (game.core.runs) reads the encounter ledger and
+;; nothing else, so a pass sent while the seat holds its own open prompt is
+;; HONOURED. That reasoning is not specific to the encounter window, and two
+;; other senders in the same chain gated on has-real-decision? alone —
+;; handle-initiation-auto-pass (the run-initiation window) and
+;; handle-stalled-window-self-advance (the #31 self-advance) — so each carried
+;; #295's harm at its own window.
+;;
+;; These call the handlers DIRECTLY rather than driving continue-run!, which is
+;; what the issue suggested. Driving the chain cannot reach
+;; handle-initiation-auto-pass with the issue's lone-Done select:
+;; handle-auto-choice sits ABOVE it and fires on any prompt with exactly one
+;; choice, so it answers the Done and returns, and the fixture stays green with
+;; the guard reverted. That is the canary trap #296's own r4 measured on its two
+;; chain-level assertions. The zero-choice "other" prompt used below is a shape
+;; that no earlier handler claims (handle-auto-choice needs `(seq :choices)`,
+;; has-real-decision? scores it trivial) and the engine still refuses an ability
+;; over — #296's third shape, and the one that makes the point that this is not a
+;; question about whether the PLAYER owes a decision.
+;;
+;; The deadlock cases are pinned beside them, because a new reason for these two
+;; handlers to decline is a new reason for #31's both-pass wedge to return — and
+;; handle-stalled-window-self-advance exists only to break it.
+;; engine-blocking-prompt? admits {nil, "run"}, and "run" is not incidental here:
+;; show-run-prompts mints the engine's dummy RUN prompt for BOTH seats on every
+;; run, so it is what the seat normally holds at these very windows.
+
+(defn- initiation-state
+  "Corp-side client state at the run-INITIATION window the Runner has already
+   passed — #62's scenario: `run!` sends the Runner's first continue by default,
+   so [:run :no-action] is \"runner\" and the Corp is the active player at an
+   otherwise empty window. `prompt` is the Corp's own open prompt."
+  [prompt]
+  (mock-client-state
+   :side "corp"
+   :game-state
+   {:active-player "runner"
+    :turn 4
+    :log []
+    :run {:phase "initiation" :position 1 :server ["hq"] :no-action "runner"}
+    :runner {:credit 5 :click 3 :hand [] :rig {} :prompt-state nil}
+    :corp {:credit 8 :click 3 :hand []
+           :servers {:hq {:ices []}}
+           :prompt-state prompt}}))
+
+(defn- initiation-pass
+  "Call handle-initiation-auto-pass at that window holding `prompt`, returning
+   [result sent]. The prompt goes into the board AND the ctx: in production
+   `my-prompt` is a copy of [side :prompt-state], which is the field the engine's
+   own gate reads, so a fixture that set only one of them would be a state the
+   client cannot be in."
+  [prompt]
+  (let [sent (atom [])]
+    (with-redefs [ws/send-message! (mock-websocket-send! sent)]
+      [(runs/handle-initiation-auto-pass
+        {:run-phase "initiation" :gameid "g1" :side "corp"
+         :state (initiation-state prompt) :my-prompt prompt})
+       @sent])))
+
+(deftest test-301-initiation-auto-pass-declines-over-an-open-prompt
+  (testing "#301: a zero-choice \"other\" prompt owes the seat nothing by
+            has-real-decision? (no selectable, fewer than 2 non-trivial choices),
+            so the old guard was satisfied and the initiation window was passed
+            with our own prompt still open. The engine honours that pass —
+            `continue` is not gated on a prompt at all — so the window closes and
+            the prompt is stranded."
+    (let [[result sent] (initiation-pass {:prompt-type "other"
+                                          :msg "Choose a trigger to resolve"
+                                          :eid "e9"})]
+      (is (nil? result)
+          (str "the handler must DECLINE, leaving the prompt to the chain. Got: "
+               (pr-str result)))
+      (is (empty? sent)
+          (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
+
+(deftest test-301-initiation-auto-pass-still-passes-an-empty-window
+  (testing "#301's deadlock half: the #62 case the handler exists for. No prompt
+            at all, so nothing blocks, and the Corp must still pass its own
+            initiation window — otherwise no handler matches, continue-run! falls
+            through to handle-unexpected-state and both seats wait on each other."
+    (let [[result sent] (initiation-pass nil)]
+      (is (= :action-taken (:status result))
+          (str "must still auto-pass an empty window. Got: " (pr-str result)))
+      (is (= ["continue"] (mapv #(get-in % [:data :command]) sent))
+          (str "with exactly one continue. Sent: " (pr-str sent))))))
+
+(deftest test-301-initiation-auto-pass-still-passes-holding-the-run-prompt
+  (testing "#301's deadlock half, the shape that actually occurs: the engine's
+            dummy RUN prompt (show-run-prompts mints one for BOTH seats on every
+            run, with nil in the choices position). It is a live prompt owed a
+            real decision that carries no :choices — and the answer to it IS
+            `continue`, which is why the engine's own gate admits :run and why
+            engine-blocking-prompt? must too. A guard that read \"any prompt\"
+            would wedge every initiation window instead of one."
+    (let [[result sent] (initiation-pass {:prompt-type "run"
+                                          :msg "You are approaching HQ"})]
+      (is (= :action-taken (:status result))
+          (str "the run prompt must not block the pass. Got: " (pr-str result)))
+      (is (= ["continue"] (mapv #(get-in % [:data :command]) sent))
+          (str "with exactly one continue. Sent: " (pr-str sent))))))
+
+(defn- stalled-state
+  "Runner-side client state at an ABANDONED approach-ice window: we have already
+   passed (:no-action \"runner\"), the approached ICE is already rezzed so the
+   board proves the Corp holds no rez decision, and `prompt` is our own."
+  [prompt]
+  (mock-client-state
+   :side "runner"
+   :game-state
+   {:active-player "runner"
+    :turn 4
+    :log []
+    :run {:phase "approach-ice" :position 1 :server [:remote1]
+          :no-action "runner"}
+    :runner {:credit 6 :click 2 :hand [] :rig {} :prompt-state prompt}
+    :corp {:credit 8 :click 3 :hand []
+           :prompt-state nil
+           :servers {:remote1 {:ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
+                               :content []}}}}))
+
+(defn- stalled-self-advance
+  "Call handle-stalled-window-self-advance at that window holding `prompt`, with
+   the grace period already elapsed, returning [result sent]."
+  [prompt]
+  (let [sent (atom [])]
+    (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                  runs/self-advance-grace-ms 0]
+      (runs/reset-window-grace!)
+      [(runs/handle-stalled-window-self-advance
+        {:run-phase "approach-ice" :gameid "g1" :side "runner"
+         :state (stalled-state prompt) :my-prompt prompt})
+       @sent])))
+
+(deftest test-301-stalled-window-self-advance-declines-over-an-open-prompt
+  (testing "#301 at the #31 self-advance: same zero-choice \"other\" shape, and
+            the blast radius is worse than at initiation. This handler sends a
+            DELIBERATE second pass (:second-pass? true), which bypasses the #98
+            already-passed chokepoint, and the engine's second continue ADVANCES
+            the phase with no side-check — so over an open prompt it leaves the
+            window behind us with the prompt unanswered."
+    (let [[result sent] (stalled-self-advance {:prompt-type "other"
+                                               :msg "Choose a trigger to resolve"
+                                               :eid "e9"})]
+      (is (nil? result)
+          (str "the handler must DECLINE. Got: " (pr-str result)))
+      (is (empty? sent)
+          (str "and nothing may reach the wire. Sent: " (pr-str sent))))))
+
+(deftest test-301-stalled-window-self-advance-still-breaks-the-deadlock
+  (testing "#301's deadlock half for the stall-BREAKER: holding the engine's
+            dummy RUN prompt, which is what the seat actually holds at an
+            approach-ice window, the abandoned window must still be advanced.
+            run-window-selfadvance-test pins this with my-prompt nil; the \"run\"
+            prompt is the case the new guard could plausibly have broken, and
+            breaking it would restore the #31 stall this handler was written to
+            end."
+    (let [[result sent] (stalled-self-advance {:prompt-type "run"
+                                               :msg "You are approaching Bran 1.0"})]
+      (is (= :action-taken (:status result))
+          (str "must still advance the abandoned window. Got: " (pr-str result)))
+      (is (= ["continue"] (mapv #(get-in % [:data :command]) sent))
+          (str "with exactly one continue. Sent: " (pr-str sent))))))
+
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
             retry counter (so repeated genuine failures eventually fall through to

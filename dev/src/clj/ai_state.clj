@@ -605,13 +605,20 @@
      would have taken.
    - `continue` is NOT gated by the engine at all: `continue :encounter-ice`
      (game.core.runs) reads the encounter ledger and nothing else, so a pass sent
-     over an open prompt is HONOURED. The two ENCOUNTER pass handlers
-     (`handle-runner-pass-broken-ice`, `handle-runner-pass-fired-ice`) therefore
-     use this predicate as a client-side rule of their own rather than as a
-     mirror. It is not a chain-wide rule: `handle-initiation-auto-pass` and
-     `handle-stalled-window-self-advance` still gate on `has-real-decision?`
-     alone, so the initiation and stalled-window passes carry the same hole at
-     their own windows (filed separately)."
+     over an open prompt is HONOURED. Every pass handler therefore uses this
+     predicate as a client-side rule of its own rather than as a mirror: the two
+     ENCOUNTER senders (`handle-runner-pass-broken-ice`,
+     `handle-runner-pass-fired-ice`) since #296, and `handle-initiation-auto-pass`
+     and `handle-stalled-window-self-advance` — which gated on
+     `has-real-decision?` alone and carried the same hole at the initiation and
+     stalled-window boundaries — since #301. `handle-runner-tactics` is the one
+     sender in the chain that still has no prompt guard at all (#297); it is a
+     different flag and needs a decision this predicate does not settle.
+
+     Callers at a both-pass window depend on the {nil, :run} admission for more
+     than exactness: an empty window has no prompt, a seat at a run window holds
+     the engine's dummy RUN prompt, and declining either would restore the #31
+     both-pass wedge that `handle-stalled-window-self-advance` exists to break."
   [prompt]
   (let [prompt-type (:prompt-type prompt)]
     (not (or (nil? prompt-type)
