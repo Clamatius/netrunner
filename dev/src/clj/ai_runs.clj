@@ -1559,7 +1559,7 @@
    `engine-blocking-prompt?` guard) and then to `handle-runner-tactics` (#297: no
    prompt guard at all), either of which would pass priority over the prompt this
    helper exists to protect. Making `handle-paid-ability-window` DECLINE as well
-   (#303 piece 2) waits on the same two, for the same reason."
+   (#305, #303 piece 2) waits on the same two, for the same reason."
   [my-prompt window]
   (println (format "🛑 Holding our own prompt at the %s window - not passing priority over it" window))
   (when-let [msg (:msg my-prompt)]
