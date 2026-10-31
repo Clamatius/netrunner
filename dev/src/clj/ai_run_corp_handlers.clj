@@ -1009,8 +1009,52 @@
 (defn handle-paid-ability-window
   "Priority 1.8: General handler for paid ability windows in ALL phases.
    Detects when we've passed priority but opponent hasn't yet.
-   Uses :no-action state as source of truth."
-  [{:keys [side run-phase state]}]
+   Uses :no-action state as source of truth.
+
+   Reads `my-prompt` since #303, for ONE reason: to tell the two cases apart.
+   The entry condition — we have passed, they have not — is true both when the
+   opponent owes the window and when the thing stranding us is a prompt of our
+   OWN, and until #303 this handler reported the first for both. That was two
+   harms, not one wording slip:
+
+     1. It named the wrong side. The opponent is not holding us up; they are
+        waiting on us to answer. The misleading-output class.
+     2. :waiting-for-opponent-paid-abilities is not in `terminal-status?`
+        (ai-runs), so `auto-continue-loop!` re-read the same state and got the
+        same answer to its iteration cap, sending nothing — and `ai-stall` scores
+        the status a nudgeable wait, so an autonomous seat chat-nudged the
+        OPPONENT (\"your move\") and then bailed the game on them, for a prompt it
+        owed itself. This handler sits ABOVE every prompt-answering handler
+        (handle-auto-choice, handle-real-decision), so nothing downstream could
+        rescue the prompt once this one claimed the tick.
+
+   Measured reach before the fix (a lone-Done select, :no-action naming us, over
+   both sides x six phases x rezzed/unrezzed): 22 of 24 windows reported the
+   opponent wait with nothing sent. #301 had guarded ONE of them.
+
+   SCOPE, deliberately: it still CLAIMS the tick in both cases — only the report
+   changes. Making it DECLINE over our own prompt is #303 piece 2 and waits on
+   #297 and #302, because below it sit senders with no prompt guard at all
+   (`handle-runner-tactics` has none; the `send-continue!` sites here do not
+   consult the predicate), and handing them the tick would arm a dormant path.
+   That is #301 round 1's CRITICAL one level down, and it is why `my-prompt` buys
+   a truthful message here rather than a fall-through.
+
+   WHICH SHAPES still report an opponent wait, because the guard is narrower than
+   \"do we hold anything?\":
+     nil       an empty window — the opponent genuinely owes it, and that wait is
+               this handler's reason to exist.
+     \"run\"     the engine's dummy RUN prompt, which `show-run-prompts` mints for
+               BOTH seats on every run; it is what a seat normally HOLDS at these
+               windows and its answer is `continue`. `engine-blocking-prompt?`
+               admits {nil, :run} exactly so this cannot misfire.
+     \"waiting\" the OPPONENT's checkpoint, which that predicate does NOT exclude
+               (it is neither nil nor \"run\"). Excluded here explicitly — #301
+               round 2's MAJOR, found by both vendors, where a surfacing arm
+               inherited the predicate's whole set and claimed the opponent's
+               checkpoint as our own decision. For this shape the opponent-wait
+               message is TRUE, and non-terminal is correct: keep polling them."
+  [{:keys [side run-phase state my-prompt]}]
   (let [run (get-in state [:game-state :run])
         no-action (:no-action run)
         no-action-str (normalize-side no-action)
@@ -1018,17 +1062,42 @@
         we-passed? (= no-action-str side)
         opp-passed? (= no-action-str opp-side)]
     (when (and we-passed? (not opp-passed?))
-      (let [status-key [:waiting-for-opponent-paid-ability run-phase side]
-            already-printed? (= @last-waiting-status status-key)]
-        (when-not already-printed?
-          (reset! last-waiting-status status-key)
-          (println (format "   Waiting for %s paid abilities (%s phase)"
-                          (clojure.string/capitalize opp-side) run-phase)))
-        {:status :waiting-for-opponent-paid-abilities
-         :wake-reason :waiting-for-opponent
-         :message (format "Waiting for %s to pass or use paid abilities" opp-side)
-         :phase run-phase
-         :we-passed true}))))
+      (if (and (state/engine-blocking-prompt? my-prompt)
+               (not (state/waiting-prompt-type? (:prompt-type my-prompt))))
+        ;; Our own unanswered prompt. Printed every call rather than once per
+        ;; status-key: the suppression below exists for an idle wait a poll loop
+        ;; re-reads hundreds of times, and this is a terminal decision that stops
+        ;; the loop, so it prints once per stop anyway — and a seat that calls
+        ;; `continue` again needs to be told again.
+        (do
+          (println (format "🛑 We passed the %s window, but we are holding our own prompt"
+                           run-phase))
+          (when-let [msg (:msg my-prompt)]
+            (println (format "   Prompt: %s" msg)))
+          (println "   → answer it (e.g. `choose-value`/`choose-card`), then continue")
+          {:status :decision-required
+           :wake-reason :blocking-prompt-at-run-window
+           :action :awaiting-own-prompt
+           :message (format (str "Passed priority at the %s window while holding our own %s "
+                                 "prompt; it is unanswered, so answer it rather than treating "
+                                 "this as a wait on %s (#303)")
+                            run-phase
+                            (or (:prompt-type my-prompt) "unknown")
+                            opp-side)
+           :prompt my-prompt
+           :phase run-phase
+           :we-passed true})
+        (let [status-key [:waiting-for-opponent-paid-ability run-phase side]
+              already-printed? (= @last-waiting-status status-key)]
+          (when-not already-printed?
+            (reset! last-waiting-status status-key)
+            (println (format "   Waiting for %s paid abilities (%s phase)"
+                            (clojure.string/capitalize opp-side) run-phase)))
+          {:status :waiting-for-opponent-paid-abilities
+           :wake-reason :waiting-for-opponent
+           :message (format "Waiting for %s to pass or use paid abilities" opp-side)
+           :phase run-phase
+           :we-passed true})))))
 
 ;; ============================================================================
 ;; Utility for ai-runs integration

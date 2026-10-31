@@ -1486,11 +1486,14 @@
    docstring conflating:
 
    - At the STALLED window, `handle-paid-ability-window` (ai-run-corp-handlers)
-     sits above every prompt-answering handler and reads `[:run :no-action]`
-     ALONE — it never looks at `my-prompt` — so once we have passed it claims the
-     tick and reports `{:status :waiting-for-opponent-paid-abilities, :message
+     sits above every prompt-answering handler and read `[:run :no-action]`
+     ALONE — it did not look at `my-prompt` — so once we had passed it claimed the
+     tick and reported `{:status :waiting-for-opponent-paid-abilities, :message
      \"Waiting for corp to pass or use paid abilities\"}` while the prompt stranding
-     the seat is OURS (#303).
+     the seat was OURS. #303 piece 1 fixed that handler's REPORT (it now reads
+     `my-prompt` and returns a terminal `:decision-required` for our own prompt),
+     but it still claims the tick, so declining here would still not reach it —
+     and two unguarded senders now sit in between. See EXIT.
    - At INITIATION that handler cannot claim the tick at all: this handler only
      runs when `should-i-act?` is true, so `:no-action` does not name us and its
      `we-passed?` is false. The fall-through there is `handle-unexpected-state`,
@@ -1546,11 +1549,17 @@
    said it was and a seat demonstrated otherwise (round 2 J3): merely reordering
    `handle-auto-choice` / `handle-real-decision` above `handle-paid-ability-window`
    does not do it — with a zero-choice \"other\" prompt both of those decline too,
-   and the misleading non-terminal wait comes back. #303 is the tracking issue.
-   Guarding `handle-paid-ability-window` instead was the one-clause alternative and
-   was rejected here: below it sit `handle-runner-tactics` (#297, which acts over
-   ANY prompt with no guard at all) and the senders in #302, so a decline there
-   arms a dormant path."
+   and the misleading non-terminal wait comes back.
+
+   #303 piece 1 has since landed, so `handle-paid-ability-window` now satisfies
+   the condition above for itself: it reports our own prompt truthfully in a
+   terminal status. It is no longer what blocks this exit. What still does are the
+   SENDERS between here and there — a decline at the stalled window hands the tick
+   to `handle-runner-approach-ice` (#302: sends a `continue` with no
+   `engine-blocking-prompt?` guard) and then to `handle-runner-tactics` (#297: no
+   prompt guard at all), either of which would pass priority over the prompt this
+   helper exists to protect. Making `handle-paid-ability-window` DECLINE as well
+   (#303 piece 2) waits on the same two, for the same reason."
   [my-prompt window]
   (println (format "🛑 Holding our own prompt at the %s window - not passing priority over it" window))
   (when-let [msg (:msg my-prompt)]
