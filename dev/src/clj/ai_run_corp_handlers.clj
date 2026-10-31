@@ -1056,7 +1056,7 @@
    guard itself is phase-independent, so nothing about the fix rested on them.
 
    SCOPE, deliberately: it still CLAIMS the tick in both cases — only the report
-   changes. Making it DECLINE over our own prompt is #303 piece 2 and waits on
+   changes. Making it DECLINE over our own prompt is #305 (#303 piece 2) and waits on
    #297 and #302, because below it sit senders with no prompt guard at all
    (`handle-runner-tactics` has none; the `send-continue!` sites here do not
    consult the predicate), and handing them the tick would arm a dormant path.
