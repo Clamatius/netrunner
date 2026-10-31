@@ -1883,13 +1883,31 @@
 ;; the prompt.
 ;;
 ;; MEASURED REACH, because #301 traced one window and the defect is wider: driving
-;; continue-run! holding a lone-Done select with :no-action naming us, over
-;; {runner, corp} x {initiation, approach-ice, movement, encounter-ice,
-;; approach-server, success} x {rezzed, unrezzed}, 22 of 24 windows returned
-;; :waiting-for-opponent-paid-abilities with NOTHING sent. The two that did not
-;; are the ones another handler already owns: runner/approach-ice/rezzed (#301's
-;; self-advance guard surfaces it) and corp/approach-ice/unrezzed (the Corp's own
-;; rez decision). #301 closed one window of the set; this closes the handler.
+;; continue-run! holding a lone-Done select with :no-action naming us, 9 of the 12
+;; ENGINE-REACHABLE windows returned :waiting-for-opponent-paid-abilities with
+;; NOTHING sent. #301 closed one of them; this closes the handler.
+;;
+;; WHICH WINDOWS ARE REACHABLE, and why the phase lists below are what they are —
+;; a first draft of these tests also swept encounter-ice, approach-server and
+;; success, and a review seat refuted all three at the engine line (#303 round 1,
+;; the same class as #301 round 3's K1). Run-level [:run :no-action] is this
+;; handler's whole input, and the engine writes it in exactly three arms:
+;;   continue :initiation    (game.core.runs:177)
+;;   continue :approach-ice  (game.core.runs:298)
+;;   continue :movement      (game.core.runs:531)
+;; set-phase resets it to false on entering ANY phase (runs.clj:98), so a pass
+;; cannot survive into success; continue :encounter-ice records its pass on the
+;; ENCOUNTER ledger instead (update-current-encounter ... :no-action,
+;; runs.clj:432), not on the run; and "approach-server" is a display label, never
+;; a wire phase. A fixture setting a run-level pass at those phases pins a state
+;; the client cannot be in.
+;;
+;; The guard is phase-INDEPENDENT (it reads my-prompt, not run-phase), so nothing
+;; is lost by dropping them: the reachable cells exercise the same arm. The phase
+;; lists differ by side because of who else owns the window — runner/approach-ice
+;; is claimed by #301's self-advance guard when the ICE is rezzed and by #244's
+;; rez wait when it is not, and corp/approach-ice/unrezzed is the Corp's own rez
+;; decision, so those three reachable cells were already correct before the fix.
 ;;
 ;; SCOPE — #303 piece 1 only. The handler still CLAIMS the tick; it just stops
 ;; lying about who owes the move. Making it DECLINE is piece 2 and waits on #297
@@ -1979,7 +1997,9 @@
             'Waiting for runner to pass or use paid abilities', with nothing sent
             — a non-terminal status, so the loop re-ticked to its cap and ai-stall
             nudged the Runner for a prompt the Corp owed."
-    (doseq [phase ["movement" "encounter-ice" "success" "initiation"]]
+    ;; Every engine-reachable Corp window (the fixture's ICE is rezzed, so
+    ;; corp/approach-ice is not the Corp's own rez decision and reaches here).
+    (doseq [phase ["initiation" "approach-ice" "movement"]]
       (let [[result sent] (drive-chain-at-paid-ability-window
                            "corp" phase lone-done-select)]
         (is (empty? sent)
@@ -2000,8 +2020,12 @@
             guarded handle-stalled-window-self-advance, which only claims
             approach-ice/movement and only once the board proves the Corp holds no
             rez decision — so every other window fell through to this handler and
-            was reported as a Corp wait. Measured: all four of these."
-    (doseq [phase ["encounter-ice" "approach-server" "success" "initiation"]]
+            was reported as a Corp wait. Measured: both of these."
+    ;; approach-ice is deliberately absent: on the Runner side both of its cells
+    ;; are owned by another handler (#301's self-advance guard when the ICE is
+    ;; rezzed, #244's :waiting-for-corp-rez when it is not), so it never reached
+    ;; this one. These two are the Runner windows that did.
+    (doseq [phase ["initiation" "movement"]]
       (let [[result sent] (drive-chain-at-paid-ability-window
                            "runner" phase lone-done-select)]
         (is (empty? sent)

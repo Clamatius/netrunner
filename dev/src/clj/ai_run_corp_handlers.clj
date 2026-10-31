@@ -1028,9 +1028,26 @@
         (handle-auto-choice, handle-real-decision), so nothing downstream could
         rescue the prompt once this one claimed the tick.
 
-   Measured reach before the fix (a lone-Done select, :no-action naming us, over
-   both sides x six phases x rezzed/unrezzed): 22 of 24 windows reported the
-   opponent wait with nothing sent. #301 had guarded ONE of them.
+   Measured reach before the fix, over the windows the ENGINE CAN ACTUALLY REACH:
+   9 of 12 reported the opponent wait with nothing sent. #301 had guarded one of
+   them. The reachable set is {initiation, approach-ice, movement} x both sides x
+   rezzed/unrezzed, because run-level `[:run :no-action]` — this handler's whole
+   input — is written by exactly three engine arms, `continue :initiation`,
+   `:approach-ice` and `:movement` (game.core.runs 177/298/531). `set-phase`
+   resets it to false on entering any phase (runs.clj:98), `continue
+   :encounter-ice` records its pass on the ENCOUNTER instead
+   (`update-current-encounter ... :no-action`, runs.clj:432), and
+   \"approach-server\" is a display label, not a wire phase. The three reachable
+   windows that were already correct are owned by other handlers: #301's
+   self-advance guard (runner/approach-ice/rezzed), #244's rez wait
+   (runner/approach-ice/unrezzed) and the Corp's own rez decision
+   (corp/approach-ice/unrezzed).
+
+   An earlier draft of this docstring said \"22 of 24\", from a probe that also
+   swept encounter-ice, approach-server and success with a run-level pass set.
+   Those are states the client cannot be in, and a review seat refuted them at
+   the engine line (#303 round 1) — the same class as #301 round 3's K1. The
+   guard itself is phase-independent, so nothing about the fix rested on them.
 
    SCOPE, deliberately: it still CLAIMS the tick in both cases — only the report
    changes. Making it DECLINE over our own prompt is #303 piece 2 and waits on
