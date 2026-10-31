@@ -1007,9 +1007,15 @@
 ;; ============================================================================
 
 (defn handle-paid-ability-window
-  "Priority 1.8: General handler for paid ability windows in ALL phases.
+  "Priority 1.8: the general \"I have passed, the opponent has not\" handler.
    Detects when we've passed priority but opponent hasn't yet.
-   Uses :no-action state as source of truth.
+   Uses run-level `[:run :no-action]` as its source of truth — which is also what
+   BOUNDS it to three phases. This line claimed \"ALL phases\" until #303 round 2
+   caught it contradicting the measured reach 30 lines below: the engine writes
+   that key in `continue :initiation`/`:approach-ice`/`:movement` only, and an
+   ENCOUNTER's pass is recorded on the encounter instead ([:encounters :no-action],
+   game.core.runs:432), which this handler never reads. So it cannot fire at
+   encounter-ice at all.
 
    Reads `my-prompt` since #303, for ONE reason: to tell the two cases apart.
    The entry condition — we have passed, they have not — is true both when the
