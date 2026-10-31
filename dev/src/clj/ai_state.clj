@@ -622,8 +622,13 @@
        `handle-runner-approach-ice`   `has-real-decision?` / waiting only
        the Corp handlers' `send-continue!` sites (ai-run-corp-handlers)
 
-     and `handle-paid-ability-window` does not read `my-prompt` at all, which is
-     why declining is not by itself safe: see `surface-blocking-prompt` (ai-runs).
+     `handle-paid-ability-window` is no longer on that list: since #303 piece 1 it
+     consults this predicate (plus `waiting-prompt-type?`) to tell our own
+     unanswered prompt from a genuine opponent wait, and reports the first
+     truthfully in a terminal status. It still CLAIMS the tick rather than
+     declining, because the senders above remain unguarded — which is the same
+     reason `surface-blocking-prompt` (ai-runs) still exists.
+
      Before adding this predicate to a fourth window, check what the chain does
      AFTER the decline, and prefer collapsing the senders onto one gate over a
      fifth hand-maintained copy of this clause.

@@ -12,6 +12,7 @@
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
+            [ai-stall :as stall]
             [ai-card-actions :as card-actions]
             [ai-websocket-client-v2 :as ws]))
 
@@ -1511,9 +1512,11 @@
 ;; (ai-runs). Returning nil was round 1's CRITICAL, found by both vendors: with the
 ;; handler silent the chain reports a wait on the OPPONENT while our own prompt is
 ;; the thing stranding us, in a status terminal-status? does not list, so the loop
-;; re-ticks to its iteration cap. The handler that does the misreporting differs by
-;; window (round 2 J2): handle-paid-ability-window at the stalled window (#303), and
-;; handle-unexpected-state at initiation, where handle-paid-ability-window cannot
+;; re-ticks to its iteration cap. The handler that DID the misreporting differs by
+;; window (round 2 J2): handle-paid-ability-window at the stalled window (fixed by
+;; #303 piece 1, pinned below; it still claims the tick, so these two must still
+;; surface rather than decline), and handle-unexpected-state at initiation, where
+;; handle-paid-ability-window cannot
 ;; claim the tick at all because should-i-act? being true means :no-action does not
 ;; name us. These handlers claim the tick and surface the prompt instead.
 ;;
@@ -1856,6 +1859,267 @@
           (runs/reset-strategy!)
           (runner-handlers/reset-state!)
           (corp-handlers/reset-waiting-status!))))))
+
+;; ============================================================================
+;; #303: handle-paid-ability-window named the WRONG SIDE for our own prompt
+;; ============================================================================
+;;
+;; handle-paid-ability-window's whole condition is `(and we-passed? (not
+;; opp-passed?))` off [:run :no-action]; it never read `my-prompt` at all. So
+;; whenever we had passed and the opponent had not, it claimed the tick and
+;; reported `:waiting-for-opponent-paid-abilities`, "Waiting for <opp> to pass or
+;; use paid abilities" — EVEN WHEN the thing stranding the run was a prompt of
+;; our own. Two harms, which is why the message alone was not the whole bug:
+;;
+;;   1. It names the wrong side. We are not waiting on them; they are waiting on
+;;      us to answer. This project's misleading-output class.
+;;   2. The status is not in terminal-status?, so auto-continue-loop! re-reads the
+;;      same state and gets the same answer until its cap — and ai-stall scores
+;;      the status nudgeable (`waiting-statuses`), so an autonomous seat chat-
+;;      nudges the OPPONENT ("your move") for a prompt it owes itself.
+;;
+;; It sits ABOVE every prompt-answering handler (handle-auto-choice,
+;; handle-real-decision), so once it claims the tick nothing downstream rescues
+;; the prompt.
+;;
+;; MEASURED REACH, because #301 traced one window and the defect is wider: driving
+;; continue-run! holding a lone-Done select with :no-action naming us, 9 of the 12
+;; ENGINE-REACHABLE windows returned :waiting-for-opponent-paid-abilities with
+;; NOTHING sent. #301 closed one of them; this closes the handler.
+;;
+;; WHICH WINDOWS ARE REACHABLE, and why the phase lists below are what they are —
+;; a first draft of these tests also swept encounter-ice, approach-server and
+;; success, and a review seat refuted all three at the engine line (#303 round 1,
+;; the same class as #301 round 3's K1). Run-level [:run :no-action] is this
+;; handler's whole input, and the engine writes it in exactly three arms:
+;;   continue :initiation    (game.core.runs:177)
+;;   continue :approach-ice  (game.core.runs:298)
+;;   continue :movement      (game.core.runs:531)
+;; set-phase resets it to false on entering ANY phase (runs.clj:98), so a pass
+;; cannot survive into success; continue :encounter-ice records its pass on the
+;; ENCOUNTER ledger instead (update-current-encounter ... :no-action,
+;; runs.clj:432), not on the run; and "approach-server" is a display label, never
+;; a wire phase. A fixture setting a run-level pass at those phases pins a state
+;; the client cannot be in.
+;;
+;; The guard is phase-INDEPENDENT (it reads my-prompt, not run-phase), so nothing
+;; is lost by dropping them: the reachable cells exercise the same arm. The phase
+;; lists differ by side because of who else owns the window — runner/approach-ice
+;; is claimed by #301's self-advance guard when the ICE is rezzed and by #244's
+;; rez wait when it is not, and corp/approach-ice/unrezzed is the Corp's own rez
+;; decision, so those three reachable cells were already correct before the fix.
+;;
+;; SCOPE — #303 piece 1 only. The handler still CLAIMS the tick; it just stops
+;; lying about who owes the move. Making it DECLINE is piece 2 and waits on #297
+;; and #302, because below it sit senders with no prompt guard at all, and handing
+;; them the tick would arm a dormant path (#301 round 1's CRITICAL, one level
+;; down). The deadlock pins below exist to prove the claiming behaviour is intact.
+;;
+;; THREE shapes must still report an opponent wait, and they are the reason the
+;; guard is not just engine-blocking-prompt?:
+;;   nil       — an empty window; the opponent genuinely owes it (the #31 wedge
+;;               this handler's wait exists to report).
+;;   "run"     — show-run-prompts mints the engine's dummy RUN prompt for BOTH
+;;               seats on every run, so it is what a seat normally HOLDS here;
+;;               its answer is `continue`, not `choose`.
+;;   "waiting" — the OPPONENT's checkpoint. engine-blocking-prompt? admits it
+;;               (it is neither nil nor "run"), so it is excluded explicitly —
+;;               #301 round 2's MAJOR, found by both vendors, where a surfacing
+;;               arm inherited that predicate's whole set and claimed the
+;;               opponent's checkpoint as our own decision. For this shape the
+;;               old message is TRUE and non-terminal is right: the loop should
+;;               keep polling for them.
+
+(defn- paid-ability-window-state
+  "Client state at a priority window WE have already passed and the opponent has
+   not (`:no-action` names us) — handle-paid-ability-window's entry condition.
+   `prompt` is our own open prompt; the opponent holds none.
+
+   The prompt goes into the board, and the ctx copy is taken from it by
+   continue-run! itself: `my-prompt` is read from [side :prompt-state], the very
+   field the engine's own gate reads, so a fixture setting only one of them would
+   be a state the client cannot be in."
+  [side phase prompt]
+  (mock-client-state
+   :side side
+   :game-state
+   {:active-player "runner"
+    :turn 4
+    :log []
+    :run {:phase phase :position 1 :server [:remote1] :no-action side}
+    :runner {:credit 6 :click 2 :hand [] :rig {}
+             :prompt-state (when (= side "runner") prompt)}
+    :corp {:credit 8 :click 3 :hand []
+           :prompt-state (when (= side "corp") prompt)
+           :servers {:remote1 {:ices [{:cid 1 :title "Bran 1.0" :rezzed true}]
+                               :content []}}}}))
+
+(defn- drive-chain-at-paid-ability-window
+  "Drive the WHOLE chain (continue-run!) at that window, returning [result sent].
+   The chain, not the handler alone: the bug is WHICH HANDLER CLAIMS THE TICK,
+   and a direct call cannot show that. It also pins that the chain still reaches
+   this handler — a reorder, or a new handler above it, would leave a direct-call
+   test green over a dead guard."
+  [side phase prompt]
+  (let [sent (atom [])]
+    (runs/reset-strategy!)
+    (runner-handlers/reset-state!)
+    (corp-handlers/reset-waiting-status!)
+    (try
+      (with-mock-state (paid-ability-window-state side phase prompt)
+        (with-redefs [ws/send-message! (mock-websocket-send! sent)
+                      runs/self-advance-grace-ms 0]
+          (runs/reset-window-grace!)
+          [(runs/continue-run!) @sent]))
+      (finally
+        (runs/reset-strategy!)
+        (runner-handlers/reset-state!)
+        (corp-handlers/reset-waiting-status!)))))
+
+(def ^:private lone-done-select
+  "The shape #296/#301 name, and one the engine will actually queue: show-prompt
+   (game.core.prompts) queues on (pos? (count choices)), and has-real-decision?
+   then strips the Done as trivial and sees no selectable — so every
+   'does the seat owe a decision?' predicate scores it as nothing owed, and the
+   seat still cannot act until it is answered."
+  {:prompt-type "select" :eid "e42"
+   :choices [{:value "Done" :uuid "u-done"}]
+   :selectable []})
+
+(deftest test-303-chain-does-not-blame-the-opponent-for-our-own-prompt
+  (testing "#303 on the CORP side, where handle-paid-ability-window is cleanly
+            isolated: handle-stalled-window-self-advance and
+            handle-runner-approach-ice are both runner-only, so neither #301's
+            guard nor #244's rez wait can claim this tick. The Corp has passed,
+            the Runner has not, and the Corp holds a lone-Done select.
+
+            Before the fix this returned :waiting-for-opponent-paid-abilities,
+            'Waiting for runner to pass or use paid abilities', with nothing sent
+            — a non-terminal status, so the loop re-ticked to its cap and ai-stall
+            nudged the Runner for a prompt the Corp owed."
+    ;; Every engine-reachable Corp window (the fixture's ICE is rezzed, so
+    ;; corp/approach-ice is not the Corp's own rez decision and reaches here).
+    (doseq [phase ["initiation" "approach-ice" "movement"]]
+      (let [[result sent] (drive-chain-at-paid-ability-window
+                           "corp" phase lone-done-select)]
+        (is (empty? sent)
+            (str phase ": nothing may reach the wire. Sent: " (pr-str sent)))
+        (is (not= :waiting-for-opponent-paid-abilities (:status result))
+            (str phase ": the chain must not blame the Runner for the Corp's own "
+                 "prompt. Got: " (pr-str result)))
+        (is (= :decision-required (:status result))
+            (str phase ": it must surface the prompt, in a status "
+                 "terminal-status? lists so the loop stops instead of re-ticking. "
+                 "Got: " (pr-str result)))
+        (is (= lone-done-select (:prompt result))
+            (str phase ": and hand the seat the actual prompt. Got: "
+                 (pr-str result)))))))
+
+(deftest test-303-chain-does-not-blame-the-corp-for-the-runners-own-prompt
+  (testing "#303 on the RUNNER side, at the windows #301 did not reach. #301
+            guarded handle-stalled-window-self-advance, which only claims
+            approach-ice/movement and only once the board proves the Corp holds no
+            rez decision — so every other window fell through to this handler and
+            was reported as a Corp wait. Measured: both of these."
+    ;; approach-ice is deliberately absent: on the Runner side both of its cells
+    ;; are owned by another handler (#301's self-advance guard when the ICE is
+    ;; rezzed, #244's :waiting-for-corp-rez when it is not), so it never reached
+    ;; this one. These two are the Runner windows that did.
+    (doseq [phase ["initiation" "movement"]]
+      (let [[result sent] (drive-chain-at-paid-ability-window
+                           "runner" phase lone-done-select)]
+        (is (empty? sent)
+            (str phase ": nothing may reach the wire. Sent: " (pr-str sent)))
+        (is (not= :waiting-for-opponent-paid-abilities (:status result))
+            (str phase ": the chain must not blame the Corp for our own prompt. "
+                 "Got: " (pr-str result)))
+        (is (= :decision-required (:status result))
+            (str phase ": and the status must be terminal. Got: "
+                 (pr-str result)))))))
+
+(deftest test-303-message-names-our-own-prompt-and-never-an-opponent-wait
+  (testing "#303 harm 1 is the TEXT, and a status change alone would leave it.
+            The seat surface is what a model seat reads, so assert the whole
+            message, not that one token appears: no wording that attributes the
+            wait to the opponent may survive, and the message must say the prompt
+            is ours."
+    (let [[result _] (drive-chain-at-paid-ability-window
+                      "corp" "movement" lone-done-select)
+          msg (:message result)]
+      (is (string? msg) (str "a message is owed. Got: " (pr-str result)))
+      (is (not (re-find #"(?i)waiting for (runner|corp|the opponent)" msg))
+          (str "must not report a wait on the opponent. Message: " (pr-str msg)))
+      (is (not (re-find #"(?i)paid abilit" msg))
+          (str "and must not describe their paid-ability window as what we are "
+               "blocked on. Message: " (pr-str msg)))
+      (is (re-find #"(?i)\bour own\b" msg)
+          (str "it must say the prompt is ours. Message: " (pr-str msg))))))
+
+(deftest test-303-an-empty-window-is-still-reported-as-an-opponent-wait
+  (testing "#303's deadlock pin, and the reason the guard is not simply 'do we
+            hold anything?'. With NO prompt the opponent genuinely owes this
+            window, and the wait is both true and correctly NON-terminal — the
+            loop must keep polling for them. Surfacing here would stop an
+            autonomous seat's loop on every empty priority window in the game."
+    (doseq [side ["corp" "runner"]]
+      (let [[result sent] (drive-chain-at-paid-ability-window side "movement" nil)]
+        (is (= :waiting-for-opponent-paid-abilities (:status result))
+            (str side ": an empty window is still an opponent wait. Got: "
+                 (pr-str result)))
+        (is (empty? sent)
+            (str side ": and still sends nothing. Sent: " (pr-str sent)))))))
+
+(deftest test-303-the-dummy-run-prompt-is-still-an-opponent-wait
+  (testing "#303's deadlock pin for the shape a seat ACTUALLY holds here:
+            show-run-prompts mints the engine's dummy RUN prompt for both seats on
+            every run, with nil in the choices position. Reading 'we hold a
+            prompt' off that would turn every ordinary priority window into a
+            terminal decision. engine-blocking-prompt? admits {nil, \"run\"}
+            precisely so it cannot."
+    (doseq [side ["corp" "runner"]]
+      (let [[result sent] (drive-chain-at-paid-ability-window
+                           side "movement"
+                           {:prompt-type "run" :msg "You are approaching Bran 1.0"})]
+        (is (= :waiting-for-opponent-paid-abilities (:status result))
+            (str side ": the dummy run prompt is not a decision of ours. Got: "
+                 (pr-str result)))
+        (is (empty? sent)
+            (str side ": and nothing is sent. Sent: " (pr-str sent)))))))
+
+(deftest test-303-the-opponents-checkpoint-is-still-an-opponent-wait
+  (testing "#303 inherits #301 round 2's MAJOR (both vendors). A `waiting` prompt
+            IS in engine-blocking-prompt?'s set — it is neither nil nor \"run\" —
+            so guarding on that predicate alone would claim the opponent's own
+            checkpoint as our decision, stop the loop on a prompt only they can
+            clear, and print a hint telling the seat to answer something it
+            cannot. For this shape the ORIGINAL message is true and non-terminal
+            is right."
+    (doseq [side ["corp" "runner"]]
+      (let [[result sent] (drive-chain-at-paid-ability-window
+                           side "movement"
+                           {:prompt-type "waiting" :msg "Waiting for opponent"
+                            :eid "e7"})]
+        (is (= :waiting-for-opponent-paid-abilities (:status result))
+            (str side ": the opponent's checkpoint is an opponent wait, and the "
+                 "chain should say so. Got: " (pr-str result)))
+        (is (empty? sent)
+            (str side ": and nothing is sent. Sent: " (pr-str sent)))))))
+
+(deftest test-303-status-is-not-scored-as-a-nudgeable-opponent-wait
+  (testing "#303 harm 2's other consumer, which the status change is what fixes.
+            ai-stall scores :waiting-for-opponent-paid-abilities as a nudgeable
+            wait (`waiting-statuses`), so an autonomous loop holding its own
+            unanswered prompt chat-nudged the OPPONENT ('you there? your move')
+            and then BAILED the game on them. The status this now returns must not
+            be in that set, and must be terminal."
+    (let [[result _] (drive-chain-at-paid-ability-window
+                      "corp" "movement" lone-done-select)]
+      (is (not (stall/waiting-on-opponent? (:status result)))
+          (str "our own prompt is not a nudgeable opponent wait. Got: "
+               (pr-str (:status result))))
+      (is (not (stall/slow-opponent-wait? (:status result)))
+          (str "nor a slow-opponent deliberation. Got: "
+               (pr-str (:status result)))))))
 
 (deftest test-full-break-error-still-counts-as-failure
   (testing "A genuine :error from use-ability! still increments the unaffordable
