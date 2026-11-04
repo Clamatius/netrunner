@@ -93,6 +93,17 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
   # r1/F4).
   __le_val="${__le_val#"${__le_val%%[![:space:]]*}"}"
   __le_val="${__le_val%"${__le_val##*[![:space:]]}"}"
+  # A BACKSLASH is refused outright (design round / F7). It has no escape
+  # meaning here, and the closing-quote scan read the quote in
+  # `AI_PASSWORD="pa\"` as the closing one and silently exported `pa\` - a
+  # value the author did not write, which is the one failure mode this file
+  # may not have. Supporting dotenv-style escapes would be a new mechanism for
+  # a syntax no key in `.env.example` needs; refusing by name is the sized
+  # answer, and it says what to do instead.
+  case "$__le_val" in
+    *\\*)
+      echo "$__le_warn a backslash is not supported in the value of '$__le_key'" >&2; continue ;;
+  esac
   case "$__le_val" in
     \"*|\'*)
       # Quoted. Find the CLOSING quote - the next one after the opening quote,
@@ -109,9 +120,21 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
       esac
       __le_inner="${__le_rest%%"$__le_q"*}"
       __le_after="${__le_rest#"$__le_inner$__le_q"}"
-      __le_after="${__le_after#"${__le_after%%[![:space:]]*}"}"
+      # What follows the closing quote is either nothing, or whitespace and
+      # then a comment. A `#` FLUSH against the closing quote is not a comment:
+      # `AI_PASSWORD="pa"#ss` silently exported `pa`, where shell assignment
+      # gives `pa#ss` (design round / F6). Requiring the whitespace makes this
+      # arm agree with the unquoted one below, where a `#` inside a word is
+      # content, so the whole grammar is one rule: a comment starts at a `#`
+      # that follows whitespace.
       case "$__le_after" in
-        ''|'#'*) __le_val="$__le_inner" ;;
+        '') __le_val="$__le_inner" ;;
+        [[:space:]]*)
+          __le_tail="${__le_after#"${__le_after%%[![:space:]]*}"}"
+          case "$__le_tail" in
+            ''|'#'*) __le_val="$__le_inner" ;;
+            *) echo "$__le_warn unexpected text after the closing quote in the value of '$__le_key'" >&2; continue ;;
+          esac ;;
         *) echo "$__le_warn unexpected text after the closing quote in the value of '$__le_key'" >&2; continue ;;
       esac ;;
     '#'*)
@@ -143,7 +166,7 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
   fi
 done < "$ROOT_DIR/.env"
 fi
-unset _le_lineno __le_line __le_warn __le_t __le_key __le_val __le_q __le_rest __le_inner __le_after
+unset _le_lineno __le_line __le_warn __le_t __le_key __le_val __le_q __le_rest __le_inner __le_after __le_tail
 
 # Default ports
 export GAME_SERVER_PORT="${GAME_SERVER_PORT:-7888}"

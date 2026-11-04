@@ -66,6 +66,7 @@ load_env_with() {
             echo "NOTE=${NOTE-<unset>}"
             echo "LITERAL=${LITERAL-<unset>}"
             echo "__le_lineno=${__le_lineno-<unset>}"
+            echo "AI_PASSWORD=${AI_PASSWORD-<unset>}"
           } > "$1/vars"
         ' _ "$SANDBOX"
 }
@@ -290,6 +291,50 @@ env -i PATH="$PATH" HOME="$HOME" LOAD_ENV_CANARY='tok-do-not-print-me' bash -c '
     ' _ "$SANDBOX"
 assert_var "a quoted CRLF value loses its quotes and its \r" NOTE bar
 assert_var "an unquoted CRLF value is usable as a port"      CLIENT_1_PORT 8889
+
+echo
+echo "the value grammar, pinned shape by shape (design round / F2)"
+load_env_with 'NOTE="a"b"'
+assert_var    "an interior quote after the closing quote is refused" NOTE '<unset>'
+assert_stderr_has "it says what is wrong" "after the closing quote"
+load_env_with "NOTE='it\"s'"
+assert_var "a quote of the OTHER kind inside is content, not a terminator" NOTE 'it"s'
+load_env_with "NOTE='it's'"
+assert_var    "a quote of the SAME kind inside is refused" NOTE '<unset>'
+load_env_with "CLIENT_1_PORT=\"\"
+CLIENT_2_PORT=''"
+assert_var "an empty double-quoted value means the default applies" CLIENT_1_PORT 7889
+assert_var "an empty single-quoted value does the same"             CLIENT_2_PORT 7890
+
+echo
+echo "a '#' must FOLLOW WHITESPACE to be a comment, in both arms (design round / F6)"
+load_env_with 'AI_USERNAME="pa"#ss'
+assert_var    "a '#' flush against the closing quote is NOT a comment" AI_USERNAME '<unset>'
+assert_stderr_has "and it is refused, not silently truncated to 'pa'" "after the closing quote"
+load_env_with 'AI_USERNAME=pa#ss
+NOTE="pa #ss" # real comment'
+assert_var "unquoted, a '#' inside a word stays in the value" AI_USERNAME 'pa#ss'
+assert_var "quoted, whitespace before '#' makes it a comment"  NOTE 'pa #ss'
+
+echo
+echo "a backslash is refused, never silently reinterpreted (design round / F7)"
+load_env_with 'AI_PASSWORD="pa\"
+CLIENT_1_PORT=8889'
+assert_var    "a trailing escaped quote does not export a value nobody wrote" AI_PASSWORD '<unset>'
+assert_var    "and the line after it still loads"                             CLIENT_1_PORT 8889
+assert_stderr_has   "the refusal names the backslash"       "backslash"
+assert_stderr_lacks "the value is not echoed back"          'pa\'
+load_env_with 'AI_PASSWORD=plain\path
+CLIENT_1_PORT=8889'
+assert_var "an unquoted backslash is refused the same way" AI_PASSWORD '<unset>'
+assert_var "and costs only its own line"                   CLIENT_1_PORT 8889
+
+echo
+echo "nothing in a value is ever evaluated"
+load_env_with 'LITERAL=`echo pwned`
+NOTE=$(echo pwned)'
+assert_var "backticks stay literal" LITERAL '`echo pwned`'
+assert_var "command substitution stays literal" NOTE '$(echo pwned)'
 
 echo
 echo "─────────────────────────────"
