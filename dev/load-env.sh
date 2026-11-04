@@ -126,25 +126,29 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
           esac ;;
         *) echo "$__le_warn unexpected text after the closing quote in the value of '$__le_key'" >&2; continue ;;
       esac ;;
-    '#'*)
-      # A value that is nothing but a comment is empty, and an EMPTY value is
-      # what lets `${CLIENT_1_PORT:-7889}` fall back (r2/F3). But the `#` still
-      # has to FOLLOW WHITESPACE to be a comment at all: testing the TRIMMED
-      # value here meant `AI_PASSWORD=#secret` was read as a comment and
-      # silently exported as empty, where both shell assignment and the old
-      # loader give `#secret` (r4/F3, r4/F5). So look at the untrimmed value,
-      # and fall through to the unquoted arm when the `#` is flush against the
-      # `=`. With this, one rule covers every arm: a comment starts at a `#`
-      # that follows whitespace.
-      case "${__le_t#*=}" in
-        [[:space:]]*) __le_val='' ;;
-        *)            ;;
-      esac ;;
     *)
-      # Unquoted: a ` #` begins a trailing annotation. Quote the value to keep
-      # a literal one. (`.env.example` writes only whole-line comments, so this
-      # is for hand-written files, not for a precedent in the tree - r2/F2.)
+      # Unquoted. A comment starts at a `#` that FOLLOWS WHITESPACE, and that
+      # has to be judged on the UNTRIMMED value, because trimming destroys the
+      # very whitespace the rule depends on. Three separate bugs came out of
+      # getting this wrong, each fixed by patching the previous patch:
+      #
+      #   - judged on the trimmed value, `CLIENT_1_PORT=   # use the default`
+      #     kept the comment TEXT instead of going empty, so the
+      #     `${CLIENT_1_PORT:-7889}` fallback never fired (r2/F3);
+      #   - a separate `'#'*` arm added to fix that then read
+      #     `AI_PASSWORD=#secret` as a comment and silently exported empty,
+      #     where shell assignment gives `#secret` (r4/F3, r4/F5);
+      #   - and that arm's `*) ;;` branch was a NO-OP, not a fallthrough -
+      #     bash `case` has no fallthrough, whatever its comment claimed - so
+      #     `NOTE=#a #b #c` was exported whole where bash assigns `#a`
+      #     (advisor pass, BLOCKER).
+      #
+      # Stripping from the untrimmed value and trimming afterwards is one rule
+      # that answers all three, and it DELETES the special arm rather than
+      # adding a fourth case to it. Quote the value to keep a literal ` #`.
+      __le_val="${__le_t#*=}"
       __le_val="${__le_val%%[[:space:]]#*}"
+      __le_val="${__le_val#"${__le_val%%[![:space:]]*}"}"
       __le_val="${__le_val%"${__le_val##*[![:space:]]}"}" ;;
   esac
 

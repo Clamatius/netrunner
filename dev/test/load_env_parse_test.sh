@@ -342,6 +342,21 @@ load_env_with 'AI_PASSWORD=#secret
 CLIENT_1_PORT=#8889'
 assert_var "a flush '#' is kept, not silently emptied" AI_PASSWORD '#secret'
 assert_var "so a port is not silently defaulted"       CLIENT_1_PORT '#8889'
+# ...but a LATER '#' preceded by whitespace is still a comment. The arm that
+# used to handle a flush '#' had a `*) ;;` branch whose comment claimed it fell
+# through to the unquoted arm; bash `case` has no fallthrough, so it was a
+# no-op and the comment strip never ran (advisor pass, BLOCKER).
+load_env_with 'NOTE=#a #b #c'
+assert_var "a flush '#' does not disable the comment rule for the rest of the line" NOTE '#a'
+printf 'NOTE=#a\t#b\n' > "$SANDBOX/.env"
+rm -f "$SANDBOX/out" "$SANDBOX/err" "$SANDBOX/vars"
+env -i PATH="$PATH" HOME="$HOME" bash -c '
+      source "$1/dev/load-env.sh" >"$1/out" 2>"$1/err"
+      echo "NOTE=${NOTE-<unset>}" > "$1/vars"
+    ' _ "$SANDBOX"
+assert_var "a TAB before the second '#' counts as whitespace too" NOTE '#a'
+load_env_with 'CLIENT_1_PORT=#8889 # really use 8889'
+assert_var "and the same on a port line" CLIENT_1_PORT '#8889'
 # and the r2/F3 case must still hold: WITH whitespace, it is a comment
 load_env_with 'CLIENT_1_PORT=   # blank means use the default'
 assert_var "whitespace then '#' still means empty, so the default fires" CLIENT_1_PORT 7889
