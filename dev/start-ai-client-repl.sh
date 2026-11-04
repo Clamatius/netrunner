@@ -20,7 +20,7 @@ CLIENT_NAME=${1:-fixed-id}
 # runner's java pid, and ai_client_init.clj is loaded into the runner's REPL
 # under the name "corp". start-ai-both.sh passes both arguments, so the broken
 # path was only ever the one a human or a seat types.
-# KNOWN GAP, filed separately: the catch-all still has #309's defect for every
+# KNOWN GAP, filed as #313: the catch-all still has #309's defect for every
 # name that is not `corp`. `start-ai-client-repl.sh corpp` resolves to the
 # runner's port and then succeeds against the runner's listener exactly as
 # above. It is not fixed by a name allowlist, because the hole is that the

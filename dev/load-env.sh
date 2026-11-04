@@ -93,17 +93,6 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
   # r1/F4).
   __le_val="${__le_val#"${__le_val%%[![:space:]]*}"}"
   __le_val="${__le_val%"${__le_val##*[![:space:]]}"}"
-  # A BACKSLASH is refused outright (design round / F7). It has no escape
-  # meaning here, and the closing-quote scan read the quote in
-  # `AI_PASSWORD="pa\"` as the closing one and silently exported `pa\` - a
-  # value the author did not write, which is the one failure mode this file
-  # may not have. Supporting dotenv-style escapes would be a new mechanism for
-  # a syntax no key in `.env.example` needs; refusing by name is the sized
-  # answer, and it says what to do instead.
-  case "$__le_val" in
-    *\\*)
-      echo "$__le_warn a backslash is not supported in the value of '$__le_key'" >&2; continue ;;
-  esac
   case "$__le_val" in
     \"*|\'*)
       # Quoted. Find the CLOSING quote - the next one after the opening quote,
@@ -138,18 +127,44 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
         *) echo "$__le_warn unexpected text after the closing quote in the value of '$__le_key'" >&2; continue ;;
       esac ;;
     '#'*)
-      # The whole value is a comment, so the value is empty - and an EMPTY
-      # value is what lets `${CLIENT_1_PORT:-7889}` fall back. Trimming before
-      # this check is what made `CLIENT_1_PORT=   # use the default` export the
-      # comment text, which is non-empty, so the fallback never fired and the
-      # port went to lsof as prose (r2/F3).
-      __le_val='' ;;
+      # A value that is nothing but a comment is empty, and an EMPTY value is
+      # what lets `${CLIENT_1_PORT:-7889}` fall back (r2/F3). But the `#` still
+      # has to FOLLOW WHITESPACE to be a comment at all: testing the TRIMMED
+      # value here meant `AI_PASSWORD=#secret` was read as a comment and
+      # silently exported as empty, where both shell assignment and the old
+      # loader give `#secret` (r4/F3, r4/F5). So look at the untrimmed value,
+      # and fall through to the unquoted arm when the `#` is flush against the
+      # `=`. With this, one rule covers every arm: a comment starts at a `#`
+      # that follows whitespace.
+      case "${__le_t#*=}" in
+        [[:space:]]*) __le_val='' ;;
+        *)            ;;
+      esac ;;
     *)
       # Unquoted: a ` #` begins a trailing annotation. Quote the value to keep
       # a literal one. (`.env.example` writes only whole-line comments, so this
       # is for hand-written files, not for a precedent in the tree - r2/F2.)
       __le_val="${__le_val%%[[:space:]]#*}"
       __le_val="${__le_val%"${__le_val##*[![:space:]]}"}" ;;
+  esac
+
+  # A BACKSLASH in the resulting VALUE is refused by name (design round / F7).
+  # It has no escape meaning here, and the closing-quote scan read the quote in
+  # `AI_PASSWORD="pa\"` as the closing one and silently exported `pa\` - a
+  # value the author did not write, which is the one failure mode this file may
+  # not have. Supporting dotenv-style escapes would be a new mechanism for a
+  # syntax no key in `.env.example` needs.
+  #
+  # This check sits AFTER the dispatch on purpose. Round 4 had it before, where
+  # it also saw trailing comments, so `CLIENT_1_PORT=8889 # see C:\dir` was
+  # refused for a backslash the value does not contain - a false refusal whose
+  # message was itself false (r4/F2, r4/F6). Every true refusal survives the
+  # move, because the hazard leaves its backslash inside the value: `"pa\"`
+  # yields the value `pa\`, and `"a\"b"` is already refused above as
+  # unexpected text after the closing quote.
+  case "$__le_val" in
+    *\\*)
+      echo "$__le_warn a backslash is not supported in the value of '$__le_key'" >&2; continue ;;
   esac
 
   # A failed assignment must cost this line and no more. `UID=5` in a .env made

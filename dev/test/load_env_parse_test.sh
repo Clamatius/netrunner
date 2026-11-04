@@ -337,6 +337,49 @@ assert_var "backticks stay literal" LITERAL '`echo pwned`'
 assert_var "command substitution stays literal" NOTE '$(echo pwned)'
 
 echo
+echo "a '#' flush against the '=' is NOT a comment either (r4/F3, r4/F5)"
+load_env_with 'AI_PASSWORD=#secret
+CLIENT_1_PORT=#8889'
+assert_var "a flush '#' is kept, not silently emptied" AI_PASSWORD '#secret'
+assert_var "so a port is not silently defaulted"       CLIENT_1_PORT '#8889'
+# and the r2/F3 case must still hold: WITH whitespace, it is a comment
+load_env_with 'CLIENT_1_PORT=   # blank means use the default'
+assert_var "whitespace then '#' still means empty, so the default fires" CLIENT_1_PORT 7889
+
+echo
+echo "a backslash in a COMMENT does not refuse the line (r4/F2, r4/F6)"
+load_env_with 'CLIENT_1_PORT=8889 # see C:\dir
+NOTE="a b" # see C:\x'
+assert_var "an unquoted value with a backslash in its comment is kept" CLIENT_1_PORT 8889
+assert_var "and a quoted one too"                                     NOTE 'a b'
+assert_stderr_lacks "no backslash refusal is raised" "backslash"
+# the true refusals must all survive the move
+load_env_with 'NOTE="pa\"'
+assert_var        "an escaped closing quote is still refused" NOTE '<unset>'
+assert_stderr_has "and still names the backslash"             "backslash"
+load_env_with 'NOTE=a\b'
+assert_var "an unquoted backslash in the VALUE is still refused" NOTE '<unset>'
+
+echo
+echo "every refusal .env.example lists is one the loader actually makes"
+# .env.example enumerates its refusals; an enumerating doc hides its own gaps,
+# so each documented arm gets a line here. Keep this in step with the doc.
+load_env_with 'no equals sign here'
+assert_stderr_has "no '=' on the line"        "no '='"
+load_env_with '2BAD=x'
+assert_stderr_has "not a shell identifier"    "not a usable variable name"
+load_env_with '_le_x=1'
+assert_stderr_has "reserved _le_ prefix"      "reserved"
+load_env_with 'NOTE="unterminated'
+assert_stderr_has "unterminated quote"        "unterminated quote"
+load_env_with 'NOTE="a"b"'
+assert_stderr_has "text after a closing quote" "after the closing quote"
+load_env_with 'NOTE=a\b'
+assert_stderr_has "a backslash in the value"  "backslash"
+load_env_with 'UID=5'
+assert_stderr_has "a name that cannot be set" "could not be set"
+
+echo
 echo "─────────────────────────────"
 echo "load_env_parse_test: passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]
