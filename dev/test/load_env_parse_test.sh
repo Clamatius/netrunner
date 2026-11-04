@@ -231,6 +231,67 @@ assert_stderr_lacks "a line with no '=' has its CONTENT withheld too" "sk-live-a
 assert_stderr_has   "but its line number is still named"              "line 1"
 
 echo
+echo "a QUOTED value ends at its CLOSING quote, not at the first ' #' (r2/F1, r2/F7)"
+load_env_with 'CLIENT_1_PORT="8889" # use "runner"
+NOTE="a # inside" # outside
+CLIENT_2_PORT=8890'
+assert_var "a comment that itself contains quotes does not corrupt the value" CLIENT_1_PORT 8889
+assert_var "an interior ' #' survives AND a trailing comment is still dropped" NOTE 'a # inside'
+assert_var "the line after them is unharmed" CLIENT_2_PORT 8890
+assert_stderr_lacks "neither is misreported as an unterminated quote" "unterminated quote"
+load_env_with 'NOTE="pa #ss" # mine'
+assert_var "a quoted value whose interior has ' #', plus a comment" NOTE 'pa #ss'
+# The closing quote must really close: text after it is refused, not exported.
+load_env_with 'NOTE="bar" and then some
+CLIENT_1_PORT=8889'
+assert_var "text after the closing quote is refused, not exported" NOTE '<unset>'
+assert_var "and the next line still loads"                        CLIENT_1_PORT 8889
+assert_stderr_has "it says what is actually wrong" "after the closing quote"
+
+echo
+echo "a value that is ONLY a comment is EMPTY, so the default fires (r2/F3)"
+load_env_with 'CLIENT_1_PORT=   # blank means use the default
+CLIENT_2_PORT=8890'
+assert_var "the comment text is not exported as the port" CLIENT_1_PORT 7889
+assert_var "the line after it is unharmed"                CLIENT_2_PORT 8890
+
+echo
+echo "the text before a bad '=' is withheld, because it can be the VALUE (r2/F5)"
+load_env_with 'AI_TOKEN dGhpc2lzc2VjcmV0==
+CLIENT_1_PORT=8889'
+assert_var "the line after it still loads" CLIENT_1_PORT 8889
+assert_stderr_has   "the line number is named"            "line 1"
+assert_stderr_lacks "the secret is NOT in the warning"    "dGhpc2lzc2VjcmV0"
+assert_stderr_lacks "and neither is the name beside it"   "AI_TOKEN"
+
+echo
+echo "a failed export costs its line, not the whole caller (r2/F4)"
+printf 'UID=5\nCLIENT_1_PORT=8889\n' > "$SANDBOX/.env"
+if out=$(env -i PATH="$PATH" HOME="$HOME" bash -c '
+          set -e
+          source "$1/dev/load-env.sh" 2>/dev/null
+          echo "REACHED:$CLIENT_1_PORT"
+        ' _ "$SANDBOX" 2>/dev/null); then
+    case "$out" in
+      REACHED:8889) pass "a readonly key does not abort a 'set -e' caller, and the next line loads" ;;
+      *)            fail "caller continued but with the wrong state: [$out]" ;;
+    esac
+else
+    fail "a readonly key in .env aborted the 'set -e' caller — eight scripts in dev/ source this under set -e"
+fi
+
+echo
+echo "a CRLF .env parses (it was a limit; the both-ends trim removed it)"
+printf 'NOTE="bar"\r\nCLIENT_1_PORT=8889\r\n' > "$SANDBOX/.env"
+rm -f "$SANDBOX/out" "$SANDBOX/err" "$SANDBOX/vars"
+env -i PATH="$PATH" HOME="$HOME" LOAD_ENV_CANARY='tok-do-not-print-me' bash -c '
+      source "$1/dev/load-env.sh" >"$1/out" 2>"$1/err"
+      { echo "CLIENT_1_PORT=${CLIENT_1_PORT-<unset>}"; echo "NOTE=${NOTE-<unset>}"; } > "$1/vars"
+    ' _ "$SANDBOX"
+assert_var "a quoted CRLF value loses its quotes and its \r" NOTE bar
+assert_var "an unquoted CRLF value is usable as a port"      CLIENT_1_PORT 8889
+
+echo
 echo "─────────────────────────────"
 echo "load_env_parse_test: passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]
