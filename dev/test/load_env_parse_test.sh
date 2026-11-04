@@ -395,6 +395,31 @@ load_env_with 'UID=5'
 assert_stderr_has "a name that cannot be set" "could not be set"
 
 echo
+echo "a quote part-way through a value is refused, not guessed at"
+# Quotes are recognised only when the value BEGINS with one. `NOTE=#"secret"`
+# would otherwise export `#"secret"`, where shell assignment and the pre-#310
+# loader both give `#secret` (xargs did shell-style quote removal anywhere in
+# the word), making it a silent value change this cycle introduced.
+load_env_with 'NOTE=#"secret"
+CLIENT_1_PORT=8889'
+assert_var        "a mid-value quote is refused"   NOTE '<unset>'
+assert_var        "and costs only its own line"    CLIENT_1_PORT 8889
+assert_stderr_has "the refusal says what to do"    "quote the whole value instead"
+load_env_with 'NOTE=8889"trail"'
+assert_var "a trailing quoted run is refused too" NOTE '<unset>'
+load_env_with "NOTE=it's"
+assert_var "an apostrophe mid-value is refused rather than read as an open quote" NOTE '<unset>'
+# ...and the forms that ARE supported must still work
+load_env_with 'NOTE="a b"'
+assert_var "a wholly quoted value still works" NOTE 'a b'
+load_env_with "NOTE='it\"s'"
+assert_var "and a quote of the other kind inside it" NOTE 'it"s'
+load_env_with 'NOTE=8888 # a comment with "quotes" in it'
+assert_var "a quote inside a COMMENT is not the value's problem" NOTE '8888'
+load_env_with 'NOTE="a" # and "more" here'
+assert_var "nor after a closing quote" NOTE 'a'
+
+echo
 echo "─────────────────────────────"
 echo "load_env_parse_test: passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]

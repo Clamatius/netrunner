@@ -149,7 +149,26 @@ while IFS= read -r __le_line || [ -n "$__le_line" ]; do
       __le_val="${__le_t#*=}"
       __le_val="${__le_val%%[[:space:]]#*}"
       __le_val="${__le_val#"${__le_val%%[![:space:]]*}"}"
-      __le_val="${__le_val%"${__le_val##*[![:space:]]}"}" ;;
+      __le_val="${__le_val%"${__le_val##*[![:space:]]}"}"
+      # A quote MID-VALUE is refused. Quotes are only recognised when the value
+      # BEGINS with one, so `NOTE=#"secret"` would otherwise export
+      # `#"secret"` - where both shell assignment and the pre-#310 loader give
+      # `#secret`, because xargs did shell-style quote removal anywhere in the
+      # word. That makes it a silent value change this cycle INTRODUCED, found
+      # by re-measuring an advisor note against the pre-cycle commit rather
+      # than the previous one.
+      #
+      # Supporting it would mean mid-word quote removal, i.e. actually
+      # implementing shell word splitting, which is a mechanism this file has
+      # no business growing. Refusing by name is the sized answer: it trades a
+      # value nobody can predict for an error naming the line. The cost is
+      # real and is a regression against the original loader for this one
+      # shape - `KEY=a"b"c` used to work by accident - so it is documented in
+      # `.env.example` rather than left for someone to discover.
+      case "$__le_val" in
+        *\"*|*\'*)
+          echo "$__le_warn a quote mid-value is not supported in '$__le_key' - quote the whole value instead" >&2; continue ;;
+      esac ;;
   esac
 
   # A BACKSLASH in the resulting VALUE is refused by name (design round / F7).
