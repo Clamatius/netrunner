@@ -65,6 +65,7 @@ load_env_with() {
             echo "AI_USERNAME=${AI_USERNAME-<unset>}"
             echo "NOTE=${NOTE-<unset>}"
             echo "LITERAL=${LITERAL-<unset>}"
+            echo "__le_lineno=${__le_lineno-<unset>}"
           } > "$1/vars"
         ' _ "$SANDBOX"
 }
@@ -172,6 +173,62 @@ CLIENT_1_PORT=8889
 '
 assert_var "blank/comment lines: real key still loaded" CLIENT_1_PORT 8889
 assert_stderr_lacks "blank/comment lines: no warnings" "load-env.sh"
+
+echo
+echo "a value's whitespace is trimmed at BOTH ends (r1/F2, r1/F4)"
+load_env_with 'CLIENT_1_PORT= 8889
+CLIENT_2_PORT=8890 
+AI_USERNAME=  "  interior kept  "  
+NOTE =  quoted-by-spacing  '
+assert_var "leading space in a port value is trimmed"  CLIENT_1_PORT 8889
+assert_var "trailing space in a port value is trimmed" CLIENT_2_PORT 8890
+assert_var "a padded QUOTED value is still seen as quoted, interior preserved" AI_USERNAME '  interior kept  '
+assert_var "a space before the '=' does not defeat the parse" NOTE 'quoted-by-spacing'
+# The reason F2 is not cosmetic: that value is a port, and the port goes to lsof.
+load_env_with 'CLIENT_1_PORT= 8889'
+if env -i PATH="$PATH" HOME="$HOME" bash -c '
+      source "$1/dev/load-env.sh" >/dev/null 2>&1
+      lsof -i:$CLIENT_1_PORT -sTCP:LISTEN -t >/dev/null 2>"$1/lsoferr"
+      grep -q "unacceptable port specification" "$1/lsoferr" && exit 1 || exit 0
+    ' _ "$SANDBOX"; then
+    pass "the resulting port is one lsof will accept"
+else
+    fail "the resulting port made lsof say 'unacceptable port specification' — ai-bounce.sh:44's listen probe and stop-ai-client.sh's kill selector both read it"
+fi
+
+echo
+echo "a QUOTED value may be followed by a comment (r1/F3, r1/F5)"
+load_env_with 'CLIENT_1_PORT="8889"   # workspace two
+NOTE="a # inside quotes is kept"
+CLIENT_2_PORT=8890'
+assert_var "quoted value + trailing comment is applied" CLIENT_1_PORT 8889
+assert_var "a '#' INSIDE the quotes survives"            NOTE 'a # inside quotes is kept'
+assert_var "the line after it is unharmed"               CLIENT_2_PORT 8890
+assert_stderr_lacks "it is not misdiagnosed as an unterminated quote" "unterminated quote"
+
+echo
+echo "a .env key cannot overwrite the parser's own state (r1/F6)"
+load_env_with '__le_lineno=08
+CLIENT_1_PORT=8889
+__le_val=whatever
+CLIENT_2_PORT=8890'
+assert_var "the good line AFTER the reserved key still loads"  CLIENT_1_PORT 8889
+assert_var "and so does the one after the second"              CLIENT_2_PORT 8890
+assert_var "the reserved key is not exported"                  __le_lineno '<unset>'
+assert_stderr_has "the reserved key is named on stderr" "reserved"
+
+echo
+echo "a warning never prints the VALUE (r1/F7)"
+load_env_with 'AI_PASSWORD="private-sentinel-do-not-print
+CLIENT_1_PORT=8889'
+assert_var "the line after the bad one still loads" CLIENT_1_PORT 8889
+assert_stderr_has   "the key is named"                     "AI_PASSWORD"
+assert_stderr_has   "the line number is named"             "line 1"
+assert_stderr_lacks "the secret value is NOT in the warning" "private-sentinel-do-not-print"
+load_env_with 'this line has no equals sign and a secret-looking blob sk-live-abc123
+CLIENT_1_PORT=8889'
+assert_stderr_lacks "a line with no '=' has its CONTENT withheld too" "sk-live-abc123"
+assert_stderr_has   "but its line number is still named"              "line 1"
 
 echo
 echo "─────────────────────────────"
