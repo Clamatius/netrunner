@@ -4,6 +4,10 @@
 # Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
 # Usage: ./ai-eval.sh [client_name] [port] <clojure-expression>
 # Old usage still supported: ./ai-eval.sh <clojure-expression>
+#
+# With the port omitted, the default comes from the CLIENT NAME: corp gets
+# CLIENT_2_PORT (7890), anything else gets CLIENT_1_PORT (7889). The rule is
+# load-env.sh's client_default_port, shared with start-ai-client-repl.sh (#312).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/load-env.sh"
@@ -86,12 +90,22 @@ if [ "${1:-}" == "--stdin" ]; then
     # #307: this was a LITERAL 7889 while the legacy one-arg branch below read
     # ${CLIENT_1_PORT:-7889} — the same script honouring a configured port on one
     # branch and ignoring it on the other. Both branches now default the same way.
-    REPL_PORT="${3:-${CLIENT_1_PORT:-7889}}"
+    #
+    # #312: and both of them ignored the client NAME, so `--stdin corp` with no
+    # port dialled the RUNNER — which does not fail when both REPLs are up. The
+    # runner answers normally, so the expression ran and the output was
+    # attributed to corp. Worse as printed advice: on a stale pidfile the
+    # remediation line below then said `start-ai-client-repl.sh corp 7889`,
+    # which is #309's collision. The name->port rule is load-env.sh's
+    # `client_default_port` (sourced above), shared with the launcher so the two
+    # doors cannot disagree again.
+    REPL_PORT="${3:-$(client_default_port "$CLIENT_NAME")}"
     EXPRESSION=$(cat)
 elif [ $# -eq 1 ]; then
-    # Old usage: just expression
+    # Old usage: just expression. CLIENT_NAME is the legacy `fixed-id`, which
+    # takes client_default_port's catch-all arm — the runner's port, as before.
     CLIENT_NAME="fixed-id"
-    REPL_PORT="${CLIENT_1_PORT:-7889}"
+    REPL_PORT="$(client_default_port "$CLIENT_NAME")"
     EXPRESSION="$1"
 elif [ $# -eq 3 ]; then
     # New usage: client_name port expression
@@ -101,6 +115,8 @@ elif [ $# -eq 3 ]; then
 else
     echo "Usage: $0 [client_name] [port] <clojure-expression>"
     echo "       $0 --stdin [client_name] [port] < file_with_expression"
+    echo "With the port omitted, the default comes from the CLIENT NAME:"
+    echo "  corp gets CLIENT_2_PORT ($CLIENT_2_PORT), anything else CLIENT_1_PORT ($CLIENT_1_PORT)."
     echo "Examples:"
     echo "  $0 '(ai-actions/status)'"
     echo "  $0 runner $CLIENT_1_PORT '(ai-actions/status)'"

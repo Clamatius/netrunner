@@ -100,13 +100,30 @@
 # FIXTURE root and shows it is honoured, which proves the isolation is real and
 # load-bearing: the .env this test is exposed to is one it controls.
 #
-# NOT covered here, deliberately: `ai-eval.sh --stdin corp` still defaults to
-# the RUNNER's port, because neither branch maps the client NAME to a side the
-# way start-ai-client-repl.sh now does (#309). That is a real defect of the same
-# class, one door over, filed as #312 rather than fixed in passing — fixing it
-# adds another copy of the side->port mapping, which is what #308 is asking
-# whether to collapse. The assertion below pins today's behaviour so the fix for
-# it has to come here and change this file on purpose.
+# SIDE-BLINDNESS IS NOW COVERED, and this paragraph is the record of the change.
+# It used to say the opposite: that `--stdin corp` still defaulted to the
+# RUNNER's port, that this was filed as #312 rather than fixed, and that "the
+# assertion below pins today's behaviour so the fix for it has to come here and
+# change this file on purpose". That is what happened — #312 was fixed, and this
+# file is where it had to be said.
+#
+# The fix did NOT add the second copy of the mapping that #312 priced as its
+# cost. The rule is one function, `client_default_port`, in load-env.sh — the
+# file both doors already source and the one that already owns these port
+# values — and `start-ai-client-repl.sh`'s own `case` arm was replaced by a call
+# to it. So the side->port decision sites went 2 -> 1, not 2 -> 3, and the
+# reasoning is on the record in load-env.sh beside the function.
+#
+# Two consequences for the assertions below:
+#   - `corp-name-selects-client2-port` is the flipped one. It was
+#     `corp-name-does-not-yet-move-the-default` expecting CLIENT_1_PORT.
+#   - `runner-name-...` is UNCHANGED and is still load-bearing: it is what
+#     distinguishes "corp is special" from "the name now swings everything".
+#
+# Still NOT covered, and still true: #313. `client_default_port`'s catch-all
+# gives the runner's port to every name that is not `corp`, so a typo
+# (`--stdin corpp`) resolves to 7889. The fix is not a name allowlist — see the
+# KNOWN GAP note in load-env.sh — and it is blocked on #293.
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -209,16 +226,40 @@ assert_eq "stdin-explicit-port-wins" \
 assert_eq "three-arg-explicit-port-wins" \
     "$(dialled_port CLIENT_1_PORT=18889 -- "$NAME" 7777 '(+ 1 1)')" "7777"
 
-# Today's side-blindness (#312), pinned with the LITERAL side names, which is
-# the only thing that can witness it. `corp` is the name a fixed ai-eval.sh
-# would key on, so this is the assertion that must go red when #312 is fixed;
-# `runner` is here so the pair distinguishes "the name is never consulted" from
-# "only corp is special". Both are safe because the `ps` stub makes the pidfile
-# `rm` arm unreachable, witnessed by stale-pidfile-survives-a-run above.
-assert_eq "corp-name-does-not-yet-move-the-default" \
-    "$(dialled_port CLIENT_1_PORT=18889 CLIENT_2_PORT=18890 -- --stdin corp)" "18889"
+# #312: the client NAME selects the side's port. Pinned with the LITERAL side
+# names, which is the only thing that can witness an arm keying on them — an
+# earlier version of this test passed only a made-up name and therefore stayed
+# green when a corp arm was ADDED, a fixture monoculture that reached four
+# comments as a false claim. Both names are safe because the `ps` stub makes the
+# pidfile `rm` arm unreachable, witnessed by stale-pidfile-survives-a-run above.
+#
+# The pair is the point. `corp` alone cannot distinguish "corp is special" from
+# "the name now swings everything", and `runner` alone cannot distinguish "the
+# catch-all is right" from "the name is still never consulted".
+assert_eq "corp-name-selects-client2-port" \
+    "$(dialled_port CLIENT_1_PORT=18889 CLIENT_2_PORT=18890 -- --stdin corp)" "18890"
 assert_eq "runner-name-does-not-move-the-default" \
     "$(dialled_port CLIENT_1_PORT=18889 CLIENT_2_PORT=18890 -- --stdin runner)" "18889"
+
+# The bug's SIGNATURE, mirroring the assertion of the same name in
+# client_repl_port_default_test.sh: a .env that moves only the runner must not
+# move corp. Two absolute assertions can drift to a shared wrong value; this one
+# fails if corp ever starts reading CLIENT_1_PORT again, whatever its value.
+assert_eq "corp-is-unmoved-by-a-runner-only-env" \
+    "$(dialled_port CLIENT_1_PORT=18889 -- --stdin corp)" "7890"
+
+# With nothing configured at all, each side lands on its own built-in default.
+# This is the shape an operator actually types (`--stdin corp`, no port, no
+# .env), and it is the one that silently dialled the runner before #312.
+assert_eq "corp-with-nothing-configured-gets-7890" \
+    "$(dialled_port -i -- --stdin corp)" "7890"
+assert_eq "runner-with-nothing-configured-gets-7889" \
+    "$(dialled_port -i -- --stdin runner)" "7889"
+
+# An explicit port still beats the NAME, not just the environment — the
+# three-argument shape is how start-ai-both.sh and send_command call this.
+assert_eq "explicit-port-beats-the-corp-name" \
+    "$(dialled_port CLIENT_1_PORT=18889 CLIENT_2_PORT=18890 -- --stdin corp 7777)" "7777"
 
 # The isolation is load-bearing, not decorative: a .env in the FIXTURE root is
 # read and honoured, which is the same mechanism that let the checkout's .env

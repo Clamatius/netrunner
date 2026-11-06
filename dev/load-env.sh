@@ -212,6 +212,53 @@ export CLIENT_1_PORT="${CLIENT_1_PORT:-7889}"
 export CLIENT_2_PORT="${CLIENT_2_PORT:-7890}"
 export WEB_SERVER_PORT="${WEB_SERVER_PORT:-1042}"
 
+# The side->port default, in ONE place (#312).
+#
+# Two doors resolve a port when the caller omits one - `start-ai-client-repl.sh`
+# (which side's REPL to START) and `ai-eval.sh` (which side's REPL to DIAL) -
+# and they each used to own a copy of the rule. Both had half of it:
+#
+#   start-ai-client-repl.sh  consulted the NAME but not, before #309, for corp
+#   ai-eval.sh               honoured the configured PORT but never the NAME
+#
+# so `ai-eval.sh --stdin corp` with no port dialled the RUNNER (#312), and with
+# both REPLs up the runner answered normally - the expression ran, output came
+# back, and it was attributed to corp. `send_command` has the mirror-image half:
+# it maps the side correctly and hard-codes both numbers (#291).
+#
+# This file is where the rule belongs rather than a third copy of it: it already
+# owns these four values, and both doors already `source` it unconditionally.
+# One definition cannot disagree with itself, which is the whole defect class
+# (#291, #307, #312) that kept getting filed one door at a time.
+#
+# The `:-` literals stay INSIDE the function on purpose. The exports above
+# always set both names, so they are unreachable in normal use - they are the
+# defence-in-depth the #307 author deliberately kept when mirroring
+# ai-eval.sh's legacy branch, and moving the rule here must not quietly delete
+# it. (Measured: with the function defined but neither variable exported, corp
+# still resolves to 7890.)
+#
+# KNOWN GAP, filed as #313, and NOT closed by moving the arm here: the catch-all
+# gives the runner's port to every name that is not `corp`, so
+# `start-ai-client-repl.sh corpp` still resolves to 7889 and then succeeds
+# against the runner's listener - no REPL started, two pid files naming one
+# process, operator told it worked. A name allowlist is not the fix: the hole is
+# that the launcher's readiness probe cannot tell its own REPL from someone
+# else's, and the `*)` arm is load-bearing for `runner` AND for the `fixed-id`
+# legacy default that dev/README.md still documents. #313 needs #293's ownership
+# check on the /tmp/ai-client-* paths first. This function preserves that
+# semantics exactly; it changes where the arm lives, not what it does.
+#
+# This does NOT answer ASK #308 (should these ports be configurable at all).
+# Under "keep", this is the owner every door should call; under "delete", it is
+# one function to remove instead of N copies to find.
+client_default_port() {
+    case "${1:-}" in
+        corp) printf '%s\n' "${CLIENT_2_PORT:-7890}" ;;
+        *)    printf '%s\n' "${CLIENT_1_PORT:-7889}" ;;  # runner, and the fixed-id legacy name
+    esac
+}
+
 # Log configuration (optional, can be noisy)
 # echo "Configuration:"
 # echo "  GAME_SERVER_PORT: $GAME_SERVER_PORT"
