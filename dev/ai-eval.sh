@@ -83,7 +83,10 @@ fi
 if [ "${1:-}" == "--stdin" ]; then
     # Stdin mode: read expression from stdin to avoid shell escaping
     CLIENT_NAME="${2:-fixed-id}"
-    REPL_PORT="${3:-7889}"
+    # #307: this was a LITERAL 7889 while the legacy one-arg branch below read
+    # ${CLIENT_1_PORT:-7889} — the same script honouring a configured port on one
+    # branch and ignoring it on the other. Both branches now default the same way.
+    REPL_PORT="${3:-${CLIENT_1_PORT:-7889}}"
     EXPRESSION=$(cat)
 elif [ $# -eq 1 ]; then
     # Old usage: just expression
