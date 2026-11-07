@@ -957,6 +957,14 @@ is_display_expr() {
 # of the other twenty sites; send_command_clj_string_test.sh now fails if a new
 # site interpolates a bare variable into a Clojure string. Backslash first, or
 # it would re-escape the backslashes this adds. (Panel, Sol 5.6.)
+#
+# KNOWN LIMIT, and it belongs to the IDIOM rather than to this function: every
+# caller spells it `\"$(clj_str "$X")\"`, and command substitution strips trailing
+# newlines. So a value ending in one reaches the REPL without it -- a filename of
+# "foo\n" saves as "foo" (panel, guest seat, reproduced). Not fixed: the repair is
+# a different mechanism at ~20 call sites (printf -v, or a nameref), which is its
+# own change rather than a rider on this one, and no input in play carries a
+# trailing newline. Documented rather than silently true.
 clj_str() {
     local s=${1//\\/\\\\}
     printf '%s' "${s//\"/\\\"}"
@@ -1677,7 +1685,7 @@ case "$COMMAND" in
         case "$CLIENT_NAME" in
             runner) OPPONENT="corp" ;;
             corp)   OPPONENT="runner" ;;
-            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;
+            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;  # CLJ-STR-EXEMPT: a message printed to a human, not Clojure source
         esac
         num_arg_min MAX_TURNS 1 "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
         # Real card titles carry quotes ("Pretty" Mary da Silva, Cerberus "Lady" H1),
@@ -2926,12 +2934,12 @@ case "$COMMAND" in
         # when the namespace loads but the var is absent.
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v) (not (future-done? (deref v))))
-                     (println \"⚠️  Autonomous loop already running for ${CLIENT_NAME} - use 'bot-loop-stop' first\")
+                     (println \"⚠️  Autonomous loop already running for $(clj_str "$CLIENT_NAME") - use 'bot-loop-stop' first\")
                      (let [loop-fn (or (requiring-resolve (quote $LOOP_NS/$LOOP_FN))
-                                       (throw (ex-info \"bot-loop: no such var $LOOP_NS/$LOOP_FN\" {})))]
+                                       (throw (ex-info \"bot-loop: no such var $(clj_str "$LOOP_NS")/$(clj_str "$LOOP_FN")\" {})))]
                        (def ai-self-play-future
                          (future (loop-fn $LOOP_ARGS)))
-                       (println \"🔁 Autonomous loop launched for ${CLIENT_NAME} ($LOOP_NS/$LOOP_FN)\"))))"
+                       (println \"🔁 Autonomous loop launched for $(clj_str "$CLIENT_NAME") ($(clj_str "$LOOP_NS")/$(clj_str "$LOOP_FN"))\"))))"
         ;;
 
     bot-loop-status)
@@ -2952,7 +2960,7 @@ case "$COMMAND" in
         execute "(let [v (resolve (quote ai-self-play-future))]
                    (if (and v (bound? v))
                      (do (future-cancel (deref v))
-                         (println \"🛑 Autonomous loop cancelled for ${CLIENT_NAME}\"))
+                         (println \"🛑 Autonomous loop cancelled for $(clj_str "$CLIENT_NAME")\"))
                      (println \"No autonomous loop to stop.\")))"
         ;;
 

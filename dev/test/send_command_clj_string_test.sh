@@ -108,16 +108,21 @@ echo "--- no site interpolates a bare variable into a Clojure string ---"
 #   2. POSITIONAL PARAMETERS. `[A-Za-z_]+` cannot match `$1`, so a forwarded
 #      argument was invisible even on an `execute` line.
 #
-# Two classes are legitimately not Clojure source. They are excluded BY RULE,
-# not by a pinned count -- a count cannot see an addition it never extracted
-# (#260):
-#   - comment lines, which document this hazard and must stay free to quote it;
-#   - user-facing message calls (error/warn/info/echo), where `\"` is for the
-#     reader's eye and never reaches a reader of Clojure.
+# Comment lines are excluded BY RULE, not by a pinned count -- a count cannot see
+# an addition it never extracted (#260). They document this hazard and must stay
+# free to quote it. The exclusion BLANKS the line rather than dropping it, so
+# `grep -n` keeps reporting real file line numbers; dropping would renumber every
+# finding below the first comment -- a guard whose output lies about where the
+# defect is.
 #
-# Both exclusions BLANK the line rather than dropping it, so `grep -n` keeps
-# reporting real file line numbers. Dropping them would renumber every finding
-# below the first comment -- a guard whose output lies about where the defect is.
+# There is NO general exclusion for user-facing message calls. Round 1 had one
+# (`/(error|warn|info|echo)[[:space:]]+"/s/.*//`) and a seat showed it blanked the
+# ENTIRE line, so `execute "(f \"$CARD_NAME\")"; info "done"` on one line hid a
+# live raw interpolation behind its neighbour's exemption (r1/I4). Narrowing it
+# would need to know where the message's argument ends, through escaped quotes.
+# Deleting the rule is the sized answer: exactly two lines in send_command print
+# an escaped quote to a human, and they carry CLJ-STR-EXEMPT like any other
+# proved-safe site. One convention, no coarse rule, no hole in it.
 # Three things are recognised as already-safe, each by a rule a new site cannot
 # accidentally inherit:
 #   - an inline `$(clj_str "$X")` wrap, the ordinary idiom;
@@ -136,13 +141,40 @@ echo "--- no site interpolates a bare variable into a Clojure string ---"
 # real pipeline changed they went on asserting things about the old spelling and
 # passed vacuously. A guard's mutation test that does not call the guard proves
 # nothing about the guard. Everything below goes through scan_raw.
+# INSIDE a Clojure string literal, judged by delimiter PARITY -- not by whether
+# the variable happens to fill the whole literal.
+#
+# Round 1 matched `\"$VAR\"`, which requires the interpolation to BE the entire
+# literal. A seat showed that `execute "(println \"before $CARD_NAME after\")"`
+# therefore passed (r1/I1), and re-measuring with the scanner below found FOUR
+# live instances the round-1 guard was green over, in the bot-loop arm's println
+# strings. So the shape was not hypothetical.
+#
+# A plain grep cannot do this. The first attempt mapped `\"` to a sentinel and
+# looked for `$` after one, which cannot tell "inside a literal" from "between
+# two literals" -- it flagged every composed variable that legitimately sits
+# outside one (`$FLAGS_ARGS`, `$ABILITY_INDEX`, `$COUNT`), five false positives
+# on this file. Tracking parity is what distinguishes them, and that needs a walk
+# over the line rather than a pattern.
 scan_raw() {   # scan_raw FILE -> one `LINENO:TEXT` per unsafe interpolation
-    sed -E 's/\$\(clj_str "\$\{?[A-Za-z_0-9]+\}?"\)//g' "$1" \
-      | sed -E 's/\\"\$\{?[A-Za-z_0-9]*_CLJ\}?\\"//g' \
+    sed -E 's/\$\(clj_str "\$\{?[A-Za-z_0-9]+\}?"\)/@SAFE@/g' "$1" \
+      | sed -E 's/\$\{?[A-Za-z_0-9]*_CLJ\}?/@SAFE@/g' \
       | sed -E '/CLJ-STR-EXEMPT/s/.*//' \
       | sed -E 's/^[[:space:]]*#.*$//' \
-      | sed -E '/(error|warn|info|echo)[[:space:]]+"/s/.*//' \
-      | grep -nE '\\"\$\{?[A-Za-z_0-9]+\}?\\"' || true
+      | awk '
+        {
+            inside = 0; i = 1; n = length($0)
+            while (i <= n) {
+                # `\"` opens or closes a Clojure string literal in the generated text.
+                if (substr($0, i, 2) == "\\\"") { inside = !inside; i += 2; continue }
+                if (inside && substr($0, i, 1) == "$") {
+                    nxt = substr($0, i + 1, 1)
+                    # A digit matters: `$1` is how every forwarded flag arrives.
+                    if (nxt ~ /[A-Za-z_{0-9]/) { print NR ":" $0; next }
+                }
+                i += 1
+            }
+        }' || true
 }
 scan_line() { printf '%s\n' "$1" | scan_raw /dev/stdin; }
 
@@ -212,13 +244,40 @@ fi
 clean exempt-clj-suffixed-var-is-clean 'execute "(runs/tank \"$ICE_NAME_CLJ\")"'
 clean exempt-marker-is-honoured 'AMOUNT="\"$AMOUNT\"" ;;  # CLJ-STR-EXEMPT: validated numeric'
 clean comment-quoting-the-hazard-is-clean '# like this: FLAGS_ARGS="$FLAGS_ARGS \"$1\""'
-clean user-message-is-not-clojure-source '    *) error "needs your side: find-card \"$CARD_NAME\"" ;;'
+# A message line printing an escaped quote to a human carries the marker like any
+# other proved-safe site; there is no blanket message rule to have a hole (r1/I4).
+clean user-message-is-exempt-by-marker \
+      '    *) error "needs your side: find-card \"$CARD_NAME\"" ;;  # CLJ-STR-EXEMPT: a message, not Clojure'
+# ...and WITHOUT the marker that same line is flagged, so the marker is doing the
+# work and the deleted blanket rule is really gone.
+flags message-without-marker-is-flagged \
+      '    *) error "needs your side: find-card \"$CARD_NAME\"" ;;'
+
+# --- the hole a seat found in round 1's pattern (r1/I1) ---
+flags interpolation-inside-a-longer-string-is-detected \
+      'execute "(println \"before $CARD_NAME after\")"'
+# ...while a composed variable BETWEEN two literals is NOT inside one. The first
+# attempt at the fix flagged all five of these on the real file.
+clean composed-var-between-two-literals-is-clean \
+      'execute "(f \"a\" $FLAGS_ARGS \"b\")"'
+clean bare-numeric-outside-any-literal-is-clean \
+      'execute "(ai-actions/fix-credits! $AMOUNT)"'
 
 # A `_CLJ` suffix is a CLAIM that the value was escaped at assignment time. The
 # name proves nothing on its own, so check every assignment actually calls
 # clj_str -- otherwise the suffix becomes a way to silence this guard.
+#
+# The anchor allows a declaration keyword. Round 1 anchored on `^[[:space:]]*NAME=`
+# and a seat showed `local SOME_CLJ="${X//\"/\\\"}"` defeated the whole convention
+# with one keyword (r1/I2): scan_raw exempts the use site on the suffix, and this
+# check could not match past `local `, so both halves reported clean together.
+# send_command has 32 `local` lines, so it is an ordinary thing to write.
+scan_clj_assignments() {   # -> one `LINENO:TEXT` per _CLJ assignment that skips clj_str
+    grep -nE '^[[:space:]]*(local|export|declare|readonly|typeset)?[[:space:]]*[A-Za-z_0-9]*_CLJ=' "$1" \
+      | grep -v 'clj_str' || true
+}
 echo "--- every _CLJ variable is really assigned from clj_str ---"
-BAD_CLJ=$(grep -nE '^[[:space:]]*[A-Za-z_0-9]*_CLJ=' "$SEND_CMD" | grep -v 'clj_str' || true)
+BAD_CLJ=$(scan_clj_assignments "$SEND_CMD")
 if [[ -z "$BAD_CLJ" ]]; then
     echo "ok   [clj-vars-are-assigned-from-clj_str]"
     PASS=$((PASS + 1))
@@ -228,14 +287,42 @@ else
     FAIL=$((FAIL + 1))
 fi
 # ...and that THAT check can fail, or the suffix convention is unenforced.
-if printf '%s\n' '        ICE_NAME_CLJ="${ICE_NAME//\"/\\\"}"' \
-   | grep -nE '^[[:space:]]*[A-Za-z_0-9]*_CLJ=' | grep -qv 'clj_str'; then
-    echo "ok   [mutation-hand-rolled-clj-var-is-detected]"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL [mutation-hand-rolled-clj-var-is-detected] — a hand-rolled _CLJ assignment passes"
-    FAIL=$((FAIL + 1))
-fi
+#
+# These go through scan_clj_assignments. Round 1 re-spelled its grep inline here,
+# so deleting the real check left the suite green and the mutation test went on
+# passing about a copy (r1/I3) -- the same defect this file fixes three lines up
+# for scan_raw, reintroduced in the same commit. A mutation test that does not
+# call the thing it is mutating proves nothing about it.
+assign_flags() {   # assign_flags LABEL LINE  -- must be reported
+    printf '%s\n' "$2" > "$TMP_ASSIGN"
+    if [[ -n "$(scan_clj_assignments "$TMP_ASSIGN")" ]]; then
+        echo "ok   [$1]"; PASS=$((PASS + 1))
+    else
+        echo "FAIL [$1] — scan_clj_assignments missed: $2"; FAIL=$((FAIL + 1))
+    fi
+}
+assign_clean() {   # assign_clean LABEL LINE  -- must NOT be reported
+    printf '%s\n' "$2" > "$TMP_ASSIGN"
+    if [[ -z "$(scan_clj_assignments "$TMP_ASSIGN")" ]]; then
+        echo "ok   [$1]"; PASS=$((PASS + 1))
+    else
+        echo "FAIL [$1] — scan_clj_assignments falsely flagged: $2"; FAIL=$((FAIL + 1))
+    fi
+}
+TMP_ASSIGN="$(mktemp "${TMPDIR:-/tmp}/clj-assign.XXXXXX")"
+trap 'rm -f "$TMP_ASSIGN"' EXIT
+
+assign_flags mutation-hand-rolled-clj-var-is-detected \
+             '        ICE_NAME_CLJ="${ICE_NAME//\"/\\\"}"'
+# The keyword that defeated round 1's anchor (r1/I2).
+assign_flags mutation-local-hand-rolled-clj-var-is-detected \
+             '        local SOME_CLJ="${X//\"/\\\"}"'
+assign_flags mutation-export-hand-rolled-clj-var-is-detected \
+             '        export SOME_CLJ="${X//\"/\\\"}"'
+assign_clean mutation-proper-clj-assignment-is-clean \
+             '        ICE_NAME_CLJ="$(clj_str "$ICE_NAME")"'
+assign_clean mutation-proper-local-clj-assignment-is-clean \
+             '        local SOME_CLJ="$(clj_str "$X")"'
 
 echo
 echo "Passed: $PASS   Failed: $FAIL"
