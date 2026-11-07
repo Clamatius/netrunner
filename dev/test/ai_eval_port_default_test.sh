@@ -41,15 +41,24 @@
 # witness an arm that keys on them.
 #
 # WHY THE SCRIPT IS RUN FROM A FIXTURE ROOT and not in place. ai-eval.sh sources
-# load-env.sh, which does `export $(... $ROOT_DIR/.env ...)` AFTER the caller's
-# environment is already set — so the checkout's .env wins over an env var this
-# test passes in. The first version ran the script in place and was green only
-# because this machine has no .env anywhere; with one copied from .env.example
-# exactly as its own header instructs, three assertions went red against a
-# CORRECT script, which would have broken `make verify` for any developer who
-# followed that instruction. (Panel MAJOR, round 1, reproduced by two vendors
-# and here before fixing.) So ai-eval.sh and load-env.sh are copied verbatim
-# into a tree whose root has no .env.
+# load-env.sh, and load-env.sh applies the .env AFTER the caller's environment is
+# already set — so the checkout's .env wins over an env var this test passes in.
+# The first version ran the script in place and was green only because this
+# machine has no .env anywhere; with one copied from .env.example exactly as its
+# own header instructs, three assertions went red against a CORRECT script, which
+# would have broken `make verify` for any developer who followed that
+# instruction. (Panel MAJOR, round 1, reproduced by two vendors and here before
+# fixing.) So ai-eval.sh and load-env.sh are copied verbatim into a tree whose
+# root has no .env.
+#
+# That "applies AFTER the caller" is a property of the loader, not of one
+# implementation of it, which is why it is stated that way. This paragraph used
+# to quote the mechanism as `export $(... $ROOT_DIR/.env ...)` — a one-liner
+# #310 deleted and replaced with a per-line parser that assigns through
+# `declare -x`. The hazard survived the rewrite; the quote did not, and a comment
+# citing deleted code in the file that exists to BE this hazard's record is worth
+# correcting. (Caught by grepping the test tree for descriptions of load-env.sh;
+# a diff cannot show it, because neither side of the merge touched these lines.)
 #
 # There is no "the fixture root has no .env" assertion. $E is a fresh
 # `mktemp -d`, so such a check cannot fail, and an earlier version of it was
@@ -84,21 +93,18 @@
 # code. Counting a script's text is not a safety property; making the dangerous
 # branch unreachable is.
 #
-# WHY THE SCRIPT IS RUN FROM A FIXTURE ROOT and not in place. ai-eval.sh sources
-# load-env.sh, which does `export $(... $ROOT_DIR/.env ...)` AFTER the caller's
-# environment is already set — so the checkout's .env wins over an env var this
-# test passes in. The first version of this test ran the script in place and was
-# green only because this machine happens to have no .env anywhere; with one
-# copied from .env.example exactly as its own header instructs, three assertions
-# went red against a CORRECT script, which would have broken `make verify` for
-# any developer who followed that instruction. (Panel MAJOR, round 1, reproduced
-# both by the seat and here before fixing.)
+# The files are copied with `cp` — the real current ones, not a transcription —
+# so that what runs here is what ships. The last case plants a .env in the
+# FIXTURE root and shows it is honoured, which is what proves the isolation is
+# real and load-bearing: the .env this test is exposed to is one it controls.
 #
-# So ai-eval.sh and load-env.sh are copied — the real current files, by `cp`, not
-# a transcription — into a fixture tree whose root has no .env, and the absence
-# is ASSERTED rather than assumed. The last case then plants a .env in the
-# FIXTURE root and shows it is honoured, which proves the isolation is real and
-# load-bearing: the .env this test is exposed to is one it controls.
+# (A second, near-verbatim copy of the fixture-root paragraph stood here and has
+# been removed. Besides repeating the stale `export $(...)` quote corrected
+# above, it claimed the .env absence "is ASSERTED rather than assumed" — the
+# exact opposite of the note further up, which records that there is deliberately
+# no such assertion because $E is a fresh `mktemp -d` and the check would be a
+# tautology dressed as a guard. Two paragraphs, one file, contradicting each
+# other about whether an assertion exists.)
 #
 # SIDE-BLINDNESS IS NOW COVERED, and this paragraph is the record of the change.
 # It used to say the opposite: that `--stdin corp` still defaulted to the
