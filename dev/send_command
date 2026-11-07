@@ -989,7 +989,7 @@ decimal_index() {
 # Scope of that claim, precisely: it is a census of the digit CHECKS in this
 # file. It is NOT a proof that every number a seat can type reaches a wrapper.
 # `run`/`continue`/`continue-run`/`monitor-run` forward each of their flags as a
-# quoted Clojure STRING (`FLAGS_ARGS="$FLAGS_ARGS \"$1\""`), so a number among
+# quoted Clojure STRING (`FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""`), so a number among
 # them never becomes a bare literal and never needs this gate. One line is
 # exempt, marked at its site with NUMERIC-GATE-EXEMPT; the sweep pins that there
 # is exactly one.
@@ -1638,7 +1638,7 @@ case "$COMMAND" in
         # takes the ABSOLUTE branch. So this arm's own documented `+5 (add 5)`
         # has never added 5 - it set credits to 5. Quote the signed form.
         case "$AMOUNT" in
-            [+-]*) AMOUNT="\"$AMOUNT\"" ;;
+            [+-]*) AMOUNT="\"$AMOUNT\"" ;;  # CLJ-STR-EXEMPT: num_arg_signed above has already proved this is [+-]?[0-9]+, so it cannot carry a quote
         esac
         warn "CHEATING: This is ONLY for fixing broken game states!"
         execute "(ai-actions/fix-credits! $AMOUNT)"
@@ -1705,7 +1705,7 @@ case "$COMMAND" in
         # reaches this one as a diff. Prints "<active>/<end-turn>".
         find_card_boundary() {   # SIDE-THAT-SHOULD-HAVE-JUST-ENDED
             NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                "(loop [i 0] (let [gs (:game-state @ai-state/client-state) ap (some-> (:active-player gs) name clojure.string/lower-case) done (true? (:end-turn gs))] (if (or (and (= ap \"$1\") done) (>= i 40)) (println (str \"FIND-CARD-BOUNDARY \" ap \"/\" done)) (do (Thread/sleep 250) (recur (inc i))))))" \
+                "(loop [i 0] (let [gs (:game-state @ai-state/client-state) ap (some-> (:active-player gs) name clojure.string/lower-case) done (true? (:end-turn gs))] (if (or (and (= ap \"$(clj_str "$1")\") done) (>= i 40)) (println (str \"FIND-CARD-BOUNDARY \" ap \"/\" done)) (do (Thread/sleep 250) (recur (inc i))))))" \
                 | sed -n 's|^FIND-CARD-BOUNDARY ||p' | tail -n 1 || true
         }
         # What prompt, if any, is open on a side. Empty when there is none.
@@ -1903,7 +1903,7 @@ case "$COMMAND" in
                 # Build Clojure vector of card name strings
                 NAMES_VEC="["
                 for name in "${CARD_NAMES[@]}"; do
-                    NAMES_VEC+="\"$name\" "
+                    NAMES_VEC+="\"$(clj_str "$name")\" "
                 done
                 NAMES_VEC+="]"
                 execute "(ai-actions/discard-by-names! $NAMES_VEC)"
@@ -1964,7 +1964,7 @@ case "$COMMAND" in
         # Build flag arguments for varargs call
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""
             shift
         done
 
@@ -2174,7 +2174,7 @@ case "$COMMAND" in
             info "Multi-selecting cards by name: ${CARD_NAMES[*]}"
             ARGS_STR=""
             for name in "${CARD_NAMES[@]}"; do
-                ARGS_STR="$ARGS_STR \"$name\""
+                ARGS_STR="$ARGS_STR \"$(clj_str "$name")\""
             done
             execute "(ai-actions/multi-choose!$ARGS_STR)"
         fi
@@ -2191,7 +2191,7 @@ case "$COMMAND" in
             info "Single-step mode..."
             FLAGS_ARGS=""
             while [[ $# -gt 0 ]]; do
-                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""
                 shift
             done
             execute "(ai-actions/continue-run!$FLAGS_ARGS)"
@@ -2215,7 +2215,7 @@ case "$COMMAND" in
             [[ "${1:-}" == "--loop" ]] && shift
             FLAGS_ARGS=""
             while [[ $# -gt 0 ]]; do
-                FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+                FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""
                 shift
             done
             info "Continuing until decision required..."
@@ -2229,7 +2229,7 @@ case "$COMMAND" in
         ensure_connection
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""
             shift
         done
         info "Single-step mode (continue-run is alias for 'continue --single')..."
@@ -2244,7 +2244,7 @@ case "$COMMAND" in
         ensure_connection
         FLAGS_ARGS=""
         while [[ $# -gt 0 ]]; do
-            FLAGS_ARGS="$FLAGS_ARGS \"$1\""
+            FLAGS_ARGS="$FLAGS_ARGS \"$(clj_str "$1")\""
             shift
         done
         info "Loop mode (monitor-run is alias for 'continue')..."
@@ -2318,11 +2318,17 @@ case "$COMMAND" in
         if [[ -z "$ICE_NAME" ]]; then
             error "tank requires ICE name. Usage: tank \"Ice Wall\""
         fi
-        # Escape quotes in ICE name for Clojure string
-        ICE_NAME_ESCAPED="${ICE_NAME//\"/\\\"}"
+        # Escape the ICE name for a Clojure string. This was hand-rolled as
+        # `${ICE_NAME//\"/\\\"}`, which escapes QUOTES ONLY -- so a name carrying
+        # a backslash still reached the reader as an escape. clj_str does
+        # backslash first and then quotes, which is the order that cannot
+        # re-escape its own output. The `_CLJ` suffix is the convention the
+        # escaping guard recognises, and it checks that every `_CLJ` variable is
+        # assigned from clj_str rather than trusting the name.
+        ICE_NAME_CLJ="$(clj_str "$ICE_NAME")"
         execute "(do
                   (require (quote [ai-runs :as runs]))
-                  (let [ice-name \"$ICE_NAME_ESCAPED\"
+                  (let [ice-name \"$ICE_NAME_CLJ\"
                         current-tank (get (runs/get-strategy) :tank #{})]
                     (runs/set-strategy! {:tank (conj current-tank ice-name)})
                     (println (format \"✅ Authorized tank on: %s\" ice-name))
@@ -2452,11 +2458,11 @@ case "$COMMAND" in
         info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
-                   (conn/create-lobby! {:title \"$TITLE\"
-                                        :side \"$SIDE\"
+                   (conn/create-lobby! {:title \"$(clj_str "$TITLE")\"
+                                        :side \"$(clj_str "$SIDE")\"
                                         :format \"system-gateway\"
-                                        :gateway-type \"$GATEWAY_TYPE\"
-                                        :precon \"$PRECON\"
+                                        :gateway-type \"$(clj_str "$GATEWAY_TYPE")\"
+                                        :precon \"$(clj_str "$PRECON")\"
                                         :room \"casual\"
                                         :allow-spectator true
                                         :spectatorhands true
@@ -2476,7 +2482,7 @@ case "$COMMAND" in
         info "Selecting deck $DECK_ID..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
-                   (conn/select-deck! \"$DECK_ID\")
+                   (conn/select-deck! \"$(clj_str "$DECK_ID")\")
                    nil)"
         ;;
 
@@ -2676,7 +2682,7 @@ case "$COMMAND" in
         if [[ -n "$FILENAME" ]]; then
             execute "(do
                       (require (quote [ai-state :as state]))
-                      (state/save-replay! \"$FILENAME\"))"
+                      (state/save-replay! \"$(clj_str "$FILENAME")\"))"
         else
             execute '(do
                       (require (quote [ai-state :as state]))
