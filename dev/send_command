@@ -1646,7 +1646,7 @@ case "$COMMAND" in
         # takes the ABSOLUTE branch. So this arm's own documented `+5 (add 5)`
         # has never added 5 - it set credits to 5. Quote the signed form.
         case "$AMOUNT" in
-            [+-]*) AMOUNT="\"$AMOUNT\"" ;;  # CLJ-STR-EXEMPT: num_arg_signed above has already proved this is [+-]?[0-9]+, so it cannot carry a quote
+            [+-]*) AMOUNT="\"$(clj_str "$AMOUNT")\"" ;;
         esac
         warn "CHEATING: This is ONLY for fixing broken game states!"
         execute "(ai-actions/fix-credits! $AMOUNT)"
@@ -1685,13 +1685,12 @@ case "$COMMAND" in
         case "$CLIENT_NAME" in
             runner) OPPONENT="corp" ;;
             corp)   OPPONENT="runner" ;;
-            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card \"$CARD_NAME\"" ;;  # CLJ-STR-EXEMPT: a message printed to a human, not Clojure source
+            *) error "find-card plays the opponent's turns through the opponent's own REPL, so it needs your side: send_command corp|runner find-card '$CARD_NAME'" ;;
         esac
         num_arg_min MAX_TURNS 1 "max-turns must be a whole number of turns (1 or more), got: $MAX_TURNS"
         # Real card titles carry quotes ("Pretty" Mary da Silva, Cerberus "Lady" H1),
         # and these names are interpolated into a Clojure string literal. Without
         # this the reader sees several forms and the search never runs (guest MAJOR).
-        CARD_NAME_CLJ=$(clj_str "$CARD_NAME")
         # find-card is an ORCHESTRATOR, and the only one: its OWN budget is the
         # ambient TIMEOUT, but it hands REPL_BLOCKING_TIMEOUT to a CHILD
         # send_command further down. The child does validate it — after this loop
@@ -1752,7 +1751,7 @@ case "$COMMAND" in
             # Branch on draw-to-card!'s RETURNED :status, printed on a line of its
             # own, not on the wording of what it printed along the way.
             DRAW_OUT=$(TIMEOUT="$REPL_BLOCKING_TIMEOUT" NR_NO_AUTO_PROMPT=1 "$SELF" "$CLIENT_NAME" eval \
-                "(let [r (ai-actions/draw-to-card! \"$CARD_NAME_CLJ\")] (println (str \"FIND-CARD-STATUS \" (some-> (:status r) name))) nil)") \
+                "(let [r (ai-actions/draw-to-card! \"$(clj_str "$CARD_NAME")\")] (println (str \"FIND-CARD-STATUS \" (some-> (:status r) name))) nil)") \
                 || { printf '%s\n' "$DRAW_OUT"; error "draw-to-card did not complete on turn $turn; find-card stopped (nothing further was sent)."; }
             DRAW_STATUS=$(printf '%s\n' "$DRAW_OUT" | sed -n 's/^FIND-CARD-STATUS //p' | tail -n 1)
             printf '%s\n' "$DRAW_OUT" | grep -v '^FIND-CARD-STATUS ' || true
@@ -2330,13 +2329,10 @@ case "$COMMAND" in
         # `${ICE_NAME//\"/\\\"}`, which escapes QUOTES ONLY -- so a name carrying
         # a backslash still reached the reader as an escape. clj_str does
         # backslash first and then quotes, which is the order that cannot
-        # re-escape its own output. The `_CLJ` suffix is the convention the
-        # escaping guard recognises, and it checks that every `_CLJ` variable is
-        # assigned from clj_str rather than trusting the name.
-        ICE_NAME_CLJ="$(clj_str "$ICE_NAME")"
+        # re-escape its own output.
         execute "(do
                   (require (quote [ai-runs :as runs]))
-                  (let [ice-name \"$ICE_NAME_CLJ\"
+                  (let [ice-name \"$(clj_str "$ICE_NAME")\"
                         current-tank (get (runs/get-strategy) :tank #{})]
                     (runs/set-strategy! {:tank (conj current-tank ice-name)})
                     (println (format \"✅ Authorized tank on: %s\" ice-name))
