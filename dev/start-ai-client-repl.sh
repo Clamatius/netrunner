@@ -4,13 +4,30 @@
 #
 # Usage: ./start-ai-client-repl.sh [client_name] [port]
 # Example: ./start-ai-client-repl.sh runner 7889
+#
+# With the port omitted, the default comes from the CLIENT NAME: corp gets
+# CLIENT_2_PORT (7890), anything else gets CLIENT_1_PORT (7889).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."  # Ensure we are in project root for lein and relative paths
 source "$SCRIPT_DIR/load-env.sh"
 
 CLIENT_NAME=${1:-fixed-id}
-REPL_PORT=${2:-${CLIENT_1_PORT:-7889}}
+# The port default is per SIDE. There was no corp branch here (#309), so
+# `start-ai-client-repl.sh corp` resolved to the RUNNER's 7889 - and with the
+# runner already up, that does not fail: the readiness probe below is satisfied
+# by the runner's own listener, /tmp/ai-client-corp.pid is written with the
+# runner's java pid, and ai_client_init.clj is loaded into the runner's REPL
+# under the name "corp". start-ai-both.sh passes both arguments, so the broken
+# path was only ever the one a human or a seat types.
+#
+# The rule itself now lives in load-env.sh as `client_default_port`, because
+# ai-eval.sh needed the same decision and had the same bug one door over
+# (#312) - and a second copy of a rule that agrees with the first only on the
+# default is the defect class this family keeps filing. The KNOWN GAP for #313
+# (every name that is not `corp` still gets the runner's port) is documented
+# there, with the arm it describes.
+REPL_PORT=${2:-$(client_default_port "$CLIENT_NAME")}
 
 echo "Starting AI Client REPL for '$CLIENT_NAME' on port $REPL_PORT..."
 echo "This REPL will maintain connection to the game server."
