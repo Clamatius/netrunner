@@ -85,16 +85,66 @@ else
     echo "skip [reader-round-trip] (clojure CLI not on PATH)"
 fi
 
-echo "--- no execute site interpolates a bare variable into a Clojure string ---"
+echo "--- no site interpolates a bare variable into a Clojure string ---"
 # The structural half. A helper nothing is obliged to call decays: this fails on
 # a NEW raw site rather than waiting for someone to play a Cerberus.
-# Per-INTERPOLATION, not per-line. `grep -v clj_str` discarded the whole line,
-# so a site with two arguments stayed green when only ONE lost its escaping --
-# install-card! takes both a card name and a server. (Fresh delta seat, Astra,
-# who executed the partial revert rather than reasoning about it.) Strip every
-# wrapped interpolation first, then look at what is left.
-RAW=$(sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' "$SEND_CMD" \
-      | grep -nE 'execute .*\\"\$[A-Za-z_]+\\"' || true)
+#
+# WHAT THIS CATCHES, stated as a bound rather than implied to be complete: a bare
+# variable that IS an entire Clojure string literal, `\"$VAR\"`, anywhere in the
+# file -- not only on an `execute` line, and including `$1`, `$@` and `$*`.
+#
+# That bound is deliberate, and it is the third shape this check has had. The
+# history is worth keeping, because it is the argument against a fourth:
+#
+#   r0  `grep 'execute .*\"$[A-Za-z_]+\"'`. Green over SIXTEEN raw sites. Two
+#       blind spots: a site that accumulates Clojure into a VARIABLE has no
+#       `execute` on its line (seven sites, including raw CARD TITLES into
+#       discard-by-names! and multi-choose!), and `[A-Za-z_]+` cannot match `$1`
+#       (the five flag arms).
+#   r1  dropped the `execute` anchor and allowed digits. Found all sixteen.
+#       A seat then showed it still misses an interpolation INSIDE a longer
+#       literal, `\"before $X after\"` (r1/I1).
+#   r2  tried to fix that by tracking delimiter parity in awk. A panel returned
+#       ELEVEN findings against that mechanism, five MAJOR, and one of them is
+#       structural: the walk resets per PHYSICAL LINE, while this file's
+#       `execute` blocks span many lines (r2/F8). A line-oriented scan cannot
+#       decide "inside a Clojure literal" for multi-line generated Clojure. The
+#       other ten were about the `_CLJ` and marker conventions that existed only
+#       to feed exemptions to that walk.
+#
+# So the parity mechanism and both conventions are DELETED rather than patched a
+# third time, and the sites that needed exempting are escaped inline instead.
+# What is left is the bound above: smaller than the question, honest about it.
+#
+# NOT CAUGHT, and none of these is hypothetical -- each was executed by a seat:
+#   - an interpolation inside a longer literal: `\"before $X after\"`
+#   - a literal spanning physical lines, with the interpolation on a later one
+#   - `$(cmd)` other than the clj_str wrap, e.g. `\"$(date)\"`
+#   - a second interpolation on a line whose message call blanked it (below)
+# Closing those needs a different mechanism: build the expression and hand it to
+# a reader, rather than pattern-matching the generator. That is its own change
+# with its own design round, not a rider here.
+#
+# Comment lines and user-message calls are blanked, whole. Blanking (not
+# dropping) keeps `grep -n` reporting real file line numbers. The whole-line part
+# IS a hole -- a raw interpolation sharing a line with a message call is
+# invisible (r2/F6, r2/F9) -- and it stays open rather than being papered over
+# with a marker that has the identical hole.
+scan_raw() {   # scan_raw FILE -> one `LINENO:TEXT` per unsafe interpolation
+    sed -E 's/\$\(clj_str "\$\{?[A-Za-z_0-9]+\}?"\)//g' "$1" \
+      | sed -E 's/^[[:space:]]*#.*$//' \
+      | sed -E '/(error|warn|info|echo)[[:space:]]+"/s/.*//' \
+      | grep -nE '\\"\$\{?[A-Za-z_0-9@*]+\}?\\"' || true
+}
+scan_line() { printf '%s\n' "$1" | scan_raw /dev/stdin; }
+
+# The r0 pattern, frozen, so `widening-is-load-bearing` can show what it missed.
+scan_line_old() {
+    printf '%s\n' "$1" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
+      | grep -nE 'execute .*\\"\$[A-Za-z_]+\\"' || true
+}
+
+RAW=$(scan_raw "$SEND_CMD")
 if [[ -z "$RAW" ]]; then
     echo "ok   [no-raw-interpolation-sites]"
     PASS=$((PASS + 1))
@@ -104,41 +154,65 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-echo "--- that guard can actually fail (mutation test) ---"
-# Feed the same pattern a line we know is raw. If this reports clean, the grep
-# above is decorative and the check above proves nothing.
-MUTANT='execute "(ai-actions/play-card! \"$CARD_NAME\")"'
-if echo "$MUTANT" | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "ok   [mutation-raw-site-is-detected]"
+echo "--- that guard can actually fail (mutation tests, all through scan_raw) ---"
+flags() {   # flags LABEL LINE  -- the scanner must report this line
+    if [[ -n "$(scan_line "$2")" ]]; then
+        echo "ok   [$1]"; PASS=$((PASS + 1))
+    else
+        echo "FAIL [$1] — scan_raw missed: $2"; FAIL=$((FAIL + 1))
+    fi
+}
+clean() {   # clean LABEL LINE  -- the scanner must NOT report this line
+    if [[ -z "$(scan_line "$2")" ]]; then
+        echo "ok   [$1]"; PASS=$((PASS + 1))
+    else
+        echo "FAIL [$1] — scan_raw falsely flagged: $2"; FAIL=$((FAIL + 1))
+    fi
+}
+
+flags mutation-raw-site-is-detected 'execute "(ai-actions/play-card! \"$CARD_NAME\")"'
+clean mutation-wrapped-site-is-clean 'execute "(ai-actions/play-card! \"$(clj_str "$CARD_NAME")\")"'
+# TWO interpolations on one line, only one escaped. install-card! is this shape.
+flags mutation-partial-escaping-is-detected \
+      'execute "(ai-actions/install-card! \"$CARD_NAME\" \"$(clj_str "$SERVER")\")"'
+
+# --- the two blind spots that hid seven live raw sites (r0) ---
+# 1. ACCUMULATION: builds Clojure into a variable, so no `execute` on the line.
+flags mutation-accumulation-site-is-detected 'FLAGS_ARGS="$FLAGS_ARGS \"$1\""'
+flags mutation-accumulation-append-is-detected 'NAMES_VEC+="\"$name\" "'
+# 2. POSITIONAL PARAMETER: `[A-Za-z_]+` cannot match `$1`.
+flags mutation-positional-param-is-detected 'execute "(ai-actions/run! \"$1\")"'
+# ...and the argument-list forms a seat found the class had also left out (r2/F10).
+flags mutation-dollar-star-is-detected 'execute "(ai-actions/chat! \"$*\")"'
+flags mutation-dollar-at-is-detected 'execute "(ai-actions/chat! \"$@\")"'
+
+# Dropping the `execute` anchor and allowing digits is what buys those five. If
+# the r0 pattern caught them, that change was decoration.
+if [[ -z "$(scan_line_old 'FLAGS_ARGS="$FLAGS_ARGS \"$1\""')" \
+   && -z "$(scan_line_old 'NAMES_VEC+="\"$name\" "')" \
+   && -z "$(scan_line_old 'execute "(ai-actions/run! \"$1\")"')" ]]; then
+    echo "ok   [widening-is-load-bearing]"
     PASS=$((PASS + 1))
 else
-    echo "FAIL [mutation-raw-site-is-detected] — the pattern misses a known raw site"
+    echo "FAIL [widening-is-load-bearing] — the r0 pattern already caught these,"
+    echo "       so dropping its anchor buys nothing"
     FAIL=$((FAIL + 1))
 fi
 
-# ...and that a WRAPPED site is not falsely flagged.
-SAFE='execute "(ai-actions/play-card! \"$(clj_str "$CARD_NAME")\")"'
-if echo "$SAFE" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
-   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "FAIL [mutation-wrapped-site-is-clean] — a wrapped site is flagged"
-    FAIL=$((FAIL + 1))
-else
-    echo "ok   [mutation-wrapped-site-is-clean]"
-    PASS=$((PASS + 1))
-fi
+clean comment-quoting-the-hazard-is-clean '# like this: FLAGS_ARGS="$FLAGS_ARGS \"$1\""'
+clean user-message-is-not-clojure-source '    *) error "needs your side: find-card \"$CARD_NAME\"" ;;'
 
-# The case that made the old per-line form useless: TWO interpolations on one
-# line, only one of them escaped. install-card! is exactly this shape.
-PARTIAL='execute "(ai-actions/install-card! \"$CARD_NAME\" \"$(clj_str "$SERVER")\")"'
-if echo "$PARTIAL" | sed -E 's/\$\(clj_str "\$[A-Za-z_]+"\)//g' \
-   | grep -qE 'execute .*\\"\$[A-Za-z_]+\\"'; then
-    echo "ok   [mutation-partial-escaping-is-detected]"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL [mutation-partial-escaping-is-detected] — one unescaped arg hides behind another's clj_str"
-    FAIL=$((FAIL + 1))
-fi
-
+# --- the bounds, asserted so they cannot be mistaken for coverage ---
+# Each of these SHOULD ideally be flagged and is not. Pinning them means the
+# limit is a decision on the record, and the day someone closes it these go red
+# and get deleted deliberately rather than silently widening the claim.
+echo "--- known limits, pinned so they stay deliberate ---"
+clean limit-interpolation-inside-a-longer-literal \
+      'execute "(println \"before $CARD_NAME after\")"'
+clean limit-command-substitution-other-than-clj_str \
+      'execute "(println \"$(date)\")"'
+clean limit-raw-site-sharing-a-line-with-a-message \
+      'execute "(f \"$CARD_NAME\")"; info "done"'
 echo
 echo "Passed: $PASS   Failed: $FAIL"
 if [[ $FAIL -gt 0 ]]; then
