@@ -263,8 +263,8 @@ gated_contains "bot-loop-resolves-relative-path-to-the-same-file" \
     ":heartbeat-file \"$REL_EXPECT\""
 
 # Escaping: HEARTBEAT_DIR is a caller-settable seam, so a path containing a
-# double quote must not close the Clojure string and execute. #255 is open
-# against exactly this shape elsewhere in the dispatcher.
+# double quote must not close the Clojure string and execute. #255 fixed
+# exactly this shape across the rest of the dispatcher.
 QDIR="$HEARTBEAT_DIR/q\"uote"
 mkdir -p "$QDIR" 2>/dev/null || true
 touch "$QDIR/corp" 2>/dev/null || true

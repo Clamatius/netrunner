@@ -2884,8 +2884,8 @@ case "$COMMAND" in
         # bot that is still playing. Hand the loop the path so it can refresh its
         # own side's clock; bash stays the single owner of the path (so the
         # HEARTBEAT_DIR seam keeps working and the contract isn't duplicated in
-        # Clojure). Through clj_str, not bare interpolation: #255 is open against
-        # exactly this shape, and HEARTBEAT_DIR is caller-settable, so a path
+        # Clojure). Through clj_str, not bare interpolation: #255 fixed exactly
+        # this shape dispatcher-wide, and HEARTBEAT_DIR is caller-settable, so a path
         # containing a quote would otherwise close the string and execute.
         # ABSOLUTE, always. We hand this string to the REPL, which resolves it
         # against ITS working directory — a different tree (the client REPLs are
