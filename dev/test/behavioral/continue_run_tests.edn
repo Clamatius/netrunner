@@ -1,11 +1,39 @@
 {:scenarios
+ ;; reset.sh STOPS AT THE MULLIGAN PHASE (#320). It did the keep-hand steps
+ ;; itself until 7480fbc11 (2026-01-30), which removed them so a human could
+ ;; read card text before deciding; this file was never updated and kept
+ ;; describing a precondition it no longer established, which is why it reads
+ ;; as fine. Every scenario below must answer both mulligans first, or the
+ ;; first action is refused and nothing in the game ever moves.
  {:fresh-game
-  {:desc "Game start, both players kept hands"
-   :setup []}
+  {:desc "Game start, both players have kept their opening hands"
+   :setup [{:corp "keep-hand"}
+           {:runner "keep-hand"}]}
 
-  :runner-turn-start
-  {:desc "Start of runner turn, corp passed"
-   :setup [{:corp "end-turn --force"}]}}
+  ;; NOT USABLE YET, and now says so. Measured 2026-11-11, driving each step:
+  ;; the two keep-hands and `start-turn` all succeed, but `corp end-turn --force`
+  ;; then exits 0 while leaving a hand-size prompt open ("Discard down to 5
+  ;; cards"), and the Runner still reads {:can-start false :reason
+  ;; :opponent-not-ended}. So the Corp's turn does NOT end and the Runner's
+  ;; never begins. The step is left OUT rather than included as a lie, and the
+  ;; :desc below describes what the setup actually establishes.
+  ;;
+  ;; Reaching the Runner's turn needs the Corp to resolve that discard first,
+  ;; i.e. prompt handling — which is exactly what the commented-out tests at the
+  ;; bottom of this file already say they are waiting on. Whoever adds it should
+  ;; drive the steps, not reason about them: this scenario's previous :desc
+  ;; claimed a state it could not reach, which is the #320 defect over again.
+  ;;
+  ;; RENAMED from :runner-turn-start (review finding). A comment explaining that
+  ;; the scenario does not reach the Runner's turn does not help a test author
+  ;; who read the KEY and believed it; the two commented-out tests below are
+  ;; Runner actions that would have been refused :opponent-has-clicks on a
+  ;; fixture whose name promised otherwise. The key now says what it establishes.
+  :corp-turn-started
+  {:desc "Corp's turn started, hands kept — the Runner's turn has NOT begun yet"
+   :setup [{:corp "keep-hand"}
+           {:runner "keep-hand"}
+           {:corp "start-turn"}]}}
 
  :tests
  [{:name "basic-command-execution"
@@ -16,6 +44,14 @@
              {:corp "take-credit"}]
    :expect-log-contains
    ["gain 1"]
+   ;; THREE clicks, so three lines. `expect-log-contains` alone is satisfied by
+   ;; one of the three landing (#320). The count is 3 and not "at least one"
+   ;; because status prints the last FOUR log entries, which here are the
+   ;; mandatory start-of-turn draw plus exactly these three — measured, not
+   ;; assumed. If a future engine line lands inside that window this count is
+   ;; what will say so.
+   :expect-log-count
+   {:pattern "gain 1" :count 3}
    :timeout 10000}
 
   ;; TODO: Additional behavioral tests
@@ -30,7 +66,7 @@
 
   ;; {:name "undefended-rnd-run-with-autocontinue"
   ;;  :desc "Runner runs undefended R&D with --continue, validates full auto-continue flow"
-  ;;  :scenario :runner-turn-start
+  ;;  :scenario :corp-turn-started   ; NOTE: does NOT reach the Runner's turn yet
   ;;  :actions [{:runner "run \"R&D\" --continue"}]
   ;;  :expect-log-contains
   ;;  ["accessed.*from R&D"
@@ -39,7 +75,7 @@
 
   ;; {:name "multiple-undefended-runs-same-turn"
   ;;  :desc "Runner makes multiple undefended runs in same turn with --continue"
-  ;;  :scenario :runner-turn-start
+  ;;  :scenario :corp-turn-started   ; NOTE: does NOT reach the Runner's turn yet
   ;;  :actions [{:runner "run \"HQ\" --continue"}
   ;;           {:runner "run \"R&D\" --continue"}
   ;;           {:runner "run \"Archives\" --continue"}]

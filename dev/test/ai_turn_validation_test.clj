@@ -843,6 +843,173 @@
             "must dispatch end-turn when not already ended")))))
 
 ;; ============================================================================
+;; #321 — every refusal names its state and its recovery
+;; ============================================================================
+
+;; `ensure-turn-started!` used to name only some of the reasons `can-start-turn?`
+;; can refuse with. The rest printed a bare "Cannot perform action: Turn not
+;; ready" — no reason, no recovery — and one of them, :my-mulligan, is the state
+;; EVERY reset.sh leaves the seat in. No count here on purpose: four drafts
+;; across this file and ai_basic_actions.clj carried four different ones, each
+;; stale the moment an arm moved, and the last was still wrong after a round
+;; spent fixing counts. `reachable-refusals` below is the enumeration; prose
+;; does not get to restate it. Measured on a live game:
+;; `can-start-turn?` answered {:can-start false :reason :my-mulligan} and both
+;; `take-credit` and `draw` printed only the generic line (#321).
+;;
+;; The reason the gap survived is the default arm: it was handed a reason keyword
+;; and discarded it, so an unnamed state was indistinguishable from an unknown
+;; one. `the-default-arm-names-the-reason-it-was-given` is the guard against the
+;; next reason repeating this, and it is deliberately NOT a list of today's
+;; reasons — a pinned list would go stale the way the `case` did.
+
+(def ^:private reachable-refusals
+  "Every reason `ensure-turn-started!` can reach its refusal branch with.
+
+   It reaches that branch only when `my-clicks` is 0 and :can-start is false, so
+   this is every :can-start false reason — all twelve. An earlier draft excluded
+   :turn-already-started on the grounds that it requires clicks > 0 while the
+   first `cond` arm returns true for clicks > 0. That is true of ONE snapshot,
+   and there are two: `ensure-turn-started!` derefs the state atom for its own
+   click count, then `can-start-turn?` derefs it again, so a start landing
+   between the reads gives 0 and then :turn-already-started. The exclusion was
+   wrong (review finding).
+
+   HAND-MAINTAINED, and it cannot see a reason added to `can-start-turn?` later.
+   Said plainly because an earlier draft claimed the list was re-derived from
+   source; it is not. What covers an unlisted reason is
+   `turn-refusal-message`'s default, which names the keyword it was handed — see
+   `the-default-arm-names-the-reason-it-was-given`. A structural guard (assert
+   every `:reason` literal inside `can-start-turn?` appears here) would close the
+   gap properly and is deliberately not built in this round."
+  [:no-game-state :no-side :turn-already-played :opponent-mulligan :my-mulligan
+   :opponent-restarted :not-first-player :opponent-has-clicks :not-your-turn
+   :opponent-not-ended :opponent-identity-unknown :turn-already-started])
+
+(def ^:private expected-refusal-messages
+  "Each arm's message, WHOLE, so a change to one is a visible edit here.
+
+   This replaces three generations of heuristic guard, all of which a review seat
+   defeated or showed to be false-positive machines:
+
+   - a shape check (a header plus an indented line): satisfied by every arm
+     returning the same text, and by two arms' texts swapped
+   - a per-reason signature regex: matched headline phrases only, so restoring
+     round 1's wrong ADVICE under a corrected header passed, and the mutation
+     result that appeared to guard it was an accident of the header being
+     reworded in the same edit
+   - banned wordings plus a detector reading `dev/send_command`'s Usage lines:
+     false-red on correct English in both directions. The Usage-derived command
+     set contains ordinary words — run, play, score, change, trash, advance,
+     choose, chat — so 'then play your turn' failed; a correct prohibition
+     ('do not use start-turn') tripped the ban on advising it; `resync` used as a
+     NOUN tripped it too; and an incomplete quoted form passed. Nine mutants
+     survived.
+
+   Whole-string equality kills all nine with no heuristic at all, which is what
+   the seat that broke the heuristics recommended. The cost is that improving any
+   wording requires editing this map. That is the intended cost: these strings
+   are seat-facing claims about engine state, and two of the three MAJORs in this
+   change were a string asserting something nobody had checked. Making the claim
+   expensive to change is the point."
+  {:opponent-has-clicks
+   "❌ Cannot perform action: Opponent still has clicks remaining\n   Wait for their turn to end first"
+
+   :opponent-not-ended
+   "❌ Cannot perform action: Opponent hasn't ended their turn yet\n   Wait for opponent to complete their turn"
+
+   :not-first-player
+   "❌ Cannot perform action: Corp goes first\n   Wait for Corp to start and complete their turn"
+
+   :opponent-mulligan
+   "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn"
+
+   :opponent-identity-unknown
+   "❌ Cannot perform action: The board does not name your opponent\n   Their turn boundaries are invisible until it does — they may have left the game\n   Use 'peer-status' to check, then 'status'"
+
+   :my-mulligan
+   "❌ Cannot perform action: You have not answered your own opening mulligan\n   Use 'keep-hand' (or 'mulligan') first, then start your turn\n   The engine will NOT refuse a start here — it grants the clicks and takes the mandatory draw with the decision still live"
+
+   :turn-already-played
+   "❌ Cannot perform action: This turn has already been played\n   Use 'status' to see what it still owes — a prompt on you, your own end-turn, or the opponent's move"
+
+   :opponent-restarted
+   "❌ Cannot perform action: The opponent started another turn after ending the previous one\n   Your start window has passed — use 'wait' until they end again"
+
+   :not-your-turn
+   "❌ Cannot perform action: It is not your turn\n   Use 'wait' until the opponent ends their turn"
+
+   :no-game-state
+   "❌ Cannot perform action: This client has no game state\n   Start with 'status'"
+
+   :no-side
+   "❌ Cannot perform action: This client holds no seat in the game\n   Without a side there is nothing to act as — use 'status' to check, then rejoin as a player"
+
+   :turn-already-started
+   "❌ Cannot perform action: Your turn had not started when this was checked, and had by the time it was re-checked\n   Retry the action in a moment — do NOT re-send start-turn, the turn is starting"})
+
+(deftest every-reachable-refusal-names-its-state
+  (testing "no reachable reason falls through to the bare generic line"
+    (doseq [reason reachable-refusals]
+      (let [msg (actions/turn-refusal-message reason)]
+        (is (not (re-find #"(?i)Turn not ready" msg))
+            (str reason " still prints the bare generic: " (pr-str msg)))
+        (is (re-find #"(?i)cannot perform action" msg)
+            (str reason " dropped the refusal header: " (pr-str msg)))
+        ;; A reason that names a state but no step is the half-fix: the seat
+        ;; still has to guess. Every arm carries an indented second line.
+        (is (re-find #"\n\s{2,}\S" msg)
+            (str reason " names a state but no recovery step: " (pr-str msg)))))))
+
+(deftest each-refusal-says-exactly-what-it-is-pinned-to-say
+  (testing "every reachable reason is pinned"
+    (is (= (set reachable-refusals) (set (keys expected-refusal-messages)))
+        "the pinned messages and the reachable list have drifted apart"))
+  (testing "and says exactly that"
+    (doseq [reason reachable-refusals]
+      (is (= (get expected-refusal-messages reason)
+             (actions/turn-refusal-message reason))
+          (str reason "'s message changed; if that is intended, edit "
+               "expected-refusal-messages and re-check the claim it makes"))))
+  (testing "no two reasons share a message"
+    (let [msgs (map actions/turn-refusal-message reachable-refusals)]
+      (is (= (count reachable-refusals) (count (set msgs)))
+          "two reasons share a message, so one of them is unidentifiable"))))
+
+(deftest the-mulligan-refusal-names-keep-hand
+  (testing ":my-mulligan says which decision is owed and the word that clears it"
+    (let [msg (actions/turn-refusal-message :my-mulligan)]
+      (is (re-find #"(?i)mulligan" msg) msg)
+      (is (re-find #"keep-hand" msg)
+            (str "the recovery is one word and the message must carry it: " msg))
+      ;; It must not read as the OPPONENT's mulligan — that arm already existed,
+      ;; and #320/forum [384] misattributed this state to it.
+      (is (not (re-find #"(?i)opponent" msg)) msg))))
+
+(deftest the-default-arm-names-the-reason-it-was-given
+  (testing "an unrecognised reason degrades to diagnosable, not invisible"
+    (let [msg (actions/turn-refusal-message :a-reason-added-after-this-test)]
+      (is (re-find #"a-reason-added-after-this-test" msg)
+          (str "the default arm discarded the only information it had: " msg)))
+    ;; nil is the shape a caller gets from a map with no :reason at all.
+    (is (string? (actions/turn-refusal-message nil))
+        "a missing reason must still produce a message, not an NPE")))
+
+(deftest ensure-turn-started-prints-the-mulligan-refusal-on-a-real-board
+  (testing "the whole path, not just the message function (#321)"
+    (let [board (-> (make-game-state-with-log :my-side :corp :my-clicks 0 :turn 0)
+                    (assoc-in [:game-state :corp :keep] false)
+                    (assoc-in [:game-state :runner :keep] true))]
+      (with-mock-state board
+        (is (= :my-mulligan (:reason (actions/can-start-turn?)))
+            "fixture no longer produces the state under test")
+        (let [out (java.io.StringWriter.)
+              ok? (binding [*out* out] (actions/ensure-turn-started!))]
+          (is (false? ok?))
+          (is (re-find #"keep-hand" (str out)) (str out))
+          (is (not (re-find #"(?i)Turn not ready" (str out))) (str out)))))))
+
+;; ============================================================================
 ;; Test Suite Main
 ;; ============================================================================
 

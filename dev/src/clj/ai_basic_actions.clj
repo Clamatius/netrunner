@@ -367,6 +367,147 @@
       :else
       {:can-start true :reason :ready})))
 
+(defn turn-refusal-message
+  "The refusal `ensure-turn-started!` prints, for one `can-start-turn?` reason.
+
+   Extracted from that `case` so the mapping can be tested per reason rather than
+   only through a board that produces the reason.
+
+   Every reason `can-start-turn?` can refuse with has an arm (#321). Most of them
+   did not: the rest printed a bare \"Turn not ready\" with no state and no step.
+   No count is given here on purpose — three drafts of this paragraph carried
+   three different ones, each stale the moment an arm was added, and a count
+   nobody re-derives is how the gap lasted in the first place. The completeness
+   claim is `every-reachable-refusal-names-its-state`, which enumerates.
+
+   The one that mattered was :my-mulligan, the state every reset.sh leaves the
+   seat in, so the project's own documented starting position produced the least
+   informative refusal in the file. Its sibling :opponent-mulligan, one arm above
+   it in `can-start-turn?`, had always had real advice.
+
+   :turn-already-started DOES reach here, and an earlier draft of this docstring
+   said it could not. The argument was that it requires clicks > 0 while
+   `ensure-turn-started!` returns true for clicks > 0 — true of one snapshot, and
+   there are two: `ensure-turn-started!` derefs the state atom for its own
+   `my-clicks`, then `can-start-turn?` derefs it again. A start-turn diff landing
+   between the two reads — precisely the retry this function asks for with its
+   'Start pending, retry it in a moment' branch — gives clicks 0 to the first and
+   :turn-already-started from the second. Narrow, but it is the window the retry
+   advice steers seats into, so it gets an arm (review finding, round 1).
+
+   The DEFAULT names the reason it was given. That is the half that keeps this
+   fixed: the old default discarded the keyword, so a state nobody had written an
+   arm for was indistinguishable from one nobody had heard of, and the gap was
+   invisible from the output. A reason added to `can-start-turn?` later degrades
+   to diagnosable rather than silent.
+
+   This docstring makes no claim about the commands the arms cite. Two drafts did
+   — 'all nine were checked against dev/send_command', then a delegation to a
+   test — and both were false in a way nothing caught: the first was true only of
+   the labels' existence and not of the advised form (the round-1 MAJOR), and the
+   second pointed at a test that checked neither. What each arm's text must be is
+   pinned instead by `expected-refusal-messages` in ai_turn_validation_test, as
+   whole strings, so changing one is a visible edit to a test rather than a claim
+   in prose."
+  [reason]
+  (case reason
+    :opponent-has-clicks
+    "❌ Cannot perform action: Opponent still has clicks remaining\n   Wait for their turn to end first"
+
+    :opponent-not-ended
+    "❌ Cannot perform action: Opponent hasn't ended their turn yet\n   Wait for opponent to complete their turn"
+
+    :not-first-player
+    "❌ Cannot perform action: Corp goes first\n   Wait for Corp to start and complete their turn"
+
+    :opponent-mulligan
+    "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn"
+
+    ;; Say what is actually missing. Every turn-boundary scan needs the
+    ;; opponent's name, so without it this seat cannot tell whose boundary
+    ;; it is holding — and the recovery is to find out whether they are
+    ;; still at the table, not to wait for a turn that may already be ours.
+    :opponent-identity-unknown
+    "❌ Cannot perform action: The board does not name your opponent\n   Their turn boundaries are invisible until it does — they may have left the game\n   Use 'peer-status' to check, then 'status'"
+
+    ;; We owe our OWN opening mulligan. Ranked in importance above everything
+    ;; else here because it is what reset.sh leaves behind, and because
+    ;; my-mulligan-pending? is the ONLY thing refusing it: game.core has no
+    ;; ordering check (the engine trusts the client), so a seat that works
+    ;; around this guard really does start the turn and take the mandatory draw
+    ;; with the decision still live — a kept six-card starting hand, observed on
+    ;; game e753fdee. The recovery is one word, and the old message withheld it.
+    :my-mulligan
+    "❌ Cannot perform action: You have not answered your own opening mulligan\n   Use 'keep-hand' (or 'mulligan') first, then start your turn\n   The engine will NOT refuse a start here — it grants the clicks and takes the mandatory draw with the decision still live"
+
+    ;; Deliberately does NOT say whose move it is. "Wait for the opponent" was
+    ;; the first draft and it is false in states this reason covers: the seat's
+    ;; own turn may not have ended (`:end-turn` false, own start line in the log,
+    ;; 0 clicks), where nothing is owed by the opponent and the resolving action
+    ;; is the seat's own end-turn — or a prompt may be sitting on the seat.
+    ;; `start-turn!` splits this same state four ways; rather than restate that
+    ;; split here and be wrong in the arm nobody pictured, this weakens the
+    ;; sentence and names the command that reports the real answer (review
+    ;; finding, round 1 MAJOR).
+    :turn-already-played
+    "❌ Cannot perform action: This turn has already been played\n   Use 'status' to see what it still owes — a prompt on you, your own end-turn, or the opponent's move"
+
+    :opponent-restarted
+    "❌ Cannot perform action: The opponent started another turn after ending the previous one\n   Your start window has passed — use 'wait' until they end again"
+
+    :not-your-turn
+    "❌ Cannot perform action: It is not your turn\n   Use 'wait' until the opponent ends their turn"
+
+    ;; This arm names NO recovery command, on purpose, and says nothing about
+    ;; what `status` will report. Third draft; the first two were both MAJOR.
+    ;;
+    ;; Draft 1 said bare 'resync'. `resync` requires a game-id ("Usage:
+    ;; send_command <side> resync <game-id>") and a client with no game state is
+    ;; exactly the client that does not know one, so a seat following it got a
+    ;; usage error.
+    ;;
+    ;; Draft 2 fixed the FORM ('list-lobbies', then 'resync <game-id>') and
+    ;; thereby made the advice EXECUTABLE in a state it is wrong for: a seated
+    ;; player in a lobby that has not started has a :gameid, a side and no board,
+    ;; the same signature, and its recovery is start-game, not a rejoin.
+    ;; Following draft 2 there runs resync-game! -> clear-game-state!, which nils
+    ;; :lobby-state, and the server sends nothing for a lobby with no :state,
+    ;; converting a healthy lobby into a failed resync. Draft 1 died harmlessly
+    ;; on a usage error; fixing the form ARMED it.
+    ;;
+    ;; Draft 3 then tried to EXPLAIN the states instead, and that was wrong too:
+    ;; it claimed `status` names which boardless state this is and the recovery
+    ;; for each. It does not. A never-joined client prints "Not in a game", which
+    ;; was not in the list; a kept gameid with no board prints a message that
+    ;; explicitly declines to say which case it is; the word "ended" appears in
+    ;; none of the outputs; and for the game-gone and resync-failed verdicts
+    ;; `status` is refused by send_command's own gate before it runs. The draft
+    ;; also credited `print-no-board-cause!` for what the seat would see, and
+    ;; that function is never reached from `status` at all — its only callers are
+    ;; start-turn! and end-turn!.
+    ;;
+    ;; What survives all three rounds is one sentence with no claim in it.
+    :no-game-state
+    "❌ Cannot perform action: This client has no game state\n   Start with 'status'"
+
+    ;; A nil :side coexists with a perfectly valid board — a spectator is exactly
+    ;; that — so the advice is about the SEAT, not the board.
+    :no-side
+    "❌ Cannot perform action: This client holds no seat in the game\n   Without a side there is nothing to act as — use 'status' to check, then rejoin as a player"
+
+    ;; Reachable only through the two-snapshot window described in the
+    ;; docstring: our own read saw 0 clicks, the second read saw the start. The
+    ;; action was NOT sent, and the recovery is to retry it — not to re-send
+    ;; start-turn, which is already the standing advice for a pending start.
+    :turn-already-started
+    "❌ Cannot perform action: Your turn had not started when this was checked, and had by the time it was re-checked\n   Retry the action in a moment — do NOT re-send start-turn, the turn is starting"
+
+    ;; Names the reason. See the docstring: discarding it is what let the missing
+    ;; arms above stay missing without anything saying so.
+    (str "❌ Cannot perform action: Turn not ready (no advice written for "
+         (pr-str reason) ")\n   Report this with 'status' output — the state is"
+         " refusable but undescribed (#321)")))
+
 (defn ensure-turn-started!
   "Check if turn is started, and if not but we CAN start, auto-start it.
 
@@ -418,28 +559,7 @@
       :else
       (do
         (println "")
-        (case (:reason can-start-result)
-          :opponent-has-clicks
-          (println "❌ Cannot perform action: Opponent still has clicks remaining\n   Wait for their turn to end first")
-
-          :opponent-not-ended
-          (println "❌ Cannot perform action: Opponent hasn't ended their turn yet\n   Wait for opponent to complete their turn")
-
-          :not-first-player
-          (println "❌ Cannot perform action: Corp goes first\n   Wait for Corp to start and complete their turn")
-
-          :opponent-mulligan
-          (println "❌ Cannot perform action: Opponent hasn't finished their opening mulligan\n   Wait until they keep/mulligan, then start your turn")
-
-          ;; Say what is actually missing. Every turn-boundary scan needs the
-          ;; opponent's name, so without it this seat cannot tell whose boundary
-          ;; it is holding — and the recovery is to find out whether they are
-          ;; still at the table, not to wait for a turn that may already be ours.
-          :opponent-identity-unknown
-          (println "❌ Cannot perform action: The board does not name your opponent\n   Their turn boundaries are invisible until it does — they may have left the game\n   Use 'peer-status' to check, then 'status'")
-
-          ;; Default
-          (println "❌ Cannot perform action: Turn not ready"))
+        (println (turn-refusal-message (:reason can-start-result)))
         false))))
 
 (defn- extract-turn-from-log
