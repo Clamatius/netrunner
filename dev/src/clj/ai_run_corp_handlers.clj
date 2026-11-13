@@ -455,13 +455,15 @@
    (ai-run-pass/own-prompt-surface).
 
    A `waiting` prompt (the opponent's checkpoint) is refused by the engine too,
-   so it gets pass-priority!'s non-terminal check-1 result: no send, no latch.
+   so it gets a non-terminal :waiting-for-opponent (as pass-priority!'s check 1)
+   with a fire-specific :action/:message: no send, no latch.
 
    The latch also waited on nothing else: a fire the SOCKET refused (send-message!
    false) latched the same way. Now there is no :fired-at-encounter without a
    sent fire, and the refusal is an {:status :error :reason :send-failed} — the
-   shape ai-basic-actions reports a refused send in — which the run loop stops
-   on, instead of an :action-taken it re-ticked until it called the run :stuck.
+   shape ai-basic-actions reports a refused send in — which is a terminal status
+   of the run loop, instead of an :action-taken it re-ticked until it called the
+   run :stuck.
 
    `announce` is printed only once the fire has been sent. On a sent fire, the
    pre-fire prompt is captured so that — if a fired sub OPENS a prompt (issue
@@ -472,9 +474,18 @@
   (cond
     ;; The engine refuses a fire over ANY prompt but nil/:run, the opponent's
     ;; `waiting` checkpoint included — so no send, no latch, no announcement;
-    ;; the same non-terminal wait pass-priority! returns for it.
+    ;; a non-terminal wait, as pass-priority! returns for the same prompt, but
+    ;; worded for the FIRE. The message holds in both modes: a --persistent
+    ;; loop sleeps and re-ticks on its own; a hand-driven one returns this
+    ;; wait, and the seat's next command is that tick.
     (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
-    pass/waiting-prompt-result
+    {:status :waiting-for-opponent
+     :action :fire-held-waiting-prompt
+     :message (format (str "Fire on %s NOT sent: the Runner owes a decision on its own prompt, "
+                           "and the engine refuses a fire until it is answered. Nothing is latched; "
+                           "the first run tick after the Runner answers re-checks the fire "
+                           "(a --persistent loop takes that tick itself; otherwise re-issue your command).")
+                      ice-title)}
 
     (pass/own-blocking-prompt)
     (pass/own-prompt-surface)

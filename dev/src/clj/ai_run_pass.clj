@@ -122,9 +122,7 @@
 
 (def waiting-prompt-result
   "pass-priority!'s check-1 result: our own prompt is the OPPONENT's `waiting`
-   checkpoint, so nothing is sent. Non-terminal, so a loop keeps polling. Also
-   what the Corp's automated fire returns over a waiting prompt, which the engine
-   refuses a fire over as well (game.core.actions no-blocking-or-prevent-prompt?)."
+   checkpoint, so nothing is sent. Non-terminal, so a loop keeps polling."
   {:status :waiting-for-opponent
    :action :continue-suppressed-waiting-prompt
    :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"})

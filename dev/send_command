@@ -701,7 +701,8 @@ ${GREEN}Running:${NC}
     --tank <name>    Runner: pre-authorize letting subs fire on the ICE titled
                      <name>, instead of being asked mid-encounter. Repeatable.
                      Same signal the 'tank' command sends, committed up front.
-    --tank-all       Runner: pre-authorize it on EVERY ICE this run (yolo).
+                     Holds for the rest of the run, given with --single too.
+    --tank-all      Runner: pre-authorize it on EVERY ICE this run (yolo).
     --tactics <edn>  Runner: per-ICE break plan inline. Unusable from this script
                      for any map containing a QUOTED string — each flag is
                      interpolated into a Clojure string unquoted, so the first

@@ -459,7 +459,10 @@
       (take-credits state :corp)
       (run-on state "HQ")
       (is (= :approach-ice (get-in @state [:run :phase])) "fixture: unrezzed approach")
-      (as-seat! state "runner" (cmd-continue-single "--tank" "Hourglass" "--full-break"))
+      (let [{:keys [out]} (as-seat! state "runner" (cmd-continue-single "--tank" "Hourglass" "--full-break"))]
+        (is (= 1 (count (filter #{"✅ Authorized tank on: Hourglass (for the rest of this run)"}
+                                (str/split-lines out))))
+            (str "the store is announced, once:\n" out)))
       (is (= {:tank #{"Hourglass"}} (seat-strategy "runner"))
           (str "only :tank is stored by a single step; --full-break stays one-call. strategy " (pr-str (seat-strategy "runner"))))
       (is (= :runner (get-in @state [:run :no-action])) "fixture: the single step was the approach pass")
@@ -1013,7 +1016,16 @@
         (is (not-any? #{"unbroken-subroutines"} commands)
             (str "no fire sent over a waiting prompt (the engine refuses it). sent " commands "\n" out))
         (is (nil? (:fired-at-encounter (seat-strategy "corp"))) (str "no latch. strategy " (pr-str (seat-strategy "corp"))))
-        (is (= :waiting-for-opponent (:status result)) (str "non-terminal, as pass-priority!'s check 1: " (pr-str result)))
+        (is (= {:status :waiting-for-opponent
+                :action :fire-held-waiting-prompt
+                :message (str "Fire on Funhouse NOT sent: the Runner owes a decision on its own prompt, "
+                              "and the engine refuses a fire until it is answered. Nothing is latched; "
+                              "the first run tick after the Runner answers re-checks the fire "
+                              "(a --persistent loop takes that tick itself; otherwise re-issue your command).")}
+               (select-keys result [:status :action :message]))
+            (str "non-terminal, and says what happened to the FIRE: " (pr-str result)))
+        (is (not (re-find #"(?i)continue suppressed|#75" (pr-str result)))
+            "not the pass path's continue wording")
         (is (not (str/includes? out "firing")) (str "and not announced:\n" out))))))
 
 (deftest change2-fire-refused-by-the-socket-is-not-latched
@@ -1035,7 +1047,11 @@
                                     (as-seat! state "corp" (cmd-continue "--fire-unbroken")))]
          (is (= {:status :error :reason :send-failed} (select-keys result [:status :reason]))
              (str "the loop reports the failed send, not :stuck. result " (pr-str result) "\n" out))
-         (is (str/includes? out "❌ ERROR: Failed to send") (str "and tells the seat:\n" out))
+         (is (= (str "🎯 Strategy: fire-unbroken\n"
+                     "👁️  Monitoring run... (auto-passing boring windows)\n"
+                     "❌ ERROR: Failed to send the fire on Hourglass (server unreachable?)\n")
+                out)
+             (str "and tells the seat that, and nothing else (no unknown-status line):\n" out))
          (is (nil? (:fired-at-encounter (seat-strategy "corp")))))))))
 
 ;; ---------------------------------------------------------------------------

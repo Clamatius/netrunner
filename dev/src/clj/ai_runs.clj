@@ -1908,6 +1908,8 @@
                                 (or (some? (get-in @state/client-state [:game-state :run]))
                                     (core/encounter-window? @state/client-state)))
                        (set-strategy! {:tank (into (or (:tank (get-strategy)) #{}) (:tank flags))})
+                       (doseq [ice-name (:tank flags)]
+                         (println (format "✅ Authorized tank on: %s (for the rest of this run)" ice-name)))
                        true)
         strategy (cond-> (merge (get-strategy) (cond-> flags tank-stored? (dissoc :tank)))
                    ;; #151 item 14: `continue --single --rez X` at a window names that
@@ -2041,7 +2043,11 @@
   [status]
   (contains? #{:decision-required :fire-decision-required :ice-rezzed :ability-used :subs-fired
                :tag-or-damage :run-complete :no-run
-               :tactic-paused :tactic-failed}  ; Tactics system pauses
+               :tactic-paused :tactic-failed  ; Tactics system pauses
+               ;; A handler's own failure report (automated-fire!'s :send-failed):
+               ;; stop and hand it to the seat as it stands, rather than via the
+               ;; unknown-status catch-all and its extra line.
+               :error}
              status))
 
 (defn- should-pause-for-event?
@@ -2536,10 +2542,11 @@
    a run.
 
    Residual, documented rather than fixed: if that expiry is missed (a desync)
-   OR OVERTAKEN by this write-back — expire-run-strategy! runs on the diff
-   thread, so a run-end diff that lands between the read here and the
-   set-strategy! in monitor-active-run! is undone and :tank outlives its run with
-   no desync at all — AND the next run starts through a run EVENT rather than
+   OR OVERTAKEN by a write-back — expire-run-strategy! runs on the diff thread,
+   so a run-end diff that lands between the read here and the set-strategy! in
+   monitor-active-run! is undone and :tank outlives its run with no desync at
+   all; continue-run!'s single-step --tank store is the same read-modify-write
+   (read the run, read :tank, write the union) with the same race — AND the next run starts through a run EVENT rather than
    `run` (so run!'s reset never happens), AND it meets an ICE of the same name,
    the old authorization is honoured. The engine's :run-id is not on the wire, so the client cannot tell
    two runs apart to close it."
