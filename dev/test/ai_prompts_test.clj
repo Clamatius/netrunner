@@ -54,6 +54,11 @@
       (is (not (str/includes? out "Timeout")))
       (is (not (str/includes? out "multi-choose"))))))
 
+(deftest wait-for-prompt-change!-closed-select
+  (with-mock-state (mock-client-state :prompt nil)
+    (is (true? (prompts/wait-for-prompt-change! "serum-1" :old-msg "Choose cards for Longevity Serum"
+                                                 :timeout-ms 100)))))
+
 ;; ============================================================================
 ;; choose-by-value! reaches a SELECT prompt's meta-button (laundry-list #5)
 ;;
@@ -426,34 +431,6 @@
    :msg "Choose a connection or virtual resource"
    :selectable [{:cid "c1" :title "Smartware Distributor"}
                 {:cid "c2" :title "Telework Contract"}]})
-
-(deftest choose-card-uses-wire-when-host-prompt-closes
-  (with-mock-state (mock-client-state :side "runner"
-                    :prompt {:prompt-type "select" :eid "host-1" :msg "Choose host ICE"
-                             :selectable [{:cid "ice-1" :title "Palisade"}]})
-    (with-redefs [ws/select-card! (fn [& _]
-                                   (swap! state/client-state assoc-in [:game-state :runner :prompt-state] nil)
-                                   true)
-                  prompts/wait-for-prompt-change! (constantly false)
-                  basic/check-auto-end-turn! (constantly nil)]
-      (let [lines (str/split-lines (with-out-str (prompts/choose-card! 0)))]
-        (is (some #(= "📇 Selected card: Palisade (index 0)" %) lines))
-        (is (not-any? #(str/includes? % "Toggled card") lines))))))
-
-(deftest multi-choose-uses-wire-when-last-select-closes
-  (with-mock-state (mock-client-state :side "corp"
-                    :prompt {:prompt-type "select" :eid "serum-1" :msg "Choose cards for Longevity Serum"
-                             :selectable [{:cid "c1" :title "Hedge Fund"}
-                                          {:cid "c2" :title "IPO"}]})
-    (let [selected (atom 0)]
-      (with-redefs [ws/select-card! (fn [& _]
-                                     (when (= 2 (swap! selected inc))
-                                       (swap! state/client-state assoc-in [:game-state :corp :prompt-state] nil))
-                                     true)
-                    prompts/wait-for-prompt-change! (constantly false)]
-        (let [lines (str/split-lines (with-out-str (prompts/multi-choose! 0 1)))]
-          (is (some #(= "✅ Selection complete" %) lines))
-          (is (not-any? #(str/includes? % "choose-value \"Done\"") lines)))))))
 
 (deftest choose-card-accepts-other-typed-selectable-prompt
   (testing "choose-card on an 'other'-typed prompt WITH selectable cards selects, not rejects"

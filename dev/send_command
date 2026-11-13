@@ -1297,7 +1297,7 @@ shift || true
 # Chat alone accepts `chat -- --help` to send the literal message; action verbs
 # cannot escape this safety check with `--`. A larger argument such as
 # "please type --help" remains ordinary text.
-if [[ "$COMMAND" == chat && "${1:-}" == -- ]]; then
+if [[ "$COMMAND" == chat && "${1:-}" == -- && "$#" -gt 1 ]]; then
     shift
 else
     for arg in "$@"; do

@@ -482,6 +482,11 @@
 (defn corp-clicks [] (clicks-for-side :corp))
 (defn corp-hand-count [] (hand-count-for-side :corp))
 
+(defn card-and-hosted
+  "A visible card and all of its recursively hosted cards."
+  [card]
+  (tree-seq #(seq (:hosted %)) :hosted card))
+
 (defn installed-runner-cards
   "All Runner-installed cards in a wire game state, including recursive guests
    on rig cards and Corp server cards. Hosted but parked cards are excluded.
@@ -496,8 +501,7 @@
          rig-roots (mapcat #(get rig % []) [:program :hardware :resource])
          corp-roots (mapcat (fn [server] (concat (:ices server) (:content server)))
                             (vals servers))
-         walk (fn walk [card]
-                (cons card (mapcat walk (:hosted card))))]
+         walk card-and-hosted]
      (vec (concat rig-roots
                   (filter #(and (:installed %)
                                 (contains? #{"Runner" :runner} (:side %)))

@@ -41,6 +41,22 @@
         (let [lines (clojure.string/split-lines (with-out-str (display/show-card-text "Spin Doctor")))]
           (is (some #(= "Unique: Yes" %) lines)))))))
 
+(deftest unique-rez-conflict-on-recursively-hosted-corp-card
+  (let [sent (atom [])
+        card {:title "Spin Doctor" :code "25086" :type "Asset" :cost 0 :uniqueness true}
+        hosted (assoc card :cid 1 :rezzed true :side "Corp" :installed true)
+        board {:corp {:credit 9
+                      :servers {:remote1 {:content [{:cid 3 :title "Host" :hosted
+                                                    [{:cid 4 :title "Inner host" :hosted [hosted]}]}]}
+                                :remote2 {:content [(assoc card :cid 2 :rezzed false)]}}}
+               :runner {}}]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (with-redefs [cards/all-cards (atom {"Spin Doctor" card})
+                    ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (ai-actions/rez-card! "Spin Doctor"))]
+          (is (clojure.string/includes? out "this card is unique and another copy is already rezzed."))
+          (is (empty? @sent)))))))
+
 (deftest install-prompt-resolution-does-not-offer-done
   (let [stale {:eid 11 :msg "Choose host ICE" :prompt-type "select" :choices ["Done"]}
         render (fn [wire-prompt]
@@ -53,6 +69,18 @@
     (let [lines (clojure.string/split-lines (render (assoc stale :eid 12)))]
       (is (some #(= "⏳ Install of Botulus: prompt changed; run 'prompt' for the current decision." %) lines))
       (is (not-any? #(clojure.string/includes? % "choose-value \"Done\"") lines)))))
+
+(deftest install-open-host-select-picks-card
+  (let [prompt {:eid 11 :msg "Choose host ICE" :prompt-type "select"
+                :selectable [{:cid "ice-1" :title "Palisade"}]
+                :choices ["Done"]}]
+    (with-mock-state (mock-client-state :side "runner" :prompt prompt)
+      (with-redefs [ai-core/show-turn-indicator (constantly nil)]
+        (let [out (with-out-str
+                    (#'ai-card-actions/handle-install-waiting! "Botulus" nil prompt))]
+          (is (= (str "⏸️  Install of Botulus pending - choose a card with choose-card <index>; run 'prompt' to see selectable cards.\n"
+                      "   Prompt: Choose host ICE\n") out))
+          (is (not (clojure.string/includes? out "waiting for your confirmation → choose-value \"Done\""))))))))
 
 (deftest ambiguous-installed-card-messages
   (let [copies [{:cid 1 :title "Spin Doctor" :type "Asset" :zone [:servers :remote1 :content] :rezzed false}

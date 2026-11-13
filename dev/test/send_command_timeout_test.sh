@@ -638,6 +638,15 @@ if [[ "$escaped" == *"No help entry"* || ! -s "$STUB_TIMEOUT_FILE" ]] || \
 else
     ok "chat-literal-help" "-- terminates option scanning and sends --help as chat text"
 fi
+: > "$STUB_TIMEOUT_FILE"
+literal_dashes=$(AI_EVAL="$STUB" NR_NO_AUTO_PROMPT=1 "$SEND_CMD" corp chat -- 2>&1) || true
+if [[ "$literal_dashes" == *"Usage: send_command"* || \
+      ! -s "$STUB_TIMEOUT_FILE" ]] || \
+   ! grep -qF 'send-chat! "--"' "$STUB_TIMEOUT_FILE"; then
+    fail "chat-literal-dashes" "chat -- did not send the exact literal text"
+else
+    ok "chat-literal-dashes" "chat -- sent the two-character message"
+fi
 
 classified_names() {
     local e

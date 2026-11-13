@@ -206,6 +206,11 @@
                     ;; Ownership first: a passive waiting prompt is the
                     ;; OPPONENT's decision (guest panel).
                     (state/waiting-prompt-type? (:prompt-type prompt)) "waiting for the opponent"
+                    (and (state/select-prompt-type? (:prompt-type prompt))
+                         (seq (:selectable prompt)))
+                    "choose a card with choose-card <index>; run 'prompt' to see selectable cards."
+                    (state/select-prompt-type? (:prompt-type prompt))
+                    "run 'prompt' to inspect the card selection."
                     sole-choice (str "waiting for your confirmation → choose-value \"" sole-choice "\"")
                     normalized-server "waiting for you to answer a prompt → run 'prompt', then choose-card <N> / choose-value \"<text>\""
                     :else "waiting for server selection")))
@@ -625,8 +630,10 @@
                                           (some? (:code card))
                                           (not= (:cid card) (:cid other))
                                           (= (:code card) (:code other))))
-                                   (mapcat #(concat (:ices %) (:content %))
-                                           (vals (state/corp-servers))))
+                                   (filter #(not (contains? #{"Runner" :runner} (:side %)))
+                                           (mapcat state/card-and-hosted
+                                                   (mapcat #(concat (:ices %) (:content %))
+                                                           (vals (state/corp-servers))))))
                 _ (when same-rezzed? (core/load-cards-from-api!))
                 unique-conflict? (and same-rezzed?
                                       (:uniqueness (get @cards/all-cards (:title card))))]
