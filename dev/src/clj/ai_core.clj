@@ -390,9 +390,8 @@
   [initial current]
   (boolean
     (and current
-         (if (:eid current)
-           (not= (:eid current) (:eid initial))
-           (not= current initial)))))
+         (or (not= (:eid current) (:eid initial))
+             (not= current initial)))))
 
 (defn classify-action-result
   "Pure classifier for card-action verification. Given the prompt/log/hand seen
@@ -411,8 +410,12 @@
                       (some #(when (string? (:text %))
                                (str/includes? (:text %) card-name))
                             recent-log))
+        card-in-new-log (some #(when (string? (:text %))
+                                (str/includes? (:text %) card-name))
+                              (drop initial-size current-log))
         prompt-card (:card current-prompt)
         action-prompt? (and (new-prompt? initial-prompt current-prompt)
+                            (not (state/waiting-prompt-type? (:prompt-type current-prompt)))
                             (or (and prompt-card
                                      (if (and card-cid (:cid prompt-card))
                                        (= (str card-cid) (str (:cid prompt-card)))
@@ -426,7 +429,7 @@
       ;; Payment and cost-reduction prompts move the card to :play-area before
       ;; asking the seat. The new eid plus matching wire :card identifies this
       ;; action even though hand and log alone look like a timeout.
-      action-prompt?
+      (and action-prompt? (not card-in-new-log))
       {:status :waiting-input :prompt current-prompt :card-name card-name}
 
       ;; If card moved from hand AND log grew, it's a success
@@ -434,15 +437,6 @@
            (or (> current-size initial-size)
                card-in-log))
       {:status :success}
-
-      ;; If card is STILL in hand but a new prompt appeared, it's waiting for
-      ;; input. This MUST be checked before the bare log-grew heuristic below:
-      ;; the click-spend line can land while the location prompt is still open,
-      ;; and reporting :success there is a false "installed".
-      (and card-still-in-hand (new-prompt? initial-prompt current-prompt))
-      {:status :waiting-input
-       :prompt current-prompt
-       :card-name card-name}
 
       ;; If log grew or card appears in log (even without zone change), might be success
       ;; (for Corp hidden cards where card name doesn't show)

@@ -5,6 +5,7 @@
             [ai-state :as ai-state]
             [ai-websocket-client-v2 :as ws]
             [cheshire.core :as json]
+            [clojure.string :as str]
             [clojure.test :refer :all]
             [game.core :as game-core]
             [game.core.diffs :as diffs]
@@ -107,3 +108,64 @@
         (is (= :error (:status blocked)) "an already open prompt still blocks the next action")
         (is (= (:log board) (:log (:game-state (seat-state state :runner))))
             "the blocked second play sent nothing")))))
+
+(defn- first-output-line [out]
+  (first (str/split-lines out)))
+
+(deftest played-card-with-own-follow-up-prompt-wire
+  (do-game
+    (new-game {:corp {:hand ["Hedge Fund"] :deck [(qty "Hedge Fund" 10)]}
+               :runner {:hand ["Jailbreak"] :credits 10}})
+    (take-credits state :corp)
+    (let [{:keys [result out before board prompt]} (send-from-seat state :runner
+                                        #(actions/play-card! "Jailbreak"))]
+      (is (some #(str/includes? (:text %) "Jailbreak")
+                (drop (count (:log before)) (:log board))))
+      (is (= "other" (:prompt-type prompt)))
+      (is (= :success (:status result)) out)
+      (is (= "🃏 Played: Jailbreak" (first-output-line out))))))
+
+(deftest played-operation-with-select-prompt-wire
+  (do-game
+    (new-game {:corp {:hand ["Project Atlas" "Seamless Launch"]
+                      :deck [(qty "Hedge Fund" 10)] :credits 10}})
+    (play-from-hand state :corp "Project Atlas" "New remote")
+    (take-credits state :corp)
+    (take-credits state :runner)
+    (let [{:keys [result out before board prompt]} (send-from-seat state :corp
+                                        #(actions/play-card! "Seamless Launch"))]
+      (is (some #(str/includes? (:text %) "Seamless Launch")
+                (drop (count (:log before)) (:log board))))
+      (is (= "select" (:prompt-type prompt)))
+      (is (= :success (:status result)) out)
+      (is (= "🃏 Played: Seamless Launch" (first-output-line out))))))
+
+(deftest installed-program-with-choose-ice-prompt-wire
+  (do-game
+    (new-game {:corp {:hand ["Ice Wall"] :deck [(qty "Hedge Fund" 10)]}
+               :runner {:hand ["Femme Fatale"] :credits 20}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (let [{:keys [result out before board prompt]} (send-from-seat state :runner
+                                        #(actions/install-card! "Femme Fatale"))]
+      (is (some #(str/includes? (:text %) "Femme Fatale")
+                (drop (count (:log before)) (:log board))))
+      (is (= "select" (:prompt-type prompt)))
+      (is (= :success (:status result)) out)
+      (is (= "📥 Installed: Femme Fatale (Program)" (first-output-line out))))))
+
+(deftest played-operation-with-opponent-prompt-wire
+  (do-game
+    (new-game {:corp {:hand ["Public Trail"] :deck [(qty "Hedge Fund" 10)]}
+               :runner {:hand ["Sure Gamble"]}})
+    (take-credits state :corp)
+    (run-empty-server state "Archives")
+    (take-credits state :runner)
+    (game-core/gain state :corp :credit 10)
+    (let [{:keys [result out before board prompt]} (send-from-seat state :corp
+                                        #(actions/play-card! "Public Trail"))]
+      (is (some #(str/includes? (:text %) "Public Trail")
+                (drop (count (:log before)) (:log board))))
+      (is (= "waiting" (:prompt-type prompt)))
+      (is (= :success (:status result)) out)
+      (is (= "🃏 Played: Public Trail" (first-output-line out))))))
