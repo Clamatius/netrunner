@@ -44,7 +44,12 @@ LINE_MSG=$(printf '%s' "$MSG" | tr '\n' ' ')
 printf '%s  PING   %-6s %s\n' "$TS" "$SIDE" "$LINE_MSG" >> "$MAILBOX"
 
 echo "📨 Pinged umpire ($SIDE): $LINE_MSG"
-if [ "$WAKE" -eq 1 ]; then
+# logs/NO-WAKE switches paging off for an unattended run with nobody to page.
+# A file, not an env var: it has to reach every seat process however it was
+# launched. The ping is still written to the mailbox above.
+if [ "$WAKE" -eq 1 ] && [ -e "$SCRIPT_DIR/../logs/NO-WAKE" ]; then
+  echo "🔕 --wake is switched off for this run (logs/NO-WAKE): nobody was paged. The ping is in the mailbox; keep waiting and do nothing destructive."
+elif [ "$WAKE" -eq 1 ]; then
   # Debounce: --wake pages Michael house-wide, so suppress a repeat within 120s
   # (a polling seat could otherwise page him every escalation-ladder retry).
   WAKE_STAMP="$MAILBOX_DIR/.last-wake"
