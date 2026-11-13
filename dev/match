@@ -791,7 +791,15 @@ for s in corp runner; do
         f="$RUN/babysit-$s-chunks.log"
         if [[ -f "$f" ]] && grep -q '^===== chunk ' "$f"; then
             printf '\n\n---\n## Babysitter continuation (last chunk of %s)\n\n' "$f"
-            awk '/^===== chunk /{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$f"
+            # A codex chunk is the whole session transcript; its final message is
+            # what follows the last `tokens used` / <count> footer. Other backends,
+            # or a chunk without the footer: the whole last chunk.
+            awk '/^===== chunk /{buf=""; tail=""; seen=0}
+                 {buf=buf $0 "\n"}
+                 seen==1 {seen=2; next}
+                 seen==2 {tail=tail $0 "\n"}
+                 /^tokens used$/ {seen=1; tail=""}
+                 END{printf "%s", (tail != "" ? tail : buf)}' "$f"
         fi
     } > "$dest"
     printf -v "REPORT_$s" '%s' "$dest"

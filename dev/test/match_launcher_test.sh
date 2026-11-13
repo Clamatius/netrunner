@@ -118,6 +118,9 @@ EOF
 ST="$(cd "$(dirname "$0")/.." && pwd)/state"
 echo "babysit $1 $2 $3 primary=$4 backend=${MARQUEE_BACKEND:-} codex_effort=${MARQUEE_CODEX_EFFORT:-} claude_effort=${MARQUEE_CLAUDE_EFFORT:-} session=${MARQUEE_CLAUDE_SESSION:-} primary_log=${MARQUEE_PRIMARY_LOG:-} chunk_log=${MARQUEE_CHUNK_LOG:-}" >> "$ST/events.log"
 echo $$ >> "$ST/pids-babysit"
+if [[ -f "$ST/chunk-$1" && -n "${MARQUEE_CHUNK_LOG:-}" ]]; then
+  printf '\n===== chunk 1 00:00:00 status=x idle=0 =====\nOpenAI Codex v0\nexec\nTRANSCRIPT-NOISE\ntokens used\n1,234\nFINAL-REPORT-%s\n' "$1" > "$MARQUEE_CHUNK_LOG"
+fi
 if [[ -f "$ST/babysit-forever" ]]; then while :; do sleep 1; done; fi
 while kill -0 "$4" 2>/dev/null; do sleep 0.2; done
 exit 0
@@ -239,6 +242,7 @@ done
 # ════════════════════════════════════════════════════════════════════════════
 # 2. completed — and the whole happy path, briefs included.
 mk_tree done
+touch "$ST/chunk-corp"
 seat corp "$KEEP_THEN_PLAY"
 seat runner "$WIN_SOON"
 run_match --corp luna --runner opus --effort medium --corp-deck dev/decks/corp.edn --runner-deck dev/decks/runner.edn --tag g1
@@ -254,7 +258,9 @@ check "completed: turns"    eq "$(rj g1 turns)" 12
 check "completed: corp seat"   eq "$(rj g1 corp.seat)/$(rj g1 corp.backend)/$(rj g1 corp.model)/$(rj g1 corp.effort)" luna/codex/gpt-6-luna/medium
 check "completed: runner seat" eq "$(rj g1 runner.seat)/$(rj g1 runner.backend)/$(rj g1 runner.model)/$(rj g1 runner.effort)" opus/claude/claude-opus-5-5/medium
 check "completed: decks"    eq "$(rj g1 decks.corp)" "$T/dev/decks/corp.edn"
-check "completed: babysit chunks" eq "$(rj g1 babysit_chunks.corp)/$(rj g1 babysit_chunks.runner)" 0/0
+check "completed: babysit chunks" eq "$(rj g1 babysit_chunks.corp)/$(rj g1 babysit_chunks.runner)" 1/0
+check "completed: codex chunk → only the final message is appended" \
+    bash -c "f='$T/dev/replays/${GID:0:8}-corp-luna-report.md'; grep -q FINAL-REPORT-corp \$f && ! grep -q -e TRANSCRIPT-NOISE -e 'tokens used' \$f"
 check "completed: replay"   eq "$(rj g1 replay)" "$T/dev/replays/$GID.json"
 check "completed: corp report copied"   eq "$(rj g1 reports.corp)" "$T/dev/replays/${GID:0:8}-corp-luna-report.md"
 check "completed: runner report copied" eq "$(rj g1 reports.runner)" "$T/dev/replays/${GID:0:8}-runner-opus-report.md"
