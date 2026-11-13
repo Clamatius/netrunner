@@ -11,6 +11,8 @@
             [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-run-runner-handlers :as runner-handlers]
+            ;; The one gate every automated `continue` goes through (pass-priority!).
+            [ai-run-pass :as pass]
             [ai-connection :as connection]))
 
 ;; ============================================================================
@@ -973,56 +975,6 @@
 ;;
 ;; Handlers are tried in priority order until one returns non-nil.
 
-(defn- send-continue!
-  "Helper to send continue command and return action-taken result.
-   Waits briefly for state to sync via WebSocket.
-
-   Chokepoint guard (#75): if the LIVE state shows our own prompt is a
-   'waiting' prompt, the engine is mid-checkpoint on the OPPONENT and a
-   continue from us re-fires that checkpoint (duplicate-prompt minting — the
-   marquee-g2 Manegarm wedge). Suppress and report an opponent wait instead.
-   Same guard as the ai-run-corp-handlers copy.
-
-   Second guard (#98): if the engine already recorded US as this window's
-   passer (:no-action names us), the opponent owes the window — a repeat
-   continue is a no-op that only feeds the stuck-detector's false alarm.
-   `:second-pass? true` bypasses ONLY this guard: the #31 self-advance
-   deliberately sends the window's SECOND continue after proving the
-   opponent abandoned it (the engine's advance branch has no side-check).
-   The waiting-prompt guard is never bypassed — a blocked checkpoint must
-   not receive a continue from anyone (#75)."
-  [gameid & {:keys [second-pass?]}]
-  (cond
-    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-waiting-prompt
-     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
-
-    (and (not second-pass?)
-         (core/i-already-passed-run-window? @state/client-state (:side @state/client-state)))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-already-passed
-     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
-
-    :else
-    (let [sent? (boolean (ws/send-message! :game/action
-                                           {:gameid gameid
-                                            :command "continue"
-                                            :args nil}))]
-      ;; Brief wait for WebSocket state update to arrive
-      ;; Without this, caller may see stale state on next read
-      (Thread/sleep 100)
-      ;; :sent, like the other two copies of this sender (#150 Corp, #167
-      ;; Runner) — one contract for one command. No caller here LATCHES on
-      ;; having passed, so a false :sent is a wasted tick rather than the
-      ;; permanent stall it is on the other two paths; the :status is left
-      ;; alone deliberately, because changing what the loop treats as progress
-      ;; is a behaviour change no test in this repo pins (guest panel MAJOR,
-      ;; #167 round 2 — reported honestly rather than fixed blind).
-      {:status :action-taken
-       :action :sent-continue
-       :sent sent?})))
-
 (defn- send-choice!
   "Helper to send choice command and return action-taken result.
    Waits briefly for state to sync via WebSocket.
@@ -1407,7 +1359,8 @@
    without it, so the LOG is the authority and the line is not.
 
    It describes the WINDOW, which is observed, and not \"this step\", which is
-   only intended: this runs before send-continue!, and that send can fail.
+   only intended: this runs before pass-priority!, and that send can fail or be
+   refused.
 
    The last two lines exist for the LOOP paths (`run --tank-all`,
    monitor-run!), where this fires on every rezzed approach and the loop
@@ -1455,7 +1408,6 @@
   "Priority 6: Auto-continue through paid ability windows where we don't need to act"
   [{:keys [my-prompt run-phase gameid side state]}]
   (when (can-auto-continue? my-prompt run-phase side state)
-    (println "   → Auto-continuing through paid ability window")
     ;; Before the send, because the condition is a fact about the window we are
     ;; LEAVING: read after it, the phase has moved and the ICE may be gone.
     ;;
@@ -1473,106 +1425,14 @@
       (when-let [ice-title (:title (core/current-run-ice state))]
         (when (state/tank-authorized? ice-title)
           (warn-tank-not-yet-signalled! ice-title))))
-    (send-continue! gameid)))
+    ;; The pass line only once pass-priority! reports a send: it can refuse.
+    (let [r (pass/pass-priority! gameid)]
+      (when (pass/sent? r)
+        (println "   → Auto-continuing through paid ability window"))
+      r)))
 
-(defn- surface-blocking-prompt
-  "Claim this tick and SURFACE our own prompt, instead of passing priority over it
-   or declining silently (#301 round 1, the panel's CRITICAL — both vendors).
-
-   The two both-pass senders below must not send a `continue` while we hold a
-   prompt the engine would refuse an ability over. Returning nil for that was the
-   obvious decline and it was WRONG at BOTH windows, measured on the chain — but
-   for two DIFFERENT reasons, which round 2 caught the first draft of this
-   docstring conflating:
-
-   - At the STALLED window, `handle-paid-ability-window` (ai-run-corp-handlers)
-     sits above every prompt-answering handler and read `[:run :no-action]`
-     ALONE — it did not look at `my-prompt` — so once we had passed it claimed the
-     tick and reported `{:status :waiting-for-opponent-paid-abilities, :message
-     \"Waiting for corp to pass or use paid abilities\"}` while the prompt stranding
-     the seat was OURS. #303 piece 1 fixed that handler's REPORT (it now reads
-     `my-prompt` and returns a terminal `:decision-required` for our own prompt),
-     but it still claims the tick, so declining here would still not reach it —
-     and two unguarded senders now sit in between. See EXIT.
-   - At INITIATION that handler cannot claim the tick at all: this handler only
-     runs when `should-i-act?` is true, so `:no-action` does not name us and its
-     `we-passed?` is false. The fall-through there is `handle-unexpected-state`,
-     whose `:waiting-for-opponent` is just as non-terminal and just as wrong.
-
-   Either way the status is not in `terminal-status?`, so the auto-continue loop
-   re-ticks the same state to its iteration cap under a message naming the wrong
-   side. Declining traded a wrong-but-progressing pass for a silent spin — and
-   these seats run un-babysat.
-
-   So the handler claims the tick and says what is true. `:decision-required` is
-   terminal (`terminal-status?`), which stops the loop and hands the seat the
-   prompt — the same answer #296 chose for full-break's bad-publicity payment:
-   surface a prompt the client cannot answer correctly rather than guess at it.
-
-   WHICH SHAPES actually reach this, which the first two drafts got wrong by
-   repeating #296's example without checking it (round 3 K1). The engine will not
-   queue a prompt at all unless it is `:waiting`/`:run`, its choices are a
-   `:number`/`:card-title`/`:credit`/`:counter` map, or `(pos? (count choices))`
-   (`show-prompt`, game.core.prompts) — so the zero-choice \"other\" prompt used as
-   the example here and as the fixture in ai-runs-test is NOT engine-producible.
-   It is kept as a deliberate boundary case, not because it occurs.
-
-   What reaches here in practice is a prompt with 2+ TRIVIAL choices (say Done and
-   Continue): `has-real-decision?` strips both and sees fewer than 2 non-trivial,
-   and `handle-auto-choice`'s exactly-one-choice gate declines it, so it arrives
-   here. At INITIATION that is the only reachable shape, which makes this arm close
-   to dormant there — a one-choice prompt is auto-answered upstream. At the STALLED
-   window a lone-`Done` select reaches it too, because this handler runs before
-   `handle-auto-choice`.
-
-   NOT for a `waiting` prompt. Callers must exclude `state/waiting-prompt-type?`
-   BEFORE reaching here and fall through instead. A waiting prompt is the
-   OPPONENT's checkpoint: the seat can do nothing about it, so surfacing it as a
-   decision stops the loop on a prompt only the opponent can clear, and the
-   printed hint tells the seat to answer something it cannot. Round 2's MAJOR,
-   found by both vendors — the surfacing arm had inherited
-   `engine-blocking-prompt?`'s whole set rather than the subset the seat owes.
-   There was never anything to fix for that shape anyway: `send-continue!`'s #75
-   chokepoint already suppresses a continue over a waiting prompt.
-
-   COST, deliberately paid: at the STALLED window a lone-`Done` select that
-   `handle-auto-choice` would answer is surfaced instead, because the chain does
-   not reach `handle-auto-choice` from there (it sits below
-   `handle-paid-ability-window`). At INITIATION there is no such cost and no
-   conflict with the canary argument in ai-runs-test: `handle-auto-choice`
-   PRECEDES `handle-initiation-auto-pass`, so a lone-`Done` select is auto-answered
-   before this helper is ever reached (measured, round 2 J2).
-
-   EXIT — delete this and go back to a plain decline once every handler BELOW
-   these two either claims our own prompt or reports it truthfully in a status
-   `terminal-status?` lists. Note what is NOT sufficient, because the first draft
-   said it was and a seat demonstrated otherwise (round 2 J3): merely reordering
-   `handle-auto-choice` / `handle-real-decision` above `handle-paid-ability-window`
-   does not do it — with a zero-choice \"other\" prompt both of those decline too,
-   and the misleading non-terminal wait comes back.
-
-   #303 piece 1 has since landed, so `handle-paid-ability-window` now satisfies
-   the condition above for itself: it reports our own prompt truthfully in a
-   terminal status. It is no longer what blocks this exit. What still does are the
-   SENDERS between here and there — a decline at the stalled window hands the tick
-   to `handle-runner-approach-ice` (#302: sends a `continue` with no
-   `engine-blocking-prompt?` guard) and then to `handle-runner-tactics` (#297: no
-   prompt guard at all), either of which would pass priority over the prompt this
-   helper exists to protect. Making `handle-paid-ability-window` DECLINE as well
-   (#305, #303 piece 2) waits on the same two, for the same reason."
-  [my-prompt window]
-  (println (format "🛑 Holding our own prompt at the %s window - not passing priority over it" window))
-  (when-let [msg (:msg my-prompt)]
-    (println (format "   Prompt: %s" msg)))
-  (println "   → answer it (e.g. `choose-value`/`choose-card`), then continue")
-  {:status :decision-required
-   :wake-reason :blocking-prompt-at-run-window
-   :action :awaiting-own-prompt
-   :message (format (str "Holding our own %s prompt at the %s window; passing priority over it "
-                         "would be honoured by the engine and strand it (#301)")
-                    (or (:prompt-type my-prompt) "unknown")
-                    window)
-   :prompt my-prompt})
+;; surface-blocking-prompt moved to ai-run-pass (one surface for pass-priority!
+;; and the per-handler clauses below); its history is in that docstring.
 
 (defn handle-initiation-auto-pass
   "Priority 6 (before handle-auto-continue): auto-pass the run INITIATION window
@@ -1612,9 +1472,11 @@
     ;; `continue` is not gated on a prompt at all (continue :encounter-ice,
     ;; game.core.runs, reads the encounter ledger and nothing else), so the pass
     ;; is HONOURED and the window closes with our prompt stranded.
-    ;; send-continue!'s own chokepoints do not cover it either — they guard a
-    ;; `waiting` prompt (#75) and our own recorded pass (#98), and a select is
-    ;; neither.
+    ;; The old send-continue! chokepoints did not cover it either — they guarded
+    ;; a `waiting` prompt (#75) and our own recorded pass (#98), and a select is
+    ;; neither. ai-run-pass/pass-priority! now refuses over it as well, so this
+    ;; clause is a redundant per-handler copy, kept until a game series has run
+    ;; on the gate (deferred, plan v3).
     ;;
     ;; engine-blocking-prompt? admits {nil, "run"}, which is what keeps #62
     ;; working: an empty initiation window has no prompt, and a seat at a run
@@ -1628,11 +1490,12 @@
       ;; the loop on a prompt only they can clear.
       (state/waiting-prompt-type? (:prompt-type my-prompt)) nil
       (state/engine-blocking-prompt? my-prompt)
-      (surface-blocking-prompt my-prompt "initiation")
+      (pass/surface-blocking-prompt my-prompt "initiation")
       :else
-      (do
-        (println "   → Auto-passing initiation window (no run-start decision)")
-        (send-continue! gameid)))))
+      (let [r (pass/pass-priority! gameid)]
+        (when (pass/sent? r)
+          (println "   → Auto-passing initiation window (no run-start decision)"))
+        r))))
 
 (def self-advance-grace-ms
   "How long the opponent gets to answer a window before we treat it as ABANDONED
@@ -1706,21 +1569,23 @@
       ;; The OPPONENT's checkpoint, not ours (round 2 J1, both vendors): fall
       ;; through, so handle-paid-ability-window reports the wait — which for THIS
       ;; shape is true, and non-terminal is right because the loop should keep
-      ;; polling for them. send-continue!'s #75 chokepoint already made a pass
+      ;; polling for them. pass-priority!'s #75 chokepoint already made a pass
       ;; over a waiting prompt harmless, so there is nothing here to guard.
       (state/waiting-prompt-type? (:prompt-type my-prompt)) nil
       (state/engine-blocking-prompt? my-prompt)
-      (surface-blocking-prompt my-prompt run-phase)
+      (pass/surface-blocking-prompt my-prompt run-phase)
       :else
       ;; Board says there's no rez decision here. Give the opponent the grace
       ;; period anyway (see docstring) — only an ABANDONED window gets advanced.
       (let [stalled-ms (core/window-stalled-for-ms state side)]
         (when (>= stalled-ms self-advance-grace-ms)
-          (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
-                           (/ stalled-ms 1000.0)))
           ;; Deliberate SECOND pass of an abandoned window — bypasses the #98
           ;; already-passed guard, which exists to stop accidental repeats.
-          (send-continue! gameid :second-pass? true))))))
+          (let [r (pass/pass-priority! gameid :second-pass? true)]
+            (when (pass/sent? r)
+              (println (format "   → Opponent abandoned this window (%.1fs, no rez decision available) — self-advancing (#31)"
+                               (/ stalled-ms 1000.0))))
+            r))))))
 
 (defn handle-real-decision
   "Priority 3: I have a real decision to make"
@@ -2033,7 +1898,20 @@
   [& args]
   (let [;; Parse flags if provided, merge with run strategy
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
-        strategy (cond-> (merge (get-strategy) flags)
+        ;; A --tank on a single step is STORED, unioned into :tank, the way the
+        ;; `tank` command stores it — while a run or encounter is live. Merged
+        ;; into this one call only, `continue --single --tank X` at an approach
+        ;; was forgotten by the next step, and the Corp was never told (the
+        ;; Game F wedge, third spelling). Only :tank: every other flag on a
+        ;; single step stays one-call, as before.
+        tank-stored? (when (and (seq (:tank flags))
+                                (or (some? (get-in @state/client-state [:game-state :run]))
+                                    (core/encounter-window? @state/client-state)))
+                       (set-strategy! {:tank (into (or (:tank (get-strategy)) #{}) (:tank flags))})
+                       (doseq [ice-name (:tank flags)]
+                         (println (format "✅ Authorized tank on: %s (for the rest of this run)" ice-name)))
+                       true)
+        strategy (cond-> (merge (get-strategy) (cond-> flags tank-stored? (dissoc :tank)))
                    ;; #151 item 14: `continue --single --rez X` at a window names that
                    ;; copy; a single step is always within this run.
                    (seq (:rez flags))
@@ -2165,7 +2043,11 @@
   [status]
   (contains? #{:decision-required :fire-decision-required :ice-rezzed :ability-used :subs-fired
                :tag-or-damage :run-complete :no-run
-               :tactic-paused :tactic-failed}  ; Tactics system pauses
+               :tactic-paused :tactic-failed  ; Tactics system pauses
+               ;; A handler's own failure report (automated-fire!'s :send-failed):
+               ;; stop and hand it to the seat as it stands, rather than via the
+               ;; unknown-status catch-all and its extra line.
+               :error}
              status))
 
 (defn- should-pause-for-event?
@@ -2643,10 +2525,45 @@
   [status]
   (contains? #{:run-complete :no-run} status))
 
+(defn- live-tank-to-keep
+  "The named-ICE tank set to carry across monitor-active-run!'s reset-strategy!,
+   or nil. Kept only when a run OR an encounter is live at entry: a `tank` given
+   mid-run is a decision the seat already made, and a plain `continue` that
+   re-entered the same run used to wipe it, so the Corp was never told
+   (#267/#273/#274, the Game F wedge).
+
+   ONLY :tank. :force, :no-rez, :rez, :full-break, :tank-all, :fire-unbroken,
+   :fired-at-encounter, last-waiting-status, the retry latches and the tank-SIGNAL
+   latch (runner-handlers/signaled-fire-encounter) all still reset on every
+   command, exactly as before — a flag the seat typed on one command must be
+   withdrawable by the next one that omits it. No run tag and no new lifetime
+   mechanism: the bound on staleness is the existing one. run! clears everything
+   at run start, and ai-state/expire-run-strategy! clears on the observed end of
+   a run.
+
+   Residual, documented rather than fixed: if that expiry is missed (a desync)
+   OR OVERTAKEN by a write-back — expire-run-strategy! runs on the diff thread,
+   so a run-end diff that lands between the read here and the set-strategy! in
+   monitor-active-run! is undone and :tank outlives its run with no desync at
+   all; continue-run!'s single-step --tank store is the same read-modify-write
+   (read the run, read :tank, write the union) with the same race — AND the next run starts through a run EVENT rather than
+   `run` (so run!'s reset never happens), AND it meets an ICE of the same name,
+   the old authorization is honoured. The engine's :run-id is not on the wire, so the client cannot tell
+   two runs apart to close it."
+  [client-state]
+  (when (or (some? (get-in client-state [:game-state :run]))
+            (core/encounter-window? client-state))
+    (not-empty (:tank (get-strategy)))))
+
 (defn- monitor-active-run!
-  "Own one active run: (re)apply the pre-committed strategy, then loop."
+  "Own one active run: (re)apply the pre-committed strategy, then loop.
+   A named tank survives the reset while a run or encounter is live; see
+   live-tank-to-keep."
   [flags]
-  (reset-strategy!)
+  (let [kept-tank (live-tank-to-keep @state/client-state)]
+    (reset-strategy!)
+    (when kept-tank
+      (set-strategy! {:tank kept-tank})))
   ;; NO reset-window-grace! here (#102 item 7 round 3). A plain `continue` is
   ;; this function, and resetting the abandon clock on entry mid-window meant
   ;; the #31 self-advance saw every abandoned window as 0 ms old, so the recovery
@@ -2655,7 +2572,11 @@
   ;; NB reported-events is deliberately NOT reset here either: it is game-scoped.
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal :rez-cids)]
     (when (seq strategy-flags)
-      (set-strategy! strategy-flags)
+      ;; A --tank given mid-run UNIONS with the kept set: set-strategy! merges,
+      ;; and a plain merge would replace `tank X` with `--tank Y`.
+      (set-strategy! (cond-> strategy-flags
+                       (:tank strategy-flags)
+                       (update :tank #(into (or (:tank (get-strategy)) #{}) %))))
       ;; #151 item 14: a persistent commitment spans the turn's runs, so every
       ;; server's copies of a name count; one made during a run is this run's.
       ;; A --rez given AT a rez window names that copy.
@@ -2901,3 +2822,27 @@
      (continue!)  ; Just send continue, no checks"
   []
   (continue-run! "--force"))
+
+(defn tank!
+  "dev/send_command's `tank <ice>`: add ICE-NAME to the run's tank set, then take
+   one continue-run! step. It was inline in the dispatcher; it lives here so the
+   refusal below can be tested.
+
+   REFUSED when neither a run nor an encounter is live. Mid-run the set now
+   survives a plain `continue` (live-tank-to-keep), so an authorization recorded
+   with nothing live would sit in the strategy until something cleared it, and
+   nothing does until the next run! — a run started by a run event would inherit
+   it. With nothing live there is nothing to tank; `run <server> --tank <ice>`
+   is the way to commit one up front."
+  [ice-name]
+  (let [cs @state/client-state]
+    (if (or (some? (get-in cs [:game-state :run]))
+            (core/encounter-window? cs))
+      (let [current-tank (get (get-strategy) :tank #{})]
+        (set-strategy! {:tank (conj current-tank ice-name)})
+        (println (format "✅ Authorized tank on: %s" ice-name))
+        (continue-run!))
+      (do
+        (println (format "❌ tank refused: no run and no encounter is live, so there is nothing to tank on %s." ice-name))
+        (println "   To commit a tank up front, start the run with it: run <server> --tank \"<ice>\"")
+        {:status :error :reason :no-live-run}))))

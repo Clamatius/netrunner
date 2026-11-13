@@ -34,7 +34,10 @@
 ;;
 ;; LIFETIME. ai-runs/reset-strategy! clears this at the START of run! and
 ;; monitor-active-run!, NOT at the end of a run — so on its own the set outlives
-;; the run that created it. That was survivable while only the run loops read it
+;; the run that created it. (monitor-active-run! keeps ONE key across its reset:
+;; the named :tank set, while a run or encounter is live — a mid-run `continue`
+;; used to wipe a `tank` the seat had already given, #274. See
+;; ai-runs/live-tank-to-keep for the bound and its residual.) That was survivable while only the run loops read it
 ;; (they reset before use); it is NOT survivable now that the display reads it to
 ;; assert "you have already tanked this ICE": tank Tithe, let the run end, start
 ;; another run through a run EVENT (Jailbreak/Conduit enter via continue-run! and
@@ -651,23 +654,20 @@
 
      DO NOT read that list as chain coverage. It is the list of callers, not of
      senders, and a draft of it claimed the chain was covered — which a review
-     seat refuted at the line (#301 round 1). Senders that reach the wire WITHOUT
-     consulting this predicate, as of #301:
+     seat refuted at the line (#301 round 1). What covers the SENDERS is one
+     gate, which an earlier version of this docstring asked for: every client-automated `continue` now goes through
+     ai-run-pass/pass-priority!, which consults this predicate (after
+     `waiting-prompt-type?`) at send time, and the Corp's automated fire asks the
+     same question through ai-run-pass/own-prompt-surface. The per-handler
+     clauses above are now redundant copies, kept until a game series has run on
+     the gate. Still unguarded, and NOT a continue: `handle-runner-tactics` acts
+     with abilities the engine itself refuses over a prompt (#297, deferred).
 
-       `handle-runner-tactics`        no prompt guard at all (#297)
-       `handle-runner-approach-ice`   `has-real-decision?` / waiting only
-       the Corp handlers' `send-continue!` sites (ai-run-corp-handlers)
-
-     `handle-paid-ability-window` is no longer on that list: since #303 piece 1 it
-     consults this predicate (plus `waiting-prompt-type?`) to tell our own
-     unanswered prompt from a genuine opponent wait, and reports the first
-     truthfully in a terminal status. It still CLAIMS the tick rather than
-     declining, because the senders above remain unguarded — which is the same
-     reason `surface-blocking-prompt` (ai-runs) still exists.
-
-     Before adding this predicate to a fourth window, check what the chain does
-     AFTER the decline, and prefer collapsing the senders onto one gate over a
-     fifth hand-maintained copy of this clause.
+     `handle-paid-ability-window` consults this predicate (plus
+     `waiting-prompt-type?`) since #303 piece 1 to tell our own unanswered prompt
+     from a genuine opponent wait, and reports the first truthfully in a
+     terminal status. It still CLAIMS the tick rather than declining; #305
+     closes as \"keeps claiming the tick, nothing left to guard\".
 
      Callers at a both-pass window depend on the {nil, :run} admission for more
      than exactness: an empty window has no prompt, a seat at a run window holds

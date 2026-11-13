@@ -56,6 +56,7 @@ test:
 	  ai-prompts-test \
 	  ai-pure-functions-test \
 	  ai-run-corp-decisions-test \
+	  ai-run-priority-repro-test \
 	  ai-runs-test \
 	  ai-stall-test \
 	  ai-state-test \

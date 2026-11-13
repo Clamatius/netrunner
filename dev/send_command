@@ -701,7 +701,8 @@ ${GREEN}Running:${NC}
     --tank <name>    Runner: pre-authorize letting subs fire on the ICE titled
                      <name>, instead of being asked mid-encounter. Repeatable.
                      Same signal the 'tank' command sends, committed up front.
-    --tank-all       Runner: pre-authorize it on EVERY ICE this run (yolo).
+                     Holds for the rest of the run, given with --single too.
+    --tank-all      Runner: pre-authorize it on EVERY ICE this run (yolo).
     --tactics <edn>  Runner: per-ICE break plan inline. Unusable from this script
                      for any map containing a QUOTED string — each flag is
                      interpolated into a Clojure string unquoted, so the first
@@ -2330,13 +2331,10 @@ case "$COMMAND" in
         # a backslash still reached the reader as an escape. clj_str does
         # backslash first and then quotes, which is the order that cannot
         # re-escape its own output.
+        # Body is runs/tank! (refuses when no run and no encounter is live).
         execute "(do
                   (require (quote [ai-runs :as runs]))
-                  (let [ice-name \"$(clj_str "$ICE_NAME")\"
-                        current-tank (get (runs/get-strategy) :tank #{})]
-                    (runs/set-strategy! {:tank (conj current-tank ice-name)})
-                    (println (format \"✅ Authorized tank on: %s\" ice-name))
-                    (runs/continue-run!)))"
+                  (runs/tank! \"$(clj_str "$ICE_NAME")\"))"
         after_action
         ;;
 
