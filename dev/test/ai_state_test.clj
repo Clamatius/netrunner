@@ -417,7 +417,8 @@
 
   (testing "recurses into hosted cards (e.g. credits on a hosted card)"
     (let [gs {:runner {:rig {:hardware [{:title "Console"
-                                         :hosted [{:title "Hosted Econ" :counter {:credit 2}}]}]}}}
+                                         :hosted [{:title "Hosted Econ" :side "Runner"
+                                                   :installed true :counter {:credit 2}}]}]}}}
           {:keys [total sources]} (state/runner-hosted-credits gs)]
       (is (= 2 total))
       (is (= [{:title "Hosted Econ" :credits 2}] sources))))

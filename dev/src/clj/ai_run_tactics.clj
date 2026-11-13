@@ -21,6 +21,7 @@
 
    Also note :pause (and :default :pause) is NOT a stub: it works in V1."
   (:require [ai-card-actions :as actions]
+            [ai-state :as ai-state]
             [ai-core :as core]))
 
 ;; ============================================================================
@@ -29,14 +30,21 @@
 
 ;; Use core/current-run-ice for ICE lookup (single source of truth)
 
+(declare trojan-host-matches?)
+
+(def host-only-breaker-titles #{"Botulus" "Slap Vandal" "Knight"})
+
 (defn list-available-breakers
-  "List all icebreakers in Runner rig with their break abilities."
+  "List all installed Runner icebreakers with their break abilities."
   [state]
-  (let [runner-rig (get-in state [:game-state :runner :rig])
-        programs (get runner-rig :program [])]
+  (let [programs (ai-state/runner-programs (:game-state state))
+        ice (core/encountered-ice state)]
     (for [prog programs
-          :when (some #{"Icebreaker"} (:subtypes prog))]
+          :when (or (nil? ice) (trojan-host-matches? prog ice))
+          :when (or (some #{"Icebreaker"} (:subtypes prog))
+                    (some core/break-ability? (:abilities prog)))]
       {:title (:title prog)
+       :reference (core/installed-runner-reference prog (:game-state state))
        :strength (:current-strength prog)
        :abilities (map-indexed
                    (fn [idx ab]
@@ -71,13 +79,30 @@
       (subtypes "AI") :ai  ; AI breakers can break any type
       :else nil)))
 
+(defn trojan-host-matches?
+  "Apply the host restrictions in the named break abilities."
+  [breaker ice]
+  (cond
+    (= "Living Mural" (:title breaker))
+    (= (take 2 (get-in breaker [:host :zone])) (take 2 (:zone ice)))
+
+    (host-only-breaker-titles (:title breaker))
+    (= (get-in breaker [:host :cid]) (:cid ice))
+
+    :else true))
+
 (defn breaker-matches-ice?
   "Check if breaker can break the ICE type."
   [breaker ice]
   (let [ice-type (ice-primary-type ice)
         breaker-type (breaker-ice-type breaker)]
-    (or (= breaker-type :ai)
-        (= breaker-type ice-type))))
+    (and (trojan-host-matches? breaker ice)
+         (or (= breaker-type :ai)
+             (= breaker-type ice-type)
+             ;; Botulus is Virus - Trojan, not subtype Icebreaker. Its
+             ;; break-sub :req allows only the host ICE and ignores strength.
+             (and (= "Botulus" (:title breaker))
+                  (some core/break-ability? (:abilities breaker)))))))
 
 ;; ============================================================================
 ;; Ability Detection
@@ -142,7 +167,8 @@
             (first
              (for [breaker compatible-breakers
                    :let [breaker-strength (or (:current-strength breaker) (:strength breaker) 0)
-                         needs-pump? (< breaker-strength ice-strength)
+                         needs-pump? (and (some #{"Icebreaker"} (:subtypes breaker))
+                                          (< breaker-strength ice-strength))
                          pump-ability (when needs-pump? (find-pump-ability breaker))
                          break-ability (find-break-ability breaker ice-type)]
                    ;; Must have break ability, and either strong enough or can pump
@@ -154,7 +180,7 @@
                 :break-ability break-ability}))]
         (when usable-breaker
           (let [{:keys [breaker needs-pump? pump-ability break-ability]} usable-breaker
-                breaker-name (:title breaker)]
+                breaker-name (core/installed-runner-reference breaker (:game-state state))]
             ;; Note: last-full-break-warning is reset by the caller on success
             (if needs-pump?
               ;; Need to pump first
@@ -211,7 +237,7 @@
     (when (seq breakers)
       (println "   Breakers:")
       (doseq [b breakers]
-        (println (format "     - %s (str %s)" (:title b) (:strength b)))))
+        (println (format "     - %s (str %s)" (:reference b) (:strength b)))))
     {:status :tactic-paused
      :reason reason
      :context {:ice-name ice-name
@@ -220,16 +246,39 @@
                :breakers breakers
                :credits credits}}))
 
+(defn- resolve-tactic-card
+  "Resolve an indexed card first; for a bare title, narrow by the host rule."
+  [card-name state]
+  (let [installed (ai-state/installed-runner-cards (:game-state state))
+        {:keys [title explicit-index? index]} (core/parse-card-reference card-name)
+        matches (filter #(= title (:title %)) installed)
+        ice (core/encountered-ice state)
+        card (if explicit-index?
+               (core/find-installed-card card-name)
+               (let [eligible (filter #(trojan-host-matches? % ice) matches)]
+                 (when (= 1 (count eligible)) (first eligible))))]
+    (cond
+      (and card (trojan-host-matches? card ice)) {:card card}
+      (and card (= "Living Mural" (:title card)))
+      {:reason (str card-name " can break only ICE on its host server")}
+      card {:reason (str card-name " can break only its host ICE")}
+      (empty? matches) {:reason (str "Card not found installed: " card-name)}
+      (and explicit-index? (>= index (count matches)))
+      {:reason (str "No installed copy " card-name " (valid indices 0.." (dec (count matches)) ")")}
+      explicit-index? {:reason (str "Card not found installed: " card-name)}
+      (> (count (filter #(trojan-host-matches? % ice) matches)) 1)
+      {:reason (str "Multiple copies of " title " can break here; name one by index [N]")}
+      (= "Living Mural" title)
+      {:reason (str card-name " can break only ICE on its host server")}
+      :else {:reason (str card-name " can break only its host ICE")})))
+
 (defn- execute-break-dynamic!
   "Execute a :break-dynamic tactic - find and use the card's full-break ability."
   [card-name state]
-  (let [runner-rig (get-in state [:game-state :runner :rig])
-        programs (get runner-rig :program [])
-        ;; Find the specified card
-        target-prog (first (filter #(= (:title %) card-name) programs))]
+  (let [{target-prog :card reason :reason} (resolve-tactic-card card-name state)]
     (if-not target-prog
       {:status :tactic-failed
-       :reason (format "Card not found in rig: %s" card-name)}
+       :reason reason}
       ;; Find the dynamic break ability
       ;; NOTE: Dynamic abilities have playable=null, so don't require it
       (let [abilities (:abilities target-prog)
@@ -245,7 +294,9 @@
            :reason (format "%s has no playable break ability" card-name)}
           (do
             (println (format "🎯 Tactic: %s using %s" card-name (:label break-ability)))
-            (let [result (actions/use-ability! card-name (:index break-ability))]
+            (let [result (actions/use-ability!
+                           (core/installed-runner-reference target-prog (:game-state state))
+                           (:index break-ability))]
               (if (= :success (:status result))
                 {:status :action-taken
                  :action :tactic-executed
@@ -264,12 +315,18 @@
       (execute-break-dynamic! card state)
 
       :use-ability
-      (let [ability-index (:ability-index tactic)]
-        (println (format "🎯 Tactic: %s ability %d" card ability-index))
-        (let [result (actions/use-ability! card ability-index)]
-          (if (= :success (:status result))
-            {:status :action-taken :action :tactic-executed :card card}
-            {:status :tactic-failed :reason (:reason result)})))
+      (let [ability-index (:ability-index tactic)
+            {target :card reason :reason} (resolve-tactic-card card state)]
+        (if-not target
+          {:status :tactic-failed :reason reason}
+          (do
+            (println (format "🎯 Tactic: %s ability %d" card ability-index))
+            (let [result (actions/use-ability!
+                           (core/installed-runner-reference target (:game-state state))
+                           ability-index)]
+              (if (= :success (:status result))
+                {:status :action-taken :action :tactic-executed :card card}
+                {:status :tactic-failed :reason (:reason result)})))))
 
       ;; V2 Stubs - recognized but not implemented
       :break-subs

@@ -1,6 +1,7 @@
 (ns ai-state
   "Client state management and diff application for AI WebSocket connection"
   (:require [differ.core :as differ]
+            [clojure.string :as str]
             [ai-debug :as debug]))
 
 ;; ============================================================================
@@ -478,6 +479,49 @@
 (defn corp-clicks [] (clicks-for-side :corp))
 (defn corp-hand-count [] (hand-count-for-side :corp))
 
+(defn installed-runner-cards
+  "All Runner-installed cards in a wire game state, including recursive guests
+   on rig cards and Corp server cards. Hosted but parked cards are excluded.
+
+   Mirrors game.core.board/all-installed-runner. diffs/servers-summary places
+   :hosted under each ICE/content card; diffs/card-summary retains :installed,
+   :side and :host on the Runner's own guests, even on unrezzed Corp ICE."
+  ([] (installed-runner-cards (get-game-state)))
+  ([gs]
+   (let [rig (get-in gs [:runner :rig])
+         servers (get-in gs [:corp :servers])
+         rig-roots (mapcat #(get rig % []) [:program :hardware :resource])
+         corp-roots (mapcat (fn [server] (concat (:ices server) (:content server)))
+                            (vals servers))
+         walk (fn walk [card]
+                (cons card (mapcat walk (:hosted card))))]
+     (vec (concat rig-roots
+                  (filter #(and (:installed %)
+                                (contains? #{"Runner" :runner} (:side %)))
+                          (mapcat walk (concat (mapcat :hosted rig-roots)
+                                               (mapcat :hosted corp-roots)))))))))
+
+(defn runner-host-label
+  "Visible host of an installed Runner card. Name unrezzed Corp ICE by position."
+  [gs card]
+  (when-let [host-cid (get-in card [:host :cid])]
+    (or (some (fn [[server-key server]]
+                (or (some (fn [[idx ice]]
+                            (when (= host-cid (:cid ice))
+                              (str (if (:rezzed ice) (or (:title ice) "ICE") "unrezzed ICE")
+                                   " #" idx " " (str/upper-case (name server-key)))))
+                          (map-indexed vector (:ices server)))
+                    (some (fn [[idx content]]
+                            (when (= host-cid (:cid content))
+                              (str (if (:rezzed content)
+                                     (or (:title content) "card")
+                                     "unrezzed card")
+                                   " #" idx " " (str/upper-case (name server-key)))))
+                          (map-indexed vector (:content server)))))
+              (get-in gs [:corp :servers]))
+        (some (fn [host] (when (= host-cid (:cid host)) (:title host)))
+              (installed-runner-cards gs)))))
+
 (defn- card-credit-counters
   "Recursively collect {:title :credits} for a card and any cards hosted on it
    that carry a positive :credit counter."
@@ -501,26 +545,14 @@
    what's hosted without over-claiming what's spendable."
   ([] (runner-hosted-credits (get-game-state)))
   ([gs]
-   (let [rig (get-in gs [:runner :rig])
-         cards (concat (:program rig) (:hardware rig) (:resource rig)
-                       (get-in gs [:runner :play-area]))
-         sources (vec (mapcat card-credit-counters cards))]
+   (let [installed (installed-runner-cards gs)
+         sources (vec (concat (keep (fn [card]
+                                      (let [n (get-in card [:counter :credit] 0)]
+                                        (when (pos? n) {:title (or (:title card) "Unknown") :credits n})))
+                                    installed)
+                              (mapcat card-credit-counters (get-in gs [:runner :play-area]))))]
      {:total (reduce + 0 (map :credits sources))
       :sources sources})))
-
-(defn- card-virus-counters
-  "Recursively collect {:title :virus} for a card and any cards hosted on it that
-   carry a positive :virus counter. Hosted cards count: a Leech on a Leprechaun
-   is still the Leech whose counters the run budget depends on."
-  [card]
-  ;; PRESENT, not positive: a Leech that has spent its last counter keeps
-  ;; :virus 0, and dropping it makes the line say "no virus programs" when the
-  ;; truth is "a virus program with nothing left" — a different plan (guest
-  ;; re-review). Same rule as the compact board's counter suffix.
-  (let [n (get-in card [:counter :virus])
-        here (when n [{:title (or (:title card) "Unknown") :virus n}])
-        hosted (mapcat card-virus-counters (:hosted card))]
-    (concat here hosted)))
 
 (defn runner-virus-counters
   "Virus counters on the Runner's installed cards, as
@@ -534,9 +566,13 @@
    programs a total cannot be budgeted against either."
   ([] (runner-virus-counters (get-game-state)))
   ([gs]
-   (let [rig (get-in gs [:runner :rig])
-         cards (concat (:program rig) (:hardware rig) (:resource rig))
-         sources (vec (mapcat card-virus-counters cards))]
+   ;; Presence, including zero, matters: a spent Leech is still installed.
+   (let [sources (vec (keep (fn [card]
+                              (when-let [n (get-in card [:counter :virus])]
+                                (cond-> {:title (or (:title card) "Unknown") :virus n}
+                                  (runner-host-label gs card)
+                                  (assoc :host-label (runner-host-label gs card)))))
+                            (installed-runner-cards gs)))]
      {:total (reduce + 0 (map :virus sources))
       :sources sources})))
 
@@ -1230,21 +1266,25 @@
 
 (defn runner-programs
   "Returns runner's installed programs. Returns [] if unavailable."
-  []
-  (let [programs (:program (runner-rig))]
-    (if (sequential? programs) (vec programs) [])))
+  ([] (runner-programs (get-game-state)))
+  ([gs]
+   (let [roots (get-in gs [:runner :rig :program])]
+     (vec (filter #(or (= "Program" (:type %)) (some #{%} roots))
+                  (installed-runner-cards gs))))))
 
 (defn runner-hardware
   "Returns runner's installed hardware. Returns [] if unavailable."
   []
-  (let [hardware (:hardware (runner-rig))]
-    (if (sequential? hardware) (vec hardware) [])))
+  (let [roots (:hardware (runner-rig))]
+    (vec (filter #(or (= "Hardware" (:type %)) (some #{%} roots))
+                 (installed-runner-cards)))))
 
 (defn runner-resources
   "Returns runner's installed resources. Returns [] if unavailable."
   []
-  (let [resources (:resource (runner-rig))]
-    (if (sequential? resources) (vec resources) [])))
+  (let [roots (:resource (runner-rig))]
+    (vec (filter #(or (= "Resource" (:type %)) (some #{%} roots))
+                 (installed-runner-cards)))))
 
 ;; === Run State ===
 

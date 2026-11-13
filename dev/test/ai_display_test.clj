@@ -506,8 +506,8 @@
             (str "and must not then say there are none, got: " out))
         (is (str/includes? out "none at the top level; 1 hosted on another card")
             (str "it accounts for the header total instead of leaving it unexplained, got: " out))
-        (is (str/includes? out "shown elsewhere in this rig, under their hosts")
-            (str "and points the seat at where the program actually is, got: " out))
+        (is (str/includes? out "none at the top level; 1 hosted on another card)")
+            (str "the note makes no claim about where each guest is drawn, got: " out))
         (is (str/includes? out "\u21b3 Corroder")
             (str "and Corroder is findable under its host, got: " out))))))
 
@@ -3945,7 +3945,8 @@
                       :game-state {:active-player "runner" :turn 9
                                    :runner {:click 2 :credit 5 :hand [] :agenda-point 0
                                             :rig {:program [{:title "Leprechaun"
-                                                             :hosted [{:title "Leech"
+                                                             :hosted [{:title "Leech" :type "Program"
+                                                                       :side "Runner" :installed true
                                                                        :counter {:virus 4}}]}]}}
                                    :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
       (let [line (str/trim (with-out-str (display/status-compact)))]

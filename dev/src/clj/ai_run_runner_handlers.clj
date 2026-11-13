@@ -537,18 +537,18 @@
       ;; Also check log in case :fired flag isn't set by server
       (when (and (core/encounter-ice-active? state current-ice) (seq unbroken-subs)
                  (not (subs-already-resolved? state ice-title)))
-        (let [runner-rig (get-in state [:game-state :runner :rig])
-              all-programs (get runner-rig :program [])
+        (let [all-programs (state/runner-programs (:game-state state))
 
               ;; Look for dynamic break abilities (server will reject if unaffordable)
               ;; NOTE: Dynamic abilities have playable=null, so don't require it
               breakable-abilities
               (for [program all-programs
                     [idx ability] (map-indexed vector (:abilities program))
-                    :when (and (:dynamic ability)
+                    :when (and (tactics/trojan-host-matches? program current-ice)
+                               (:dynamic ability)
                                (clojure.string/includes? (str (:dynamic ability)) "break"))]
                 {:card program
-                 :card-name (:title program)
+                 :card-name (core/installed-runner-reference program (:game-state state))
                  :ability-index idx
                  :label (:label ability)
                  :cost-label (:cost-label ability)
@@ -693,10 +693,15 @@
                       all-break-abilities
                       (for [program all-programs
                             [idx ability] (map-indexed vector (:abilities program))
-                            :when (and (:dynamic ability)
+                            ;; Same host rule as breakable-abilities above: a
+                            ;; trojan hosted on ANOTHER ICE is not a breaker for
+                            ;; this one, so it must not be named as the thing we
+                            ;; cannot afford.
+                            :when (and (tactics/trojan-host-matches? program current-ice)
+                                       (:dynamic ability)
                                        (when-let [dyn (:dynamic ability)]
                                          (clojure.string/includes? (str dyn) "break")))]
-                        {:card-name (:title program)
+                        {:card-name (core/installed-runner-reference program (:game-state state))
                          :label (:label ability)
                          :playable (:playable ability)
                          :cost-label (:cost-label ability)})]

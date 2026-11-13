@@ -12,9 +12,48 @@
 
    These tests pin what that costs, so the `:host` key can never be dropped again without
    a red test: `select` silently no-ops and `ability` is refused."
-  (:require [game.core :as core]
+  (:require [cheshire.core :as json]
+            [game.core.diffs :as diffs]
+            [game.core :as core]
             [game.test-framework :refer :all]
             [clojure.test :refer :all]))
+
+(deftest unrezzed-ice-keeps-runner-trojan-on-wire
+  (do-game
+    (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"]}
+               :runner {:credits 15 :hand ["Botulus"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (play-from-hand state :runner "Botulus")
+    (click-card state :runner (get-ice state :hq 0))
+    (let [gs (-> state diffs/public-states :runner-state
+                 json/generate-string (json/parse-string true))
+          ice (first (get-in gs [:corp :servers :hq :ices]))
+          bot (first (:hosted ice))]
+      (is (nil? (:title ice)) "unrezzed ICE title is withheld from Runner")
+      (is (= "Botulus" (:title bot)) "the Runner's own trojan remains visible")
+      (is (= "Runner" (:side bot)))
+      (is (= "this-turn" (:installed bot)))
+      (is (= ["onhost"] (:zone bot)))
+      (is (= (:cid ice) (get-in bot [:host :cid])))
+      (is (= 1 (get-in bot [:counter :virus]))))))
+
+(deftest corp-hosted-program-memory-is-sent-by-engine
+  (do-game
+    (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Ice Wall"]}
+               :runner {:credits 15 :hand ["Botulus"]}})
+    (play-from-hand state :corp "Ice Wall" "HQ")
+    (take-credits state :corp)
+    (let [before (get-in (:runner-state (diffs/public-states state)) [:runner :memory])]
+      (play-from-hand state :runner "Botulus")
+      (click-card state :runner (get-ice state :hq 0))
+      (let [wire (-> state diffs/public-states :runner-state
+                     json/generate-string (json/parse-string true))
+            after (get-in wire [:runner :memory])]
+        (is (= (get-in @state [:runner :memory :used]) (:used after)))
+        (is (= (get-in @state [:runner :memory :available]) (:available after)))
+        (is (= 1 (- (:used after) (:used before)))
+            "Botulus on Corp ICE consumes 1 MU in the engine's transmitted total")))))
 
 (defn- seat-ref
   "The card reference our seat builders put on the wire."
