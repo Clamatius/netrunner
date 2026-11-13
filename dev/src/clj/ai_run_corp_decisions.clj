@@ -47,7 +47,7 @@
   (= "run" (str (:prompt-type prompt))))
 
 (defn- prompt-choices [prompt]
-  (when (sequential? (:choices prompt)) (:choices prompt)))
+  (or (:choices prompt) []))
 
 (defn- prompt-selectables [prompt]
   (or (:selectable prompt) []))
@@ -57,7 +57,6 @@
   [prompt]
   (and prompt
        (or (seq (prompt-choices prompt))
-           (and (not (sequential? (:choices prompt))) (some? (:choices prompt)))
            (seq (prompt-selectables prompt)))))
 
 (defn empty-run-window?
