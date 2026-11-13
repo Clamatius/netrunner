@@ -368,6 +368,27 @@
 ;; WebSocket Connection
 ;; ============================================================================
 
+
+(def ^:private max-text-message-bytes
+  "Largest state message the client accepts. Jetty's default is 65,536 bytes; a
+   full game state passed that in the first Worlds-deck game (68,041 bytes, game
+   8058fb3e) and BOTH the diff and the resync that should have recovered from it
+   were refused, leaving each seat with no board. The web client has no such cap.
+   32 MiB is two orders of magnitude above anything seen, and still bounded."
+  (* 32 1024 1024))
+
+(defn- new-ws-client
+  "An unstarted Jetty WebSocketClient configured for this client: a 10-minute
+   idle timeout (default 5) and room for a full game state."
+  [url]
+  (let [client (if (.startsWith ^String url "wss://")
+                 (WebSocketClient. (SslContextFactory.))
+                 (WebSocketClient.))]
+    (doto (.getPolicy client)
+      (.setIdleTimeout 600000)
+      (.setMaxTextMessageSize max-text-message-bytes))
+    client))
+
 (defn connect!
   "Connect to WebSocket server.
 
@@ -407,12 +428,7 @@
           full-url (str url "?client-id=" client-id
                         (when csrf-token
                           (str "&csrf-token=" (URLEncoder/encode csrf-token "UTF-8"))))
-          ;; Create custom WebSocket client with longer idle timeout (10 minutes instead of 5)
-          ws-client (if (.startsWith url "wss://")
-                      (WebSocketClient. (SslContextFactory.))
-                      (WebSocketClient.))
-          _ (doto (.getPolicy ws-client)
-              (.setIdleTimeout 600000))
+          ws-client (new-ws-client url)
           _ (.start ws-client)
           ;; Build headers - include session cookie if authenticated
           headers (when session-token

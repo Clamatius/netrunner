@@ -463,3 +463,18 @@
       (is (not (.contains out "Error parsing")))
       (is (= "SG Haas-Bioroid"
              (get-in (first @events) [:data :players 0 :deck :name]))))))
+
+
+;; Game 8058fb3e (worlds-2018-a, 2026-11-13): a state message of 68,041 bytes
+;; exceeded Jetty's default 65,536-byte text limit. The socket errored, the
+;; resync (a FULL state, larger still) hit the same limit, and both seats were
+;; left with NO STATE while the game sat healthy on the server at a trace
+;; prompt. System Gateway boards never got that large; a Worlds deck with a
+;; deep heap and open decklists does.
+(deftest test-websocket-client-accepts-a-large-state-message
+  (let [client (#'ai-websocket-client-v2/new-ws-client "ws://localhost:1042/chsk")
+        policy (.getPolicy client)]
+    (testing "a full game state must fit: far above the 64 KiB Jetty default"
+      (is (>= (.getMaxTextMessageSize policy) (* 8 1024 1024))))
+    (testing "the idle timeout the client already relied on is kept"
+      (is (= 600000 (.getIdleTimeout policy))))))
