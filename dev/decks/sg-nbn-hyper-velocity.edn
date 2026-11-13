@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Null Signal's official NBN sample deck,
+;; "Hyper Velocity" (44 cards).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Decklist: https://netrunnerdb.com/en/decklist/c8f08617-26df-4deb-8fab-415c9dddd9e1/hyper-velocity-sg-only-
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Hyper Velocity",
+ :format "system-gateway",
+ :identity {:title "NBN: Reality Plus"},
+ :cards
+ [{:qty 3, :card "Orbital Superiority"}
+  {:qty 3, :card "Send a Message"}
+  {:qty 1, :card "Superconducting Hub"}
+  {:qty 1, :card "Tomorrow's Headline"}
+  {:qty 3, :card "Spin Doctor"}
+  {:qty 3, :card "Hansei Review"}
+  {:qty 3, :card "Hedge Fund"}
+  {:qty 2, :card "Neurospike"}
+  {:qty 3, :card "Predictive Planogram"}
+  {:qty 3, :card "Public Trail"}
+  {:qty 2, :card "AMAZE Amusements"}
+  {:qty 2, :card "Manegarm Skunkworks"}
+  {:qty 3, :card "Palisade"}
+  {:qty 3, :card "Ping"}
+  {:qty 3, :card "Funhouse"}
+  {:qty 3, :card "Whitespace"}
+  {:qty 3, :card "Tithe"}]}
