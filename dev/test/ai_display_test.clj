@@ -3945,7 +3945,8 @@
                       :game-state {:active-player "runner" :turn 9
                                    :runner {:click 2 :credit 5 :hand [] :agenda-point 0
                                             :rig {:program [{:title "Leprechaun"
-                                                             :hosted [{:title "Leech"
+                                                             :hosted [{:title "Leech" :type "Program"
+                                                                       :side "Runner" :installed true
                                                                        :counter {:virus 4}}]}]}}
                                    :corp {:click 0 :credit 9 :hand [] :agenda-point 0}})
       (let [line (str/trim (with-out-str (display/status-compact)))]

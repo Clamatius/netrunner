@@ -59,10 +59,8 @@
    `status-compact`'s virus segment DID recurse. The two views disagreed about
    whether the card existed.
 
-   Scope: the rig only. A program hosted on ICE (Botulus, Trypano) is in the
-   Corp server's `:hosted`, not the Runner's rig, and is out of this seq by
-   construction — see #171, where both compact views are consistently blind, so
-   the #161 symptom does not recur there."
+   Scope: rig topology only, including parked guests. Installed membership and
+   counts come from ai-state/installed-runner-cards, which also walks Corp ICE."
   [cards]
   (mapcat (fn [c] (cons c (rig-card-seq (:hosted c)))) cards))
 
@@ -165,8 +163,8 @@
       :else (str t ":"))))
 
 (defn- rig-type-count
-  "How many cards of `type-str` the rig holds — the category's own vector, plus
-   any INSTALLED hosted card of that type anywhere in the rig.
+  "How many cards of `type-str` the Runner has installed — the category's own
+   vector, plus installed hosted cards on rig or Corp cards.
 
    The counts label the list beside them, so a count that stopped at the top
    level while the list recursed would be a new contradiction, not a smaller one.
@@ -176,16 +174,25 @@
      serializes without one (`diffs/private-card-keys` omits `:type` and
      `:title`) and counting those by type would silently drop cards the old code
      showed.
-   - Hosted cards are counted by `:type` AND gated on `guest-role`, so nothing
-     parked, withheld or foreign (an accessed agenda on a Film Critic) inflates
-     `HW[n]`."
-  [rig category type-str]
-  (+ (count (get rig category))
-     (count (filter #(and (= :installed (guest-role %)) (= type-str (:type %)))
-                    (rig-card-seq (mapcat :hosted
-                                          (concat (:program rig)
-                                                  (:hardware rig)
-                                                  (:resource rig))))))))
+   - Hosted cards are counted by `:type` through the shared installed walk, so
+     parked, withheld or foreign guests do not inflate `HW[n]`."
+  [gs category type-str]
+  (let [rig (get-in gs [:runner :rig])
+        roots (mapcat #(get rig % []) [:program :hardware :resource])]
+    (+ (count (get rig category))
+       (count (filter #(and (= type-str (:type %))
+                            (not (some #{%} roots)))
+                      (state/installed-runner-cards gs))))))
+
+(defn- corp-hosted-runner-cards
+  "Installed Runner guests on Corp cards, drawn from the shared installed walk."
+  [gs]
+  (let [host-cids (set (map :cid (mapcat (fn [server]
+                                         (concat (:ices server) (:content server)))
+                                       (vals (get-in gs [:corp :servers])))))]
+    (filter #(when-let [host-cid (get-in % [:host :cid])]
+               (contains? host-cids host-cid))
+            (state/installed-runner-cards gs))))
 
 (defn compact-counter-suffix
   "Pure: the counters on a card, in the compact board's one-line idiom —
@@ -236,9 +243,13 @@
    …) when more than one shares a host — the Corp's view of a Street Peddler is
    three of them, and three identical tokens claim they are interchangeable
    (guest panel)."
-  [card siblings]
+  [card siblings all-installed]
   (if-let [title (rig-card-title card)]
-    (let [same-name (vec (filter #(= title (rig-card-title %)) siblings))]
+    (let [installed-matches (vec (filter #(= title (:title %)) all-installed))
+          same-name (if (and (some #{card} installed-matches)
+                             (> (count installed-matches) 1))
+                      installed-matches
+                      (vec (filter #(= title (rig-card-title %)) siblings)))]
       (if (> (count same-name) 1)
         (str title " [" (.indexOf same-name card) "]")
         title))
@@ -288,10 +299,10 @@
    them, and `:current-strength` is stamped by ice.clj alone, so widening it to
    hardware and resources would have rested on an engine invariant this file
    neither owns nor tests."
-  ([cards indent] (print-rig-cards! cards indent "•"))
-  ([cards indent bullet]
+  ([cards indent all-installed] (print-rig-cards! cards indent "•" all-installed))
+  ([cards indent bullet all-installed]
    (doseq [card cards]
-     (println (str indent bullet " " (rig-card-name card cards)
+     (println (str indent bullet " " (rig-card-name card cards all-installed)
                    ;; GUESTS name their type. A guest is printed inside whatever
                    ;; section its HOST belongs to, so an Adjusted Matrix under a
                    ;; program, or a condition counter under a resource, otherwise
@@ -314,7 +325,7 @@
                        ;; the Runner's to install, so neither marker applies.
                        nil))))
      (when-let [hosted (seq (:hosted card))]
-       (print-rig-cards! hosted (str indent "  ") "↳")))))
+       (print-rig-cards! hosted (str indent "  ") "↳" all-installed)))))
 
 (defn- compact-rig-entry
   "Pure: one rig card in the compact board's idiom — `Name(counters)`, plus
@@ -337,20 +348,16 @@
    carry the same `HW:`/`Res:` tag their hosts do, so the named tree stays
    invertible against the counts at every depth, not just the first.
 
-   `siblings` is the collection the card is indexed within, so duplicate titles
-   keep their `[N]` suffix; children index within their host's `:hosted`.
+   Installed names use the shared walk's global `[N]` index, matching the
+   resolver; parked and foreign guests still index within their siblings.
 
-   CAVEAT the seat needs and this line cannot give it: a guest named here is NOT
-   addressable by bare title. `core/find-installed-card` searches the three
-   top-level vectors only, so `use Leech` resolves to a top-level Leech — or
-   reports \"not found installed\" — however this line renders. That is #170, and
-   naming guests here is what arms it."
-  [card siblings]
+   Installed guests resolve through the shared installed walk (#170)."
+  [card siblings all-installed]
   (let [hosted (seq (:hosted card))
         named (remove #(= :parked (guest-role %)) hosted)
-        parts (concat (map #(str (rig-type-tag %) (compact-rig-entry % hosted)) named)
+        parts (concat (map #(str (rig-type-tag %) (compact-rig-entry % hosted all-installed)) named)
                       (when-let [p (parked-suffix hosted)] [p]))]
-    (str (rig-card-name card siblings)
+    (str (rig-card-name card siblings all-installed)
          (compact-counter-suffix card)
          (when (seq parts)
            (str "{" (str/join "," parts) "}")))))
@@ -705,6 +712,13 @@
                                    (map #(format "%s %d" (:title %) (:credits %))
                                         (:sources hosted)))))
                 (println "Credits:" (state/runner-credits))))
+            (when-let [sources (seq (:sources (state/runner-virus-counters gs)))]
+              (println (str "Virus: "
+                            (str/join ", "
+                                      (map #(str (:title %) " [" (:virus %) "virus]"
+                                                 (when-let [host (:host-label %)]
+                                                   (str " (on " host ")")))
+                                           sources)))))
             (print-clicks-line "runner" (get-in gs [:runner :click]))
             ;; This is the RUNNER section: report the RUNNER's grip size, not
             ;; ours. It used to read my-hand-count, so a Corp viewer saw its
@@ -969,7 +983,11 @@
                                (when rezzed (str " (" subtype-str ")"))
                                (when (and rezzed strength) (str " (str: " strength ")"))
                                (format-counters ice)
-                               (ice-encounter-label idx ice-total))))))
+                               (ice-encounter-label idx ice-total)))
+                  (let [installed (state/installed-runner-cards gs)
+                        guests (filter #(some #{%} installed) (:hosted ice))]
+                    (when (seq guests)
+                      (print-rig-cards! guests "    " "↳" installed))))))
             (println "  (No ICE)"))
 
           ;; Show Content (assets/agendas)
@@ -978,14 +996,22 @@
                   unrezzed-content (filter (complement :rezzed) content-list)]
               (doseq [card rezzed-content]
                 (let [card-name (core/format-card-name-with-index card content-list)]
-                  (println (str "  Content: 🔴 " card-name " (" (:type card) ")" (format-counters card)))))
+                  (println (str "  Content: 🔴 " card-name " (" (:type card) ")" (format-counters card)))
+                  (let [installed (state/installed-runner-cards gs)
+                        guests (filter #(some #{%} installed) (:hosted card))]
+                    (when (seq guests)
+                      (print-rig-cards! guests "    " "↳" installed)))))
               ;; Corp sees their own unrezzed cards, Runner sees "Unrezzed card"
               (doseq [card unrezzed-content]
                 (let [card-name (core/format-card-name-with-index card content-list)
                       display-name (if is-corp?
                                      (str card-name " [unrezzed]")
                                      "Unrezzed card")]
-                  (println (str "  Content: ⚪ " display-name (format-counters card)))))))
+                  (println (str "  Content: ⚪ " display-name (format-counters card)))
+                  (let [installed (state/installed-runner-cards gs)
+                        guests (filter #(some #{%} installed) (:hosted card))]
+                    (when (seq guests)
+                      (print-rig-cards! guests "    " "↳" installed)))))))
           )))
 
     ;; Runner Rig
@@ -1014,13 +1040,15 @@
           ;; simply the only one the tests covered, and `includes?` assertions
           ;; cannot see a spurious extra line.
           shown-here (fn [cards type-str]
-                       (+ (count cards)
-                          (count (filter #(and (= :installed (guest-role %))
-                                               (= type-str (:type %)))
-                                         (rig-card-seq (mapcat :hosted cards))))))
+                       (let [installed (state/installed-runner-cards gs)]
+                         (+ (count cards)
+                            (count (filter #(and (= type-str (:type %))
+                                                 (some #{%} installed))
+                                           (rig-card-seq (mapcat :hosted cards)))))))
           section! (fn [icon label cards type-str total]
                      (println (str "\n" icon " " label " [" total "]:"))
-                     (when (seq cards) (print-rig-cards! cards "  "))
+                     (when (seq cards)
+                       (print-rig-cards! cards "  " (state/installed-runner-cards gs)))
                      (let [elsewhere (- total (shown-here cards type-str))]
                        (cond
                          (pos? elsewhere)
@@ -1036,14 +1064,17 @@
                                        ;; (guest re-review). True at any depth:
                                        ;; they are somewhere in this rig, under a
                                        ;; host.
-                                       " — shown elsewhere in this rig, under their hosts)"))
+                                       (if (some #(= type-str (:type %))
+                                                 (corp-hosted-runner-cards gs))
+                                         " — shown on a Corp card above)"
+                                         " — shown elsewhere in this rig, under their hosts)")))
                          (empty? cards) (println "  (none)"))))]
       (section! "💾" "Programs" programs "Program"
-                (rig-type-count runner-rig :program "Program"))
+                (rig-type-count gs :program "Program"))
       (section! "🔧" "Hardware" hardware "Hardware"
-                (rig-type-count runner-rig :hardware "Hardware"))
+                (rig-type-count gs :hardware "Hardware"))
       (section! "📦" "Resources" resources "Resource"
-                (rig-type-count runner-rig :resource "Resource")))
+                (rig-type-count gs :resource "Resource")))
 
     ;; Deck/Discard counts
     (println "\n--- DECK STATUS ---")
@@ -1106,6 +1137,10 @@
     (let [programs (:program runner-rig)
           hardware (:hardware runner-rig)
           resources (:resource runner-rig)
+          installed (state/installed-runner-cards gs)
+          corp-guests (map #(str (compact-rig-entry % installed installed)
+                                 "@" (state/runner-host-label gs %))
+                           (corp-hosted-runner-cards gs))
           ;; #161: the named list is every top-level program, PLUS any hardware
           ;; or resource that is hosting something — otherwise a program on a
           ;; host console stays invisible for exactly the reason a program on a
@@ -1123,15 +1158,17 @@
                         (map #(vector % hardware "HW:") (filter (comp seq :hosted) hardware))
                         (map #(vector % resources "Res:") (filter (comp seq :hosted) resources)))]
       (println (format "Rig: Prog[%d] HW[%d] Res[%d]%s"
-                      (rig-type-count runner-rig :program "Program")
-                      (rig-type-count runner-rig :hardware "Hardware")
-                      (rig-type-count runner-rig :resource "Resource")
-                      (if (seq named)
+                      (rig-type-count gs :program "Program")
+                      (rig-type-count gs :hardware "Hardware")
+                      (rig-type-count gs :resource "Resource")
+                      (if (or (seq named) (seq corp-guests))
                         (str " - " (clojure.string/join
                                     ","
-                                    (map (fn [[card siblings tag]]
-                                           (str tag (compact-rig-entry card siblings)))
-                                         named)))
+                                    (concat (map (fn [[card siblings tag]]
+                                                   (str tag (compact-rig-entry card siblings
+                                                                               installed)))
+                                                 named)
+                                            corp-guests)))
                         ""))))
     nil))
 
@@ -1305,7 +1342,9 @@
             runner-virus-str (if (seq (:sources runner-virus))
                                (format "/v:%s"
                                        (str/join ","
-                                                 (map #(format "%s %d" (:title %) (:virus %))
+                                                 (map #(format "%s %d%s" (:title %) (:virus %)
+                                                               (if-let [host (:host-label %)]
+                                                                 (str " on " host) ""))
                                                       (:sources runner-virus))))
                                "")
 
@@ -1764,10 +1803,11 @@
         (println (format "     Subroutines: %s" (sub-count-summary subs)))
         ;; Show playable icebreakers for Runner
         (when (= my-side "runner")
-          (let [programs (get-in state [:game-state :runner :rig :program])
+          (let [programs (state/runner-programs (:game-state state))
                 ;; Check :subtypes vector for "Icebreaker"
-                breakers (filter #(some (fn [st] (= (str st) "Icebreaker"))
-                                        (or (:subtypes %) []))
+                breakers (filter #(or (some (fn [st] (= (str st) "Icebreaker"))
+                                             (or (:subtypes %) []))
+                                      (some core/break-ability? (:abilities %)))
                                  programs)
                 playable-breakers (filter #(some :playable (:abilities %)) breakers)]
             (when (seq playable-breakers)
@@ -1785,7 +1825,9 @@
                   (println (format "     • %s (str %s)" (:title b) (or (:current-strength b) (:strength b))))
                   (doseq [[idx ab] playable-abs]
                     (println (format "       → %s" (:label ab)))
-                    (println (format "         use-ability \"%s\" %d" (:title b) idx))))))))
+                    (println (format "         use-ability \"%s\" %d"
+                                     (core/installed-runner-reference b (:game-state state))
+                                     idx))))))))
           ;; Runner-usable abilities printed on the encountered ICE itself
           ;; (bioroid click-to-break, issue #95). Source: current-run-ice, the
           ;; authoritative run-state card — NOT prompt-state, which is
@@ -3648,7 +3690,6 @@
         clicks (:click my-state)
         credits (:credit my-state)
         hand (:hand my-state)
-        rig (:rig my-state)
         deck-count (:deck-count my-state)
         ;; The basic actions this side can actually take right now. One value,
         ;; printed below and counted in the total — see the comment there.
@@ -3751,10 +3792,9 @@
                             cost-str))))))
 
     ;; Playable installed abilities
-    (let [all-installed (concat
-                         (get rig :hardware [])
-                         (get rig :program [])
-                         (get rig :resource []))
+    (let [all-installed (if (= side :runner)
+                          (state/installed-runner-cards gs)
+                          [])
           playable-abilities (for [card all-installed
                                   [idx ability] (map-indexed vector (:abilities card))
                                   :when (:playable ability)]
@@ -3831,9 +3871,9 @@
 
     ;; Return count of playable actions
     (let [card-count (count (filter :playable hand))
-          ability-count (count (for [card (concat (get rig :hardware [])
-                                                  (get rig :program [])
-                                                  (get rig :resource []))
+          ability-count (count (for [card (if (= side :runner)
+                                           (state/installed-runner-cards gs)
+                                           [])
                                     ability (:abilities card)
                                     :when (:playable ability)]
                                 ability))]

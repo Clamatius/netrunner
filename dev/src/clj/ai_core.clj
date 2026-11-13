@@ -1116,13 +1116,12 @@
    :title (:title card)})
 
 (defn find-installed-card
-  "Find an installed card by title in the rig
+  "Find an installed Runner card by title, including hosted cards on either side.
    Supports [N] suffix for duplicate cards: \"Corroder [1]\"
-   Searches programs, hardware, and resources
+   Searches programs, hardware, and resources through ai-state's installed walk.
    Returns nil and prints disambiguation message if multiple copies and no index specified"
   [card-name]
-  (let [rig (state/runner-rig)
-        all-installed (concat (:program rig) (:hardware rig) (:resource rig))
+  (let [all-installed (state/installed-runner-cards)
         {:keys [title index explicit-index?]} (parse-card-reference card-name)
         matches (filter #(= title (:title %)) all-installed)
         match-count (count matches)]
@@ -1142,6 +1141,20 @@
           (let [zone-name (name (last (:zone card)))]
             (println (format "   → \"%s [%d]\" (%s)" title idx zone-name))))
         nil))))
+
+(defn installed-runner-reference
+  "Command name for a particular installed Runner card, indexed across both
+   roots when titles repeat. `find-installed-card` uses this same walk/order."
+  [card gs]
+  (let [matches (vec (filter #(= (:title card) (:title %))
+                             (state/installed-runner-cards gs)))]
+    (if (> (count matches) 1)
+      (str (:title card) " ["
+           (or (first (keep-indexed (fn [idx c]
+                                      (when (= (:cid c) (:cid card)) idx))
+                                    matches))
+               (.indexOf matches card)) "]")
+      (:title card))))
 
 (defn- card-server-location
   "Get human-readable server location for a Corp card"
@@ -1240,8 +1253,7 @@
   [card-name scope]
   (let [{:keys [title]} (parse-card-reference card-name)
         installed (case scope
-                    :runner (let [rig (state/runner-rig)]
-                              (concat (:program rig) (:hardware rig) (:resource rig)))
+                    :runner (state/installed-runner-cards)
                     :corp (let [servers (state/corp-servers)]
                             (concat (mapcat :ices (vals servers))
                                     (mapcat :content (vals servers))))
@@ -1553,7 +1565,6 @@
         gs (:game-state client-state)
         runner-state (:runner gs)
         corp-state (:corp gs)
-        rig (:rig runner-state)
         servers (:servers corp-state)]
     {:credits (get-in gs [side :credit])
      :clicks (get-in gs [side :click])
@@ -1568,9 +1579,7 @@
      :deck-size (or (get-in gs [side :deck-count]) (count (get-in gs [side :deck])))
      :discard-size (count (get-in gs [side :discard]))
      :installed-count (if (= side :runner)
-                       (+ (count (:program rig))
-                          (count (:hardware rig))
-                          (count (:resource rig)))
+                       (count (state/installed-runner-cards gs))
                        ;; Corp: count all content + ICE across servers
                        (reduce + (map #(+ (count (:content %))
                                          (count (:ices %)))

@@ -21,6 +21,7 @@
 
    Also note :pause (and :default :pause) is NOT a stub: it works in V1."
   (:require [ai-card-actions :as actions]
+            [ai-state :as ai-state]
             [ai-core :as core]))
 
 ;; ============================================================================
@@ -29,14 +30,19 @@
 
 ;; Use core/current-run-ice for ICE lookup (single source of truth)
 
+(declare trojan-host-matches?)
+
 (defn list-available-breakers
-  "List all icebreakers in Runner rig with their break abilities."
+  "List all installed Runner icebreakers with their break abilities."
   [state]
-  (let [runner-rig (get-in state [:game-state :runner :rig])
-        programs (get runner-rig :program [])]
+  (let [programs (ai-state/runner-programs (:game-state state))
+        ice (core/encountered-ice state)]
     (for [prog programs
-          :when (some #{"Icebreaker"} (:subtypes prog))]
+          :when (or (nil? ice) (trojan-host-matches? prog ice))
+          :when (or (some #{"Icebreaker"} (:subtypes prog))
+                    (some core/break-ability? (:abilities prog)))]
       {:title (:title prog)
+       :reference (core/installed-runner-reference prog (:game-state state))
        :strength (:current-strength prog)
        :abilities (map-indexed
                    (fn [idx ab]
@@ -71,13 +77,29 @@
       (subtypes "AI") :ai  ; AI breakers can break any type
       :else nil)))
 
+(defn trojan-host-matches?
+  "Apply the card-specific host rule before trying a break. Botulus's break-sub
+   :req checks same-card? against :host; Living Mural checks the host's server.
+   The programs.clj trojan helper itself only limits where installation goes."
+  [breaker ice]
+  (case (:title breaker)
+    "Botulus" (= (get-in breaker [:host :cid]) (:cid ice))
+    "Living Mural" (= (take 2 (get-in breaker [:host :zone]))
+                       (take 2 (:zone ice)))
+    true))
+
 (defn breaker-matches-ice?
   "Check if breaker can break the ICE type."
   [breaker ice]
   (let [ice-type (ice-primary-type ice)
         breaker-type (breaker-ice-type breaker)]
-    (or (= breaker-type :ai)
-        (= breaker-type ice-type))))
+    (and (trojan-host-matches? breaker ice)
+         (or (= breaker-type :ai)
+             (= breaker-type ice-type)
+             ;; Botulus is Virus - Trojan, not subtype Icebreaker. Its
+             ;; break-sub :req allows only the host ICE and ignores strength.
+             (and (= "Botulus" (:title breaker))
+                  (some core/break-ability? (:abilities breaker)))))))
 
 ;; ============================================================================
 ;; Ability Detection
@@ -142,7 +164,8 @@
             (first
              (for [breaker compatible-breakers
                    :let [breaker-strength (or (:current-strength breaker) (:strength breaker) 0)
-                         needs-pump? (< breaker-strength ice-strength)
+                         needs-pump? (and (some #{"Icebreaker"} (:subtypes breaker))
+                                          (< breaker-strength ice-strength))
                          pump-ability (when needs-pump? (find-pump-ability breaker))
                          break-ability (find-break-ability breaker ice-type)]
                    ;; Must have break ability, and either strong enough or can pump
@@ -154,7 +177,7 @@
                 :break-ability break-ability}))]
         (when usable-breaker
           (let [{:keys [breaker needs-pump? pump-ability break-ability]} usable-breaker
-                breaker-name (:title breaker)]
+                breaker-name (core/installed-runner-reference breaker (:game-state state))]
             ;; Note: last-full-break-warning is reset by the caller on success
             (if needs-pump?
               ;; Need to pump first
@@ -211,7 +234,7 @@
     (when (seq breakers)
       (println "   Breakers:")
       (doseq [b breakers]
-        (println (format "     - %s (str %s)" (:title b) (:strength b)))))
+        (println (format "     - %s (str %s)" (:reference b) (:strength b)))))
     {:status :tactic-paused
      :reason reason
      :context {:ice-name ice-name
@@ -223,13 +246,14 @@
 (defn- execute-break-dynamic!
   "Execute a :break-dynamic tactic - find and use the card's full-break ability."
   [card-name state]
-  (let [runner-rig (get-in state [:game-state :runner :rig])
-        programs (get runner-rig :program [])
+  (let [programs (ai-state/runner-programs (:game-state state))
         ;; Find the specified card
-        target-prog (first (filter #(= (:title %) card-name) programs))]
+        ice (core/encountered-ice state)
+        target-prog (first (filter #(and (= (:title %) card-name)
+                                         (trojan-host-matches? % ice)) programs))]
     (if-not target-prog
       {:status :tactic-failed
-       :reason (format "Card not found in rig: %s" card-name)}
+       :reason (format "Card not found installed: %s" card-name)}
       ;; Find the dynamic break ability
       ;; NOTE: Dynamic abilities have playable=null, so don't require it
       (let [abilities (:abilities target-prog)
@@ -245,7 +269,9 @@
            :reason (format "%s has no playable break ability" card-name)}
           (do
             (println (format "🎯 Tactic: %s using %s" card-name (:label break-ability)))
-            (let [result (actions/use-ability! card-name (:index break-ability))]
+            (let [result (actions/use-ability!
+                           (core/installed-runner-reference target-prog (:game-state state))
+                           (:index break-ability))]
               (if (= :success (:status result))
                 {:status :action-taken
                  :action :tactic-executed
@@ -257,8 +283,15 @@
 (defn- execute-tactic!
   "Dispatch and execute a tactic based on its :action type."
   [tactic ice-name state]
-  (let [{:keys [card action]} tactic]
-    (case action
+  (let [{:keys [card action]} tactic
+        ice (core/encountered-ice state)
+        matches (filter #(= card (:title %))
+                        (ai-state/installed-runner-cards (:game-state state)))
+        installed (first (filter #(trojan-host-matches? % ice) matches))]
+    (if (and (seq matches) (nil? installed)
+             (contains? #{:break-dynamic :use-ability} action))
+      {:status :tactic-failed :reason (str card " can break only its host ICE")}
+      (case action
       ;; V1 Actions
       :break-dynamic
       (execute-break-dynamic! card state)
@@ -266,7 +299,11 @@
       :use-ability
       (let [ability-index (:ability-index tactic)]
         (println (format "🎯 Tactic: %s ability %d" card ability-index))
-        (let [result (actions/use-ability! card ability-index)]
+        (let [result (actions/use-ability!
+                       (if installed
+                         (core/installed-runner-reference installed (:game-state state))
+                         card)
+                       ability-index)]
           (if (= :success (:status result))
             {:status :action-taken :action :tactic-executed :card card}
             {:status :tactic-failed :reason (:reason result)})))
@@ -290,7 +327,7 @@
       ;; Unknown action
       (do
         (println (format "⚠️  Unknown tactic action: %s" action))
-        (pause-with-context state ice-name (format "Unknown action: %s" action))))))
+        (pause-with-context state ice-name (format "Unknown action: %s" action)))))))
 
 ;; ============================================================================
 ;; Handler (called from ai-runs handler chain)
