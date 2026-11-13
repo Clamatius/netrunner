@@ -370,3 +370,32 @@
         (is (str/includes? compact "Probe(2v)@unrezzed card #0 HQ"))
         (is (str/includes? status "Probe 2 on unrezzed card #0 HQ"))
         (is (not (str/includes? board "Secret Asset")))))))
+
+;; Advisor pass after review r2: the pause message built its "X has: ..." line
+;; from every program with a dynamic break ability, with no host filter. Once
+;; hosted programs joined runner-programs, a Botulus on ANOTHER ICE was named as
+;; the breaker for this one, with :reason :cant-afford, when the truth is that
+;; nothing installed can break it.
+(deftest full-break-pause-does-not-name-a-trojan-hosted-elsewhere
+  (let [dynamic-bot (assoc botulus :abilities [{:dynamic "auto-pump-and-break"
+                                                :label "Fully break Ice Wall"}])
+        ;; Botulus's :host names cid "ice"; the encountered ICE is cid "other".
+        encountered {:cid "other" :side "Corp" :zone ["servers" "hq" "ices"]
+                     :title "Ice Wall" :rezzed true :strength 2 :subtypes ["Barrier"]
+                     :subroutines [{:label "End the run" :broken false :fired false}]}
+        host {:cid "ice" :side "Corp" :zone ["servers" "hq" "ices"] :hosted [dynamic-bot]}
+        client (-> client
+                   (assoc-in [:game-state :runner :rig :program] [])
+                   (assoc-in [:game-state :corp :servers :hq :ices] [host encountered])
+                   (assoc-in [:game-state :run] {:phase "encounter-ice"
+                                                  :server ["hq"] :position 2}))
+        result (atom nil)]
+    (handlers/reset-state!)
+    (let [out (with-out-str
+                (reset! result (handlers/handle-runner-full-break
+                                {:side "runner" :run-phase "encounter-ice"
+                                 :state client :strategy {:full-break true}})))]
+      (is (= :paused-cannot-break (:status @result)))
+      (is (str/includes? out "No icebreaker can break this ICE") out)
+      (is (not (str/includes? out "Botulus has:")) out)
+      (is (= :no-breaker (:reason @result))))))

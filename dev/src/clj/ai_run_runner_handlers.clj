@@ -693,10 +693,15 @@
                       all-break-abilities
                       (for [program all-programs
                             [idx ability] (map-indexed vector (:abilities program))
-                            :when (and (:dynamic ability)
+                            ;; Same host rule as breakable-abilities above: a
+                            ;; trojan hosted on ANOTHER ICE is not a breaker for
+                            ;; this one, so it must not be named as the thing we
+                            ;; cannot afford.
+                            :when (and (tactics/trojan-host-matches? program current-ice)
+                                       (:dynamic ability)
                                        (when-let [dyn (:dynamic ability)]
                                          (clojure.string/includes? (str dyn) "break")))]
-                        {:card-name (:title program)
+                        {:card-name (core/installed-runner-reference program (:game-state state))
                          :label (:label ability)
                          :playable (:playable ability)
                          :cost-label (:cost-label ability)})]
