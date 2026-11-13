@@ -1898,7 +1898,18 @@
   [& args]
   (let [;; Parse flags if provided, merge with run strategy
         {:keys [flags]} (if (seq args) (parse-run-flags (vec args)) {:flags {}})
-        strategy (cond-> (merge (get-strategy) flags)
+        ;; A --tank on a single step is STORED, unioned into :tank, the way the
+        ;; `tank` command stores it — while a run or encounter is live. Merged
+        ;; into this one call only, `continue --single --tank X` at an approach
+        ;; was forgotten by the next step, and the Corp was never told (the
+        ;; Game F wedge, third spelling). Only :tank: every other flag on a
+        ;; single step stays one-call, as before.
+        tank-stored? (when (and (seq (:tank flags))
+                                (or (some? (get-in @state/client-state [:game-state :run]))
+                                    (core/encounter-window? @state/client-state)))
+                       (set-strategy! {:tank (into (or (:tank (get-strategy)) #{}) (:tank flags))})
+                       true)
+        strategy (cond-> (merge (get-strategy) (cond-> flags tank-stored? (dissoc :tank)))
                    ;; #151 item 14: `continue --single --rez X` at a window names that
                    ;; copy; a single step is always within this run.
                    (seq (:rez flags))
@@ -2524,10 +2535,13 @@
    at run start, and ai-state/expire-run-strategy! clears on the observed end of
    a run.
 
-   Residual, documented rather than fixed: if that expiry is missed (a desync),
-   AND the next run starts through a run EVENT rather than `run` (so run!'s reset
-   never happens), AND it meets an ICE of the same name, the old authorization is
-   honoured. The engine's :run-id is not on the wire, so the client cannot tell
+   Residual, documented rather than fixed: if that expiry is missed (a desync)
+   OR OVERTAKEN by this write-back — expire-run-strategy! runs on the diff
+   thread, so a run-end diff that lands between the read here and the
+   set-strategy! in monitor-active-run! is undone and :tank outlives its run with
+   no desync at all — AND the next run starts through a run EVENT rather than
+   `run` (so run!'s reset never happens), AND it meets an ICE of the same name,
+   the old authorization is honoured. The engine's :run-id is not on the wire, so the client cannot tell
    two runs apart to close it."
   [client-state]
   (when (or (some? (get-in client-state [:game-state :run]))

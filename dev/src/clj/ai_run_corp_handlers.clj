@@ -454,9 +454,14 @@
    and the same terminal surface pass-priority! returns
    (ai-run-pass/own-prompt-surface).
 
+   A `waiting` prompt (the opponent's checkpoint) is refused by the engine too,
+   so it gets pass-priority!'s non-terminal check-1 result: no send, no latch.
+
    The latch also waited on nothing else: a fire the SOCKET refused (send-message!
-   false) latched the same way. Without a sent fire there is no
-   :fired-at-encounter in the result, so the next tick tries again.
+   false) latched the same way. Now there is no :fired-at-encounter without a
+   sent fire, and the refusal is an {:status :error :reason :send-failed} — the
+   shape ai-basic-actions reports a refused send in — which the run loop stops
+   on, instead of an :action-taken it re-ticked until it called the run :stuck.
 
    `announce` is printed only once the fire has been sent. On a sent fire, the
    pre-fire prompt is captured so that — if a fired sub OPENS a prompt (issue
@@ -464,7 +469,17 @@
    (the same honest reporting the manual fire-subs path got in #23). The caller
    must set-strategy! the :fired-at-encounter the result carries."
   [gameid current-ice ice-title sub-count enc-key announce]
-  (or (pass/own-prompt-surface)
+  (cond
+    ;; The engine refuses a fire over ANY prompt but nil/:run, the opponent's
+    ;; `waiting` checkpoint included — so no send, no latch, no announcement;
+    ;; the same non-terminal wait pass-priority! returns for it.
+    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
+    pass/waiting-prompt-result
+
+    (pass/own-blocking-prompt)
+    (pass/own-prompt-surface)
+
+    :else
       (let [card-ref (core/create-card-ref current-ice)
             old-prompt (state/get-prompt)
             sent (boolean (ws/send-message! :game/action
@@ -472,10 +487,11 @@
                                              :command "unbroken-subroutines"
                                              :args {:card card-ref}}))]
         (if-not sent
-          {:status :action-taken
-           :action :auto-fire-not-sent
-           :ice ice-title
-           :sent false}
+          ;; Reported as every other refused send is (ai-basic-actions): an
+          ;; :error the run loop stops on, so the seat is told — not an
+          ;; :action-taken it would re-tick to :stuck.
+          (do (println (format "❌ ERROR: Failed to send the fire on %s (server unreachable?)" ice-title))
+              {:status :error :reason :send-failed :ice ice-title})
           (do
             (println announce)
             (Thread/sleep core/medium-delay)

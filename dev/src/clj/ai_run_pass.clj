@@ -16,9 +16,15 @@
    - `continue --raw` (dev/send_command): a dumb socket send, typed by a seat.
    - the ENGINE's own auto-pass (`check-auto-no-action`,
      src/clj/game/core/runs.clj:199), which no client gate can see.
-   dev/test/ai_run_priority_repro_test.clj pins the structure: with comments
-   stripped, a client-sent continue under dev/src/clj appears only here and at
-   the force-mode site.
+   dev/test/ai_run_priority_repro_test.clj has a structural check, and it is
+   NARROW: it reads every form under dev/src/clj and flags a map literal whose
+   :command is \"continue\" (or :continue / 'continue) and a
+   (send-action! \"continue\" …) / (safe-action! \"continue\" …) call, outside
+   this function and force mode. It cannot see a payload BUILT at runtime —
+   (assoc {:gameid gameid} :command \"continue\"), a command held in a var or
+   computed — so it catches the copy-paste of an old sender, not every possible
+   one. The real guard is the behavioural matrix in that namespace (A1/A2/A3 and
+   change2-*): every automated sender, driven on engine-built states.
 
    Deferred, and a known limit of ANY send-time gate: it cannot see a tick that
    a handler claims WITHOUT sending. The unrezzed-approach already-passed branch
@@ -114,6 +120,15 @@
   [result]
   (boolean (and (= :action-taken (:status result)) (:sent result))))
 
+(def waiting-prompt-result
+  "pass-priority!'s check-1 result: our own prompt is the OPPONENT's `waiting`
+   checkpoint, so nothing is sent. Non-terminal, so a loop keeps polling. Also
+   what the Corp's automated fire returns over a waiting prompt, which the engine
+   refuses a fire over as well (game.core.actions no-blocking-or-prevent-prompt?)."
+  {:status :waiting-for-opponent
+   :action :continue-suppressed-waiting-prompt
+   :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"})
+
 (defn pass-priority!
   "Send the seat's `continue` for a run window, or say why not. Checks, in
    order, on LIVE state at send time:
@@ -144,9 +159,7 @@
         my-prompt (state/get-prompt)]
     (cond
       (state/waiting-prompt-type? (:prompt-type my-prompt))
-      {:status :waiting-for-opponent
-       :action :continue-suppressed-waiting-prompt
-       :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
+      waiting-prompt-result
 
       (own-blocking-prompt)
       (own-prompt-surface window)

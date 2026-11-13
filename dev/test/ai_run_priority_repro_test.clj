@@ -450,6 +450,26 @@
         (is (or (seq (tank-signals sent)) (corp-sees-signal? state "Hourglass"))
             (str "and the Corp is told. sent " commands "\n--- output ---\n" out))))))
 
+(deftest change1-single-step-tank-is-stored
+  (testing "`continue --single --tank Hourglass --full-break` at the unrezzed approach; Corp rezzes and passes; plain `continue`"
+    (do-game
+      (new-game {:corp {:hand ["Hourglass"] :credits 20}
+                 :runner {:credits 10}})
+      (play-from-hand state :corp "Hourglass" "HQ")
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (is (= :approach-ice (get-in @state [:run :phase])) "fixture: unrezzed approach")
+      (as-seat! state "runner" (cmd-continue-single "--tank" "Hourglass" "--full-break"))
+      (is (= {:tank #{"Hourglass"}} (seat-strategy "runner"))
+          (str "only :tank is stored by a single step; --full-break stays one-call. strategy " (pr-str (seat-strategy "runner"))))
+      (is (= :runner (get-in @state [:run :no-action])) "fixture: the single step was the approach pass")
+      (core/process-action "rez" state :corp {:card (get-ice state :hq 0)})
+      (engine-pass! state :corp)
+      (is (= :encounter-ice (get-in @state [:run :phase])) "fixture: at the Hourglass encounter")
+      (let [{:keys [commands out]} (as-seat! state "runner" (cmd-continue))]
+        (is (corp-sees-signal? state "Hourglass")
+            (str "plain `continue` signals the tank given on the single step. sent " commands "\n" out))))))
+
 (deftest change1-mid-run-continue-tank-unions
   (testing "`tank Hourglass` mid-run, then `continue --tank \"Ice Wall\"`: both are held"
     (at-hourglass-encounter
@@ -973,6 +993,29 @@
            (is (= :awaiting-own-prompt (:action result)))
            (is (= clicks-before (get-in @state [:runner :click])) "fixture check: Hourglass did not fire")))))))
 
+(deftest change2-automated-fire-over-own-waiting-prompt
+  (testing "Funhouse on-encounter: the Runner owes its choice (Corp holds a WAITING prompt) and has signalled; Corp `continue --single --fire-unbroken`"
+    (do-game
+      (new-game {:corp {:hand ["Funhouse"] :credits 20}
+                 :runner {:credits 10}})
+      (play-from-hand state :corp "Funhouse" "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (run-continue state :encounter-ice)
+      (core/process-action "system-msg" state :runner
+                           {:msg "indicates to fire all unbroken subroutines on Funhouse"})
+      (is (= "waiting" (:prompt-type (seat-prompt state "corp"))) "fixture: the Corp holds a waiting prompt")
+      (is (seq (ai-core/fireable-subs (ai-core/encountered-ice (wire-state state "corp")))) "fixture: Funhouse has fireable subs")
+      (is (= :runner-signaled (corp-decisions/fire-authorization (wire-state state "corp") "corp" "Funhouse"))
+          "fixture: the fire is authorized")
+      (let [{:keys [result commands out]} (as-seat! state "corp" (cmd-continue-single "--fire-unbroken"))]
+        (is (not-any? #{"unbroken-subroutines"} commands)
+            (str "no fire sent over a waiting prompt (the engine refuses it). sent " commands "\n" out))
+        (is (nil? (:fired-at-encounter (seat-strategy "corp"))) (str "no latch. strategy " (pr-str (seat-strategy "corp"))))
+        (is (= :waiting-for-opponent (:status result)) (str "non-terminal, as pass-priority!'s check 1: " (pr-str result)))
+        (is (not (str/includes? out "firing")) (str "and not announced:\n" out))))))
+
 (deftest change2-fire-refused-by-the-socket-is-not-latched
   (testing "Runner tanked Hourglass; the socket refuses the Corp's fire: no fired-at latch, so the next tick retries"
     (at-hourglass-encounter
@@ -983,7 +1026,17 @@
                                     (as-seat! state "corp" (cmd-continue-single "--fire-unbroken")))]
          (is (nil? (:fired-at-encounter (seat-strategy "corp")))
              (str "latched a fire the socket refused. result " (pr-str result) "\n" out))
-         (is (not (str/includes? out "firing")) (str "nor announced it:\n" out)))))))
+         (is (not (str/includes? out "firing")) (str "nor announced it:\n" out))))))
+  (testing "the same refusal under the run loop (`monitor-run --fire-unbroken`): the loop stops and says the send failed"
+    (at-hourglass-encounter
+     (fn [state]
+       (as-seat! state "runner" (cmd-tank "Hourglass"))
+       (let [{:keys [result out]} (binding [*refused-commands* #{"unbroken-subroutines"}]
+                                    (as-seat! state "corp" (cmd-continue "--fire-unbroken")))]
+         (is (= {:status :error :reason :send-failed} (select-keys result [:status :reason]))
+             (str "the loop reports the failed send, not :stuck. result " (pr-str result) "\n" out))
+         (is (str/includes? out "❌ ERROR: Failed to send") (str "and tells the seat:\n" out))
+         (is (nil? (:fired-at-encounter (seat-strategy "corp")))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Structure: a client-sent continue lives only in the gate and force mode
@@ -997,12 +1050,18 @@
   (or (= x "continue") (= x :continue) (= x 'continue)))
 
 (defn- continue-send-sites
-  "Every place in `src` (Clojure source) that sends a `continue`, as the name of
-   the enclosing top-level def. READ, not grepped: comments are gone and a
-   docstring is a string, so prose that mentions a continue is not a site. The
-   spellings: a map with :command \"continue\" (or :continue / 'continue) — the
-   ws/send-message! payload — and (send-action! \"continue\" …) /
-   (safe-action! \"continue\" …)."
+  "The places in `src` (Clojure source) that send a `continue` in one of the
+   LITERAL spellings below, as the name of the enclosing top-level def. READ, not
+   grepped: comments are gone and a docstring is a string, so prose that mentions
+   a continue is not a site. What it sees: a map literal with :command
+   \"continue\" (or :continue / 'continue) — the ws/send-message! payload as
+   every sender has written it — and (send-action! \"continue\" …) /
+   (safe-action! \"continue\" …). What it CANNOT see: a payload built at
+   runtime, e.g. (assoc {:gameid gameid} :command \"continue\"), or a command
+   held in a var or computed. It is not exhaustive and is not meant to be made
+   so: it catches a copied old sender. The guard for behaviour is the A1/A2/A3 and
+   change2-* matrix above, which drives every automated sender on engine-built
+   states."
   [label src]
   (let [eof (Object.)
         rdr (rt/indexing-push-back-reader src)]
@@ -1034,7 +1093,7 @@
   #{["ai_run_pass.clj" "pass-priority!"]
     ["ai_runs.clj" "handle-force-mode"]})
 
-(deftest change2-client-continue-is-sent-only-by-the-gate-and-force-mode
+(deftest change2-no-literal-continue-sender-outside-the-gate-and-force-mode
   (is (= allowed-continue-sites (tree-continue-sites {})))
   (testing "mutant: a raw continue added to a handler is caught (and its removal is the green above)"
     (let [f (io/file "dev/src/clj/ai_run_corp_handlers.clj")
