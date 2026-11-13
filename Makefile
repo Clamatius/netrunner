@@ -48,9 +48,9 @@ test:
 	  ai-encounter-identity-test \
 	  ai-forced-encounter-test \
 	  ai-heartbeat-test \
-	  ai-hosted-runner-test \
 	  ai-heuristic-corp-test \
 	  ai-heuristic-runner-test \
+	  ai-hosted-runner-test \
 	  ai-loop-sync-test \
 	  ai-phase-window-test \
 	  ai-prompts-test \
