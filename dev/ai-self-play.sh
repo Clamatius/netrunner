@@ -20,7 +20,14 @@
 #                              FORMAT unset or "preconstructed"
 # What can be asked for: dev/deck-check --formats / --precons.
 # Every refusal happens BEFORE anything is touched (no leave, seed or create).
+# A PRECON lobby is also refused when a list names a title the server would drop.
 # --check: validate the request, print the lobby it resolves to, and exit.
+#
+# Versus before FORMAT/PRECON existed: with no new env the LOBBY is the same
+# (the create-lobby payload is byte-identical), but the COMMANDS are not -
+# create-game gets a 5th argument (system-gateway, its own default),
+# seed-decks.sh a 3rd (the lobby format), deck-check runs first, and reset.sh
+# runs `ai-self-play.sh --check` before it bounces the clients.
 
 set -eo pipefail  # Exit on error, including inside a pipeline (a failed seed piped to tail)
 
@@ -58,6 +65,12 @@ LOBBY=$(./dev/deck-check --lobby "$LOBBY_FORMAT" "$PRECON_ARG" "$GATEWAY_TYPE" 2
 [[ "$LOBBY" == "LOBBY $WANT "* ]] || refuse "the request resolved to '$LOBBY', not a $WANT lobby"
 if [[ "$WANT" == constructed && -z "${CORP_DECK:-}" ]]; then
     refuse "FORMAT=$LOBBY_FORMAT is a Constructed lobby: it needs CORP_DECK and RUNNER_DECK"
+fi
+if [[ "$LOBBY_FORMAT" == preconstructed ]]; then
+    # The server installs precon decks unvalidated, and process-deck silently
+    # DROPS a title it cannot resolve - the deck plays short. Refuse that here.
+    titles=$(./dev/deck-check --precon "$PRECON_ARG" 2>&1) \
+        || { echo "$titles" | grep FAIL; refuse "PRECON=$PRECON_ARG: a deck would be played short (above)"; }
 fi
 if [[ "$WANT" == constructed ]]; then
     # Offline legality IN THE LOBBY'S FORMAT; seed-decks.sh asks the server again.

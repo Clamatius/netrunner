@@ -291,6 +291,10 @@
         precon (when (seq target) (keyword (str/lower-case target)))]
     (cond
       (and (= fmt "system-gateway") (#{:beginner :intermediate} precon)) [:precon precon]
+      ;; The server reads ANY other gateway-type as Constructed, so a typo of
+      ;; Intermediate is a Constructed lobby nobody seeded decks for.
+      (and (= fmt "system-gateway") (not= :constructed precon))
+      [:error (str "gateway-type '" gateway-type "' is not Beginner, Intermediate or Constructed; the server would silently make it a Constructed lobby")]
       (and (= fmt "preconstructed") (contains? jinteki.preconstructed/all-matchups precon)) [:precon precon]
       (= fmt "preconstructed") [:error (str "unknown matchup '" client-precon "' (see dev/deck-check --precons)")]
       (some #{fmt} constructed-formats) [:constructed fmt]
@@ -335,6 +339,8 @@
           precon-opt (opt "--precon")
           audit? (flag? "--audit")
           files (remove (set (remove nil? ["--audit" "--format" fmt-opt "--precon" precon-opt])) args)
+          _ (when (and fmt-opt precon-opt)
+              (die 2 "❌ --format does not apply to --precon: a precon lobby has no format legality (the server installs its decks as is, web/game.clj handle-precon-decks)"))
           _ (when fmt-opt
               (let [[kind v] (lobby-kind fmt-opt "" "Constructed")]
                 (cond (= fmt-opt "preconstructed")

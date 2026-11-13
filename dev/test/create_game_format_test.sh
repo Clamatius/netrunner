@@ -84,7 +84,9 @@ payload() {
                    nil)'
 }
 
-# --- Today's invocations, byte for byte (ai-self-play.sh before this change). ---
+# --- Today's invocations: the create-lobby PAYLOAD is byte for byte what it was
+# before the format argument existed. (Not the whole command: create-game now
+# also runs dev/deck-check --lobby before it sends; see the refusals below.) ---
 # The default lobby: gateway Intermediate precon. An EMPTY precon argument still
 # defaults to worlds-2012-a (bash ${3:-...} treats "" as unset).
 run_create "AI Self-Play Test" "Any Side" "" "Intermediate"
@@ -107,9 +109,30 @@ check 'explicit-sg-equals-default' "$actions" "$(payload 'T' system-gateway Cons
 # An empty format argument means the default, like every other positional here.
 run_create "T" "Any Side" "" "Intermediate" ""
 check 'empty-format-is-default' "$actions" "$(payload 'T' system-gateway Intermediate worlds-2012-a)"
-# The format lands inside a Clojure string literal: a quote must stay one string.
-run_create "T" "Any Side" "" "Constructed" 'x" :password "p'
-check 'format-is-one-string' "$actions" "$(payload 'T' 'x\" :password \"p' Constructed worlds-2012-a)"
+# The title lands inside a Clojure string literal: a quote must stay one string.
+run_create 'a "b"' "Any Side" "" "Intermediate"
+check 'title-is-one-string' "$actions" "$(payload 'a \"b\"' system-gateway Intermediate worlds-2012-a)"
+
+# --- Refusals: create-game asks dev/deck-check --lobby (the launch path's own
+# check, a mirror of web/lobby.clj validate-precon) BEFORE it sends, because
+# the server accepts any of these and leaves a lobby no deck can join. ---
+refuses() {
+    local name="$1" needle="$2"; shift 2
+    run_create "$@"
+    check "$name-exits-nonzero" "$([[ $code -ne 0 ]] && echo nonzero || echo "$code")" nonzero
+    check "$name-sends-nothing" "$actions" ""
+    check "$name-says-why" "$(grep -cF -- "$needle" "$TMP/output")" 1
+}
+refuses unknown-matchup "unknown matchup 'worlds-2099-a'" T "Any Side" worlds-2099-a Intermediate preconstructed
+refuses unknown-format "unknown format 'bogus'" T "Any Side" "" Constructed bogus
+refuses quoted-format "unknown format 'x\" :password \"p'" T "Any Side" "" Constructed 'x" :password "p'
+# A gateway-type the server would read as Constructed although it names neither:
+# a typo of Intermediate silently becomes a Constructed lobby with no decks.
+refuses gateway-typo "gateway-type 'Intermediat'" T "Any Side" "" Intermediat
+# (An EMPTY precon argument is not a refusal: it defaults to worlds-2012-a,
+# a real matchup, exactly as it always has.)
+# deck-check unavailable (no bb, missing file): refuse, never skip the check.
+NR_DECK_CHECK="$TMP/no-such-deck-check" refuses check-unavailable "cannot check the lobby" "AI Self-Play Test" "Any Side" "" "Intermediate"
 
 if ((fail)); then
     printf 'FAIL: %d create-game payload assertion(s)\n' "$fail"

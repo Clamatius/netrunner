@@ -77,6 +77,9 @@ refuses constructed-format-without-decks "FORMAT=standard is a Constructed lobby
     FORMAT=standard
 refuses preconstructed-without-precon "FORMAT=preconstructed needs PRECON=<matchup>" FORMAT=preconstructed
 refuses quick-draft "format 'quick-draft' has no deck legality" FORMAT=quick-draft CORP_DECK="$HB" RUNNER_DECK="$SHAPER"
+# A precon whose list names a title the server cannot resolve: process-deck
+# silently drops it and the deck plays short (2012-b Runner: "Crashspace").
+refuses precon-drops-a-title 'Ben Marsh - 2012: Gabe: the server would silently drop ["Crashspace"]' PRECON=worlds-2012-b
 refuses one-deck "Constructed needs BOTH CORP_DECK and RUNNER_DECK" CORP_DECK="$HB"
 
 # reset.sh refuses before it bounces the clients.
@@ -108,8 +111,10 @@ sc corp|select-deck|id-ai-corp
 sc runner|select-deck|id-ai-runner
 sc corp|start-game"
 
-# Today's two launches: the lobby they make is unchanged (create-game's 5th
-# argument is its own default; create_game_format_test pins that payload).
+# Today's two launches. NOT unchanged as commands: create-game now gets a 5th
+# argument (its own default) and seed-decks.sh a 3rd (the lobby format), and
+# reset.sh runs a preflight first. What IS unchanged is the create-lobby
+# payload these calls produce (create_game_format_test pins it).
 run ai-self-play.sh
 check default-exits "$code" 0
 check default-create "$(grep create-game <<<"$calls")" "sc corp|create-game|AI Self-Play Test|Any Side||Intermediate|system-gateway"
@@ -125,6 +130,11 @@ out="$(cd "$R" && env FORMAT= PRECON=worlds-2019-a CORP_DECK= RUNNER_DECK= AI_PI
 check check-exits "$code" 0
 check check-touches-nothing "$(cat "$LOG")" ""
 check check-names-the-lobby "$(grep -c 'LOBBY precon worlds-2019-a' <<<"$out")" 1
+: > "$LOG"
+out="$(cd "$R" && env FORMAT= PRECON=worlds-2012-b CORP_DECK= RUNNER_DECK= AI_PID_DIR="$TMP/pids" \
+       PATH="$TMP/bin:$PATH" bash ./dev/ai-self-play.sh --check 2>&1)"; code=$?
+check check-refuses-a-short-precon "$([[ $code -ne 0 ]] && echo nonzero || echo "$code")" nonzero
+check check-names-the-dropped-card "$(grep -cF '["Crashspace"]' <<<"$out")" 1
 
 # --- seed-decks.sh asks the server for legality in the LOBBY format it is given. ---
 # The real script, beside a stub ai-eval.sh that logs the expression it would

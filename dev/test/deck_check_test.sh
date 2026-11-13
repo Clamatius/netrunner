@@ -71,7 +71,8 @@ else fail "--format standard (exit $rc): $out"; fi
 fmt_run --format core "$HB"
 if [ $rc -eq 0 ] && echo "$out" | grep -q '^  engine (core): legal'; then pass "--format core accepts it and says which format it checked"
 else fail "--format core (exit $rc): $out"; fi
-# The default is the deck's OWN :format (as seed-decks.sh), so today's run is unchanged.
+# The default is the deck's OWN :format (as seed-decks.sh), so today's decks are checked
+# in the same format as before (the output gains the one engine line).
 fmt_run "$HB"
 if [ $rc -eq 0 ] && echo "$out" | grep -q '^  engine (system-gateway): legal'; then pass "default format is the deck's own (system-gateway)"
 else fail "default format (exit $rc): $out"; fi
@@ -110,6 +111,12 @@ lobby bogus worlds-2012-a Constructed
 if [ $rc -eq 1 ] && echo "$out" | grep -q "unknown format 'bogus'"; then pass "--lobby refuses an unknown format"; else fail "--lobby bogus (exit $rc): $out"; fi
 lobby quick-draft worlds-2012-a Constructed
 if [ $rc -eq 1 ] && echo "$out" | grep -q "format 'quick-draft' has no deck legality"; then pass "--lobby refuses a format the server computes no legality for"; else fail "--lobby quick-draft (exit $rc): $out"; fi
+
+lobby system-gateway worlds-2012-a Intermediat
+if [ $rc -eq 1 ] && echo "$out" | grep -q "gateway-type 'Intermediat'"; then pass "--lobby refuses a gateway-type the server would silently make Constructed"; else fail "--lobby gateway typo (exit $rc): $out"; fi
+lobby system-gateway worlds-2012-a constructed;  eq "--lobby gateway-type is case-insensitive like the server" "$rc $out" "0 LOBBY constructed system-gateway"
+fmt_run --format standard --precon worlds-2019-a
+if [ $rc -eq 2 ] && echo "$out" | grep -q "a precon lobby has no format legality"; then pass "--format with --precon is refused"; else fail "--format + --precon (exit $rc): $out"; fi
 
 # --- --audit second tier: static defcard scan for cards outside the SG pool. ---
 fmt_run --audit --precon worlds-2012-b
