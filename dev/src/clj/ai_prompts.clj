@@ -707,7 +707,9 @@
                ;; Prompt moved → selection registered and resolved. Only here is it
                ;; safe to run the auto-end-turn hook (a partial multi-select leaves
                ;; the prompt put — see the select? branch). (#18 tail)
-               (wait-for-prompt-change! eid :old-msg (:msg prompt))
+               (or (wait-for-prompt-change! eid :old-msg (:msg prompt))
+                   (let [wire-prompt (state/get-prompt)]
+                     (or (nil? wire-prompt) (not= eid (:eid wire-prompt)))))
                (do
                  ;; On a payment prompt "Selected card: X" understates what
                  ;; happened — with pay-all? one call can settle the whole cost.
@@ -857,7 +859,9 @@
             ;; misleading-output bug that drove a marquee discard-to-5 misplay
             ;; (cards still in hand, prompt still open). Mirrors choose-card! (#40).
             (cond
-              (wait-for-prompt-change! eid :old-msg (:msg prompt))
+              (or (wait-for-prompt-change! eid :old-msg (:msg prompt))
+                  (let [wire-prompt (state/get-prompt)]
+                    (or (nil? wire-prompt) (not= eid (:eid wire-prompt)))))
               (do
                 (println "✅ Selection complete")
                 (core/with-cursor {:status :success :selected (count cards-to-select)}))

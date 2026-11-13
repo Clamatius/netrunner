@@ -17,7 +17,89 @@
             [test-helpers :refer :all]
             [ai-actions]
             [ai-core]
+            [ai-basic-actions :as basic]
+            [ai-display :as display]
+            [jinteki.cards :as cards]
             [ai-websocket-client-v2 :as ws]))
+
+(deftest unique-rez-conflict-message
+  (let [sent (atom [])
+        card {:title "Spin Doctor" :code "25086" :type "Asset" :cost 0 :uniqueness true}
+        copies [(assoc card :cid 1 :rezzed true :zone [:servers :remote1 :content])
+                (assoc (dissoc card :uniqueness) :cid 2 :rezzed false :zone [:servers :remote2 :content])]
+        board {:corp {:credit 9 :servers {:remote1 {:content [(first copies)]}
+                                           :remote2 {:content [(second copies)]}}}
+               :runner {} :active-player "corp"}]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (with-redefs [cards/all-cards (atom {"Spin Doctor" card})
+                    ws/send-message! (mock-websocket-send! sent)]
+        (let [out (with-out-str (ai-actions/rez-card! "Spin Doctor [1]"))
+              lines (clojure.string/split-lines out)]
+          (is (some #(= "❌ Cannot rez Spin Doctor [1]: this card is unique and another copy is already rezzed." %) lines))
+          (is (not-any? #(clojure.string/includes? % "can you afford it?") lines))
+          (is (empty? @sent)))
+        (let [lines (clojure.string/split-lines (with-out-str (display/show-card-text "Spin Doctor")))]
+          (is (some #(= "Unique: Yes" %) lines)))))))
+
+(deftest install-prompt-resolution-does-not-offer-done
+  (let [stale {:eid 11 :msg "Choose host ICE" :prompt-type "select" :choices ["Done"]}
+        render (fn [wire-prompt]
+                 (with-mock-state (mock-client-state :side "runner" :prompt wire-prompt)
+                   (with-out-str
+                     (#'ai-card-actions/handle-install-waiting! "Botulus" nil stale))))]
+    (let [lines (clojure.string/split-lines (render nil))]
+      (is (some #(= "⏳ Install of Botulus: selection prompt resolved; check board for final install state." %) lines))
+      (is (not-any? #(clojure.string/includes? % "choose-value \"Done\"") lines)))
+    (let [lines (clojure.string/split-lines (render (assoc stale :eid 12)))]
+      (is (some #(= "⏳ Install of Botulus: prompt changed; run 'prompt' for the current decision." %) lines))
+      (is (not-any? #(clojure.string/includes? % "choose-value \"Done\"") lines)))))
+
+(deftest ambiguous-installed-card-messages
+  (let [copies [{:cid 1 :title "Spin Doctor" :type "Asset" :zone [:servers :remote1 :content] :rezzed false}
+                {:cid 2 :title "Spin Doctor" :type "Asset" :zone [:servers :remote2 :content] :rezzed false}]
+        board {:corp {:credit 9 :click 3 :servers {:remote1 {:content [(first copies)]}
+                                                    :remote2 {:content [(second copies)]}}}
+               :runner {} :active-player "corp"}]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (with-redefs [basic/ensure-turn-started! (constantly true)]
+        (doseq [[verb f] [["advance" #(ai-actions/advance-card! "Spin Doctor")]
+                          ["score" #(ai-actions/score-agenda! "Spin Doctor")]
+                          ["use-ability" #(ai-actions/use-ability! "Spin Doctor" 0)]
+                          ["use-runner-ability" #(ai-actions/use-runner-ability! "Spin Doctor" 0)]
+                          ["rez" #(ai-actions/rez-card! "Spin Doctor")]
+                          ["trash" #(ai-actions/trash-installed! "Spin Doctor")]
+                          ["fire-subs" #(ai-actions/fire-unbroken-subs! "Spin Doctor")]
+                          ["abilities" #(display/show-card-abilities "Spin Doctor")]]]
+          (let [out (with-out-str (f))
+                lines (clojure.string/split-lines out)]
+            (is (= 1 (count (filter #(= "❓ Multiple copies of 'Spin Doctor' installed (2 found)" %) lines))) verb)
+            (is (some #(= "   Re-run with the [N] suffix, e.g. \"Spin Doctor [0]\"" %) lines) verb)
+            (is (not-any? #(contains? #{"❌ Card not found installed: Spin Doctor"
+                                        "❌ ICE not found installed: Spin Doctor"} %) lines) verb)))))))
+
+(deftest runner-ambiguity-is-listed-once
+  (let [own (mapv (fn [cid] {:cid cid :title "Botulus" :type "Program" :zone [:rig :program]}) [1 2])
+        corp (mapv (fn [cid] {:cid cid :title "Botulus" :type "Asset" :zone [:servers :remote1 :content]}) [3 4])
+        board {:runner {:rig {:program own}} :corp {:servers {:remote1 {:content corp}}}}]
+    (with-mock-state (mock-client-state :side "runner" :game-state board)
+      (doseq [[verb f] [["use-ability" #(ai-actions/use-ability! "Botulus" 0)]
+                        ["abilities" #(display/show-card-abilities "Botulus")]]]
+        (let [lines (clojure.string/split-lines (with-out-str (f)))]
+          (is (= 1 (count (filter #(= "❓ Multiple copies of 'Botulus' installed (2 found)" %) lines))) verb)
+          (is (not-any? #(= "❌ Card not found installed: Botulus" %) lines) verb))))))
+
+(deftest rez-names-auto-selected-unrezzed-copy
+  (let [card {:title "Nico Campaign" :code "99999" :type "Asset" :cost 0}
+        board {:corp {:credit 9 :servers {:remote1 {:content [(assoc card :cid 1 :rezzed true :zone [:servers :remote1 :content])]}
+                                           :remote2 {:content [(assoc card :cid 2 :rezzed false :zone [:servers :remote2 :content])]}}}
+               :runner {}}]
+    (with-mock-state (mock-client-state :side "corp" :game-state board)
+      (with-redefs [cards/all-cards (atom {"Nico Campaign" (assoc card :uniqueness false)})
+                    ws/send-message! (fn [_ _] true)
+                    ai-core/find-card-by-cid (fn [_] {:rezzed true})]
+        (let [lines (clojure.string/split-lines (with-out-str (ai-actions/rez-card! "Nico Campaign")))]
+          (is (some #(= "→ 2 copies of 'Nico Campaign' installed — using the only unrezzed one (Server 2). Use \"Nico Campaign [N]\" to target another." %) lines))
+          (is (not-any? #(clojure.string/includes? % "❓ Multiple copies") lines)))))))
 
 ;; ============================================================================
 ;; Card Operations - Not Found Errors

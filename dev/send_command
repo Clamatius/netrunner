@@ -610,6 +610,7 @@ ${GREEN}Status Commands:${NC}
   card-text <name>   - Look up card information (type, cost, text)
   decklist        - Your own decklist for this game (opponent's is hidden)
   abilities <name>   - Show abilities for installed card
+                       Duplicate installed titles: use "Name [N]".
   list-playables  - List all currently playable actions (cards, abilities)
   diagnose-blocker - Explain why you can/can't act + the single next command
   peer-status     - Is my opponent alive? How long since their driver last acted.
@@ -660,13 +661,20 @@ ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
   play-index <N>  - Play card by index (0-4)
   use-ability <name> <N>  - Use installed card's ability N
+                             Duplicate installed titles: use "Name [N]".
   use-runner-ability <name> <N> - Bioroid click-to-break: use a Runner-usable ability printed on a Corp card (e.g. "Brân 1.0" during an encounter)
+                             Duplicate installed titles: use "Name [N]".
   trash <name>    - Trash installed card by name
+                    Duplicate installed titles: use "Name [N]".
   rez <name>      - Rez installed Corp card (ICE/asset/upgrade)
+                    Duplicate installed titles: use "Name [N]"; if only one copy is unrezzed, it is selected and named.
   fire-subs <name> - Fire FIREABLE ICE subroutines: unbroken, unfired AND resolvable (Corp only, at any encounter you hold priority in — including a FORCED encounter with no run)
+                     Duplicate installed titles: use "Name [N]".
   auto-pass       - Toggle auto-pass priority during a run (Corp only; refused outside one)
   advance <name> [--overadvance]  - Advance installed card (Corp only)
+                                    Duplicate installed titles: use "Name [N]".
   score <name>    - Score agenda with sufficient advancement counters
+                    Duplicate installed titles: use "Name [N]".
 
 ${GREEN}Running:${NC}
   run <server> [flags] - Run on server (HQ, "R&D", Archives, remote1, etc.).
@@ -1284,6 +1292,37 @@ fi
 # Main command dispatcher
 COMMAND="${1:-help}"
 shift || true
+
+# Exact help tokens are reserved throughout the argument list, including chat.
+# Chat alone accepts `chat -- --help` to send the literal message; action verbs
+# cannot escape this safety check with `--`. A larger argument such as
+# "please type --help" remains ordinary text.
+if [[ "$COMMAND" == chat && "${1:-}" == -- ]]; then
+    shift
+else
+    for arg in "$@"; do
+        if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+            show_help "$COMMAND"
+            exit 0
+        fi
+    done
+fi
+
+# These four arms forward the same flags to ai-runs/parse-run-flags. Reject an
+# impossible rez strategy before any connection probe or game action.
+case "$COMMAND" in
+    run|continue|continue-run|monitor-run)
+        HAS_REZ=false
+        HAS_NO_REZ=false
+        for arg in "$@"; do
+            [[ "$arg" == "--rez" ]] && HAS_REZ=true
+            [[ "$arg" == "--no-rez" ]] && HAS_NO_REZ=true
+        done
+        if [[ "$HAS_REZ" == true && "$HAS_NO_REZ" == true ]]; then
+            error "--rez and --no-rez cannot be used together. Nothing was sent."
+        fi
+        ;;
+esac
 
 # Determine project root for logging
 NETRUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

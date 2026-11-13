@@ -15,6 +15,7 @@
             [ai-actions]
             [ai-card-actions]
             [ai-core]
+            [ai-state :as state]
             [ai-websocket-client-v2 :as ws]))
 
 ;; Var-reference to test the private formatter without dropping defn-.
@@ -730,6 +731,13 @@
 ;; decision that is actually pending.
 ;; ============================================================================
 
+(defn- waiting-on-wire [prompt]
+  (swap! state/client-state
+         (fn [s] (-> s
+                     (assoc-in [:game-state :corp :prompt-state] prompt)
+                     (assoc-in [:last-state :corp :prompt-state] prompt))))
+  {:status :waiting-input :prompt prompt})
+
 (deftest install-with-a-server-does-not-call-its-confirmation-a-server-selection
   (let [sent (atom [])
         ok-prompt {:eid 9 :prompt-type "other"
@@ -742,7 +750,7 @@
                                                         :type "Asset" :rezzed true}]
                                              :ices []}})
       (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                    ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt ok-prompt})
+                    ai-core/verify-action-in-log (fn [& _] (waiting-on-wire ok-prompt))
                     ai-core/show-turn-indicator (fn [& _] nil)]
         (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
           (is (some #(= "play" (get-in % [:data :command])) @sent) "the install must still be sent")
@@ -764,7 +772,7 @@
                            :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
                            :servers {:remote1 {:content [] :ices []}})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt card-prompt})
+                      ai-core/verify-action-in-log (fn [& _] (waiting-on-wire card-prompt))
                       ai-core/show-turn-indicator (fn [& _] nil)]
           (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1" {:overwrite true}))]
             (is (re-find #"pending" out) "must have reached the waiting-input path")
@@ -781,7 +789,7 @@
                            :hand [{:cid 1 :title "Offworld Office" :type "Agenda" :zone ["hand"]}]
                            :servers {:remote1 {:content [] :ices []}})
         (with-redefs [ws/send-message! (mock-websocket-send! sent)
-                      ai-core/verify-action-in-log (fn [& _] {:status :waiting-input :prompt waiting})
+                      ai-core/verify-action-in-log (fn [& _] (waiting-on-wire waiting))
                       ai-core/show-turn-indicator (fn [& _] nil)]
           (let [out (with-out-str (ai-actions/install-card! "Offworld Office" "Server 1"))]
             (is (re-find #"(?i)waiting for the opponent" out) out)

@@ -3411,6 +3411,7 @@
   [card]
   (println "Type:" (str (:type card)
                         (when (:subtype card) (str " - " (:subtype card)))))
+  (when (:uniqueness card) (println "Unique: Yes"))
   (when (:faction card) (println "Faction:" (:faction card)))
   (when-let [cost (:cost card)] (println "Cost:" cost))
   (when-let [adv (:advancementcost card)] (println "Advancement Requirement:" adv))
@@ -3622,7 +3623,8 @@
         ;; #95: a Runner probing a Corp card (bioroid click-break) used to
         ;; dead-end on "Card not found". Fall back to the opponent's installed
         ;; cards and surface the Runner-usable abilities instead.
-        cross-card (when (and (not card) (not corp-viewer?))
+        cross-card (when (and (not card) (not corp-viewer?)
+                              (zero? (core/installed-title-match-count card-name :runner)))
                      (core/find-installed-corp-card card-name))]
     (cond
       card
