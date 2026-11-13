@@ -3821,18 +3821,16 @@
                             (:type card)
                             cost-str))))))
 
-    ;; Preserve installed Runner numbering and formatting; fallback zones are
-    ;; listed separately so they never shift an installed [N] suffix.
+    ;; Installed copies precede fallback-zone copies for a shared title.
     (let [all-installed (if (= side :runner)
                           (state/installed-runner-cards gs)
                           [])
-          fallback (remove #(pos? (core/installed-title-match-count (:title %) (if (= side :corp) :corp :runner)))
-                           (state/ability-target-cards gs side))
+          fallback (state/ability-target-cards gs side)
           playable-abilities (for [card all-installed
                                   [idx ability] (map-indexed vector (:abilities card))
                                   :when (:playable ability)]
                               {:card card
-                               :card-name (core/format-card-name-with-index card all-installed)
+                               :card-name (core/format-card-name-with-index card (concat all-installed fallback))
                                :idx idx
                                :label (:label ability)
                                :cost (:cost-label ability)})]
@@ -3848,7 +3846,7 @@
         (let [playable (for [card fallback
                              [idx ability] (map-indexed vector (:abilities card))
                              :when (:playable ability)]
-                         {:card-name (core/format-card-name-with-index card fallback)
+                         {:card-name (core/ability-card-reference card gs side)
                           :idx idx
                           :label (or (:label ability) (:msg ability) (:cost-label ability))
                           :cost (:cost-label ability)})]
@@ -3921,8 +3919,7 @@
           ability-count (count (for [card (concat (if (= side :runner)
                                                    (state/installed-runner-cards gs)
                                                    [])
-                                                 (remove #(pos? (core/installed-title-match-count (:title %) (if (= side :corp) :corp :runner)))
-                                                         (state/ability-target-cards gs side)))
+                                                 (state/ability-target-cards gs side))
                                     ability (:abilities card)
                                     :when (:playable ability)]
                                 ability))]

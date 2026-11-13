@@ -52,22 +52,39 @@
         (is (nil? (core/find-ability-card title)) title))
       (finally (reset! state/client-state original)))))
 
-(deftest installed-title-outranks-fallback-zone
+(deftest installed-and-scored-copies-have-shared-numbering
   (let [original @state/client-state]
     (try
       (reset! state/client-state
-              (assoc-in (fixture-state) [:game-state :corp :servers :remote1 :content]
-                        [(assoc (card "Gila Hands Arcology" [:servers :remote1 :content] 9)
-                                :installed true)]))
-      (let [out (with-out-str
-                  (with-redefs [ws/send-message! (fn [& _] true)
-                                core/verify-ability-in-log (fn [& _] {:status :success})]
-                    (actions/use-ability! "Gila Hands Arcology" 0)))]
-        (is (zero? (count (re-seq #"Multiple copies" out))) out)
-        (is (= 9 (:cid (core/find-ability-card "Gila Hands Arcology"))))
-        (is (nil? (core/find-ability-card "Gila Hands Arcology [1]")))
-        (is (not (str/includes? (with-out-str (display/list-playables))
-                                "Gila Hands Arcology: Ability 0"))))
+              (-> (fixture-state)
+                  (assoc-in [:game-state :corp :scored]
+                            [(card "Gila Hands Arcology" ["scored"] 2)])
+                  (assoc-in [:game-state :corp :servers :remote1 :content]
+                            [(assoc (card "Gila Hands Arcology" ["servers" "remote1" "content"] 9)
+                                    :installed true :rezzed false
+                                    :abilities [{:label "Gain 3 credits" :playable false}])])))
+      (let [sent (atom [])
+            expected (str "❓ Multiple copies of 'Gila Hands Arcology' in your ability zones (2 found)\n"
+                          "   Specify which one:\n"
+                          "   → \"Gila Hands Arcology [0]\" (remote1, unrezzed)\n"
+                          "   → \"Gila Hands Arcology [1]\" (scored area)\n"
+                          "   Re-run with the [N] suffix, e.g. \"Gila Hands Arcology [0]\"\n")]
+        (with-redefs [ws/send-message! (fn [_ payload] (swap! sent conj payload) true)
+                      core/verify-ability-in-log (fn [& _] {:status :success})]
+          (is (= expected (with-out-str (actions/use-ability! "Gila Hands Arcology" 0))))
+          (is (empty? @sent))
+          (is (= expected (with-out-str (display/show-card-abilities "Gila Hands Arcology"))))
+          (is (= :success (:status (actions/use-ability! "Gila Hands Arcology [1]" 0))))
+          (is (= 2 (get-in (last @sent) [:args :card :cid])))
+          (is (= ["scored"] (get-in (last @sent) [:args :card :zone])))
+          (is (= :success (:status (actions/use-ability! "Gila Hands Arcology [0]" 0))))
+          (is (= 9 (get-in (last @sent) [:args :card :cid]))))
+        (is (= 9 (:cid (core/find-ability-card "Gila Hands Arcology [0]"))))
+        (is (= 2 (:cid (core/find-ability-card "Gila Hands Arcology [1]"))))
+        (let [out (with-out-str (display/list-playables))]
+          (is (str/includes? out "  - Gila Hands Arcology [1]: Ability 0 - Gain 3 credits\n") out)
+          (is (not (str/includes? out "  - Gila Hands Arcology [0]: Ability 0 - Gain 3 credits\n")) out)
+          (is (str/includes? out "Total: 0 playable cards, 4 playable abilities, 3 basic actions") out)))
       (finally (reset! state/client-state original)))))
 
 (deftest duplicate-scored-copies-refuse-once
@@ -134,7 +151,7 @@
     (try
       (reset! state/client-state (fixture-state))
       (let [out (with-out-str (actions/use-ability! "Absent" 0))]
-        (is (str/includes? out "installed cards, your scored area, identity, current, or play area") out))
+        (is (= "❌ No card of yours with a usable ability by that name found in installed cards, your scored area, identity, current, or play area: Absent\n" out)))
       (finally (reset! state/client-state original)))))
 
 (deftest runner-installed-copy-order-stays-ahead-of-fallback
@@ -148,13 +165,14 @@
                                      :scored [{:title "Leech" :cid 13 :zone [:scored] :side "Runner"}]}
                             :corp {:servers {}}}})
       (let [out (with-out-str (core/find-ability-card "Leech"))]
-        (is (= (str "❓ Multiple copies of 'Leech' installed (2 found)\n"
+        (is (= (str "❓ Multiple copies of 'Leech' in your ability zones (3 found)\n"
                     "   Specify which one:\n"
                     "   → \"Leech [0]\" (program)\n"
-                    "   → \"Leech [1]\" (program)\n") out)))
+                    "   → \"Leech [1]\" (program)\n"
+                    "   → \"Leech [2]\" (scored area)\n") out)))
       (is (= 11 (:cid (core/find-ability-card "Leech [0]"))))
       (is (= 12 (:cid (core/find-ability-card "Leech [1]"))))
-      (is (nil? (core/find-ability-card "Leech [2]")))
+      (is (= 13 (:cid (core/find-ability-card "Leech [2]"))))
       (finally (reset! state/client-state original)))))
 
 (deftest opponent-card-in-my-scored-area-is-not-my-ability
@@ -162,8 +180,11 @@
     (try
       (reset! state/client-state
               {:side "runner"
-               :game-state {:runner {:scored [(card "Gila Hands Arcology" [:scored] 2)]
+               :game-state {:runner {:scored [(card "Gila Hands Arcology" ["scored"] 2)]
                                      :rig {:program [] :hardware [] :resource []}}
                             :corp {:servers {}}}})
       (is (nil? (core/find-ability-card "Gila Hands Arcology")))
+      (is (= (str "❌ No card of yours with a usable ability by that name found in installed cards, your scored area, identity, current, or play area: Gila Hands Arcology\n"
+                  "   A same-titled card in one of your zones belongs to the opponent; its abilities are not yours to use.\n")
+             (with-out-str (actions/use-ability! "Gila Hands Arcology" 0))))
       (finally (reset! state/client-state original)))))
