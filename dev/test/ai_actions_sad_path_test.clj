@@ -487,7 +487,7 @@
       (let [out (with-out-str
                   (with-redefs [ws/send-message! (fn [_ _] true)]
                     (ai-actions/use-ability! "Leech" 0)))]
-        (is (clojure.string/includes? out "Card not found installed")
+        (is (clojure.string/includes? out "Card not found in installed cards, your scored area, identity, current, or play area")
             (str "absence must still be reported as absence, got: " out))))))
 
 (deftest test-trash-installed-ambiguous-runner-card-is-not-not-found
@@ -532,7 +532,7 @@
       (let [out (with-out-str
                   (with-redefs [ws/send-message! (fn [_ _] true)]
                     (ai-actions/use-ability! "Leech [1]" 0)))]
-        (is (clojure.string/includes? out "Card not found installed")
+        (is (clojure.string/includes? out "Card not found in installed cards, your scored area, identity, current, or play area")
             (str "no Leech at all is absence, got: " out))))))
 
 (deftest test-explicit-index-outranks-the-single-match-shortcut

@@ -37,9 +37,8 @@
       (is (str/includes? (with-out-str (display/show-card-abilities "Gila Hands Arcology"))
                          "Gain 3 credits"))
       (let [out (with-out-str (display/list-playables))]
-        (is (str/includes? out "Gila Hands Arcology"))
-        (is (str/includes? out "playable abilities")))
-      (is (str/includes? (with-out-str (display/show-board)) "Gila Hands Arcology [0]"))
+        (is (str/includes? out "  - Gila Hands Arcology: Ability 0 - Gain 3 credits") out))
+      (is (not (str/includes? (with-out-str (display/show-board)) "Own playable abilities")))
       (finally (reset! state/client-state original)))))
 
 (deftest own-clickable-zones-share-one-lookup
@@ -53,17 +52,109 @@
         (is (nil? (core/find-ability-card title)) title))
       (finally (reset! state/client-state original)))))
 
-(deftest duplicate-across-zones-refuses-once
+(deftest installed-title-outranks-fallback-zone
   (let [original @state/client-state]
     (try
       (reset! state/client-state
               (assoc-in (fixture-state) [:game-state :corp :servers :remote1 :content]
                         [(assoc (card "Gila Hands Arcology" [:servers :remote1 :content] 9)
                                 :installed true)]))
+      (let [out (with-out-str
+                  (with-redefs [ws/send-message! (fn [& _] true)
+                                core/verify-ability-in-log (fn [& _] {:status :success})]
+                    (actions/use-ability! "Gila Hands Arcology" 0)))]
+        (is (zero? (count (re-seq #"Multiple copies" out))) out)
+        (is (= 9 (:cid (core/find-ability-card "Gila Hands Arcology"))))
+        (is (nil? (core/find-ability-card "Gila Hands Arcology [1]")))
+        (is (not (str/includes? (with-out-str (display/list-playables))
+                                "Gila Hands Arcology: Ability 0"))))
+      (finally (reset! state/client-state original)))))
+
+(deftest duplicate-scored-copies-refuse-once
+  (let [original @state/client-state]
+    (try
+      (reset! state/client-state
+              (assoc-in (fixture-state) [:game-state :corp :scored]
+                        [(card "Gila Hands Arcology" [:scored] 2)
+                         (card "Gila Hands Arcology" [:scored] 8)]))
       (let [out (with-out-str (actions/use-ability! "Gila Hands Arcology" 0))]
         (is (= 1 (count (re-seq #"Multiple copies" out))) out)
+        (is (str/includes? out "\"Gila Hands Arcology [0]\" (scored area)") out)
+        (is (str/includes? out "\"Gila Hands Arcology [1]\" (scored area)") out)
         (is (not (str/includes? out "Card not found")) out)
-        (is (= 2 (:cid (core/find-ability-card "Gila Hands Arcology [1]")))))
+        (is (= 8 (:cid (core/find-ability-card "Gila Hands Arcology [1]")))))
+      (finally (reset! state/client-state original)))))
+
+(deftest parent-installed-resolution-is-preserved
+  ;; Captured by loading 184a467f6~1:dev/src/clj/ai_core.clj and invoking its
+  ;; resolver on these same fixtures (ai-parent-capture-test, run offline).
+  (let [original @state/client-state
+        ice1 {:title "Palisade" :cid 1 :zone [:servers :remote1 :ices] :side "Corp" :rezzed true}
+        ice2 {:title "Palisade" :cid 2 :zone [:servers :remote2 :ices] :side "Corp" :rezzed false}
+        asset1 {:title "Nico Campaign" :cid 3 :zone [:servers :remote1 :content] :side "Corp" :rezzed true}
+        asset2 {:title "Nico Campaign" :cid 4 :zone [:servers :remote2 :content] :side "Corp" :rezzed false}
+        host {:title "Host" :cid 5 :zone [:servers :remote3 :content] :side "Corp" :rezzed true
+              :hosted [{:title "Hosted Corp" :cid 6 :zone [:onhost] :side "Corp" :installed true}]}]
+    (try
+      (reset! state/client-state {:side "corp"
+                                   :game-state {:encounters {:ice ice2}
+                                                :corp {:servers {:remote1 {:ices [ice1] :content [asset1]}
+                                                                 :remote2 {:ices [ice2] :content [asset2]}
+                                                                 :remote3 {:content [host]}}}}})
+      (let [picked (atom nil)
+            out (with-out-str (reset! picked (core/find-ability-card "Palisade")))]
+        (is (= 2 (:cid @picked)))
+        (is (= "→ 2 copies of 'Palisade' installed — using the one in the active run (Server 2). Use \"Palisade [N]\" to target another.\n"
+               out)))
+      (is (= 1 (:cid (core/find-ability-card "Palisade [0]"))))
+      (is (= 2 (:cid (core/find-ability-card "Palisade [1]"))))
+      (let [picked (atom nil)
+            out (with-out-str (reset! picked (core/find-ability-card "Nico Campaign")))]
+        (is (nil? @picked))
+        (is (= (str "❓ Multiple copies of 'Nico Campaign' installed (2 found)\n"
+                    "   Specify which one:\n"
+                    "   → \"Nico Campaign [0]\" (Server 1, rezzed)\n"
+                    "   → \"Nico Campaign [1]\" (Server 2, unrezzed)\n") out)))
+      (let [expected (str "❓ Multiple copies of 'Nico Campaign' installed (2 found)\n"
+                          "   Specify which one:\n"
+                          "   → \"Nico Campaign [0]\" (Server 1, rezzed)\n"
+                          "   → \"Nico Campaign [1]\" (Server 2, unrezzed)\n"
+                          "   Re-run with the [N] suffix, e.g. \"Nico Campaign [0]\"\n")]
+        (is (= expected (with-out-str (actions/use-ability! "Nico Campaign" 0))))
+        (is (= expected (with-out-str (display/show-card-abilities "Nico Campaign")))))
+      (is (= 3 (:cid (core/find-ability-card "Nico Campaign [0]"))))
+      (let [picked (atom nil)
+            out (with-out-str (reset! picked (core/find-ability-card "Hosted Corp")))]
+        (is (nil? @picked))
+        (is (= "" out)))
+      (finally (reset! state/client-state original)))))
+
+(deftest nowhere-miss-names-searched-zones
+  (let [original @state/client-state]
+    (try
+      (reset! state/client-state (fixture-state))
+      (let [out (with-out-str (actions/use-ability! "Absent" 0))]
+        (is (str/includes? out "installed cards, your scored area, identity, current, or play area") out))
+      (finally (reset! state/client-state original)))))
+
+(deftest runner-installed-copy-order-stays-ahead-of-fallback
+  (let [original @state/client-state
+        r1 {:title "Leech" :cid 11 :zone [:rig :program] :side "Runner"}
+        r2 {:title "Leech" :cid 12 :zone [:rig :program] :side "Runner"}]
+    (try
+      (reset! state/client-state
+              {:side "runner"
+               :game-state {:runner {:rig {:program [r1 r2] :hardware [] :resource []}
+                                     :scored [{:title "Leech" :cid 13 :zone [:scored] :side "Runner"}]}
+                            :corp {:servers {}}}})
+      (let [out (with-out-str (core/find-ability-card "Leech"))]
+        (is (= (str "❓ Multiple copies of 'Leech' installed (2 found)\n"
+                    "   Specify which one:\n"
+                    "   → \"Leech [0]\" (program)\n"
+                    "   → \"Leech [1]\" (program)\n") out)))
+      (is (= 11 (:cid (core/find-ability-card "Leech [0]"))))
+      (is (= 12 (:cid (core/find-ability-card "Leech [1]"))))
+      (is (nil? (core/find-ability-card "Leech [2]")))
       (finally (reset! state/client-state original)))))
 
 (deftest opponent-card-in-my-scored-area-is-not-my-ability

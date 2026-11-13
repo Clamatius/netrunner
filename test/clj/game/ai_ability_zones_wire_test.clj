@@ -66,14 +66,19 @@
                                          :game-state (wire state)})
           (is (re-find #"Gain 3" (with-out-str (display/show-card-abilities "Gila Hands Arcology"))))
           (is (re-find #"Gain 3" (with-out-str (display/list-playables))))
-          (is (re-find #"Gain 3" (with-out-str (display/show-board))))
+          (is (not (re-find #"Own playable abilities" (with-out-str (display/show-board)))))
           (with-redefs [ws/send-message! (fn [_ {:keys [command args]}]
                                             (core/process-action command state :corp args)
-                                            true)
-                        ai-core/verify-ability-in-log (fn [& _] {:status :success})]
-            (is (= :success (:status (actions/use-ability! "Gila Hands Arcology" 0)))))
+                                            (swap! ai-state/client-state assoc :game-state (wire state))
+                                            true)]
+            (let [result (atom nil)
+                  out (with-out-str (reset! result (actions/use-ability! "Gila Hands Arcology" 0)))]
+              (is (= :success (:status @result)))
+              (is (re-find #"⚡ Used ability: Gila Hands Arcology" out) out)))
           (is (= 3 (- (get-in @state [:corp :credit]) before))
               "the client's mirrored payload fired the scored ability")
+          (is (re-find #"Corp spends .* to use Gila Hands Arcology to gain 3"
+                       (:text (last (:log (wire state))))))
           (finally (reset! ai-state/client-state original)))))))
 
 (deftest identity-wire-and-ability

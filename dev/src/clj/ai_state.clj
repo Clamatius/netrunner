@@ -509,22 +509,12 @@
                                                (mapcat :hosted corp-roots)))))))))
 
 (defn ability-target-cards
-  "Own cards whose UI click can open the ordinary ability menu. Keep installed
-   membership in the existing installed walk; add the other active UI zones."
+  "Own non-installed cards whose UI click can open the ordinary ability menu.
+   Installed lookup and its [N] numbering remain with the existing resolvers."
   ([] (ability-target-cards (get-game-state) (my-side-kw)))
   ([gs side]
    (let [mine (get gs side)
-         installed (if (= side :runner)
-                     (installed-runner-cards gs)
-                     (let [servers (get-in gs [:corp :servers])
-                           roots (mapcat (fn [server] (concat (:ices server) (:content server)))
-                                         (vals servers))]
-                       (concat roots
-                               (filter #(and (:installed %)
-                                             (= "Corp" (:side %)))
-                                       (mapcat card-and-hosted (mapcat :hosted roots))))))
-         roots (concat installed
-                       [(:identity mine)]
+         roots (concat [(:identity mine)]
                        (:scored mine)
                        (:current mine)
                        (:play-area mine))]

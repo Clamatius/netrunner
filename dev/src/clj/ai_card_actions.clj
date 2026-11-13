@@ -353,7 +353,7 @@
   (core/report-installed-lookup-miss! card-name scopes))
 
 (defn use-ability!
-  "Use an own card's ability in a web-UI clickable zone. Returns status map:
+  "Use an installed card's ability, or an own card in a fallback ability zone. Returns status map:
    - {:status :success} - ability fired
    - {:status :waiting-input :prompt ...} - created a prompt (e.g., choose target)
    - {:status :error :reason ...} - failed
@@ -399,8 +399,8 @@
               (ws/send-message! :game/action
                                 {:gameid gameid
                                  :command "dynamic-ability"
-                                 :args (merge {:card card-ref}
-                                              (select-keys ability [:dynamic :source :index]))})
+                                 :args {:card card-ref
+                                        :dynamic dynamic-type}})
               ;; Use regular ability command for normal abilities
               (ws/send-message! :game/action
                                 {:gameid gameid

@@ -1142,47 +1142,76 @@
             (println (format "   → \"%s [%d]\" (%s)" title idx zone-name))))
         nil))))
 
+(declare find-installed-corp-card installed-title-match-count report-installed-lookup-miss!)
+
 (defn ability-title-match-count
-  "Count own-side ability targets after stripping an optional [N] suffix."
+  "Count own installed and fallback cards with this title."
   [card-name]
   (let [{:keys [title]} (parse-card-reference card-name)]
-    (count (filter #(= title (:title %)) (state/ability-target-cards)))))
+    (+ (installed-title-match-count card-name (if (side= "Corp" (:side @state/client-state))
+                                                  :corp :runner))
+       (count (filter #(= title (:title %)) (state/ability-target-cards))))))
 
 (defn find-ability-card
-  "Resolve an own-side card in the UI's ability-click zones. [N] indexes the
-   same ordered collection used by list-playables and its copy labels."
+  "Resolve installed cards with the original side-specific resolver. Only if
+   no installed copy shares the title, search own scored area, identity,
+   current, and play area. [N] keeps the installed resolver's original order;
+   a scored copy sharing an installed title becomes reachable only after the
+   installed copy leaves play."
   [card-name]
-  (let [cards (state/ability-target-cards)
-        {:keys [title index explicit-index?]} (parse-card-reference card-name)
-        matches (vec (filter #(= title (:title %)) cards))]
-    (cond
-      explicit-index? (nth matches index nil)
-      (= 1 (count matches)) (first matches)
-      (> (count matches) 1)
-      (do
-        (println (format "❓ Multiple copies of '%s' installed (%d found)" title (count matches)))
-        (println "   Specify which one:")
-        (doseq [[idx card] (map-indexed vector matches)]
-          (println (format "   → \"%s [%d]\" (%s)"
-                           title idx (or (some-> card :zone last name) "identity"))))
-        nil)
-      :else nil)))
+  (let [corp? (side= "Corp" (:side @state/client-state))
+        scope (if corp? :corp :runner)
+        installed (if corp?
+                    (find-installed-corp-card card-name)
+                    (find-installed-card card-name))]
+    (if (or installed (pos? (installed-title-match-count card-name scope)))
+      installed
+      (let [{:keys [title index explicit-index?]} (parse-card-reference card-name)
+            matches (vec (filter #(= title (:title %)) (state/ability-target-cards)))]
+        (cond
+          explicit-index? (nth matches index nil)
+          (= 1 (count matches)) (first matches)
+          (> (count matches) 1)
+          (do
+            (println (format "❓ Multiple copies of '%s' in your ability zones (%d found)"
+                             title (count matches)))
+            (println "   Specify which one:")
+            (doseq [[idx card] (map-indexed vector matches)]
+              (println (format "   → \"%s [%d]\" (%s)"
+                               title idx
+                               (if-let [zone (some-> card :zone first)]
+                                 (case (name zone)
+                                   "scored" "scored area"
+                                   "current" "current"
+                                   "play-area" "play area"
+                                   (name zone))
+                                 "identity"))))
+            nil)
+          :else nil)))))
 
 (defn report-ability-lookup-miss!
-  "Report a failed own-side ability lookup after find-ability-card's ambiguity list."
+  "Report an installed ambiguity unchanged, or a fallback ambiguity/miss."
   [card-name]
   (let [{:keys [title index explicit-index?]} (parse-card-reference card-name)
-        n (ability-title-match-count card-name)]
+        corp? (side= "Corp" (:side @state/client-state))
+        installed-scope (if corp? :corp :runner)
+        installed-count (installed-title-match-count card-name installed-scope)
+        n (count (filter #(= title (:title %)) (state/ability-target-cards)))]
     (cond
+      (pos? installed-count)
+      (report-installed-lookup-miss! card-name (if corp? [:corp] [:runner :corp]))
+
       (and explicit-index? (pos? n))
       (do (println (format "❌ No copy [%d] of '%s' — valid indices are 0..%d."
                            index title (dec n)))
           {:status :error :reason (str "Index out of range: " title)})
       (> n 1)
       (do (println (str "   Re-run with the [N] suffix, e.g. \"" title " [0]\""))
-          {:status :error :reason (str "Ambiguous: multiple copies of " title " installed — specify [N]")})
+          {:status :error :reason (str "Ambiguous: multiple copies of " title " in your ability zones — specify [N]")})
+      (and (not corp?) (pos? (installed-title-match-count card-name :corp)))
+      (report-installed-lookup-miss! card-name [:runner :corp])
       :else
-      (do (println (str "❌ Card not found installed: " card-name))
+      (do (println (str "❌ Card not found in installed cards, your scored area, identity, current, or play area: " card-name))
           {:status :error :reason (str "Card not found: " card-name)}))))
 
 (defn installed-runner-reference
