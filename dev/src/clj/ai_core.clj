@@ -400,7 +400,7 @@
    polling). Extracted from verify-action-in-log so the prompt-baseline logic is
    unit-testable without the live atom or wall clock."
   [card-name card-initial-zone
-   {:keys [initial-prompt current-prompt initial-size current-log hand]}]
+   {:keys [initial-prompt current-prompt initial-size current-log hand card-cid]}]
   (let [current-size (count current-log)
         ;; Is the card still sitting in the zone it started in (i.e. hand)?
         card-still-in-hand (some #(and (= (:title %) card-name)
@@ -409,22 +409,34 @@
         card-in-log (let [recent-log (take-last 5 current-log)]
                       (some #(when (string? (:text %))
                                (str/includes? (:text %) card-name))
-                            recent-log))]
+                            recent-log))
+        card-in-new-log (some #(when (string? (:text %))
+                                (str/includes? (:text %) card-name))
+                              (drop initial-size current-log))
+        prompt-card (:card current-prompt)
+        action-prompt? (and (new-prompt? initial-prompt current-prompt)
+                            (not (state/waiting-prompt-type? (:prompt-type current-prompt)))
+                            (or (and prompt-card
+                                     (if (and card-cid (:cid prompt-card))
+                                       (= (str card-cid) (str (:cid prompt-card)))
+                                       (= card-name (:title prompt-card))))
+                                ;; Some location prompts have no :card, but
+                                ;; explicitly name the card still in hand.
+                                (and card-still-in-hand
+                                     (nil? prompt-card)
+                                     (str/includes? (or (:msg current-prompt) "") card-name))))]
     (cond
+      ;; Payment and cost-reduction prompts move the card to :play-area before
+      ;; asking the seat. The new eid plus matching wire :card identifies this
+      ;; action even though hand and log alone look like a timeout.
+      (and action-prompt? (not card-in-new-log))
+      {:status :waiting-input :prompt current-prompt :card-name card-name}
+
       ;; If card moved from hand AND log grew, it's a success
       (and (not card-still-in-hand)
            (or (> current-size initial-size)
                card-in-log))
       {:status :success}
-
-      ;; If card is STILL in hand but a new prompt appeared, it's waiting for
-      ;; input. This MUST be checked before the bare log-grew heuristic below:
-      ;; the click-spend line can land while the location prompt is still open,
-      ;; and reporting :success there is a false "installed".
-      (and card-still-in-hand (new-prompt? initial-prompt current-prompt))
-      {:status :waiting-input
-       :prompt current-prompt
-       :card-name card-name}
 
       ;; If log grew or card appears in log (even without zone change), might be success
       ;; (for Corp hidden cards where card name doesn't show)
@@ -464,7 +476,7 @@
         ;; returns nil), so an un-normalized integer would blow up rather than
         ;; degrade. (Guest review, GPT-5.6.)
         opts (if (map? opts) opts {:pre-log-size opts})
-        {:keys [pre-log-size pre-prompt]} opts
+        {:keys [pre-log-size pre-prompt card-cid]} opts
         initial-size (or pre-log-size (get-log-size))
         ;; A nil pre-prompt is MEANINGFUL: "no prompt was open when the command
         ;; was sent". Reading the baseline here instead (i.e. AFTER the send)
@@ -485,6 +497,7 @@
                            card-name card-initial-zone
                            {:initial-prompt initial-prompt
                             :current-prompt (state/get-prompt)
+                            :card-cid card-cid
                             :initial-size initial-size
                             :current-log (get-in client-state [:game-state :log])
                             :hand (get-in client-state [:game-state side :hand])})))]

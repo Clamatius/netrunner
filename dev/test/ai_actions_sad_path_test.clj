@@ -78,8 +78,9 @@
       (with-redefs [ai-core/show-turn-indicator (constantly nil)]
         (let [out (with-out-str
                     (#'ai-card-actions/handle-install-waiting! "Botulus" nil prompt))]
-          (is (= (str "⏸️  Install of Botulus pending - choose a card with choose-card <index>; run 'prompt' to see selectable cards.\n"
-                      "   Prompt: Choose host ICE\n") out))
+          (is (clojure.string/includes? out "⏸️  Install of Botulus pending - choose a card with choose-card <index>"))
+          (is (clojure.string/includes? out "Prompt: Choose host ICE"))
+          (is (clojure.string/includes? out "choose-card <N>"))
           (is (not (clojure.string/includes? out "waiting for your confirmation → choose-value \"Done\""))))))))
 
 (deftest ambiguous-installed-card-messages

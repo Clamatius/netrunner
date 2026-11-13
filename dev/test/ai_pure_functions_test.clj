@@ -790,7 +790,8 @@
 
   (testing "same eid (genuinely the same ongoing decision) -> not new"
     (let [p {:eid {:eid 10371} :msg "Choose a server"}]
-      (is (false? (core/new-prompt? p p)))))
+      (is (false? (core/new-prompt? p p)))
+      (is (true? (core/new-prompt? p (assoc p :msg "Choose another server"))))))
 
   (testing "THE BUG: stale leftover byte-identical to a freshly re-opened prompt"
     ;; Without eid-awareness these compare structurally equal and the real
@@ -921,6 +922,32 @@
                  :initial-size 3
                  :current-log [{:text "a"} {:text "b"} {:text "c"}]
                  :hand [{:title "Karunā" :zone ["hand"]}]})))))
+
+(deftest test-classify-action-result-new-log-and-opponent-prompt
+  (let [card "Jailbreak"
+        prompt {:eid {:eid 2} :card {:title card :cid 7}
+                :prompt-type "other" :msg "Choose a server"}
+        before [{:text "Earlier play of Jailbreak"}]
+        snapshot {:initial-prompt nil :current-prompt prompt
+                  :initial-size (count before) :card-cid 7 :hand []}]
+    (testing "a new card-naming log entry confirms the action despite its follow-up prompt"
+      (is (= {:status :success}
+             (core/classify-action-result card ["hand"]
+               (assoc snapshot :current-log (conj before {:text "Runner plays Jailbreak."}))))))
+    (testing "an earlier play of the same title is not a since-send confirmation"
+      (is (= :waiting-input
+             (:status (core/classify-action-result card ["hand"]
+                        (assoc snapshot :current-log before))))))
+    (testing "a new unrelated log line does not confirm this card"
+      (is (= :waiting-input
+             (:status (core/classify-action-result card ["hand"]
+                        (assoc snapshot :current-log
+                               (conj before {:text "Runner spends a click."})))))))
+    (testing "an opponent waiting prompt is never our pending input"
+      (doseq [type ["waiting" :waiting]]
+        (is (nil? (core/classify-action-result card ["hand"]
+                    (assoc snapshot :current-prompt (assoc prompt :prompt-type type)
+                                    :current-log [] :initial-size 0))))))))
 
 (deftest test-verify-action-in-log-prompt-arrives-before-verification
   (testing "THE #105 RACE: prompt already in state when verification starts"
