@@ -28,6 +28,12 @@
              (str ", after " card-cost " to play"))
            ")"))))
 
+(defn- show-pending-prompt!
+  "Use the same renderer as `prompt`, including number and select command hints."
+  []
+  ((requiring-resolve 'ai-display/show-prompt-detailed)
+   @state/client-state {:full? true}))
+
 (defn play-card!
   "Play a card from hand by name or index.
    Auto-starts turn if needed (opponent has ended and we haven't started yet).
@@ -83,7 +89,8 @@
               ;; Wait and verify action - now returns status map
               (let [result (core/verify-action-in-log card-title card-zone core/action-timeout
                                                       {:pre-log-size initial-log-size
-                                                       :pre-prompt pre-prompt})]
+                                                       :pre-prompt pre-prompt
+                                                       :card-cid (:cid card)})]
                 (case (:status result)
                   :success
                   (let [after-state @state/client-state
@@ -111,8 +118,8 @@
 
                   :waiting-input
                   (let [prompt (:prompt result)]
-                    (println (str "⏸️  Played: " card-title " - waiting for input"))
-                    (println (str "   Prompt: " (:msg prompt)))
+                    (println (str "⏸️  Play of " card-title " pending on your prompt:"))
+                    (show-pending-prompt!)
                     (core/show-turn-indicator)
                     (flush)
                     {:status :waiting-input
@@ -215,6 +222,8 @@
                     normalized-server "waiting for you to answer a prompt → run 'prompt', then choose-card <N> / choose-value \"<text>\""
                     :else "waiting for server selection")))
   (println (str "   Prompt: " (:msg prompt)))
+  (when-not (state/waiting-prompt-type? (:prompt-type prompt))
+    (show-pending-prompt!))
   (core/show-turn-indicator)
   (flush)
   {:status :waiting-input
@@ -259,7 +268,8 @@
     ;; Wait and verify action
     (let [result (core/verify-action-in-log card-title card-zone core/action-timeout
                                             {:pre-log-size initial-log-size
-                                             :pre-prompt pre-prompt})]
+                                             :pre-prompt pre-prompt
+                                             :card-cid (:cid card)})]
       (case (:status result)
         :success      (handle-install-success! card-title card-type normalized-server before-clicks before-credits card-cost side overwrite?)
         :waiting-input (handle-install-waiting! card-title normalized-server (:prompt result))
@@ -968,8 +978,10 @@
               ;; Note: Card doesn't change zones, so we pass its current zone
               (let [result (core/verify-action-in-log card-name (:zone card) 3000
                                                       {:pre-log-size initial-log-size
-                                                       :pre-prompt pre-prompt})]
-                (if (= :success (:status result))
+                                                       :pre-prompt pre-prompt
+                                                       :card-cid (:cid card)})]
+                (case (:status result)
+                  :success
                   (let [after-state @state/client-state
                         updated-card (core/find-installed-corp-card card-name)
                         after-counters (or (:advance-counter updated-card) 0)
@@ -1007,9 +1019,17 @@
                     ;; #103 case this issue exists to protect. An example gets read
                     ;; as the rule.
                     (basic/check-auto-end-turn!))
+                  :waiting-input
+                  (do
+                    (println (str "⏸️  Advance of " card-name " pending on your prompt:"))
+                    (show-pending-prompt!)
+                    (flush)
+                    result)
+                  :error
                   (do
                     (println (str "⚠️  Sent advance command for: " card-name " - but action not confirmed in game log (may have failed)"))
-                    (flush))))))))))))
+                    (flush)
+                    result)))))))))))
 
 (defn advance-card-times!
   "Advance `card-name` up to `n` times, stopping early on failure or when the
@@ -1068,17 +1088,25 @@
                   ;; by the card name appearing in the log (which false-positives
                   ;; on prior scores / "cannot score" messages). Only a real
                   ;; increase in Corp agenda points means the agenda scored.
-                  (core/verify-action-in-log card-name (:zone card) core/action-timeout
-                                             {:pre-log-size initial-log-size
-                                              :pre-prompt pre-prompt})
-                  (let [after-state @state/client-state
+                  (let [verification (core/verify-action-in-log card-name (:zone card) core/action-timeout
+                                                               {:pre-log-size initial-log-size
+                                                                :pre-prompt pre-prompt
+                                                                :card-cid (:cid card)})
+                        after-state @state/client-state
                         after-score (or (get-in after-state [:game-state :corp :agenda-point]) 0)
                         runner-score (or (get-in after-state [:game-state :runner :agenda-point]) 0)]
-                    (if (> after-score before-score)
+                    (cond
+                      (> after-score before-score)
                       (do
                         (println (str "🎯 Scored: " card-name
                                      (when agenda-points (str " (+" agenda-points " points)"))))
                         (println (str "   📊 Score: Corp " after-score " - " runner-score " Runner")))
+                      (= :waiting-input (:status verification))
+                      (do
+                        (println (str "⏸️  Score of " card-name " pending on your prompt:"))
+                        (show-pending-prompt!)
+                        verification)
+                      :else
                       (println (str "⚠️  " card-name " did NOT score (Corp agenda points unchanged at "
                                    before-score "). The engine refused it — check advancement counters/timing.")))))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))

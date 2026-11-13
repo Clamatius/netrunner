@@ -83,6 +83,7 @@ test:
 	  game.ai-hosted-card-ref-test \
 	  game.ai-hosted-rig-wire-test \
 	  game.ai-pay-all-test \
+	  game.ai-pending-card-action-wire-test \
 	  game.ai-phase-windows-test \
 	  game.ai-prompt-values-wire-test \
 	  game.ai-send-ack-wire-test \
