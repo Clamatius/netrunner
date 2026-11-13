@@ -43,6 +43,9 @@ MSG=""
 
 GID="5ca1ab1e-0000-4000-8000-000000000001"     # the game dev/match creates
 PREV="01d01d00-0000-4000-8000-000000000000"    # whatever the REPLs held before
+# Every run points notifications at a local stub (port 9, discard: nothing
+# listens), never the owner's real topic; the stub curl on PATH also catches it.
+NTFY_STUB="http://127.0.0.1:9/match-test-stub"
 
 # mk_tree NAME -> sets T (tree) and ST (state dir)
 mk_tree() {
@@ -78,6 +81,15 @@ case "$cmd" in
       *'"PROGRESS"'*)    echo "PROGRESS $(cat "$ST/progress")" ;;
       *'"MATCHRESULT"'*) echo "MATCHRESULT $(cat "$ST/result")"; echo nil ;;
       *'"LOBBY"'*)       echo "LOBBY $(cat "$ST/lobby")" ;;
+      # Who owes the next decision: one scripted line per poll; the game ends
+      # (GAME-OVER) once the script is used up, so the sequence is the game.
+      *'"OWNER"'*)
+        echo "owner-poll $side" >> "$ST/events.log"
+        if [[ -s "$ST/owner-seq" ]]; then
+          echo "OWNER $(head -1 "$ST/owner-seq")"
+          tail -n +2 "$ST/owner-seq" > "$ST/owner-seq.next"; mv "$ST/owner-seq.next" "$ST/owner-seq"
+          [[ -s "$ST/owner-seq" || -f "$ST/owner-seq-no-end" ]] || echo "GAME-OVER winner=corp turn=12" > "$ST/status"
+        fi ;;
     esac ;;
   bot-loop) ev "bot-loop $side $*"; echo "🔁 Autonomous loop launched for $side" ;;
   bot-loop-status) [[ -f "$ST/bot-done-$side" ]] && echo "Loop done? true -> x" || echo "Loop done? false" ;;
@@ -170,10 +182,19 @@ for a in "$@"; do case "$a" in -iTCP:*) port="${a#-iTCP:}" ;; esac; done
 grep -qx "$port" "$ST/ports-down" 2>/dev/null && exit 1
 echo 4242
 EOF
+    # curl: the codex quota GET (config on stdin) or a notification POST (-d body),
+    # which lands in $ST/notify.log, one body per line, never on the network.
     cat > "$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 ST="$MATCH_TEST_STATE"
 echo "curl-argv $*" >> "$ST/events.log"
+body=""; url=""; prev=""
+for a in "$@"; do [[ "$prev" == -d ]] && body="$a"; [[ "$a" == http* ]] && url="$a"; prev="$a"; done
+if [[ -n "$body" ]]; then
+  printf '%s\n' "$body" >> "$ST/notify.log"; echo "notify-url $url" >> "$ST/events.log"
+  [[ -f "$ST/notify-fails" ]] && exit 22
+  exit 0
+fi
 cfg=$(cat); [[ "$cfg" == *"Authorization: Bearer sekrit-token"* ]] && echo "curl-config-has-bearer" >> "$ST/events.log"
 echo "{\"rate_limit\":{\"primary_window\":{\"used_percent\": $(cat "$ST/quota")}}}"
 EOF
@@ -192,7 +213,7 @@ WIN_SOON='sleep 1; echo "GAME-OVER winner=corp turn=12" > "$ST/status"; exit 0'
 run_match() {
     OUT=$(cd "$T" && PATH="$T/bin:$PATH" MATCH_TEST_STATE="$ST" CODEX_HOME="$T/codex" \
           CLAUDE_TOKEN_FILE="$T/token" ASKMODEL="$T/bin/askmodel" \
-          MATCH_POLL_SECS=0.2 MATCH_KEEP_SECS="${KEEP:-8}" MATCH_STALL_SECS="${STALL:-2}" \
+          MATCH_NTFY_URL="${NTFY_T:-$NTFY_STUB}" MATCH_NTFY_IGNORE_NO_WAKE="${IGN:-}" MATCH_POLL_SECS=0.2 MATCH_KEEP_SECS="${KEEP:-8}" MATCH_STALL_SECS="${STALL:-2}" \
           MATCH_REPORT_GRACE_SECS=3 MATCH_HUMAN_JOIN_SECS=5 MATCH_MAX_SECS="${MAXS:-40}" \
           timeout 90 "$T/dev/match" "$@" 2>&1); CODE=$?
 }
@@ -280,6 +301,8 @@ check "completed: claude babysitter armed at matched effort, by session" \
 check "completed: claude babysitter session/effort" bash -c "grep 'babysit runner' '$ST/events.log' | grep -qF 'claude_effort=medium session=$(cat "$R/runner.session")'"
 check "completed: nothing left running" all_dead
 check "completed: launcher.log kept" test -s "$R/launcher.log"
+check "completed: no human seat → no notification, no owner polling" \
+    bash -c "[[ ! -e '$ST/notify.log' ]] && ! grep -q owner-poll '$ST/events.log'"
 
 # Briefs: title and opponent lines WHOLE; everything else is the template.
 check "brief corp title"  eq "$(sed -n 1p "$R/brief-corp.md")" "# Cross-model match — you are the CORP (GPT-6 Luna) vs Claude Opus 5.5 (Runner)"
@@ -373,7 +396,7 @@ kill "$FOREIGN" 2>/dev/null; FOREIGN=""
 # interrupted: SIGTERM mid-game stops what it started and says so.
 mk_tree sigterm
 seat corp 'echo "\"keep\"" > "$ST/keep"; while :; do sleep 1; done'
-( cd "$T" && PATH="$T/bin:$PATH" MATCH_TEST_STATE="$ST" CODEX_HOME="$T/codex" ASKMODEL="$T/bin/askmodel" \
+( cd "$T" && PATH="$T/bin:$PATH" MATCH_TEST_STATE="$ST" CODEX_HOME="$T/codex" ASKMODEL="$T/bin/askmodel" MATCH_NTFY_URL="$NTFY_STUB" \
   MATCH_POLL_SECS=0.2 MATCH_STALL_SECS=60 MATCH_MAX_SECS=60 exec "$T/dev/match" --corp luna --runner luna --tag g8 >/dev/null 2>&1 ) &
 LPID=$!
 for _ in $(seq 1 50); do grep -q 'seat-start runner' "$ST/events.log" && break; sleep 0.2; done
@@ -481,6 +504,121 @@ mk_tree same
 run_match --corp luna --runner luna --tag g19 --dry-run
 check "same-model corp title" bash -c "[[ \"\$1\" == *'    # Same-model match — you are the CORP (GPT-6 Luna) vs another GPT-6 Luna (Runner)'* ]]" _ "$OUT"
 check "same-model corp opp"   bash -c "[[ \"\$1\" == *'    as the **Corp** seat, against a separate, isolated GPT-6 Luna instance playing the Runner.'* ]]" _ "$OUT"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 8. human: turn notification (#50 gap-2). One ntfy per hand-over to the human,
+#    none while the model holds the decision, re-armed only once the decision has
+#    gone back to the model (i.e. the human acted), one at the end. Texts WHOLE.
+mk_tree notify
+echo "2 0" > "$ST/lobby"
+seat corp 'while ! grep -q GAME-OVER "$ST/status"; do sleep 0.2; done; exit 0'
+cat > "$ST/owner-seq" <<'EOF'
+none unknown 0
+ai mulligan 0
+ai mulligan 0
+human mulligan 0
+human mulligan 0
+human turn 1
+ai turn 1
+ai turn 1
+human run 1
+human run 1
+none unknown 1
+human run 1
+ai prompt 2
+human turn 2
+human turn 2
+EOF
+run_match --corp luna --runner human --tag n1
+check "notify: completes" eq "$(rj n1 outcome)" completed
+[[ "$(rj n1 outcome)" == completed ]] || echo "$OUT" | tail -30
+check "notify: one per hand-over, none while the model acts, one at game over" eq "$(cat "$ST/notify.log" 2>/dev/null)" \
+"Netrunner: keep or mulligan your opening hand (Runner, turn 0). [dev/match n1]
+Netrunner: your call in the run (Runner, turn 1). [dev/match n1]
+Netrunner: your turn (Runner, turn 2). [dev/match n1]
+Netrunner: game over. Corp wins (Agenda), 7-3, turn 12. [dev/match n1]"
+check "notify: owner read through the AI (corp) REPL, privately" \
+    bash -c "grep '\"OWNER\"' '$ST/calls.log' | grep -q '^corp eval HB=$T/logs/match/n1/.heartbeats' && ! grep '\"OWNER\"' '$ST/calls.log' | grep -qv '^corp eval HB=$T/logs/match/n1/.heartbeats'"
+check "notify: sent to the env-given URL only" bash -c "[[ \$(grep -c '^notify-url $NTFY_STUB\$' '$ST/events.log') == 4 && \$(grep -c '^notify-url' '$ST/events.log') == 4 ]]"
+check "notify: nothing ever addressed to ntfy.sh" bash -c "! grep -q 'ntfy.sh' '$ST/events.log'"
+check "notify: each send logged" bash -c "[[ \$(grep -c 'notified the human: Netrunner: ' '$T/logs/match/n1/launcher.log') == 4 ]]"
+check "notify: the join instructions say notifications are on, and where they go" \
+    grep -qxF "  6. Your-turn notifications: ON, one per hand-over to you, sent to $NTFY_STUB" "$T/logs/match/n1/launcher.log"
+check "notify: the join instructions say how to wake the model" \
+    grep -qxF '  7. If the model seems asleep, type "ping" in the game chat: any chat containing "ping" wakes it.' "$T/logs/match/n1/launcher.log"
+
+# --no-notify: same game, not one notification, and no owner polling at all.
+mk_tree nonotify
+echo "2 0" > "$ST/lobby"
+seat corp 'while ! grep -q GAME-OVER "$ST/status"; do sleep 0.2; done; exit 0'
+printf 'human turn 1\nai turn 1\nhuman turn 2\n' > "$ST/owner-seq"
+( for _ in $(seq 1 300); do grep -q 'start-game' "$ST/events.log" 2>/dev/null && break; sleep 0.1; done
+  sleep 1.5; [[ -d "$ST" ]] && echo "GAME-OVER winner=corp turn=12" > "$ST/status" ) &
+run_match --corp luna --runner human --tag n2 --no-notify
+check "no-notify: completes" eq "$(rj n2 outcome)" completed
+check "no-notify: nothing sent" test ! -e "$ST/notify.log"
+check "no-notify: no owner polling" bash -c "! grep -q owner-poll '$ST/events.log'"
+check "no-notify: the instructions say so" grep -qxF "  6. Your-turn notifications: OFF (--no-notify)." "$T/logs/match/n2/launcher.log"
+
+# The game stops without a result (the model seat dies on the human's turn): the
+# human is told, once, instead of waiting on a dead seat.
+mk_tree notifydied
+echo "2 0" > "$ST/lobby"
+seat corp 'sleep 0.5; exit 1'
+touch "$ST/receipt-fail-corp" "$ST/owner-seq-no-end"
+printf 'human turn 1\n' > "$ST/owner-seq"
+STALL=1 run_match --corp luna --runner human --tag n3 --no-babysit
+check "notify died: outcome seat-died" eq "$(rj n3 outcome)" seat-died
+check "notify died: the hand-over, then the stop, once each" eq "$(cat "$ST/notify.log" 2>/dev/null)" \
+"Netrunner: your turn (Runner, turn 1). [dev/match n3]
+Netrunner: the game stopped without a result (seat-died): $(rj n3 reason) [dev/match n3]"
+
+# A failed send is logged and the game goes on.
+mk_tree notifyfail
+echo "2 0" > "$ST/lobby"
+seat corp 'while ! grep -q GAME-OVER "$ST/status"; do sleep 0.2; done; exit 0'
+touch "$ST/notify-fails"
+printf 'human turn 1\nhuman turn 1\n' > "$ST/owner-seq"
+run_match --corp luna --runner human --tag n4
+check "notify fails: game still completes" eq "$(rj n4 outcome)" completed
+check "notify fails: logged, not retried every poll" bash -c "[[ \$(grep -c 'notify FAILED' '$T/logs/match/n4/launcher.log') == 2 ]]"
+
+# logs/NO-WAKE (the switch dev/umpire-ping honours): nothing is sent, each
+# would-be send is logged, and the join instructions say why.
+nowake_tree() {  # name -> a human-Runner game with two hand-overs and NO-WAKE set
+    mk_tree "$1"; echo "2 0" > "$ST/lobby"; mkdir -p "$T/logs"; : > "$T/logs/NO-WAKE"
+    seat corp 'while ! grep -q GAME-OVER "$ST/status"; do sleep 0.2; done; exit 0'
+    printf 'human turn 1\nai turn 1\nhuman turn 2\n' > "$ST/owner-seq"
+}
+nowake_tree nowake
+run_match --corp luna --runner human --tag n5
+check "no-wake: completes" eq "$(rj n5 outcome)" completed
+check "no-wake: nothing sent" bash -c "[[ ! -e '$ST/notify.log' ]] && ! grep -q '^curl-argv.* -d ' '$ST/events.log'"
+check "no-wake: each would-be send logged instead" eq "$(grep -o 'notification NOT sent (logs/NO-WAKE exists): .*' "$T/logs/match/n5/launcher.log")" \
+"notification NOT sent (logs/NO-WAKE exists): Netrunner: your turn (Runner, turn 1). [dev/match n5]
+notification NOT sent (logs/NO-WAKE exists): Netrunner: your turn (Runner, turn 2). [dev/match n5]
+notification NOT sent (logs/NO-WAKE exists): Netrunner: game over. Corp wins (Agenda), 7-3, turn 12. [dev/match n5]"
+check "no-wake: the instructions say they are silenced and how to undo it" \
+    grep -qxF "  6. Your-turn notifications: SILENCED while $T/logs/NO-WAKE exists (delete it to be notified at $NTFY_STUB)." "$T/logs/match/n5/launcher.log"
+check "no-wake: the file is left alone" test -e "$T/logs/NO-WAKE"
+
+# MATCH_NTFY_IGNORE_NO_WAKE=1 lifts NO-WAKE for a loopback URL (a proof run
+# firing into a local stub) ...
+nowake_tree nowakeloop
+IGN=1 run_match --corp luna --runner human --tag n6
+check "no-wake override, loopback: sent to the stub" eq "$(cat "$ST/notify.log" 2>/dev/null)" \
+"Netrunner: your turn (Runner, turn 1). [dev/match n6]
+Netrunner: your turn (Runner, turn 2). [dev/match n6]
+Netrunner: game over. Corp wins (Agenda), 7-3, turn 12. [dev/match n6]"
+# ... and for nothing else: NO-WAKE still wins, and the launcher says why.
+nowake_tree nowakeremote
+IGN=1 NTFY_T="http://localhost@ntfy.example.invalid/topic" run_match --corp luna --runner human --tag n7
+check "no-wake override, non-loopback: nothing sent" test ! -e "$ST/notify.log"
+check "no-wake override, non-loopback: refused out loud" \
+    grep -qF "MATCH_NTFY_IGNORE_NO_WAKE=1 ignored: http://localhost@ntfy.example.invalid/topic is not a loopback URL" "$T/logs/match/n7/launcher.log"
+
+# The owner's real topic: no command line any case ran ever named its host.
+check "no case ever addressed ntfy.sh" bash -c "! cat '$TMP'/*/state/events.log '$TMP'/*/state/calls.log | grep -q 'ntfy\.sh'"
 
 if [[ $fails -gt 0 ]]; then echo "❌ match_launcher_test: $fails failure(s)"; exit 1; fi
 echo "✅ match_launcher_test: all passed"
