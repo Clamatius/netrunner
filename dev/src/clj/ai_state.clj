@@ -33,7 +33,10 @@
 ;;
 ;; LIFETIME. ai-runs/reset-strategy! clears this at the START of run! and
 ;; monitor-active-run!, NOT at the end of a run — so on its own the set outlives
-;; the run that created it. That was survivable while only the run loops read it
+;; the run that created it. (monitor-active-run! keeps ONE key across its reset:
+;; the named :tank set, while a run or encounter is live — a mid-run `continue`
+;; used to wipe a `tank` the seat had already given, #274. See
+;; ai-runs/live-tank-to-keep for the bound and its residual.) That was survivable while only the run loops read it
 ;; (they reset before use); it is NOT survivable now that the display reads it to
 ;; assert "you have already tanked this ICE": tank Tithe, let the run end, start
 ;; another run through a run EVENT (Jailbreak/Conduit enter via continue-run! and

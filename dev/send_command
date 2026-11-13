@@ -2330,13 +2330,10 @@ case "$COMMAND" in
         # a backslash still reached the reader as an escape. clj_str does
         # backslash first and then quotes, which is the order that cannot
         # re-escape its own output.
+        # Body is runs/tank! (refuses when no run and no encounter is live).
         execute "(do
                   (require (quote [ai-runs :as runs]))
-                  (let [ice-name \"$(clj_str "$ICE_NAME")\"
-                        current-tank (get (runs/get-strategy) :tank #{})]
-                    (runs/set-strategy! {:tank (conj current-tank ice-name)})
-                    (println (format \"✅ Authorized tank on: %s\" ice-name))
-                    (runs/continue-run!)))"
+                  (runs/tank! \"$(clj_str "$ICE_NAME")\"))"
         after_action
         ;;
 

@@ -2643,10 +2643,41 @@
   [status]
   (contains? #{:run-complete :no-run} status))
 
+(defn- live-tank-to-keep
+  "The named-ICE tank set to carry across monitor-active-run!'s reset-strategy!,
+   or nil. Kept only when a run OR an encounter is live at entry: a `tank` given
+   mid-run is a decision the seat already made, and a plain `continue` that
+   re-entered the same run used to wipe it, so the Corp was never told
+   (#267/#273/#274, the Game F wedge).
+
+   ONLY :tank. :force, :no-rez, :rez, :full-break, :tank-all, :fire-unbroken,
+   :fired-at-encounter, last-waiting-status, the retry latches and the tank-SIGNAL
+   latch (runner-handlers/signaled-fire-encounter) all still reset on every
+   command, exactly as before — a flag the seat typed on one command must be
+   withdrawable by the next one that omits it. No run tag and no new lifetime
+   mechanism: the bound on staleness is the existing one. run! clears everything
+   at run start, and ai-state/expire-run-strategy! clears on the observed end of
+   a run.
+
+   Residual, documented rather than fixed: if that expiry is missed (a desync),
+   AND the next run starts through a run EVENT rather than `run` (so run!'s reset
+   never happens), AND it meets an ICE of the same name, the old authorization is
+   honoured. The engine's :run-id is not on the wire, so the client cannot tell
+   two runs apart to close it."
+  [client-state]
+  (when (or (some? (get-in client-state [:game-state :run]))
+            (core/encounter-window? client-state))
+    (not-empty (:tank (get-strategy)))))
+
 (defn- monitor-active-run!
-  "Own one active run: (re)apply the pre-committed strategy, then loop."
+  "Own one active run: (re)apply the pre-committed strategy, then loop.
+   A named tank survives the reset while a run or encounter is live; see
+   live-tank-to-keep."
   [flags]
-  (reset-strategy!)
+  (let [kept-tank (live-tank-to-keep @state/client-state)]
+    (reset-strategy!)
+    (when kept-tank
+      (set-strategy! {:tank kept-tank})))
   ;; NO reset-window-grace! here (#102 item 7 round 3). A plain `continue` is
   ;; this function, and resetting the abandon clock on entry mid-window meant
   ;; the #31 self-advance saw every abandoned window as 0 ms old, so the recovery
@@ -2655,7 +2686,11 @@
   ;; NB reported-events is deliberately NOT reset here either: it is game-scoped.
   (let [strategy-flags (dissoc flags :since :persistent :return-on-signal :rez-cids)]
     (when (seq strategy-flags)
-      (set-strategy! strategy-flags)
+      ;; A --tank given mid-run UNIONS with the kept set: set-strategy! merges,
+      ;; and a plain merge would replace `tank X` with `--tank Y`.
+      (set-strategy! (cond-> strategy-flags
+                       (:tank strategy-flags)
+                       (update :tank #(into (or (:tank (get-strategy)) #{}) %))))
       ;; #151 item 14: a persistent commitment spans the turn's runs, so every
       ;; server's copies of a name count; one made during a run is this run's.
       ;; A --rez given AT a rez window names that copy.
@@ -2901,3 +2936,27 @@
      (continue!)  ; Just send continue, no checks"
   []
   (continue-run! "--force"))
+
+(defn tank!
+  "dev/send_command's `tank <ice>`: add ICE-NAME to the run's tank set, then take
+   one continue-run! step. It was inline in the dispatcher; it lives here so the
+   refusal below can be tested.
+
+   REFUSED when neither a run nor an encounter is live. Mid-run the set now
+   survives a plain `continue` (live-tank-to-keep), so an authorization recorded
+   with nothing live would sit in the strategy until something cleared it, and
+   nothing does until the next run! — a run started by a run event would inherit
+   it. With nothing live there is nothing to tank; `run <server> --tank <ice>`
+   is the way to commit one up front."
+  [ice-name]
+  (let [cs @state/client-state]
+    (if (or (some? (get-in cs [:game-state :run]))
+            (core/encounter-window? cs))
+      (let [current-tank (get (get-strategy) :tank #{})]
+        (set-strategy! {:tank (conj current-tank ice-name)})
+        (println (format "✅ Authorized tank on: %s" ice-name))
+        (continue-run!))
+      (do
+        (println (format "❌ tank refused: no run and no encounter is live, so there is nothing to tank on %s." ice-name))
+        (println "   To commit a tank up front, start the run with it: run <server> --tank \"<ice>\"")
+        {:status :error :reason :no-live-run}))))

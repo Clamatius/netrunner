@@ -45,7 +45,8 @@
      monitor-run         -> (ai-actions/monitor-run! ...)      send_command:2258
      continue --single   -> (ai-actions/continue-run! ...)     send_command:2204
      continue-run        -> (ai-actions/continue-run! ...)     send_command:2243
-     tank <ice>          -> set-strategy! + (runs/continue-run!) send_command:2333-2339
+     tank <ice>          -> (runs/tank! <ice>): set-strategy! + one continue-run!,
+                            refused when no run and no encounter is live
    ai-actions/monitor-run! and continue-run! are plain (def x runs/x) aliases
    (ai_actions.clj:176,179). dev/send_command itself is NOT run: it talks to the
    live REPLs, which this work must not touch."
@@ -152,12 +153,9 @@
 (defn- cmd-continue [& flags] #(apply runs/monitor-run! flags))      ; `continue` / `monitor-run`
 (defn- cmd-continue-single [& flags] #(apply runs/continue-run! flags)) ; `continue --single`
 (defn- cmd-tank
-  "Verbatim body of dev/send_command's `tank` arm (2333-2339)."
+  "dev/send_command's `tank` arm: its body is now (runs/tank! <ice>)."
   [ice-name]
-  #(let [current-tank (get (runs/get-strategy) :tank #{})]
-     (runs/set-strategy! {:tank (conj current-tank ice-name)})
-     (println (format "✅ Authorized tank on: %s" ice-name))
-     (runs/continue-run!)))
+  #(runs/tank! ice-name))
 
 ;; --- observations ---
 
@@ -311,7 +309,8 @@
 
 (deftest b1-tank-before-the-encounter-then-plain-continue
   ;; `continue` (and `continue --loop`, `monitor-run`): monitor-run! ->
-  ;; monitor-active-run! -> reset-strategy! (ai_runs.clj:2649 -> :72).
+  ;; monitor-active-run! -> reset-strategy!, which wiped the tank until
+  ;; live-tank-to-keep (Change 1) carried the named set across it.
   (doseq [entry b1-entries]
     (assert-b1 entry "continue" (b1-scenario entry (cmd-continue)))))
 
@@ -357,7 +356,12 @@
                (str "B2: `" command "` must signal the tank the seat already gave, not re-ask. status "
                     (:status result) ", sent " commands "\n--- output ---\n" out))))))))
 
-(deftest b2-a-mid-run-continue-keeps-full-break
+(deftest b2-a-mid-run-continue-clears-full-break
+  ;; This test used to be `b2-a-mid-run-continue-keeps-full-break` and asserted
+  ;; the opposite. That was the wrong claim (plan v3): --full-break is a flag the
+  ;; seat typed on ONE command, and a later command that omits it must be able to
+  ;; withdraw it. Losing it costs a question, not a wedge: the plain `continue`
+  ;; asks the seat to break-or-tank again. Only the named :tank set is kept.
   (testing "`run HQ --full-break`, then plain `continue` at the encounter (Ice Wall, Corroder installed)"
     (do-game
       (new-game {:corp {:hand ["Ice Wall"] :credits 20}
@@ -370,11 +374,133 @@
       (run-continue state :encounter-ice)
       (set-seat-strategy! "runner" {:full-break true})
       (let [{:keys [result commands out]} (as-seat! state "runner" (cmd-continue))]
-        (is (:full-break (seat-strategy "runner"))
-            (str "B2: plain `continue` wiped --full-break mid-run. strategy now: " (pr-str (seat-strategy "runner"))))
-        (is (not= :fire-decision-required (:status result))
-            (str "B2: with --full-break standing the Runner breaks, it is not asked to break-or-tank. sent "
-                 commands "\n--- output ---\n" out))))))
+        (is (not (:full-break (seat-strategy "runner")))
+            (str "plain `continue` clears --full-break. strategy now: " (pr-str (seat-strategy "runner"))))
+        (is (= :fire-decision-required (:status result))
+            (str "so the seat is asked to break-or-tank again. sent " commands "\n--- output ---\n" out))))))
+
+;; ---------------------------------------------------------------------------
+;; Change 1 (plan v3): what survives a mid-run command, and what does not
+;; ---------------------------------------------------------------------------
+
+(deftest change1-continue-force-then-plain-continue-leaves-force-unset
+  (testing "the strategy `continue --force` leaves, then plain `continue` mid-run: :force is gone, :tank kept"
+    (at-hourglass-encounter
+     (fn [state]
+       ;; monitor-active-run! stores every typed flag; this is what `continue --force` leaves.
+       (set-seat-strategy! "runner" {:force true :tank #{"Hourglass"}})
+       (as-seat! state "runner" (cmd-continue))
+       (is (not (contains? (seat-strategy "runner") :force))
+           (str "strategy now: " (pr-str (seat-strategy "runner"))))
+       (is (= #{"Hourglass"} (:tank (seat-strategy "runner"))))))))
+
+(deftest change1-no-rez-then-rez-rezzes
+  (testing "Corp `monitor-run --no-rez`, then `monitor-run --rez \"Ice Wall\"` at the same approach: Ice Wall is rezzed"
+    (do-game
+      (new-game {:corp {:hand ["Ice Wall"] :credits 20}
+                 :runner {:credits 10}})
+      (play-from-hand state :corp "Ice Wall" "HQ")
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (is (= :approach-ice (get-in @state [:run :phase])) "fixture: approach to unrezzed Ice Wall")
+      (let [first-cmd (as-seat! state "corp" (cmd-continue "--no-rez"))]
+        (is (not-any? #{"rez"} (:commands first-cmd)) (str "fixture: --no-rez declined. sent " (:commands first-cmd))))
+      (is (= :approach-ice (get-in @state [:run :phase])) "fixture: still at the approach (the Runner has not passed)")
+      (let [{:keys [commands out]} (as-seat! state "corp" (cmd-continue "--rez" "Ice Wall"))]
+        (is (not (:no-rez (seat-strategy "corp"))) (str "strategy now: " (pr-str (seat-strategy "corp"))))
+        (is (some #{"rez"} commands) (str "sent " commands "\n--- output ---\n" out))
+        (is (:rezzed (get-ice state :hq 0)) "and the engine rezzed Ice Wall")))))
+
+(def ^:private tank-refusal-out
+  (str "❌ tank refused: no run and no encounter is live, so there is nothing to tank on Hourglass.\n"
+       "   To commit a tank up front, start the run with it: run <server> --tank \"<ice>\"\n"))
+
+(deftest change1-tank-with-nothing-live-is-refused
+  (do-game
+    (new-game {:corp {:hand ["Hourglass"] :credits 20}
+               :runner {:credits 10}})
+    (play-from-hand state :corp "Hourglass" "HQ")
+    (take-credits state :corp)
+    (is (nil? (:run @state)) "fixture: no run")
+    (let [{:keys [result sent out]} (as-seat! state "runner" (cmd-tank "Hourglass"))]
+      (is (= {:status :error :reason :no-live-run} result))
+      (is (empty? sent) (str "nothing sent: " (pr-str sent)))
+      (is (= tank-refusal-out out))
+      (is (nil? (:tank (seat-strategy "runner"))) (str "nothing recorded: " (pr-str (seat-strategy "runner")))))))
+
+(deftest change1-run-tank-then-plain-continue-keeps-it
+  (testing "`run hq --tank Hourglass --no-continue`, then plain `continue` to and at the encounter"
+    (do-game
+      (new-game {:corp {:hand ["Hourglass"] :credits 20}
+                 :runner {:credits 10}})
+      (play-from-hand state :corp "Hourglass" "HQ")
+      (take-credits state :corp)
+      (as-seat! state "runner" #(runs/run! "hq" "--tank" "Hourglass" "--no-continue"))
+      (is (some? (:run @state)) "fixture: run! started the run")
+      (let [trail (drive-to-encounter! state (cmd-continue))]
+        (is (= :encounter-ice (get-in @state [:run :phase])) (str "fixture: at the encounter. trail " trail)))
+      (is (= #{"Hourglass"} (:tank (seat-strategy "runner")))
+          (str "the run's --tank survived plain `continue`. strategy now: " (pr-str (seat-strategy "runner"))))
+      (let [{:keys [sent commands out]} (as-seat! state "runner" (cmd-continue))]
+        (is (or (seq (tank-signals sent)) (corp-sees-signal? state "Hourglass"))
+            (str "and the Corp is told. sent " commands "\n--- output ---\n" out))))))
+
+(deftest change1-mid-run-continue-tank-unions
+  (testing "`tank Hourglass` mid-run, then `continue --tank \"Ice Wall\"`: both are held"
+    (at-hourglass-encounter
+     (fn [state]
+       (as-seat! state "runner" (cmd-tank "Hourglass"))
+       (as-seat! state "runner" (cmd-continue "--tank" "Ice Wall"))
+       (is (= #{"Hourglass" "Ice Wall"} (:tank (seat-strategy "runner")))
+           (str "strategy now: " (pr-str (seat-strategy "runner"))))))))
+
+(deftest change1-a-new-run-after-a-tanked-run-starts-empty
+  (do-game
+    (new-game {:corp {:hand ["Hourglass"] :credits 20}
+               :runner {:credits 10}})
+    (play-from-hand state :corp "Hourglass" "HQ")
+    (take-credits state :corp)
+    (run-on state "HQ")
+    (as-seat! state "runner" (cmd-tank "Hourglass"))
+    (is (= #{"Hourglass"} (:tank (seat-strategy "runner"))) "fixture: tanked in run 1")
+    (core/process-action "jack-out" state :runner nil)
+    (is (nil? (:run @state)) "fixture: run 1 is over")
+    (as-seat! state "runner" #(runs/run! "hq" "--no-continue"))
+    (is (some? (:run @state)) "fixture: run 2 started")
+    (is (nil? (:tank (seat-strategy "runner")))
+        (str "run 2 starts with no tank. strategy now: " (pr-str (seat-strategy "runner"))))))
+
+(deftest change1-re-signal-after-the-latch-resets-is-harmless
+  ;; The plan asks for this measured, not assumed: plain `continue` resets the
+  ;; tank-SIGNAL latch (signaled-fire-encounter) while :tank is kept. Is a second
+  ;; signal, or a second look, harmful to the Corp's fire authorization?
+  (testing "tank at the encounter, then plain `continue` (latch reset): no second signal; the Corp fires once"
+    (at-hourglass-encounter
+     (fn [state]
+       (let [tank-obs (as-seat! state "runner" (cmd-tank "Hourglass"))]
+         (is (= 1 (count (tank-signals (:sent tank-obs)))) "fixture: `tank` at the encounter signals once"))
+       (let [again (as-seat! state "runner" (cmd-continue))]
+         (is (empty? (tank-signals (:sent again)))
+             (str "the log already carries a current signal, so the reset latch re-sends nothing. sent "
+                  (:commands again))))
+       (let [clicks-before (get-in @state [:runner :click])
+             fire (as-seat! state "corp" (cmd-continue "--fire-unbroken"))]
+         (is (= 1 (count (filter #{"unbroken-subroutines"} (:commands fire)))) (str "sent " (:commands fire)))
+         (is (= (max 0 (- clicks-before 3)) (get-in @state [:runner :click])) "Hourglass resolved once")))))
+  (testing "two signal lines in the log (what a re-send after a reset would leave): the Corp fires once"
+    (at-hourglass-encounter
+     (fn [state]
+       (as-seat! state "runner" (cmd-tank "Hourglass"))
+       (core/process-action "system-msg" state :runner
+                            {:msg "indicates to fire all unbroken subroutines on Hourglass"})
+       (is (= 2 (count (filter #(str/includes? (str (:text %)) "indicates to fire") (get-in (wire-state state "corp") [:game-state :log]))))
+           "fixture: two signals")
+       (is (= :runner-signaled (corp-decisions/fire-authorization (wire-state state "corp") "corp" "Hourglass"))
+           "the Corp's authorization is unchanged by the duplicate")
+       (let [clicks-before (get-in @state [:runner :click])
+             fire (as-seat! state "corp" (cmd-continue "--fire-unbroken"))]
+         (is (= 1 (count (filter #{"unbroken-subroutines"} (:commands fire)))) (str "sent " (:commands fire)))
+         (is (= (max 0 (- clicks-before 3)) (get-in @state [:runner :click])) "Hourglass resolved once"))))))
 
 (deftest b2-a-mid-run-continue-does-not-refire-after-the-fired-at-latch-is-wiped
   (testing "Corp `monitor-run --fire-unbroken` fires Hourglass on the Runner's signal; then Corp `continue --fire-unbroken`
