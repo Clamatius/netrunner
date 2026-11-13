@@ -53,6 +53,7 @@ test:
 	  ai-hosted-runner-test \
 	  ai-loop-sync-test \
 	  ai-phase-window-test \
+	  ai-prompt-values-test \
 	  ai-prompts-test \
 	  ai-pure-functions-test \
 	  ai-run-corp-decisions-test \
@@ -81,6 +82,7 @@ test:
 	  game.ai-hosted-rig-wire-test \
 	  game.ai-pay-all-test \
 	  game.ai-phase-windows-test \
+	  game.ai-prompt-values-wire-test \
 	  game.ai-send-ack-wire-test \
 	  game.ai-upgrade-rez-timing-test \
 	  game.ai-waiting-prompt-test \

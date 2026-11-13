@@ -129,6 +129,19 @@ assert_contains "full help" "$full" "monitor-run"
 
 # #110 §2: the per-credit payment escape hatch.
 assert_contains "full help" "$full" "--all"
+assert_contains "full help" "$full" "choose-value 3"
+assert_contains "full help" "$full" 'choose-value "Sure Gamble"'
+for role in runner corp; do
+    out="$("$SEND_CMD" "$role" help 2>&1)"
+    count="$(awk '/^  choose-value <value> / {n++} END {print n+0}' <<<"$out")"
+    if [[ "$count" == 1 ]]; then
+        pass "$role help: choose-value appears once under Prompts"
+    else
+        fail "$role help: expected one choose-value entry, got $count"
+    fi
+done
+cv="$("$SEND_CMD" corp help choose-value 2>&1)"
+assert_contains "help choose-value" "$cv" "Answer trace, number"
 
 # #110 §3: the quoting note must survive rendering in the runner brief — this is
 # the exact string whose inner quotes broke the script.

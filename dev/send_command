@@ -530,6 +530,8 @@ ${role_running}
 
 ${GREEN}Prompts:${NC}
   choose <N|text>  Choose option by index (0 = first) or label text
+  choose-value <value>  Answer a number/trace/credit/counter prompt with a number,
+                        name a card with its exact title, or press a labeled option
   choose-card <N>  Select card N from selectable cards
 
 ${GREEN}Waiting:${NC}
@@ -742,7 +744,10 @@ ${GREEN}Running:${NC}
 ${GREEN}Prompts:${NC}
   choose <N|text> - Choose option N from prompt (0 = first option), or by
                         label text (same matching as choose-value)
-  choose-value <text> - Choose by matching text (e.g., "Yes", "Steal").
+  choose-value <value> - Answer trace, number, credit, counter prompts with a
+                        number (e.g., choose-value 3); name a card with its
+                        exact title (e.g., choose-value "Sure Gamble"); or
+                        match a choice label (e.g., "Yes", "Steal").
                         Also presses a SELECT prompt's meta-button, e.g.
                         choose-value "Done" to stop selecting cards.
   choose-card <N> [--all] - Select card N from selectable cards.
@@ -2124,8 +2129,14 @@ case "$COMMAND" in
     choose-value)
         ensure_connection
         VALUE="${1:-}"
-        [[ -z "$VALUE" ]] && error "Usage: send_command $CLIENT_NAME choose-value <text>"
-        info "Choosing option matching: $VALUE..."
+        [[ -z "$VALUE" ]] && error "Usage: send_command $CLIENT_NAME choose-value <value>"
+        # Numeric labels and primitive prompt values share this verb. The
+        # variable NAME is required: num_arg normalizes padded decimal input
+        # in place before it reaches the Clojure reader (#256).
+        if is_num "$VALUE"; then
+            num_arg VALUE "Value must be a whole number"
+        fi
+        info "Choosing value: $VALUE..."
         execute "(ai-actions/choose-by-value! \"$(clj_str "$VALUE")\")"
         after_action
         ;;

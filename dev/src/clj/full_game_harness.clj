@@ -235,7 +235,7 @@
   "Respond to mulligan prompt by keeping hand"
   [client-name]
   (let [prompt (get-prompt client-name)
-        choices (:choices prompt)
+        choices (when (sequential? (:choices prompt)) (:choices prompt))
         keep-choice (first (filter #(= "Keep" (:value %)) choices))]
     (when keep-choice
       (log client-name "🎯 Keeping hand (auto-response)")
@@ -338,7 +338,7 @@
         (do
           (println "  Message:" (:msg prompt))
           (println "  Type:" (:prompt-type prompt))
-          (println "  Choices:" (mapv :value (:choices prompt))))
+          (println "  Choices:" (mapv :value (when (sequential? (:choices prompt)) (:choices prompt)))))
         (println "  No prompt")))))
 
 (defn check-state

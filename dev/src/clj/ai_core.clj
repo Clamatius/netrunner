@@ -151,7 +151,7 @@
       {:msg (:msg prompt)
        :type (:prompt-type prompt)
        :card-title (get-in prompt [:card :title])
-       :choices-count (count (:choices prompt))})))
+       :choices-count (when (sequential? (:choices prompt)) (count (:choices prompt)))})))
 
 (defn with-prompt-hint
   "Enriches an error result with active prompt info if present.
@@ -1970,7 +1970,11 @@
   (let [prompt (own-prompt state side)]
     (and prompt
          (not (state/waiting-prompt-type? (:prompt-type prompt)))
-         (or (seq (:choices prompt))
+         (or (number? (:choices prompt))
+             (map? (:choices prompt))
+             (= :credit (:choices prompt))
+             (= "credit" (:choices prompt))
+             (seq (when (sequential? (:choices prompt)) (:choices prompt)))
              (seq (:selectable prompt))))))
 
 (defn opponent-mulligan-pending?

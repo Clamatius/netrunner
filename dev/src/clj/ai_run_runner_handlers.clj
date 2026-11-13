@@ -11,6 +11,7 @@
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
             [ai-state :as state]
+            [ai-prompts :as prompts]
             [ai-card-actions :as actions]
             [ai-run-tactics :as tactics]
             ;; runner-signaled-let-fire? is the predicate the CORP reads to decide
@@ -247,6 +248,7 @@
   [{:keys [side my-prompt gameid]}]
   (when (and my-prompt
              (= "select" (:prompt-type my-prompt))
+             (sequential? (:selectable my-prompt))
              (= 1 (count (:selectable my-prompt))))
     (let [selectable (:selectable my-prompt)
           eid (:eid my-prompt)
@@ -414,7 +416,7 @@
    must be resolved before breaking."
   [prompt]
   (when prompt
-    (let [choices (:choices prompt)
+    (let [choices (when (sequential? (:choices prompt)) (:choices prompt))
           selectable (:selectable prompt)
           non-trivial (remove (fn [choice]
                                (let [value (clojure.string/lower-case (:value choice ""))]
@@ -423,7 +425,8 @@
                                      (= value "ok")
                                      (= value ""))))
                              choices)]
-      (or (>= (count non-trivial) 2)
+      (or (prompts/value-prompt-kind prompt)
+          (>= (count non-trivial) 2)
           (seq selectable)))))
 
 (defn- subs-already-resolved?

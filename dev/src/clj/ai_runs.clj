@@ -805,7 +805,7 @@
    or has 1+ selectable cards (for 'select' type prompts like credit sources)."
   [prompt]
   (when prompt
-    (let [choices (:choices prompt)
+    (let [choices (when (sequential? (:choices prompt)) (:choices prompt))
           selectable (:selectable prompt)
           non-trivial (remove (fn [choice]
                                (let [value (clojure.string/lower-case (:value choice ""))]
@@ -814,8 +814,9 @@
                                      (= value "ok")
                                      (= value ""))))
                              choices)]
-      (or (>= (count non-trivial) 2)
-          (seq selectable)))))
+      (boolean (or (prompts/value-prompt-kind prompt)
+                   (>= (count non-trivial) 2)
+                   (seq selectable))))))
 
 (defn corp-has-rez-opportunity?
   "True if corp is at a rez decision point (approach-ice with unrezzed ice)"
@@ -833,7 +834,7 @@
 
       ;; Corp has explicit rez choices (upgrade/asset rez)
       (when corp-prompt
-        (let [choices (:choices corp-prompt)]
+        (let [choices (when (sequential? (:choices corp-prompt)) (:choices corp-prompt))]
           (some #(clojure.string/includes? (:value % "") "Rez") choices))))))
 
 (defn is-waiting-prompt?
@@ -868,7 +869,8 @@
        (not= "run" (:prompt-type my-prompt))
        (not= "waiting" (:prompt-type my-prompt))
        (or (= "select" (:prompt-type my-prompt))
-           (seq (:choices my-prompt))
+           (prompts/value-prompt-kind my-prompt)
+           (seq (when (sequential? (:choices my-prompt)) (:choices my-prompt)))
            (seq (:selectable my-prompt)))))
 
 (defn should-i-act?
@@ -1199,7 +1201,7 @@
             (when card-title
               (println (format "   Card: %s" card-title)))
             ;; Show choices if any (e.g., "Steal", "Pay to trash")
-            (when-let [choices (:choices my-prompt)]
+            (when-let [choices (when (sequential? (:choices my-prompt)) (:choices my-prompt))]
               (when (> (count choices) 1)
                 (println "   Options:")
                 (doseq [[idx choice] (map-indexed vector choices)]
@@ -1252,6 +1254,7 @@
    For other single-choice prompts: auto-continue immediately."
   [{:keys [my-prompt gameid]}]
   (when (and my-prompt
+             (sequential? (:choices my-prompt))
              (seq (:choices my-prompt))
              (= 1 (count (:choices my-prompt))))
     (if-let [bad-pub (bad-pub-offer my-prompt)]
@@ -1598,8 +1601,12 @@
       ;; Show card text for first-seen cards (especially useful during access)
       (core/show-card-on-first-sight! card-title))
     ;; Display text choices if present
-    (let [choices (:choices my-prompt)
+    (let [choices (when (sequential? (:choices my-prompt)) (:choices my-prompt))
           selectable (:selectable my-prompt)]
+      (when-let [kind (prompts/value-prompt-kind my-prompt)]
+        (println (if (= kind :card-title)
+                   "   → choose-value \"<card title>\""
+                   "   → choose-value <number>")))
       (when (seq choices)
         (println (format "   Choices: %d options" (count choices)))
         (doseq [[idx choice] (map-indexed vector choices)]
@@ -1622,7 +1629,10 @@
   (let [run-phase (get-in state [:game-state :run :phase])
         ;; Corp should wait during success phase ONLY if Corp has no prompt at all
         ;; If Corp has any prompt (even trivial "Done"), that needs to be handled first
-        corp-has-prompt-with-choices? (and my-prompt (seq (:choices my-prompt)))
+        corp-has-prompt-with-choices? (and my-prompt
+                                           (or (prompts/value-prompt-kind my-prompt)
+                                               (seq (when (sequential? (:choices my-prompt))
+                                                      (:choices my-prompt)))))
         corp-waiting-for-access? (and (= side "corp")
                                       (= run-phase "success")
                                       (not corp-has-prompt-with-choices?)

@@ -2,11 +2,14 @@
   "Prompt handling, choices, mulligan, and discard management"
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
-            [ai-core :as core]))
+            [ai-core :as core]
+            [clojure.string :as str]))
 
 ;; ============================================================================
 ;; Prompts & Choices
 ;; ============================================================================
+
+(declare value-prompt-kind)
 
 (defn- maybe-auto-end-turn-after-prompt!
   "After a prompt resolves, the run may have completed implicitly (e.g.,
@@ -119,7 +122,7 @@
         old-eid (:eid prompt)
         old-msg (:msg prompt)
         old-cid (get-in prompt [:card :cid])
-        old-choice-values (mapv :value (:choices prompt))]
+        old-choice-values (mapv :value (when (sequential? (:choices prompt)) (:choices prompt)))]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"
@@ -162,7 +165,7 @@
             ;; minus the sub just broken, another [click] per break). Calling
             ;; that a duplicate told seats to "drain" a prompt that was
             ;; actually offering more value, 9/9 breaks in marquee 30c4a1c0.
-            new-choice-values (mapv :value (:choices new-prompt))
+            new-choice-values (mapv :value (when (sequential? (:choices new-prompt)) (:choices new-prompt)))
             duplicate? (and same-shape? (= new-choice-values old-choice-values))
             follow-up? (and same-shape? (not= new-choice-values old-choice-values))]
         (println (str "✅ Chose: " (core/format-choice choice)))
@@ -212,9 +215,13 @@
         prompt (get-in client-state [:game-state side-kw :prompt-state])
         prompt-type (:prompt-type prompt)
         choices (:choices prompt)
-        choice (nth choices index nil)
+        choice (when (sequential? choices) (nth choices index nil))
         choice-uuid (:uuid choice)]
     (cond
+      (value-prompt-kind prompt)
+      (do (println "❌ This prompt expects a value, not a numbered button. Use choose-value <number> or choose-value \"<card title>\".")
+          (core/with-cursor {:status :error :reason "Use choose-value for value prompts"}))
+
       ;; Select prompts need choose-card, not choose. Warn LOUDLY rather than
       ;; silently picking a meta-choice (e.g. "Done") from :choices.
       ;;
@@ -398,7 +405,106 @@
             (when-let [after (get l (+ i (count n)))]
               (Character/isDigit ^char after)))))))
 
-(defn choose-by-value!
+(defn value-prompt-kind
+  "The primitive-choice branches in game.core.actions/resolve-prompt."
+  [prompt]
+  (let [choices (:choices prompt)]
+    (cond
+      (contains? #{:trace "trace"} (:prompt-type prompt)) :trace
+      (and (map? choices) (contains? choices :number)) :number
+      (= choices "credit") :credit
+      (= choices :credit) :credit
+      (and (map? choices) (contains? choices :counter)) :counter
+      (and (map? choices) (contains? choices :card-title)) :card-title)))
+
+(defn value-prompt-range
+  "Inclusive bounds offered by board.cljs. Nil means no trustworthy ceiling."
+  [client-state prompt]
+  (let [side (state/my-side-kw client-state)
+        choices (:choices prompt)]
+    (case (value-prompt-kind prompt)
+      :trace [0 choices]
+      :number [(get choices :minimum 0) (:number choices)]
+      :credit [0 (get-in client-state [:game-state side :credit])]
+      :counter (let [cid (get-in prompt [:card :cid])
+                     card (when cid (core/find-selectable-card-by-cid
+                                      cid (:game-state client-state)))]
+                 [0 (or (when (:zone card)
+                          (get-in card [:counter (keyword (:counter choices))])) 0)])
+      nil)))
+
+(defn heuristic-value
+  "Conservative answer for a bot; the card-title predicate stays engine-owned."
+  [client-state prompt]
+  (let [kind (value-prompt-kind prompt)
+        [lo hi] (value-prompt-range client-state prompt)]
+    (case kind
+      :card-title (let [preferred (if (re-find #"(?i)agenda" (str (:msg prompt)))
+                                    "Project Atlas"
+                                    (if (= "corp" (:side client-state)) "Sure Gamble" "Hedge Fund"))
+                        allowed (get-in prompt [:choices :autocomplete])]
+                    (if (contains? (:choices prompt) :autocomplete)
+                      (or (some #(when (= % preferred) %) allowed) (first allowed))
+                      preferred))
+      (:trace :credit :counter) "0"
+      :number (when (and (number? lo) (number? hi))
+                (str (min hi (max lo (get-in prompt [:choices :default] 0)))))
+      nil)))
+
+(defn- choose-primitive!
+  [value-text]
+  (let [cs @state/client-state
+        prompt (state/get-prompt cs)
+        kind (value-prompt-kind prompt)
+        range (value-prompt-range cs prompt)
+        default (get-in prompt [:choices :default] 0)
+        parsed (when (and (not= kind :card-title)
+                          (re-matches #"[0-9]+" (str value-text)))
+                 (try (Long/parseLong (str value-text))
+                      (catch NumberFormatException _ nil)))
+        choice (if (= kind :card-title) value-text parsed)
+        [lo hi] range
+        allowed-titles (get-in prompt [:choices :autocomplete])
+        title-matches (when (and (= kind :card-title) (string? value-text))
+                        (filter #(= (str/lower-case value-text)
+                                    (str/lower-case %)) allowed-titles))]
+    (cond
+      (= kind :card-title)
+      (if (not= 1 (count title-matches))
+        (do (println (format "❌ %s is not a valid card title for this prompt (check autocomplete); nothing sent." value-text))
+            (when (> (count title-matches) 1)
+              (println "   Ambiguous case-insensitive match; nothing sent."))
+            (core/with-cursor {:status :error :reason "Card title not allowed by prompt"}))
+        (let [choice (first title-matches)]
+          (ws/send-message! :game/action
+                            {:gameid (:gameid cs) :command "choice"
+                             :args {:eid (:eid prompt) :choice choice}})
+          (if (wait-for-prompt-change! (:eid prompt) :old-msg (:msg prompt))
+            (do (println (format "✅ Named card: %s" choice))
+                (maybe-auto-end-turn-after-prompt!)
+                (core/with-cursor {:status :success :choice choice}))
+            (do (println (format "⚠️  %s was not accepted; prompt unchanged. Check the card restriction and try another title." choice))
+                (core/with-cursor {:status :waiting-input :reason "Card title rejected"})))))
+
+      (or (nil? parsed) (not (number? lo)) (not (number? hi))
+          (< parsed lo) (> parsed hi))
+      (do (println (format "❌ Choose a whole number in range %s–%s (default %s); nothing sent."
+                           (or lo "?") (or hi "?") default))
+          (core/with-cursor {:status :error :reason "Number outside prompt range"}))
+
+      :else
+      (do
+        (ws/send-message! :game/action
+                          {:gameid (:gameid cs) :command "choice"
+                           :args {:eid (:eid prompt) :choice choice}})
+        (if (wait-for-prompt-change! (:eid prompt) :old-msg (:msg prompt))
+          (do (println (format "✅ Chose number: %d" choice))
+              (maybe-auto-end-turn-after-prompt!)
+              (core/with-cursor {:status :success :choice choice}))
+          (do (println (format "⚠️  %d was not accepted; prompt unchanged." choice))
+              (core/with-cursor {:status :waiting-input :reason "Number rejected"})))))))
+
+(defn- choose-labelled-value!
   "Choose from prompt by matching value/label text (case-insensitive substring
    match, tolerant of [icon] brackets — see choice-match-index).
    Usage: (choose-by-value! \"steal\") or (choose-by-value! \"keep\")
@@ -480,6 +586,13 @@
         (println "   → Press by index instead with: choose <N>")
         (core/with-cursor {:status :error :reason "No matching choice"})))))
 
+(defn choose-by-value!
+  "Answer a primitive value prompt or match a named choice button."
+  [value-text]
+  (if (value-prompt-kind (state/get-prompt))
+    (choose-primitive! value-text)
+    (choose-labelled-value! value-text)))
+
 (defn- payment-progress
   "Report a per-credit payment step honestly, or nil if this wasn't one.
 
@@ -553,7 +666,7 @@
        ;; `choose` rather than the misleading "No select prompt active". (backlog #3)
        (empty? selectable)
        (do
-         (if (and prompt (seq (:choices prompt)))
+         (if (and prompt (sequential? (:choices prompt)) (seq (:choices prompt)))
            (do (println "❌ This prompt has text choices, not selectable cards.")
                (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
            (println "❌ No selectable cards in current prompt"))
@@ -620,7 +733,7 @@
                (do
                  (println (format "↪️  choose-card %d did not register — this prompt isn't a card-select."
                                   index))
-                 (if (seq (:choices prompt))
+                 (if (and (sequential? (:choices prompt)) (seq (:choices prompt)))
                    (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
                    (println "   → Use 'prompt' to inspect, then choose / choose-value."))
                  (core/with-cursor {:status :error
@@ -673,7 +786,7 @@
       ;; "select" (mirrors choose-card!; see backlog #3).
       (empty? selectable)
       (do
-        (if (and prompt (seq (:choices prompt)))
+        (if (and prompt (sequential? (:choices prompt)) (seq (:choices prompt)))
           (do (println "❌ This prompt has text choices, not selectable cards.")
               (println "   → Use: choose <N>  (or choose-value \"<text>\")"))
           (println "❌ No selectable cards in current prompt"))
@@ -762,7 +875,7 @@
               :else
               (do
                 (println "↪️  multi-choose did not register — this prompt isn't a card-select.")
-                (if (seq (:choices prompt))
+                (if (and (sequential? (:choices prompt)) (seq (:choices prompt)))
                   (println "   → It's a numbered CHOICE prompt. Use:  choose <N>")
                   (println "   → Use 'prompt' to inspect, then choose / choose-value."))
                 (core/with-cursor {:status :error
@@ -1180,6 +1293,7 @@
   (let [prompt (state/get-prompt)
         choices (:choices prompt)]
     (and prompt
+         (sequential? choices)
          (= 1 (count choices))
          (= "OK" (:value (first choices))))))
 

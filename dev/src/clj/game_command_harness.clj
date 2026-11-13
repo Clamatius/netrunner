@@ -1471,7 +1471,7 @@
     (let [prompt (get-prompt state :runner)]
       (when prompt
         (println "Access prompt:" (:msg prompt))
-        (when-let [choices (seq (:choices prompt))]
+        (when-let [choices (seq (when (sequential? (:choices prompt)) (:choices prompt)))]
           (let [choice-vals (mapv :value choices)]
             (println "Choices:" choice-vals)
             (if (some #(= % "Steal") choice-vals)
@@ -1742,7 +1742,7 @@
         (when prompt
           (println "Runner has prompt to choose which subroutine to break:")
           (println "  Prompt:" (:msg prompt))
-          (println "  Choices:" (mapv :value (:choices prompt)))
+          (println "  Choices:" (mapv :value (when (sequential? (:choices prompt)) (:choices prompt))))
           (click-prompt state :runner "End the run")
           (println "✓ Broke 'End the run' subroutine!"))))
 
@@ -1761,7 +1761,7 @@
     (let [prompt (get-prompt state :runner)]
       (when prompt
         (println "Access prompt:" (:msg prompt))
-        (let [choices (mapv :value (:choices prompt))]
+        (let [choices (mapv :value (when (sequential? (:choices prompt)) (:choices prompt)))]
           (println "Choices:" choices)
           (if (some #(= % "Steal") choices)
             (do

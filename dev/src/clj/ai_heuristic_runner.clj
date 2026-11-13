@@ -279,6 +279,11 @@
             (= prompt-type "waiting"))
         false
 
+        (prompts/value-prompt-kind prompt)
+        (when-let [answer (prompts/heuristic-value @state/client-state prompt)]
+          (log-decision "VALUE PROMPT:" msg "->" answer)
+          (= :success (:status (prompts/choose-by-value! answer))))
+
         ;; Brân 1.0 click ability (Runner Playbook: "Almost always bypass")
         (str/includes? msg "Lose [Click]")
         (do
