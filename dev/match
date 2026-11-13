@@ -704,8 +704,11 @@ seat_note() {  # side -> one-line account of how its seat ended
     local rec="$RUN/$1.out.receipt"
     case "$(gv "$1" kind)" in
         bot) echo "$1 bot loop ended" ;;
-        model) [[ -f "$rec" ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%s seat exited (ok=%s, %s)" % (sys.argv[2], d.get("ok"), d.get("reason") or "exit %s" % d.get("exit")))' "$rec" "$1" 2>/dev/null \
-               || echo "$1 seat exited without a receipt" ;;
+        model) local n b
+               n=$([[ -f "$rec" ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%s seat exited (ok=%s, %s)" % (sys.argv[2], d.get("ok"), d.get("reason") or "exit %s" % d.get("exit")))' "$rec" "$1" 2>/dev/null \
+                   || echo "$1 seat exited without a receipt")
+               b=$(grep -m1 '^BACKEND-UNAVAILABLE: ' "$RUN/babysit-$1.log" 2>/dev/null)  # marquee-babysit.sh gave up
+               echo "$n${b:+; $1 babysitter: ${b#BACKEND-UNAVAILABLE: }}" ;;
     esac
 }
 progress() {

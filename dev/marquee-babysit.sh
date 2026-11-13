@@ -32,6 +32,29 @@
 #            MARQUEE_CLAUDE_TOKEN_FILE) and exports CLAUDE_CODE_OAUTH_TOKEN.
 #            MARQUEE_CLAUDE_EFFORT overrides reasoning effort (default xhigh).
 #
+# Backend failures (game a5891297: every claude resume answered
+# `Failed to authenticate. API Error: 403 ... Cloudflare` and exited 1 at once):
+#   A chunk whose backend call exits NON-ZERO within FAST_FAIL_SECS (60) and
+#   leaves the game log where it was never ran the model. It does not count
+#   toward the "5 idle chunks = STALLED" rule; it is retried with exponential
+#   backoff 30s, 60s, 120s, 240s, 480s, then 600s each, until the backoff slept
+#   since the last chunk that ran reaches MARQUEE_BACKEND_PATIENCE_SECS
+#   (default 3600). Then: BACKEND-UNAVAILABLE line, exit 75 (EX_TEMPFAIL).
+#   Any chunk that ran (slow, zero exit, or game-log progress) resets the
+#   backoff. Each failure logs a BACKEND-FAIL line: exit code, duration, first
+#   output line (token redacted), next retry time. The game ending during a
+#   backoff sleep is noticed within one 15s poll.
+#   60s: the a5891297 failures took ~3s per chunk including both send_command
+#   calls (33s apart, 30s of it the sleep); a chunk that runs the model loads
+#   the conversation and makes at least one model turn plus tool calls.
+#   3600s: dev/match declares a side dead only when its seat AND its
+#   babysitter are both gone (side_alive), so a babysitter backing off keeps
+#   the game alive; its own clock is --max-hours (default 6h). An hour is 3x
+#   the launcher's 20-minute stall window and outlasts the a5891297 outage
+#   (healthy again within 20 minutes). Cost: a PERMANENT fast failure (a bad
+#   CLI flag) now takes the patience to give up instead of ~2.5 minutes; the
+#   BACKEND-FAIL lines name its cause from the first attempt.
+#
 # FAIRNESS NOTE: the *_EFFORT defaults are xhigh, which is DELIBERATELY not the
 # usual seat default. If a match is running both seats at a matched effort, pass
 # the match's level explicitly on BOTH babysitters — otherwise a seat that gets
@@ -48,6 +71,9 @@ CODEX_EFFORT="${MARQUEE_CODEX_EFFORT:-xhigh}"
 CLAUDE_EFFORT="${MARQUEE_CLAUDE_EFFORT:-xhigh}"
 CLAUDE_SESSION="${MARQUEE_CLAUDE_SESSION:-}"
 CLAUDE_TOKEN_FILE="${MARQUEE_CLAUDE_TOKEN_FILE:-$HOME/claude_oauth.txt}"
+PATIENCE="${MARQUEE_BACKEND_PATIENCE_SECS:-3600}"
+[[ "$PATIENCE" =~ ^[0-9]+$ ]] || { echo "MARQUEE_BACKEND_PATIENCE_SECS must be a whole number of seconds, got '$PATIENCE'"; exit 1; }
+FAST_FAIL_SECS=60; BACKOFF_FIRST=30; BACKOFF_CAP=600; BACKOFF_POLL=15
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs
 # MARQUEE_CHUNK_LOG: a launcher (dev/match) keeps the chunk log in its run dir.
@@ -100,25 +126,57 @@ fi
 
 NUDGE="The Netrunner game is STILL LIVE and you are the ${SIDE} seat. Your last reply ended without finishing the game — that strands the match. Do NOT narrate intentions and do NOT end your reply until ./dev/send_command ${SIDE} game-over-status prints GAME-OVER or GAME-GONE. EXECUTE commands now: check status, take your turn(s), use the blocking wait loop between turns (C=\$(./dev/send_command ${SIDE} get-cursor); ./dev/send_command ${SIDE} wait --since \"\$C\"), and keep looping. A wait timeout is benign — re-issue wait. Keep appending to your move-by-move rationale as you play; produce the final report only at GAME-OVER/GAME-GONE."
 
-idle=0
-chunk=0
-while true; do
+# Exit 0 if the game is over; otherwise leave the status line in $s.
+check_terminal() {
   s=$(./dev/send_command "$SIDE" game-over-status 2>/dev/null | tail -1)
   case "$s" in
     GAME-OVER*|GAME-GONE*|NO-GAME*) echo "TERMINAL: $s (after $chunk chunks)"; exit 0;;
   esac
+}
+# Sleep $1 seconds in BACKOFF_POLL slices, ending the babysitter as soon as the
+# game is over instead of after the whole (up to 600s) delay.
+backoff_sleep() {
+  local left="$1" step
+  while [ "$left" -gt 0 ]; do
+    step=$BACKOFF_POLL; [ "$left" -lt "$step" ] && step=$left
+    sleep "$step"; left=$((left-step))
+    check_terminal
+  done
+}
+# First non-blank line of this chunk's output (bytes after offset $1 of $LOG),
+# trimmed, capped at 200 chars, with the OAuth token redacted.
+first_line() {
+  local line
+  line=$(tail -c "+$(( $1 + 1 ))" "$LOG" 2>/dev/null | tr -d '\r' | grep -m1 '[^[:space:]]')
+  line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then line="${line//"$CLAUDE_CODE_OAUTH_TOKEN"/[REDACTED]}"; fi
+  [ -n "$line" ] || line="(no output)"
+  printf '%s' "${line:0:200}"
+}
+clock_at() {  # epoch -> HH:MM:SS (BSD date, then GNU)
+  date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'
+}
+
+idle=0
+chunk=0
+fails=0; backoff_used=0; delay=0
+while true; do
+  check_terminal
   before=$(./dev/send_command "$SIDE" get-cursor 2>/dev/null | tail -1)
   chunk=$((chunk+1))
   {
     echo ""
     echo "===== chunk $chunk $(date '+%H:%M:%S') status=$s idle=$idle ====="
   } >> "$LOG"
+  offset=$(wc -c < "$LOG" | tr -d ' ')
+  t0=$(date +%s)
   if [ "$BACKEND" = codex ]; then
     # `exec resume` has no -s (codex 0.156 rejects it: every chunk died on
     # "unexpected argument '-s'" and the loop stalled out) — set it via config.
     timeout 3600 codex exec resume "$SESSION" "$NUDGE" \
       -m "$MODEL" -c sandbox_mode='"danger-full-access"' -c model_reasoning_effort="$CODEX_EFFORT" \
       >> "$LOG" 2>&1
+    rc=$?
     # A resume may be recorded under a fresh id; chain onto whatever it used.
     newest="$(codex_session_id "$LOG")"
     [ -n "$newest" ] && SESSION="$newest"
@@ -128,11 +186,32 @@ while true; do
     printf '%s' "$NUDGE" | timeout 3600 claude --model "$MODEL" \
       --effort "$CLAUDE_EFFORT" --resume "$CLAUDE_SESSION" \
       --dangerously-skip-permissions -p >> "$LOG" 2>&1
+    rc=$?
   else
     DEVIN_PERMISSION_MODE=dangerous timeout 3600 devin -p -c --model "$MODEL" -- "$NUDGE" \
       >> "$LOG" 2>&1
+    rc=$?
   fi
+  t1=$(date +%s); dur=$((t1-t0))
   after=$(./dev/send_command "$SIDE" get-cursor 2>/dev/null | tail -1)
+  if [ "$rc" -ne 0 ] && [ "$dur" -lt "$FAST_FAIL_SECS" ] && [ "$before" = "$after" ]; then
+    # The backend call failed to run the model: back off, do not count idle.
+    fails=$((fails+1))
+    why="exit $rc after ${dur}s: $(first_line "$offset")"
+    left=$((PATIENCE-backoff_used))
+    if [ "$left" -le 0 ]; then
+      echo "BACKEND-UNAVAILABLE: $BACKEND backend unavailable — $fails consecutive calls failed without running the model, after ${backoff_used}s of backoff (MARQUEE_BACKEND_PATIENCE_SECS=$PATIENCE); last: $why"
+      exit 75
+    fi
+    if [ "$fails" -eq 1 ]; then delay=$BACKOFF_FIRST; else delay=$((delay*2)); fi
+    [ "$delay" -gt "$BACKOFF_CAP" ] && delay=$BACKOFF_CAP
+    [ "$delay" -gt "$left" ] && delay=$left
+    backoff_used=$((backoff_used+delay))
+    echo "BACKEND-FAIL attempt $fails: $BACKEND exited $rc after ${dur}s without running the model: $(first_line "$offset") — retry in ${delay}s at $(clock_at $((t1+delay))) (backoff ${backoff_used}s of ${PATIENCE}s patience)"
+    backoff_sleep "$delay"
+    continue
+  fi
+  fails=0; backoff_used=0
   if [ "$before" = "$after" ]; then idle=$((idle+1)); else idle=0; fi
   if [ "$idle" -ge 5 ]; then
     echo "STALLED: 5 consecutive chunks with no game-log progress (last status: $s)"
