@@ -1,0 +1,800 @@
+#!/usr/bin/env bash
+# dev/match — run ONE whole Netrunner game unattended and leave a replay, both
+# seat reports and a machine-readable result.json. `dev/match --help` is the doc.
+#
+# The sequence is the as-executed marquee recipe (claude-memory
+# netrunner-pair-day301/launch-game.sh and netrunner-argon-pairs-1025), not
+# dev/MARQUEE_RUNBOOK.md: reset -> gameid -> Corp seat -> wait for the Corp's
+# keep/mulligan -> Runner seat -> babysitter per seat -> wait -> harvest.
+#
+# Ownership: this launcher kills only processes it started, identified by pid
+# AND start time (a recycled pid is somebody else's), plus their descendants.
+# Never by port, never by name: the REPLs and the game server are a shared
+# singleton (memory: a-launched-process-is-not-an-owned-one).
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SC="$SCRIPT_DIR/send_command"
+ASKMODEL="${ASKMODEL:-$(command -v askmodel 2>/dev/null || echo "$HOME/bin/askmodel")}"
+CLAUDE_TOKEN_FILE="${CLAUDE_TOKEN_FILE:-$HOME/claude_oauth.txt}"
+CODEX_AUTH="${CODEX_HOME:-$HOME/.codex}/auth.json"
+
+# Tuning knobs (seconds). Defaults are for real games; the tests shrink them.
+POLL_SECS="${MATCH_POLL_SECS:-30}"
+KEEP_SECS="${MATCH_KEEP_SECS:-1200}"
+HUMAN_JOIN_SECS="${MATCH_HUMAN_JOIN_SECS:-1800}"
+REPORT_GRACE_SECS="${MATCH_REPORT_GRACE_SECS:-900}"
+SEAT_TIMEOUT="${MATCH_SEAT_TIMEOUT:-14400}"
+QUOTA_LIMIT=80
+
+usage() {
+    cat <<'EOF'
+dev/match — run one Netrunner game unattended, start to replay.
+
+  dev/match --corp <seat> --runner <seat> [--corp-deck <file.edn> --runner-deck <file.edn>]
+            [--effort low|medium|high|xhigh] [--tag <name>] [--no-babysit]
+            [--max-hours N] [--stall-minutes N] [--force] [--dry-run]
+
+<seat> is one of:
+  an askmodel seat   opus, fable, sonnet, haiku, sol, astra, luna, argon, ... or any
+                     versioned pin `askmodel --list` knows (fable51, sol6, ...).
+                     codex/devin seats run through `askmodel <seat> --write`; claude
+                     seats run raw `claude -p --session-id` (askmodel's claude sandbox
+                     denies loopback, so it cannot reach the REPLs).
+  bot                the in-repo heuristic player (`send_command <side> bot-loop`;
+                     `--patient 30` when its opponent is not also a bot).
+  human              you, in the web client. The launcher creates the lobby, seats
+                     only the other side, prints how to join, and waits for you.
+
+Options:
+  --corp-deck/--runner-deck  both or neither. Both = System Gateway Constructed with
+                     these lists (seeded via dev/seed-decks.sh); neither = the default
+                     Intermediate lobby. A missing file is refused before anything runs.
+  --effort E         reasoning effort for BOTH model seats and BOTH babysitters
+                     (default high). Matched named settings, not equal compute.
+                     Not applied to devin seats (effort rides in the model string).
+  --tag NAME         run dir name (default <timestamp>-<corp>-v-<runner>).
+  --no-babysit       do not arm dev/marquee-babysit.sh for model seats.
+  --max-hours N      give up after N hours (default 6): outcome "timeout".
+  --stall-minutes N  "stalled"/"seat-died" needs N minutes with no game-log progress
+                     AND a side with no live seat process or babysitter (default 20).
+  --force            run even if a game is live on the REPLs (its replay is flushed
+                     first) or a codex seat's weekly quota is above 80%.
+  --dry-run          print every command it would run; touch nothing.
+
+What it does:
+  preflight  ports 1042/7888/7889/7890 listening; no live unfinished game; seats
+             resolve; codex weekly quota (refused above 80% unless --force).
+  reset      flushes the previous game's replay if dev/replays lacks it (save-replay
+             must run before any further reset), then dev/reset.sh with the decks.
+  launch     Corp seat -> waits for the Corp's keep/mulligan (aborts if the Corp seat
+             dies) -> Runner seat -> babysitters (matched effort passed explicitly).
+  wait       until GAME-OVER, GAME-GONE, a stall, or --max-hours. The launcher polls
+             with a PRIVATE heartbeat dir, so its own polling never makes a dead seat
+             look alive in peer-status.
+  harvest    dev/save-replay.sh -> dev/replays/<gameid>.json; seat reports copied to
+             dev/replays/<gameid8>-<side>-<seat>-report.md; result.json.
+  exit       0 only when outcome is "completed". On ANY exit it stops the seat
+             processes and babysitters it started (by pid + start time, never by
+             port or name). An unfinished game's lobby is left open, resumable;
+             the next dev/match flushes its replay before resetting.
+
+Run dir logs/match/<tag>/: brief-<side>.md, seat-<side>.sh (the exact seat command),
+<side>.out (+ .stderr/.receipt/.trace.jsonl), babysit-<side>.log/-chunks.log,
+launcher.log, launcher-commands.log (the launcher's own send_command calls),
+result.json {gameid, tag, corp:{seat,backend,model,effort}, runner:{...}, decks,
+winner, reason, score:{corp,runner}, turns, started, ended, duration_s, outcome,
+babysit_chunks:{corp,runner}, replay, reports:{corp,runner}, git_sha}.
+outcome: completed | stalled | seat-died | timeout | launch-failed | interrupted.
+
+Unattended start that survives the caller (verified: a seat spawned from a
+background launcher outlives the shell that started it):
+  nohup dev/match --corp luna --runner luna > /dev/null 2>&1 &
+  # then: tail -f logs/match/<tag>/launcher.log ; cat logs/match/<tag>/result.json
+Umpire (optional): seats ping dev/.umpire when they suspect a wedge; watch with
+  dev/umpire-watch.sh and answer with dev/umpire-reply (see dev/MARQUEE_RUNBOOK.md).
+
+Tuning/test knobs (env, seconds): MATCH_POLL_SECS (30), MATCH_KEEP_SECS (1200),
+MATCH_HUMAN_JOIN_SECS (1800), MATCH_REPORT_GRACE_SECS (900), MATCH_SEAT_TIMEOUT
+(14400, askmodel --timeout), MATCH_STALL_SECS / MATCH_MAX_SECS (override the minute/
+hour flags), ASKMODEL, CLAUDE_TOKEN_FILE, CODEX_HOME.
+EOF
+}
+
+# ── tiny helpers ──────────────────────────────────────────────────────────────
+now() { date +%s; }
+iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+die_usage() { echo "dev/match: $*" >&2; echo "  (dev/match --help for usage)" >&2; exit 2; }
+quote() { local s="" a; for a in "$@"; do s+="$(printf '%q' "$a") "; done; printf '%s' "${s% }"; }
+other() { [[ "$1" == corp ]] && echo runner || echo corp; }
+Cap() { [[ "$1" == corp ]] && echo Corp || echo Runner; }
+
+# Per-side fields without associative arrays: sv corp kind model / gv corp kind
+sv() { printf -v "S_${1}_${2}" '%s' "$3"; }
+gv() { local v="S_${1}_${2}"; printf '%s' "${!v:-}"; }
+
+DRY=0
+# x: run a command, or print it under --dry-run.
+x() {
+    if (( DRY )); then printf '+ %s\n' "$(quote "$@")"; return 0; fi
+    "$@"
+}
+# pollsc: the launcher's OWN send_command calls. Private heartbeat dir (operator
+# calls would otherwise refresh the side's heartbeat and make a dead seat look
+# alive to its opponent's peer-status) and a private command log.
+pollsc() { x env HEARTBEAT_DIR="$HB" SEND_COMMAND_LOG="$CMDLOG" "$SC" "$@"; }
+# marker SIDE NAME EXPR: eval EXPR in SIDE's REPL; print the text after "NAME ".
+# q: like the call it wraps, but quiet in a real run (dry-run still prints it).
+# Wrap only x-aware calls: pollsc, or an explicit `x cmd ...`.
+q() { if (( DRY )); then "$@"; else "$@" >/dev/null 2>&1; fi; }
+snooze() { sleep "$1" & wait $!; }   # a trapped signal interrupts it at once
+marker() {
+    local side="$1" name="$2" expr="$3"
+    pollsc "$side" eval "$expr" 2>/dev/null | sed -n "s/^$name //p" | tail -1
+}
+
+# ── argument parsing (pure: touches nothing) ─────────────────────────────────
+CORP_SEAT=""; RUNNER_SEAT=""; CORP_DECK=""; RUNNER_DECK=""; EFFORT="high"; TAG=""
+BABYSIT=1; MAX_HOURS=6; STALL_MIN=20; FORCE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --corp|--runner|--corp-deck|--runner-deck|--effort|--tag|--max-hours|--stall-minutes)
+            [[ $# -ge 2 && -n "$2" ]] || die_usage "$1 needs a value"
+            case "$1" in
+                --corp) CORP_SEAT="$2" ;; --runner) RUNNER_SEAT="$2" ;;
+                --corp-deck) CORP_DECK="$2" ;; --runner-deck) RUNNER_DECK="$2" ;;
+                --effort) EFFORT="$2" ;; --tag) TAG="$2" ;;
+                --max-hours) MAX_HOURS="$2" ;; --stall-minutes) STALL_MIN="$2" ;;
+            esac
+            shift 2 ;;
+        --no-babysit) BABYSIT=0; shift ;;
+        --force) FORCE=1; shift ;;
+        --dry-run) DRY=1; shift ;;
+        *) die_usage "unknown argument: $1" ;;
+    esac
+done
+
+[[ -n "$CORP_SEAT" ]]   || die_usage "--corp <seat> is required"
+[[ -n "$RUNNER_SEAT" ]] || die_usage "--runner <seat> is required"
+[[ "$CORP_SEAT" == human && "$RUNNER_SEAT" == human ]] && die_usage "both seats human: nothing for the launcher to seat (open the web client)"
+case "$EFFORT" in low|medium|high|xhigh) ;; *) die_usage "--effort must be low|medium|high|xhigh, got '$EFFORT'" ;; esac
+[[ "$MAX_HOURS" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk "BEGIN{exit !($MAX_HOURS>0)}" || die_usage "--max-hours must be a positive number, got '$MAX_HOURS'"
+[[ "$STALL_MIN" =~ ^[0-9]+$ && "$STALL_MIN" -gt 0 ]] || die_usage "--stall-minutes must be a positive whole number, got '$STALL_MIN'"
+MAX_SECS="${MATCH_MAX_SECS:-$(awk "BEGIN{printf \"%d\", $MAX_HOURS*3600}")}"
+STALL_SECS="${MATCH_STALL_SECS:-$((STALL_MIN * 60))}"
+
+# Decks: both or neither, and each must exist — refused here, before any reset.
+if [[ -n "$CORP_DECK" || -n "$RUNNER_DECK" ]]; then
+    [[ -n "$CORP_DECK" && -n "$RUNNER_DECK" ]] || die_usage "decks are both or neither (got --corp-deck '${CORP_DECK}' --runner-deck '${RUNNER_DECK}')"
+    for d in "$CORP_DECK" "$RUNNER_DECK"; do
+        [[ -f "$d" && -r "$d" ]] || die_usage "no such deck file: $d"
+    done
+    CORP_DECK="$(cd "$(dirname "$CORP_DECK")" && pwd)/$(basename "$CORP_DECK")"
+    RUNNER_DECK="$(cd "$(dirname "$RUNNER_DECK")" && pwd)/$(basename "$RUNNER_DECK")"
+fi
+
+[[ -z "$TAG" ]] && TAG="$(date +%Y%m%d-%H%M%S)-${CORP_SEAT}-v-${RUNNER_SEAT}"
+[[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || die_usage "--tag may only use letters, digits, . _ - (got '$TAG')"
+RUN="$ROOT/logs/match/$TAG"
+[[ -e "$RUN" ]] && die_usage "run dir already exists: $RUN (pick another --tag)"
+HB="$RUN/.heartbeats"
+CMDLOG="$RUN/launcher-commands.log"
+
+# Seats: kind (model|bot|human), backend, model string, vendor, display name.
+display_name() {  # model string -> what a seat brief calls it
+    python3 - "$1" <<'PY'
+import sys
+m = sys.argv[1]
+p = [x for x in m.split('-') if x not in ('low', 'medium', 'high', 'xhigh', 'max')]
+if p[0] == 'claude' and len(p) >= 2:
+    print(' '.join(['Claude', p[1].capitalize()] + (['.'.join(p[2:])] if p[2:] else [])))
+elif p[0] == 'gpt' and len(p) >= 2:
+    print(' '.join(['GPT-' + p[1]] + [x.capitalize() for x in p[2:]]))
+else:
+    print(m)
+PY
+}
+resolve_side() {
+    local side="$1" seat="$2" out
+    case "$seat" in
+        bot)   sv "$side" kind bot;   sv "$side" backend heuristic; sv "$side" model "ai-heuristic-$side" ;;
+        human) sv "$side" kind human; sv "$side" backend web;       sv "$side" model "" ;;
+        *)
+            out=$("$ASKMODEL" "$seat" --resolve 2>&1) || die_usage "$(Cap "$side") seat '$seat' does not resolve: $out"
+            IFS=$'\t' read -r b m v <<<"$(printf '%s\n' "$out" | tail -1)"
+            [[ -n "${b:-}" && -n "${m:-}" ]] || die_usage "askmodel $seat --resolve printed nothing usable: $out"
+            sv "$side" kind model; sv "$side" backend "$b"; sv "$side" model "$m"; sv "$side" vendor "${v:-}"
+            sv "$side" name "$(display_name "$m")"
+            if [[ "$b" == claude ]]; then
+                command -v claude >/dev/null 2>&1 || die_usage "$(Cap "$side") seat '$seat' needs the claude CLI on PATH"
+                [[ -s "$CLAUDE_TOKEN_FILE" ]] || die_usage "$(Cap "$side") seat '$seat' needs an OAuth token in $CLAUDE_TOKEN_FILE"
+            fi ;;
+    esac
+    sv "$side" seat "$seat"
+    # Effort is the model seats' dial; devin carries it in the model string.
+    if [[ "$(gv "$side" kind)" == model && "$(gv "$side" backend)" != devin ]]; then
+        sv "$side" effort "$EFFORT"
+    else
+        sv "$side" effort ""
+    fi
+}
+resolve_side corp "$CORP_SEAT"
+resolve_side runner "$RUNNER_SEAT"
+
+HUMAN_SIDE=""
+for s in corp runner; do [[ "$(gv $s kind)" == human ]] && HUMAN_SIDE="$s"; done
+# The REPL the launcher watches the game through: an AI side that is in the game.
+OBS=corp; [[ "$HUMAN_SIDE" == corp ]] && OBS=runner
+
+# ── briefs: one template per side ─────────────────────────────────────────────
+brief_values() {  # side -> sets B_KIND B_SELF B_OPP_TITLE B_OPP B_NOTE
+    local side="$1" opp; opp="$(other "$side")"
+    B_SELF="$(gv "$side" name)"
+    case "$(gv "$opp" kind)" in
+        model)
+            if [[ "$(gv "$opp" model)" == "$(gv "$side" model)" ]]; then
+                B_KIND="Same-model match"; B_OPP_TITLE="another $(gv "$opp" name)"
+                B_OPP="a separate, isolated $(gv "$opp" name) instance"
+            else
+                B_KIND="Cross-model match"; B_OPP_TITLE="$(gv "$opp" name)"
+                B_OPP="an isolated $(gv "$opp" name) model"
+            fi
+            B_NOTE="" ;;
+        bot)
+            B_KIND="Bot match"; B_OPP_TITLE="the heuristic $(Cap "$opp") bot"
+            B_OPP="the repo's scripted heuristic bot"
+            B_NOTE="Your opponent is a scripted bot, not a model: it plays fast. Do not read its source or strategy files to predict it; play what is in front of you." ;;
+        human)
+            B_KIND="Human match"; B_OPP_TITLE="a human player"
+            B_OPP="a human player in the web client"
+            B_NOTE="Your opponent is a human in the web client. \`peer-status\` only sees \`send_command\` callers, so it cannot see a human: it will report the $(Cap "$opp") as \`no heartbeat yet\` or \`SILENT … likely disconnected\` for the whole game. Ignore that. The game is live while \`game-over-status\` says \`IN-PROGRESS\` or \`AWAITING-START\`: keep waiting, however long the human takes." ;;
+    esac
+}
+render_brief() {  # side dest  (dest "-" = stdout)
+    local side="$1" dest="$2"
+    brief_values "$side"
+    B_KIND="$B_KIND" B_SELF="$B_SELF" B_OPP_TITLE="$B_OPP_TITLE" B_OPP="$B_OPP" B_NOTE="$B_NOTE" \
+    python3 - "$SCRIPT_DIR/seats/template-$side.md" "$dest" <<'PY'
+import os, sys
+src, dest = sys.argv[1], sys.argv[2]
+t = open(src).read()
+note = os.environ["B_NOTE"]
+t = t.replace("{{OPPONENT_NOTE}}\n\n", note + "\n\n" if note else "")
+for k, v in (("KIND", "B_KIND"), ("SELF", "B_SELF"), ("OPPONENT_TITLE", "B_OPP_TITLE"), ("OPPONENT", "B_OPP")):
+    t = t.replace("{{%s}}" % k, os.environ[v])
+if "{{" in t:
+    sys.exit("unfilled placeholder in %s" % src)
+(sys.stdout if dest == "-" else open(dest, "w")).write(t)
+PY
+}
+
+# ── process ownership ─────────────────────────────────────────────────────────
+OWNED=()          # "pid|lstart|label"
+OWNED_BOTS=()     # sides whose bot-loop this run launched
+pstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/  */ /g;s/^ //;s/ $//'; }
+own() { OWNED+=("$1|$(pstart "$1")|$2"); }
+owned_entry() { local e; for e in "${OWNED[@]+"${OWNED[@]}"}"; do [[ "${e##*|}" == "$1" ]] && { echo "$e"; return 0; }; done; return 1; }
+entry_alive() {  # "pid|lstart|label" -> 0 while that same process lives
+    local pid="${1%%|*}" rest="${1#*|}"; local st="${rest%%|*}"
+    kill -0 "$pid" 2>/dev/null && [[ "$(pstart "$pid")" == "$st" ]]
+}
+label_alive() { local e; e=$(owned_entry "$1") && entry_alive "$e"; }
+label_pid() { local e; e=$(owned_entry "$1") && echo "${e%%|*}"; }
+descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do descendants "$c"; echo "$c"; done; }
+stop_owned() {
+    local e pid tree=() p i
+    for e in "${OWNED[@]+"${OWNED[@]}"}"; do
+        entry_alive "$e" || continue
+        pid="${e%%|*}"
+        log "stopping ${e##*|} (pid $pid) and its descendants"
+        tree+=($(descendants "$pid") "$pid")
+    done
+    if (( ${#tree[@]} )); then
+        kill -TERM "${tree[@]}" 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            local live=0; for p in "${tree[@]}"; do kill -0 "$p" 2>/dev/null && live=1; done
+            (( live )) || break; sleep 0.5
+        done
+        kill -KILL "${tree[@]}" 2>/dev/null
+    fi
+    for s in "${OWNED_BOTS[@]+"${OWNED_BOTS[@]}"}"; do
+        log "stopping the $s bot loop this run launched"
+        q pollsc "$s" bot-loop-stop
+    done
+    OWNED=(); OWNED_BOTS=()
+}
+# spawn LABEL LOGFILE cmd... : detached from the caller (nohup, stdin closed) and owned.
+spawn() {
+    local label="$1" logf="$2"; shift 2
+    if (( DRY )); then printf '+ nohup %s > %s 2>&1 < /dev/null &\n' "$(quote "$@")" "$logf"; return 0; fi
+    nohup "$@" > "$logf" 2>&1 < /dev/null &
+    own "$!" "$label"
+    log "$label started: pid $!"
+}
+
+# ── result.json ───────────────────────────────────────────────────────────────
+GAMEID=""; WINNER=""; REASON=""; SCORE_C=""; SCORE_R=""; TURNS=""; OUTCOME=""; REPLAY=""
+REPORT_corp=""; REPORT_runner=""; RESULT_WRITTEN=0; PHASE=preflight; STARTED=$(now)
+chunks_of() {  # side -> chunk count, or empty when no babysitter was armed
+    [[ "$(gv "$1" babysat)" == 1 ]] || return 0
+    local f="$RUN/babysit-$1-chunks.log"
+    if [[ -f "$f" ]]; then grep -c '^===== chunk ' "$f" || true; else echo 0; fi
+}
+write_result() {
+    (( DRY )) && return 0
+    [[ -d "$RUN" ]] || return 0
+    local ended s; ended=$(now)
+    # Unfinished game: the reports are whatever the seats left in the run dir.
+    for s in corp runner; do
+        local rv="REPORT_$s"
+        [[ -z "${!rv}" && -s "$RUN/$s.out" ]] && printf -v "$rv" '%s' "$RUN/$s.out"
+    done
+    R_GAMEID="$GAMEID" R_TAG="$TAG" R_OUTCOME="$OUTCOME" R_WINNER="$WINNER" R_REASON="$REASON" \
+    R_SC="$SCORE_C" R_SR="$SCORE_R" R_TURNS="$TURNS" R_STARTED="$(iso "$STARTED")" R_ENDED="$(iso "$ended")" \
+    R_DUR="$((ended - STARTED))" R_REPLAY="$REPLAY" R_REP_C="$REPORT_corp" R_REP_R="$REPORT_runner" \
+    R_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)" \
+    R_CDECK="$CORP_DECK" R_RDECK="$RUNNER_DECK" \
+    R_C_SEAT="$(gv corp seat)" R_C_BACK="$(gv corp backend)" R_C_MODEL="$(gv corp model)" R_C_EFF="$(gv corp effort)" \
+    R_R_SEAT="$(gv runner seat)" R_R_BACK="$(gv runner backend)" R_R_MODEL="$(gv runner model)" R_R_EFF="$(gv runner effort)" \
+    R_CH_C="$(chunks_of corp)" R_CH_R="$(chunks_of runner)" \
+    python3 - "$RUN/result.json" <<'PY'
+import json, os, sys
+e = os.environ
+s = lambda k: e.get(k) or None
+n = lambda k: int(e[k]) if (e.get(k) or "").lstrip("-").isdigit() else None
+side = lambda p: {"seat": s(p + "SEAT"), "backend": s(p + "BACK"), "model": s(p + "MODEL"), "effort": s(p + "EFF")}
+r = {
+    "gameid": s("R_GAMEID"), "tag": e["R_TAG"],
+    "corp": side("R_C_"), "runner": side("R_R_"),
+    "decks": {"corp": e["R_CDECK"], "runner": e["R_RDECK"]} if e.get("R_CDECK") else None,
+    "winner": s("R_WINNER"), "reason": s("R_REASON"),
+    "score": {"corp": n("R_SC"), "runner": n("R_SR")}, "turns": n("R_TURNS"),
+    "started": e["R_STARTED"], "ended": e["R_ENDED"], "duration_s": int(e["R_DUR"]),
+    "outcome": e["R_OUTCOME"],
+    "babysit_chunks": {"corp": n("R_CH_C"), "runner": n("R_CH_R")},
+    "replay": s("R_REPLAY"), "reports": {"corp": s("R_REP_C"), "runner": s("R_REP_R")},
+    "git_sha": e["R_SHA"],
+}
+json.dump(r, open(sys.argv[1], "w"), indent=2)
+open(sys.argv[1], "a").write("\n")
+PY
+    RESULT_WRITTEN=1
+    log "result: $RUN/result.json (outcome=$OUTCOME)"
+}
+finish() {  # outcome reason exit-code
+    OUTCOME="$1"; [[ -n "${2:-}" ]] && REASON="$2"
+    log "OUTCOME $OUTCOME${REASON:+ — $REASON}"
+    stop_owned
+    if [[ "$OUTCOME" != completed && -n "$GAMEID" ]]; then
+        log "lobby $GAMEID left open (resumable). The next dev/match flushes its replay before resetting; by hand: dev/save-replay.sh $GAMEID"
+    fi
+    write_result
+    release_lock
+    exit "$3"
+}
+launch_failed() { finish launch-failed "$1" 1; }
+
+LOCK="$ROOT/logs/match/.lock"
+HAVE_LOCK=0
+take_lock() {
+    mkdir -p "$ROOT/logs/match"
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        local holder; holder=$(cat "$LOCK/pid" 2>/dev/null)
+        if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+            echo "dev/match: another dev/match (pid $holder) holds $LOCK — the game stack is a singleton" >&2
+            exit 2
+        fi
+        rm -rf "$LOCK"; mkdir "$LOCK" || { echo "dev/match: cannot take $LOCK" >&2; exit 2; }
+    fi
+    echo $$ > "$LOCK/pid"; HAVE_LOCK=1
+}
+release_lock() { (( HAVE_LOCK )) && rm -rf "$LOCK"; HAVE_LOCK=0; }
+
+on_exit() {
+    local code=$?
+    if (( ! DRY )) && (( ! RESULT_WRITTEN )); then
+        [[ -z "$OUTCOME" ]] && OUTCOME=launch-failed && REASON="${REASON:-launcher exited unexpectedly (status $code) in phase $PHASE}"
+        stop_owned; write_result
+    fi
+    release_lock
+}
+on_signal() {
+    trap - INT TERM HUP
+    local why="launcher received SIG$1 in phase $PHASE; the seats it started were stopped"
+    if [[ "$PHASE" == preflight || "$PHASE" == reset || "$PHASE" == launch ]]; then
+        finish launch-failed "$why" 130
+    fi
+    finish interrupted "$why" 130
+}
+
+# ── dry-run banner / real run dir ────────────────────────────────────────────
+if (( DRY )); then
+    echo "DRY RUN — nothing below is executed."
+    echo "run dir: $RUN"
+else
+    take_lock
+    trap on_exit EXIT
+    trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal HUP' HUP
+    mkdir -p "$RUN" "$HB"
+    exec > >(tee -a "$RUN/launcher.log") 2>&1
+fi
+for s in corp runner; do
+    log "$(Cap $s): seat=$(gv $s seat) backend=$(gv $s backend) model=$(gv $s model) effort=$(gv $s effort)"
+done
+[[ -n "$CORP_DECK" ]] && log "decks: corp=$CORP_DECK runner=$RUNNER_DECK (System Gateway Constructed)"
+log "tag=$TAG max=${MAX_SECS}s stall=${STALL_SECS}s babysit=$BABYSIT force=$FORCE head=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+for s in corp runner; do
+    [[ "$(gv $s kind)" == model ]] || continue
+    if (( DRY )); then
+        echo "--- would write $RUN/brief-$s.md (first lines):"; render_brief "$s" - | sed -n '1,7p' | sed 's/^/    /'
+    else
+        render_brief "$s" "$RUN/brief-$s.md" || launch_failed "could not render the $s brief"
+    fi
+done
+
+# ── preflight ────────────────────────────────────────────────────────────────
+PHASE=preflight
+for p in 1042 7888 7889 7890; do
+    if (( DRY )); then printf '+ lsof -nP -iTCP:%s -sTCP:LISTEN -t\n' "$p"; continue; fi
+    lsof -nP -iTCP:"$p" -sTCP:LISTEN -t >/dev/null 2>&1 \
+        || launch_failed "port $p is not listening (1042 web, 7888 server nREPL, 7889/7890 client REPLs) — start the stack first"
+done
+
+PREV_GAMEID=""
+if (( DRY )); then
+    pollsc corp game-over-status; pollsc runner game-over-status
+else
+    for s in corp runner; do
+        st=$(pollsc "$s" game-over-status 2>/dev/null | tail -1)
+        log "current game on the $s REPL: ${st:-<no answer>}"
+        case "$st" in
+            IN-PROGRESS*|AWAITING-START*)
+                (( FORCE )) || launch_failed "a game is live on the $s REPL ($st); finish it, or pass --force to flush its replay and replace it" ;;
+        esac
+    done
+    PREV_GAMEID=$(marker corp GAMEID '(println "GAMEID" (str (:gameid @ai-state/client-state)))')
+    [[ "$PREV_GAMEID" == nil ]] && PREV_GAMEID=""
+fi
+
+codex_quota() {  # prints the 7-day used_percent, or nothing if unreadable
+    [[ -r "$CODEX_AUTH" ]] || return 0
+    python3 - "$CODEX_AUTH" <<'PY' 2>/dev/null | curl -sS --max-time 15 -K - 2>/dev/null | python3 -c '
+import json, sys
+try:
+    w = (json.load(sys.stdin).get("rate_limit") or {}).get("primary_window") or {}
+    print(w["used_percent"])
+except Exception:
+    pass'
+import json, sys
+t = json.load(open(sys.argv[1]))["tokens"]
+print('url = "https://chatgpt.com/backend-api/wham/usage"')
+print('header = "Authorization: Bearer %s"' % t["access_token"])
+print('header = "ChatGPT-Account-Id: %s"' % t["account_id"])
+print('header = "Accept: application/json"')
+PY
+}
+if [[ "$(gv corp backend)" == codex || "$(gv runner backend)" == codex ]]; then
+    if (( DRY )); then
+        echo "+ GET https://chatgpt.com/backend-api/wham/usage (bearer from $CODEX_AUTH; refuse above ${QUOTA_LIMIT}% unless --force)"
+    else
+        pct=$(codex_quota)
+        if [[ -z "$pct" ]]; then
+            log "codex weekly quota: UNREADABLE (auth or network) — proceeding without the check"
+        else
+            log "codex weekly quota: ${pct}% used"
+            if awk "BEGIN{exit !($pct > $QUOTA_LIMIT)}"; then
+                (( FORCE )) || launch_failed "codex weekly quota is ${pct}% used (> ${QUOTA_LIMIT}%); pass --force to spend it anyway"
+            fi
+        fi
+    fi
+fi
+
+# ── reset: a fresh game ──────────────────────────────────────────────────────
+PHASE=reset
+# save-replay must run before any further reset (memory: save-replay-before-next-game).
+if [[ -n "$PREV_GAMEID" && ! -f "$SCRIPT_DIR/replays/$PREV_GAMEID.json" ]]; then
+    log "flushing the previous game's replay ($PREV_GAMEID) before resetting"
+    x "$SCRIPT_DIR/save-replay.sh" "$PREV_GAMEID" || log "save-replay for $PREV_GAMEID failed (see above); its replay may still be in mongo"
+elif (( DRY )); then
+    echo "+ $SCRIPT_DIR/save-replay.sh <previous gameid>   # only if dev/replays lacks it"
+fi
+
+GATEWAY=Intermediate; [[ -n "$CORP_DECK" ]] && GATEWAY=Constructed
+read_gameid() { marker "$1" GAMEID '(println "GAMEID" (str (:gameid @ai-state/client-state)))'; }
+
+if [[ -z "$HUMAN_SIDE" ]]; then
+    if [[ -n "$CORP_DECK" ]]; then
+        x env CORP_DECK="$CORP_DECK" RUNNER_DECK="$RUNNER_DECK" "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"
+    else
+        x "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"
+    fi
+    GAMEID=$( (( DRY )) && echo "<gameid>" || read_gameid corp )
+else
+    # Human seat: reset.sh always seats BOTH clients (ai-self-play.sh), so the same
+    # steps are done here with one client: bounce, reap, the AI side creates the
+    # lobby on ITS side, and the lobby waits for the human.
+    AI="$(other "$HUMAN_SIDE")"
+    x "$SCRIPT_DIR/ai-bounce.sh" || launch_failed "dev/ai-bounce.sh failed (output above)"
+    for s in corp runner; do q pollsc "$s" leave-game; done
+    DECK_ID=""
+    if [[ -n "$CORP_DECK" ]]; then
+        ai_deck="$CORP_DECK"; [[ "$AI" == runner ]] && ai_deck="$RUNNER_DECK"
+        if (( DRY )); then x "$SCRIPT_DIR/seed-decks.sh" "ai-$AI" "$ai_deck"; DECK_ID="<deck-id>"
+        else DECK_ID=$("$SCRIPT_DIR/seed-decks.sh" "ai-$AI" "$ai_deck" | tail -1) || launch_failed "seeding the $AI deck failed"; fi
+    fi
+    TITLE="dev/match $TAG"
+    pollsc "$AI" create-game "$TITLE" "$(Cap "$AI")" "" "$GATEWAY" || launch_failed "create-game failed"
+    GAMEID=$( (( DRY )) && echo "<gameid>" || read_gameid "$AI" )
+    if [[ -n "$DECK_ID" ]]; then
+        out=$(pollsc "$AI" select-deck "$DECK_ID" 2>&1); echo "$out"
+        (( DRY )) || [[ "$out" == *"Deck selected"* ]] || launch_failed "the $AI deck did not take"
+    fi
+    q x "$SC" clear-heartbeats; x rm -rf "$SCRIPT_DIR/.umpire"
+    hdeck="the System Gateway deck the lobby assigns"
+    if [[ -n "$CORP_DECK" ]]; then
+        hfile="$CORP_DECK"; [[ "$HUMAN_SIDE" == runner ]] && hfile="$RUNNER_DECK"
+        hdeck="a System Gateway Constructed deck in YOUR account — to put $hfile there: dev/seed-decks.sh <your-username> $hfile"
+    fi
+    cat <<EOF
+════════════════════════════════════════════════════════════════════════
+HUMAN SEAT — you are the $(Cap "$HUMAN_SIDE").
+  1. Open http://localhost:1042 and log in with your own account (not ai-corp/ai-runner).
+  2. Play → join the lobby "$TITLE" (casual room). You get the $(Cap "$HUMAN_SIDE") side.
+  3. Deck: $hdeck.
+  4. The AI $(Cap "$AI") starts the game as soon as you are seated with a deck.
+     The launcher waits up to $((HUMAN_JOIN_SECS / 60)) minutes for you.
+  5. Play in the browser. Game id: $GAMEID
+════════════════════════════════════════════════════════════════════════
+EOF
+    if (( DRY )); then
+        echo "+ (every ${POLL_SECS}s, up to ${HUMAN_JOIN_SECS}s) $SC $AI eval <lobby players/decks>"
+        pollsc "$AI" start-game
+    else
+        need=2; deadline=$(( $(now) + HUMAN_JOIN_SECS )); joined=0
+        while (( $(now) < deadline )); do
+            lob=$(marker "$AI" LOBBY '(let [p (get-in @ai-state/client-state [:lobby-state :players])] (println "LOBBY" (count p) (count (filter :deck p))))')
+            players=${lob%% *}; decks=${lob##* }
+            if [[ "$players" == 2 ]] && { [[ "$GATEWAY" == Intermediate ]] || [[ "$decks" == 2 ]]; }; then joined=1; break; fi
+            snooze "$POLL_SECS"
+        done
+        (( joined )) || launch_failed "no human joined lobby $GAMEID within ${HUMAN_JOIN_SECS}s"
+        log "human seated; starting the game"
+        pollsc "$AI" start-game
+    fi
+fi
+(( DRY )) || { [[ -n "$GAMEID" && "$GAMEID" != nil ]] || launch_failed "no gameid after reset"; }
+log "game $GAMEID"
+
+# ── launch ───────────────────────────────────────────────────────────────────
+PHASE=launch
+write_seat_script() {  # side -> writes RUN/seat-<side>.sh, the exact seat command
+    local side="$1" f="$RUN/seat-$side.sh" brief="$RUN/brief-$side.md" out="$RUN/$side.out"
+    local seat backend model effort; seat=$(gv "$side" seat); backend=$(gv "$side" backend)
+    model=$(gv "$side" model); effort=$(gv "$side" effort)
+    {
+        echo '#!/usr/bin/env bash'
+        echo "# $side seat for dev/match $TAG — generated; this is exactly what ran."
+        echo "cd $(quote "$ROOT") || exit 1"
+        if [[ "$backend" == claude ]]; then
+            local session; session=$(uuidgen | tr 'A-Z' 'a-z'); sv "$side" session "$session"
+            (( DRY )) || echo "$session" > "$RUN/$side.session"
+            echo "# raw claude -p: askmodel's claude --write sandbox denies loopback, so it cannot reach the REPLs."
+            echo "START=\$(date -u +%FT%TZ)"
+            echo "CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat $(quote "$CLAUDE_TOKEN_FILE"))\" claude --model $(quote "$model") --effort $(quote "$effort") \\"
+            echo "  --session-id $session --dangerously-skip-permissions -p --output-format stream-json --verbose \\"
+            echo "  < $(quote "$brief") > $(quote "$out.trace.jsonl") 2> $(quote "$out.stderr")"
+            echo "CODE=\$?"
+            echo "python3 - $(quote "$out.trace.jsonl") $(quote "$out") $(quote "$out.receipt") \"\$CODE\" \"\$START\" $(quote "$model") $session <<'PY'"
+            cat <<'PY'
+import datetime, json, sys
+trace, out, rec, code, start, model, session = sys.argv[1:8]
+res = None
+for line in open(trace, errors="replace"):
+    try:
+        ev = json.loads(line)
+    except Exception:
+        continue
+    if ev.get("type") == "result":
+        res = ev
+body = (res or {}).get("result") or "SEAT FAILED: no result event in the trace\n"
+open(out, "w").write(body)
+ok = int(code) == 0 and res is not None and not (res or {}).get("is_error")
+json.dump({"seat_backend": "claude", "model": model, "session": session, "exit": int(code), "ok": ok,
+           "started": start, "ended": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "bytes": len(body.encode())}, open(rec, "w"))
+PY
+            echo "PY"
+            echo "exit \$CODE"
+        else
+            local eff=(); [[ -n "$effort" ]] && eff=(--effort "$effort")
+            echo "exec $(quote "$ASKMODEL" "$seat" --write "${eff[@]+"${eff[@]}"}" --timeout "$SEAT_TIMEOUT" --prompt-file "$brief" -o "$out")"
+        fi
+    } > "$( (( DRY )) && echo /dev/stdout || echo "$f")"
+    (( DRY )) || chmod +x "$f"
+}
+side_alive() {  # side -> 0 while something of ours still plays it
+    local side="$1"
+    case "$(gv "$side" kind)" in
+        human) return 0 ;;
+        bot)   [[ "$(pollsc "$side" bot-loop-status 2>/dev/null)" == *"Loop done? false"* ]] ;;
+        model) label_alive "$side-seat" || label_alive "$side-babysitter" ;;
+    esac
+}
+launch_side() {
+    local side="$1"
+    case "$(gv "$side" kind)" in
+        human) log "$(Cap "$side") is the human: nothing to launch" ;;
+        bot)
+            local patient=(); [[ "$(gv "$(other "$side")" kind)" != bot ]] && patient=(--patient 30)
+            # The REAL heartbeat dir on purpose: the bot's heartbeat is what its
+            # opponent's peer-status should read.
+            if (( DRY )); then x "$SC" "$side" bot-loop "${patient[@]+"${patient[@]}"}"
+            else
+                local out; out=$("$SC" "$side" bot-loop "${patient[@]+"${patient[@]}"}" 2>&1); echo "$out"
+                [[ "$out" == *"Autonomous loop launched"* ]] || launch_failed "the $side bot loop did not launch"
+                OWNED_BOTS+=("$side")
+            fi ;;
+        model)
+            (( DRY )) && echo "--- would write $RUN/seat-$side.sh:"
+            write_seat_script "$side"
+            spawn "$side-seat" "$RUN/$side.launch.log" bash "$RUN/seat-$side.sh" ;;
+    esac
+}
+
+launch_side corp
+
+# The Runner seat starts only after the Corp has kept (or mulliganed): the
+# engine's own :keep flag, serialized for both players (ai-state
+# opponent-mulligan-pending?), read from an AI REPL that is in the game.
+if [[ "$(gv runner kind)" != human ]]; then
+    keep_budget=$KEEP_SECS; [[ "$HUMAN_SIDE" == corp ]] && keep_budget=$HUMAN_JOIN_SECS
+    if (( DRY )); then
+        echo "+ (every ${POLL_SECS}s, up to ${keep_budget}s) $SC $OBS eval <corp :keep>   # abort if the Corp seat dies"
+    else
+        log "waiting for the Corp to keep or mulligan (up to ${keep_budget}s)"
+        deadline=$(( $(now) + keep_budget )); kept=0
+        while (( $(now) < deadline )); do
+            k=$(marker "$OBS" CORPKEEP '(println "CORPKEEP" (pr-str (get-in @ai-state/client-state [:game-state :corp :keep])))')
+            case "$k" in ''|false|nil) ;; *) kept=1; log "Corp answered its mulligan: $k"; break ;; esac
+            side_alive corp || launch_failed "the Corp seat exited before keeping its hand — not launching the Runner"
+            snooze "$POLL_SECS"
+        done
+        (( kept )) || launch_failed "the Corp did not keep or mulligan within ${keep_budget}s — not launching the Runner"
+    fi
+fi
+launch_side runner
+
+# Babysitters: one per model seat, matched effort passed explicitly (their own
+# default is xhigh). devin's babysitter continues "the most recent conversation",
+# so two devin seats cannot both be babysat.
+arm_babysitter() {
+    local side="$1" backend model pid env_args=()
+    backend=$(gv "$side" backend); model=$(gv "$side" model)
+    pid=$( (( DRY )) && echo "<$side-seat-pid>" || label_pid "$side-seat" )
+    env_args=(MARQUEE_BACKEND="$backend" MARQUEE_CHUNK_LOG="$RUN/babysit-$side-chunks.log")
+    case "$backend" in
+        codex)  env_args+=(MARQUEE_PRIMARY_LOG="$RUN/$side.out.trace.jsonl" MARQUEE_CODEX_EFFORT="$(gv "$side" effort)") ;;
+        claude) env_args+=(MARQUEE_CLAUDE_SESSION="$(gv "$side" session)" MARQUEE_CLAUDE_EFFORT="$(gv "$side" effort)"
+                           MARQUEE_CLAUDE_TOKEN_FILE="$CLAUDE_TOKEN_FILE") ;;
+        devin)
+            if [[ "$(gv "$(other "$side")" backend)" == devin ]]; then
+                log "no babysitter for the $side seat: both seats are devin, and devin -p -c cannot tell them apart"
+                return 0
+            fi ;;
+    esac
+    spawn "$side-babysitter" "$RUN/babysit-$side.log" env "${env_args[@]}" "$SCRIPT_DIR/marquee-babysit.sh" "$side" "$model" "$TAG" "$pid"
+    sv "$side" babysat 1
+}
+if (( BABYSIT )); then
+    for s in corp runner; do [[ "$(gv $s kind)" == model ]] && arm_babysitter "$s"; done
+fi
+
+# ── wait ─────────────────────────────────────────────────────────────────────
+PHASE=playing
+seat_failed() {  # side -> 0 if its seat left evidence of failing (not merely stopping)
+    local rec="$RUN/$1.out.receipt"
+    [[ -f "$rec" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("ok") is False else 1)' "$rec" 2>/dev/null
+}
+seat_note() {  # side -> one-line account of how its seat ended
+    local rec="$RUN/$1.out.receipt"
+    case "$(gv "$1" kind)" in
+        bot) echo "$1 bot loop ended" ;;
+        model) [[ -f "$rec" ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%s seat exited (ok=%s, %s)" % (sys.argv[2], d.get("ok"), d.get("reason") or "exit %s" % d.get("exit")))' "$rec" "$1" 2>/dev/null \
+               || echo "$1 seat exited without a receipt" ;;
+    esac
+}
+progress() {
+    local s p=""
+    for s in corp runner; do
+        [[ "$(gv $s kind)" == human ]] && continue
+        p+="$s:$(marker "$s" PROGRESS '(println "PROGRESS" (ai-actions/get-cursor) (count (get-in @ai-state/client-state [:game-state :log])))') "
+    done
+    printf '%s' "$p"
+}
+if (( DRY )); then
+    echo "+ (every ${POLL_SECS}s) $SC $OBS game-over-status   # GAME-OVER/GAME-GONE end the wait"
+    echo "+ (every ${POLL_SECS}s) $SC <side> eval <cursor + game-log length>   # progress"
+    echo "  stall: no progress for ${STALL_SECS}s AND a side with no live seat/babysitter; timeout after ${MAX_SECS}s"
+else
+    log "playing: watching through the $OBS REPL"
+    last_prog=""; last_move=$(now); status=""
+    while :; do
+        status=$(pollsc "$OBS" game-over-status 2>/dev/null | tail -1)
+        case "$status" in
+            GAME-OVER*) log "$status"; break ;;
+            GAME-GONE*) log "$status"; finish stalled "GAME-GONE: the server closed the lobby without a result ($status)" 1 ;;
+        esac
+        prog=$(progress)
+        if [[ "$prog" != "$last_prog" ]]; then last_prog="$prog"; last_move=$(now); fi
+        if (( $(now) - STARTED >= MAX_SECS )); then
+            finish timeout "--max-hours reached after $(( $(now) - STARTED ))s (last status: $status)" 1
+        fi
+        if (( $(now) - last_move >= STALL_SECS )); then
+            dead=()
+            for s in corp runner; do side_alive "$s" || dead+=("$s"); done
+            if (( ${#dead[@]} == 2 )); then
+                why="no game progress for ${STALL_SECS}s; $(seat_note corp); $(seat_note runner)"
+                if seat_failed corp || seat_failed runner; then finish seat-died "$why" 1; fi
+                finish stalled "$why" 1
+            elif (( ${#dead[@]} == 1 )); then
+                finish seat-died "no game progress for ${STALL_SECS}s; $(seat_note "${dead[0]}"), the other seat is still up" 1
+            fi
+        fi
+        snooze "$POLL_SECS"
+    done
+fi
+
+# ── harvest ──────────────────────────────────────────────────────────────────
+PHASE=harvest
+if (( DRY )); then
+    echo "+ $SC $OBS eval <winner, reason, agenda points, turn>"
+    echo "+ (up to ${REPORT_GRACE_SECS}s) wait for the seats to write their reports and exit"
+    echo "+ $SCRIPT_DIR/save-replay.sh <gameid>"
+    echo "+ cp $RUN/<side>.out $SCRIPT_DIR/replays/<gameid8>-<side>-<seat>-report.md"
+    echo "+ write $RUN/result.json"
+    exit 0
+fi
+res=$(marker "$OBS" MATCHRESULT '(do (require (quote cheshire.core)) (let [gs (:game-state @ai-state/client-state)] (println "MATCHRESULT" (cheshire.core/generate-string {:winner (:winner gs) :reason (:reason gs) :turn (:turn gs) :corp (get-in gs [:corp :agenda-point]) :runner (get-in gs [:runner :agenda-point])}))) nil)')
+eval "$(printf '%s' "$res" | python3 -c '
+import json, shlex, sys
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+for k, v in (("WINNER", "winner"), ("REASON", "reason"), ("TURNS", "turn"), ("SCORE_C", "corp"), ("SCORE_R", "runner")):
+    print("%s=%s" % (k, shlex.quote("" if d.get(v) is None else str(d[v]))))')"
+WINNER=$(printf '%s' "$WINNER" | tr 'A-Z' 'a-z')
+log "result: winner=${WINNER:-?} reason=${REASON:-?} score corp ${SCORE_C:-?} / runner ${SCORE_R:-?} turn ${TURNS:-?}"
+
+log "waiting up to ${REPORT_GRACE_SECS}s for the seats to write their reports"
+deadline=$(( $(now) + REPORT_GRACE_SECS ))
+while (( $(now) < deadline )); do
+    busy=0; for e in "${OWNED[@]+"${OWNED[@]}"}"; do entry_alive "$e" && busy=1; done
+    (( busy )) || break
+    snooze "$POLL_SECS"
+done
+stop_owned
+
+out=$("$SCRIPT_DIR/save-replay.sh" "$GAMEID" 2>&1); echo "$out"
+[[ -f "$SCRIPT_DIR/replays/$GAMEID.json" ]] && REPLAY="$SCRIPT_DIR/replays/$GAMEID.json" \
+    || log "no replay file at $SCRIPT_DIR/replays/$GAMEID.json — check mongo before believing it is lost (dev/save-replay.sh $GAMEID)"
+
+for s in corp runner; do
+    [[ "$(gv $s kind)" == model ]] || continue
+    src="$RUN/$s.out"; [[ -s "$src" ]] || continue
+    dest="$SCRIPT_DIR/replays/${GAMEID:0:8}-$s-$(gv $s seat)-report.md"
+    {
+        cat "$src"
+        f="$RUN/babysit-$s-chunks.log"
+        if [[ -f "$f" ]] && grep -q '^===== chunk ' "$f"; then
+            printf '\n\n---\n## Babysitter continuation (last chunk of %s)\n\n' "$f"
+            awk '/^===== chunk /{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$f"
+        fi
+    } > "$dest"
+    printf -v "REPORT_$s" '%s' "$dest"
+    log "$s report: $dest"
+done
+finish completed "${REASON:-}" 0
