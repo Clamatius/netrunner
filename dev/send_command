@@ -784,7 +784,9 @@ ${GREEN}Waiting / Synchronization:${NC}
   ping                    - Send 'ping' chat to wake opponent's wait
 
 ${GREEN}Lobby:${NC}
-  create-game <title> [side] [precon] [gateway-type]  - Create new game
+  create-game <title> [side] [precon] [gateway-type] [format]  - Create new game
+                  (format default system-gateway; precon = matchup key when
+                   format is preconstructed. Lists: dev/deck-check --formats / --precons)
   select-deck <deck-id>  - Constructed lobbies: pick a deck you own (id from dev/seed-decks.sh)
   start-game      - Start game (after opponent joins)
   auto-start      - Auto-start game if lobby is ready
@@ -2468,12 +2470,22 @@ case "$COMMAND" in
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
         GATEWAY_TYPE="${4:-Intermediate}"
-        info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
+        # Lobby format. The server keys the lobby KIND off format + one of the
+        # other two (web/lobby.clj validate-precon): system-gateway reads
+        # GATEWAY_TYPE (Beginner/Intermediate = precon decks, else Constructed),
+        # preconstructed reads PRECON (a jinteki.preconstructed matchup key),
+        # every other format is Constructed. The web UI sends all three keys on
+        # every create (src/cljs/nr/new_game.cljs:12-29,50), and so do we. No
+        # validation here: the server accepts any string and an unknown one
+        # makes a lobby no deck can join, so dev/ai-self-play.sh checks it with
+        # `dev/deck-check --lobby` before calling this.
+        FORMAT="${5:-system-gateway}"
+        info "Creating game: $TITLE (Side: $SIDE, Format: $FORMAT, Gateway: $GATEWAY_TYPE)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
                    (conn/create-lobby! {:title \"$(clj_str "$TITLE")\"
                                         :side \"$(clj_str "$SIDE")\"
-                                        :format \"system-gateway\"
+                                        :format \"$(clj_str "$FORMAT")\"
                                         :gateway-type \"$(clj_str "$GATEWAY_TYPE")\"
                                         :precon \"$(clj_str "$PRECON")\"
                                         :room \"casual\"
