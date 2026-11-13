@@ -12,6 +12,8 @@
             [ai-run-runner-handlers :as runner-handlers]
             [ai-heuristic-corp :as corp-bot]
             [ai-heuristic-runner :as runner-bot]
+            [ai-card-actions :as card-actions]
+            [ai-core :as core]
             [jinteki.cards :as cards]))
 
 (def value-prompts
@@ -28,9 +30,58 @@
    :game-state (assoc {:corp {:credit 5} :runner {:credit 3}}
                       (keyword side)
                       {:prompt-state (assoc prompt :eid {:eid 325}
-                                            :card {:title "Sealed Vault"
-                                                   :counter {:credit 3}})
-                       :credit 5})})
+                                            :card {:cid 325 :title "Sealed Vault"})
+                       :credit 5
+                       :servers {:remote1 {:content
+                                           [{:cid 325 :title "Sealed Vault"
+                                             :zone [:servers :remote1 :content]
+                                             :side "Corp" :counter {:credit 3}}]}}})})
+
+(defn- bare-counter-state [side prompt]
+  (-> (seat-state side prompt)
+      (assoc-in [:game-state :corp :servers :remote1 :content]
+                [{:cid 325 :title "Sealed Vault" :zone [:servers :remote1 :content]
+                  :side "Corp"}])))
+
+(deftest missing-counter-zero-is-sendable
+  (let [cs (bare-counter-state "corp" (nth value-prompts 3))
+        sent (atom nil)]
+    (is (= [0 0] (prompts/value-prompt-range cs (state/get-prompt cs))))
+    (let [missing-card (assoc-in cs [:game-state :corp :servers :remote1 :content] [])]
+      (is (= [0 0] (prompts/value-prompt-range missing-card (state/get-prompt missing-card)))))
+    (reset! state/client-state cs)
+    (try
+      (with-redefs [ws/send-message! (fn [_ data] (reset! sent data) true)
+                    prompts/wait-for-prompt-change! (fn [& _] true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (with-out-str (prompts/choose-by-value! "0"))
+        (is (= 0 (get-in @sent [:args :choice]))))
+      (finally (reset! state/client-state {})))))
+
+(deftest bot-reports-only-sent-values
+  (doseq [[side bot] [["corp" corp-bot/handle-prompt-if-needed]
+                      ["runner" runner-bot/handle-prompt-if-needed]]]
+    (reset! state/client-state (bare-counter-state side (nth value-prompts 3)))
+    (try
+      (let [sent (atom nil)]
+        (with-redefs [ws/send-message! (fn [& args] (reset! sent args) true)
+                      prompts/wait-for-prompt-change! (fn [& _] false)]
+          (is (not (bot)))
+          (is (= 0 (get-in (second @sent) [:args :choice])))))
+      (finally (reset! state/client-state {})))))
+
+(deftest bot-sends-zero-with-no-hosted-counter
+  (doseq [[side bot] [["corp" corp-bot/handle-prompt-if-needed]
+                      ["runner" runner-bot/handle-prompt-if-needed]]]
+    (reset! state/client-state (bare-counter-state side (nth value-prompts 3)))
+    (try
+      (let [sent (atom nil)]
+        (with-redefs [ws/send-message! (fn [_ data] (reset! sent data) true)
+                      prompts/wait-for-prompt-change! (fn [& _] true)
+                      basic/check-auto-end-turn! (fn [] nil)]
+          (is (true? (bot)))
+          (is (= 0 (get-in @sent [:args :choice])))))
+      (finally (reset! state/client-state {})))))
 
 (deftest value-prompt-displays-and-compact-summary
   (doseq [prompt value-prompts]
@@ -103,6 +154,61 @@
             (is (str/includes? out "prompt unchanged") out))))
       (finally (reset! state/client-state {})))))
 
+(deftest card-name-sends-canonical-autocomplete-title
+  (let [sent (atom nil)]
+    (reset! state/client-state (seat-state "corp" (last value-prompts)))
+    (try
+      (with-redefs [ws/send-message! (fn [_ data] (reset! sent data) true)
+                    prompts/wait-for-prompt-change! (fn [& _] true)
+                    basic/check-auto-end-turn! (fn [] nil)]
+        (with-out-str (prompts/choose-by-value! "sure gamble"))
+        (is (= "Sure Gamble" (get-in @sent [:args :choice]))))
+      (finally (reset! state/client-state {})))))
+
+(deftest card-name-refuses-ambiguous-case-fold
+  (let [sent (atom nil)
+        prompt (assoc-in (last value-prompts) [:choices :autocomplete]
+                         ["Sure Gamble" "SURE GAMBLE"])]
+    (reset! state/client-state (seat-state "corp" prompt))
+    (try
+      (with-redefs [ws/send-message! (fn [& args] (reset! sent args))]
+        (let [out (with-out-str (prompts/choose-by-value! "sure gamble"))]
+          (is (nil? @sent))
+          (is (str/includes? (str/lower-case out) "ambiguous"))))
+      (finally (reset! state/client-state {})))))
+
+(deftest ok-only-does-not-count-value-selector
+  (doseq [prompt [(first value-prompts) (second value-prompts)
+                  (nth value-prompts 2) (nth value-prompts 3)
+                  (last value-prompts)]]
+    (reset! state/client-state (seat-state "corp" prompt))
+    (try (is (not (prompts/ok-only-prompt?)))
+         (finally (reset! state/client-state {})))))
+
+(deftest play-prompt-echo-uses-value-renderer
+  (doseq [prompt [(first value-prompts) (last value-prompts)]]
+    (reset! state/client-state
+            {:side "corp" :gameid "game-325"
+             :game-state {:corp {:credit 5 :click 3}}})
+    (try
+      (let [result (atom nil)
+            out (with-redefs [basic/ensure-turn-started! (fn [] true)
+                              basic/check-auto-end-turn! (fn [] nil)
+                              core/find-card-in-hand (fn [_] {:cid 12 :title "SEA Source" :zone [:hand]})
+                              core/capture-state-snapshot (fn [] {})
+                              core/get-log-size (fn [] 0)
+                              core/verify-action-in-log (fn [& _] {:status :success})
+                              ws/send-message! (fn [& _]
+                                                 (swap! state/client-state assoc-in
+                                                        [:game-state :corp :prompt-state] prompt))]
+                  (with-out-str (reset! result (card-actions/play-card! "SEA Source"))))]
+        (is (= :success (:status @result)))
+        (is (str/includes? out "choose-value"))
+        (when (= "card-title" (:prompt-type prompt))
+          (is (not (str/includes? out "Sure Gamble")) out))
+        (is (not (str/includes? out "0.[:")) (str prompt "\n" out)))
+      (finally (reset! state/client-state {})))))
+
 (deftest every-value-shape-blocks-and-is-not-auto-answered
   (doseq [prompt value-prompts]
     (let [prompt (assoc prompt :eid {:eid 325})]
@@ -142,10 +248,14 @@
             {:msg "Name an agenda" :prompt-type "card-title"
              :choices {:card-title true :autocomplete ["Project Atlas"]}}
             "Project Atlas"]]]
-    (let [answer (atom nil)]
+    (let [sent (atom nil)]
       (reset! state/client-state (seat-state side prompt))
       (try
-        (with-redefs [prompts/choose-by-value! (fn [v] (reset! answer v) {:status :success})]
+        (with-redefs [ws/send-message! (fn [_ data] (reset! sent data) true)
+                      prompts/wait-for-prompt-change! (fn [& _] true)
+                      basic/check-auto-end-turn! (fn [] nil)]
           (is (true? (bot)) (str prompt))
-          (is (= expected @answer) (str prompt)))
+          (is (= (if (re-matches #"[0-9]+" expected)
+                   (Long/parseLong expected) expected)
+                 (get-in @sent [:args :choice])) (str prompt)))
         (finally (reset! state/client-state {}))))))

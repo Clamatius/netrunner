@@ -96,10 +96,9 @@
                     (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
                     ;; Show prompt if card created one (e.g., Jailbreak asking for server)
                     (when (and new-prompt (not (state/waiting-prompt-type? (:prompt-type new-prompt))))
-                      (println (str "   📋 " (:msg new-prompt)))
-                      (when-let [choices (:choices new-prompt)]
-                        (println (str "      Choices: " (clojure.string/join ", "
-                                       (map-indexed #(str %1 "." (core/format-choice %2)) choices))))))
+                      ;; ai-display already owns this renderer and depends on
+                      ;; ai-prompts. Resolve lazily to avoid a namespace cycle.
+                      ((requiring-resolve 'ai-display/show-prompt-detailed) after-state {:full? true}))
                     ;; Show turn indicator only if we won't auto-end (which shows its own)
                     (when (and (> after-clicks 0) (nil? new-prompt))
                       (core/show-turn-indicator))
@@ -188,7 +187,8 @@
   (let [;; diffs.clj serializes card-valued choices as {:cid :title ...} maps;
         ;; a hint must never print raw EDN (guest panel), so only a plain
         ;; string value earns the choose-value line.
-        choices (map #(cond (string? %) % (map? %) (:value %) :else nil) (:choices prompt))
+        choices (map #(cond (string? %) % (map? %) (:value %) :else nil)
+                     (when (sequential? (:choices prompt)) (:choices prompt)))
         sole-choice (when (and (= 1 (count choices)) (string? (first choices)))
                       (first choices))]
     (println (str "⏸️  Install of " card-title " pending - "

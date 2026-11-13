@@ -3,8 +3,7 @@
   (:require [ai-websocket-client-v2 :as ws]
             [ai-state :as state]
             [ai-core :as core]
-            [clojure.string :as str]
-            [jinteki.cards :refer [all-cards]]))
+            [clojure.string :as str]))
 
 ;; ============================================================================
 ;; Prompts & Choices
@@ -123,7 +122,7 @@
         old-eid (:eid prompt)
         old-msg (:msg prompt)
         old-cid (get-in prompt [:card :cid])
-        old-choice-values (mapv :value (:choices prompt))]
+        old-choice-values (mapv :value (when (sequential? (:choices prompt)) (:choices prompt)))]
     (ws/send-message! :game/action
                       {:gameid gameid
                        :command "choice"
@@ -166,7 +165,7 @@
             ;; minus the sub just broken, another [click] per break). Calling
             ;; that a duplicate told seats to "drain" a prompt that was
             ;; actually offering more value, 9/9 breaks in marquee 30c4a1c0.
-            new-choice-values (mapv :value (:choices new-prompt))
+            new-choice-values (mapv :value (when (sequential? (:choices new-prompt)) (:choices new-prompt)))
             duplicate? (and same-shape? (= new-choice-values old-choice-values))
             follow-up? (and same-shape? (not= new-choice-values old-choice-values))]
         (println (str "✅ Chose: " (core/format-choice choice)))
@@ -427,7 +426,11 @@
       :trace [0 choices]
       :number [(get choices :minimum 0) (:number choices)]
       :credit [0 (get-in client-state [:game-state side :credit])]
-      :counter [0 (get-in prompt [:card :counter (keyword (:counter choices))])]
+      :counter (let [cid (get-in prompt [:card :cid])
+                     card (when cid (core/find-selectable-card-by-cid
+                                      cid (:game-state client-state)))]
+                 [0 (or (when (:zone card)
+                          (get-in card [:counter (keyword (:counter choices))])) 0)])
       nil)))
 
 (defn heuristic-value
@@ -461,19 +464,18 @@
                       (catch NumberFormatException _ nil)))
         choice (if (= kind :card-title) value-text parsed)
         [lo hi] range
-        allowed-titles (get-in prompt [:choices :autocomplete])]
+        allowed-titles (get-in prompt [:choices :autocomplete])
+        title-matches (when (and (= kind :card-title) (string? value-text))
+                        (filter #(= (str/lower-case value-text)
+                                    (str/lower-case %)) allowed-titles))]
     (cond
       (= kind :card-title)
-      (if-not (and (string? value-text)
-                   (not (str/blank? value-text))
-                   (if (contains? (:choices prompt) :autocomplete)
-                     (some #(= (str/lower-case value-text) (str/lower-case %)) allowed-titles)
-                     (or (empty? @all-cards)
-                         (some #(= (str/lower-case value-text)
-                                   (str/lower-case %)) (keys @all-cards)))))
+      (if (not= 1 (count title-matches))
         (do (println (format "❌ %s is not a valid card title for this prompt (check autocomplete); nothing sent." value-text))
+            (when (> (count title-matches) 1)
+              (println "   Ambiguous case-insensitive match; nothing sent."))
             (core/with-cursor {:status :error :reason "Card title not allowed by prompt"}))
-        (do
+        (let [choice (first title-matches)]
           (ws/send-message! :game/action
                             {:gameid (:gameid cs) :command "choice"
                              :args {:eid (:eid prompt) :choice choice}})
@@ -1291,6 +1293,7 @@
   (let [prompt (state/get-prompt)
         choices (:choices prompt)]
     (and prompt
+         (sequential? choices)
          (= 1 (count choices))
          (= "OK" (:value (first choices))))))
 

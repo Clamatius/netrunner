@@ -985,7 +985,7 @@
   (when-let [prompt (state/get-prompt)]
     (let [prompt-type (:prompt-type prompt)
           msg (or (:msg prompt) "")
-          choices (:choices prompt)
+          choices (when (sequential? (:choices prompt)) (:choices prompt))
           selectable (:selectable prompt)]
       (cond
         ;; Waiting prompts - nothing to do
@@ -995,8 +995,7 @@
         (prompts/value-prompt-kind prompt)
         (when-let [answer (prompts/heuristic-value @state/client-state prompt)]
           (log-decision "VALUE PROMPT:" msg "->" answer)
-          (prompts/choose-by-value! answer)
-          true)
+          (= :success (:status (prompts/choose-by-value! answer))))
 
         ;; Discard prompt - select cards to discard
         ;; Heuristic: discard duplicates first, then lowest-value cards

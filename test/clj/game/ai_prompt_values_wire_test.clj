@@ -1,6 +1,7 @@
 (ns game.ai-prompt-values-wire-test
   "Issue #325: real cards, public serializer, JSON round trip, and UI choice payloads."
   (:require [game.core.diffs :as diffs]
+            [ai-prompts :as prompts]
             [game.main :as main]
             [game.test-framework :refer :all]
             [cheshire.core :as json]
@@ -73,8 +74,15 @@
       (card-ability state :corp sv 1)
       (let [p (wire-prompt state :corp)]
         (is (= {:counter "credit"} (:choices p)))
-        (is (= 3 (get-in p [:card :counter :credit]))
-            "Counter total must be visible to validate the UI's range")
+        (is (nil? (get-in p [:card :counter]))
+            "Unmodified engine sends a small prompt card reference")
+        (let [board (-> (diffs/public-states state) :corp-state
+                        json/generate-string (json/parse-string true))
+              card (get-in board [:corp :servers :remote1 :content 0])
+              cs {:side "corp" :game-state (assoc board :corp
+                                                  (assoc (:corp board) :prompt-state p))}]
+          (is (= 3 (get-in card [:counter :credit])))
+          (is (= [0 3] (prompts/value-prompt-range cs p))))
         (answer! state :corp p 2)
         (is (= 1 (get-in (refresh sv) [:counter :credit])))))))
 

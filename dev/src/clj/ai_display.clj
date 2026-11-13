@@ -2895,7 +2895,7 @@
 
    `gs` is the captured game-state the rest of the block renders from (#139)."
   [choices gs]
-  (for [[label idxs] (->> (map-indexed vector choices)
+  (for [[label idxs] (->> (map-indexed vector (when (sequential? choices) choices))
                           (group-by (comp core/format-choice second))
                           (sort-by (comp ffirst val)))
         :when (> (count idxs) 1)
@@ -2937,7 +2937,7 @@
                (and installing (#{"Asset" "Agenda"} installing-type)) :definite
                (or installing (= msg "Choose a server"))              :conditional)]
     (when mode
-      (for [[i c] (map-indexed vector (:choices prompt))
+      (for [[i c] (map-indexed vector (when (sequential? (:choices prompt)) (:choices prompt)))
             :let [server (core/format-choice c)
                   root (core/root-card-in (get-in state [:game-state :corp :servers]) server)]
             :when root
