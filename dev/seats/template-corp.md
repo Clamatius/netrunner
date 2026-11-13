@@ -30,7 +30,10 @@ destroyed a game. One source of truth.
 
 1. **Play the ENTIRE game, to GAME-OVER. Do NOT stop after one turn.** After each
    of your turns run `./dev/send_command corp game-over-status`. While it prints
-   `IN-PROGRESS …` the game is NOT over — take your next turn. Stop only on
+   `IN-PROGRESS …` or `AWAITING-START …` the game is NOT over — keep playing.
+   (`AWAITING-START` is a turn boundary in a LIVE game, not "the game has not
+   begun": start your turn when it says `next-player=corp`, and `wait` when it
+   says `next-player=runner`.) Stop only on
    `GAME-OVER winner=… turn=…` or `GAME-GONE turn=…` (server tore the game down
    without a result — report what you saw). Stopping early strands the game and
    wastes the run.
