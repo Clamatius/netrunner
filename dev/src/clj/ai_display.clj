@@ -3606,7 +3606,7 @@
        (show-cards card-names full?)))))
 
 (defn show-card-abilities
-  "Show available abilities for an installed card by name
+  "Show available abilities for an own card in an ability-click zone by name
    Works for both Runner and Corp cards
    Usage: (show-card-abilities \"Smartware Distributor\")
           (show-card-abilities \"Cleaver\")"
@@ -3614,17 +3614,14 @@
   (let [state @state/client-state
         side (:side state)
         corp-viewer? (core/side= "Corp" side)
-        ;; Find card in appropriate location. Use core/side= — client-state stores
-        ;; :side lowercase ("corp"), so a strict (= "Corp" side) is always false
-        ;; and would search the Runner rig, missing every Corp card. (issue #69)
-        card (if corp-viewer?
-               (core/find-installed-corp-card card-name)
-               (core/find-installed-card card-name))
+        ;; Both seats use the same own-card ability lookup. Preserve the
+        ;; existing opponent-card fallback for Runner-usable Corp abilities.
+        card (core/find-ability-card card-name)
         ;; #95: a Runner probing a Corp card (bioroid click-break) used to
         ;; dead-end on "Card not found". Fall back to the opponent's installed
         ;; cards and surface the Runner-usable abilities instead.
         cross-card (when (and (not card) (not corp-viewer?)
-                              (zero? (core/installed-title-match-count card-name :runner)))
+                              (zero? (core/ability-title-match-count card-name)))
                      (core/find-installed-corp-card card-name))]
     (cond
       card
@@ -3634,7 +3631,9 @@
         (println (clojure.string/join "" (repeat 70 "=")))
         (if (seq abilities)
           (doseq [[idx ability] (map-indexed vector abilities)]
-            (let [label (or (:label ability) (:cost-label ability) (str "Ability " idx))
+            (let [label (if (pos? (core/installed-title-match-count card-name (if corp-viewer? :corp :runner)))
+                          (or (:label ability) (:cost-label ability) (str "Ability " idx))
+                          (or (:label ability) (:msg ability) (:cost-label ability) (str "Ability " idx)))
                   action-icon (if (:action ability) "[Click] " "")
                   once-str (when (:once ability)
                             (str " (Once " (if (keyword? (:once ability))
@@ -3666,8 +3665,7 @@
       ;; Ambiguity is not absence (#151 item 5): a duplicate title has already
       ;; printed its "❓ Multiple copies" list by the time we get here, and a
       ;; flat not-found beneath it tells the seat its own board is wrong.
-      (core/report-installed-lookup-miss! card-name
-                                          (if corp-viewer? [:corp] [:runner :corp])))))
+      (core/report-ability-lookup-miss! card-name))))
 
 ;; ============================================================================
 ;; High-Level Workflows
@@ -3823,15 +3821,16 @@
                             (:type card)
                             cost-str))))))
 
-    ;; Playable installed abilities
+    ;; Installed copies precede fallback-zone copies for a shared title.
     (let [all-installed (if (= side :runner)
                           (state/installed-runner-cards gs)
                           [])
+          fallback (state/ability-target-cards gs side)
           playable-abilities (for [card all-installed
                                   [idx ability] (map-indexed vector (:abilities card))
                                   :when (:playable ability)]
                               {:card card
-                               :card-name (core/format-card-name-with-index card all-installed)
+                               :card-name (core/format-card-name-with-index card (concat all-installed fallback))
                                :idx idx
                                :label (:label ability)
                                :cost (:cost-label ability)})]
@@ -3842,7 +3841,21 @@
                           card-name
                           idx
                           label
-                          (if cost (str " (" cost ")") ""))))))
+                          (if cost (str " (" cost ")") "")))))
+      (when (seq fallback)
+        (let [playable (for [card fallback
+                             [idx ability] (map-indexed vector (:abilities card))
+                             :when (:playable ability)]
+                         {:card-name (core/ability-card-reference card gs side)
+                          :idx idx
+                          :label (or (:label ability) (:msg ability) (:cost-label ability))
+                          :cost (:cost-label ability)})]
+          (when (seq playable)
+            (println "\n⚙️  Playable Abilities:")
+            (doseq [{:keys [card-name idx label cost]} playable]
+              (println (format "  - %s: Ability %d - %s%s"
+                               card-name idx label
+                               (if cost (str " (" cost ")") ""))))))))
 
     ;; Runner abilities on Corp cards (e.g., bioroid click-to-break, #95).
     ;; Primary source: the encountered ICE from run state (current-run-ice) —
@@ -3903,9 +3916,10 @@
 
     ;; Return count of playable actions
     (let [card-count (count (filter :playable hand))
-          ability-count (count (for [card (if (= side :runner)
-                                           (state/installed-runner-cards gs)
-                                           [])
+          ability-count (count (for [card (concat (if (= side :runner)
+                                                   (state/installed-runner-cards gs)
+                                                   [])
+                                                 (state/ability-target-cards gs side))
                                     ability (:abilities card)
                                     :when (:playable ability)]
                                 ability))]

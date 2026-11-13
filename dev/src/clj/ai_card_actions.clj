@@ -353,7 +353,7 @@
   (core/report-installed-lookup-miss! card-name scopes))
 
 (defn use-ability!
-  "Use an installed card's ability. Returns status map:
+  "Use an installed card's ability, or an own card in a fallback ability zone. Returns status map:
    - {:status :success} - ability fired
    - {:status :waiting-input :prompt ...} - created a prompt (e.g., choose target)
    - {:status :error :reason ...} - failed
@@ -363,10 +363,7 @@
   [card-name ability-index]
   (let [client-state @state/client-state
         side (:side client-state)
-        ;; Find card in appropriate location based on side
-        card (if (core/side= "Corp" side)
-               (core/find-installed-corp-card card-name)
-               (core/find-installed-card card-name))]
+        card (core/find-ability-card card-name)]
     (if card
       (let [gameid (:gameid client-state)
             card-ref (core/create-card-ref card)
@@ -444,7 +441,7 @@
       ;; issue #95) — route to the runner-ability command instead of
       ;; dead-ending; a Corp card's :abilities aren't the Runner's to use.
       (if-let [corp-card (and (not (core/side= "Corp" side))
-                              (zero? (core/installed-title-match-count card-name :runner))
+                              (zero? (core/ability-title-match-count card-name))
                               (core/find-installed-corp-card card-name))]
         (if (seq (:runner-abilities corp-card))
           (do
@@ -456,10 +453,7 @@
             {:status :error :reason (str "No runner-abilities on Corp card: " card-name)}))
         ;; A Corp seat searched only its own servers; a Runner seat searched
         ;; its rig AND (for the bioroid fallback just above) the Corp's cards.
-        (ambiguous-or-missing-error card-name
-                                    (if (core/side= "Corp" side)
-                                      [:corp]
-                                      [:runner :corp]))))))
+        (core/report-ability-lookup-miss! card-name)))))
 
 (defn use-runner-ability!
   "Use a Runner-usable ability printed on a Corp card (e.g. bioroid

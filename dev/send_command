@@ -511,7 +511,7 @@ ${GREEN}Essential Commands:${NC}
 ${GREEN}Inspect (read-only — use these to decide):${NC}
   card-text <name>   Look up ANY card's type, cost, and full text
   decklist           YOUR decklist for this game, with full card text
-  abilities <name>   Show an installed card's abilities (for use-ability)
+  abilities <name>   Show an own card's abilities (for use-ability)
   list-playables     List everything you can play/use right now
   diagnose-blocker   Explain why you can/can't act and the one next command to run
   log [N]            Last N game-log entries (default 20)
@@ -609,7 +609,7 @@ ${GREEN}Status Commands:${NC}
                     (default: 5). 'log' is the one to read by eye.
   card-text <name>   - Look up card information (type, cost, text)
   decklist        - Your own decklist for this game (opponent's is hidden)
-  abilities <name>   - Show abilities for installed card
+  abilities <name>   - Show abilities for own clickable card
                        Duplicate installed titles: use "Name [N]".
   list-playables  - List all currently playable actions (cards, abilities)
   diagnose-blocker - Explain why you can/can't act + the single next command
@@ -660,7 +660,7 @@ ${GREEN}Mulligan & Hand Management:${NC}
 ${GREEN}Card Actions:${NC}
   play <name>     - Play card by name (e.g., "Sure Gamble")
   play-index <N>  - Play card by index (0-4)
-  use-ability <name> <N>  - Use installed card's ability N
+  use-ability <name> <N>  - Use own clickable card's ability N
                              Duplicate installed titles: use "Name [N]".
   use-runner-ability <name> <N> - Bioroid click-to-break: use a Runner-usable ability printed on a Corp card (e.g. "Brân 1.0" during an encounter)
                              Duplicate installed titles: use "Name [N]".
