@@ -1,7 +1,6 @@
 (ns ai-hosted-runner-test
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer :all]
             [test-helpers :refer [with-mock-state]]
@@ -122,34 +121,83 @@
                (assoc other :zone ["servers" "rd" "ices"]))))))
 
 (deftest every-host-req-breaker-obeys-host-rule
-  ;; Read the actual defcard forms and the card data: no frozen card count/list.
-  (let [catalog (set (map :title (edn/read-string (slurp "data/cards.edn"))))
-        forms (with-open [r (java.io.PushbackReader.
+  ;; Static scan of break-sub :req forms, including a local let-bound :req as
+  ;; on Knight. It sees these two host spellings, not arbitrary helper calls or
+  ;; runtime predicates hidden behind other symbols.
+  (let [forms (with-open [r (java.io.PushbackReader.
                              (io/reader "src/clj/game/cards/programs.clj"))]
                 (loop [out []]
                   (let [form (read {:eof ::end} r)]
                     (if (= ::end form) out (recur (conj out form))))))
+        nodes (fn [x] (tree-seq coll? seq x))
+        host-ref? (fn [x]
+                    (some #{'(:host card) '(get-nested-host card)} (nodes x)))
         host-req? (fn [form]
-                    (some (fn [node]
-                            (and (seq? node) (= 'break-sub (first node))
-                                 (some (fn [part]
-                                         (and (map? part) (:req part)
-                                              (some #(= '(:host card) %)
-                                                    (tree-seq coll? seq (:req part)))))
-                                       (rest node))))
-                          (tree-seq coll? seq form)))
+                    (let [bindings (into {}
+                                         (for [node (nodes form)
+                                               :when (and (seq? node) (= 'let (first node)))
+                                               [name value] (partition 2 (second node))]
+                                           [name value]))]
+                      (some (fn [node]
+                              (and (seq? node) (= 'break-sub (first node))
+                                   (some (fn [part]
+                                           (when (and (map? part) (:req part))
+                                             (let [req (:req part)]
+                                               (or (host-ref? req)
+                                                   (and (symbol? req)
+                                                        (host-ref? (get bindings req)))))))
+                                         (rest node))))
+                            (nodes form))))
         titles (for [form forms
                      :when (and (seq? form) (= 'defcard (first form)) (host-req? form))]
-                 (second form))
-        host {:cid "host" :zone ["servers" "hq" "ices"]}
-        other {:cid "other" :zone ["servers" "rd" "ices"]}]
-    (is (seq titles))
-    (is (every? catalog titles))
-    (doseq [title titles]
-      (is (not (tactics/trojan-host-matches?
-                 {:title title :type "Program" :subtypes ["Trojan"] :host host
-                  :abilities [{:label "Break 1 subroutine"}]}
-                 other)) title))))
+                 (second form))]
+    (is (= (conj (some-> (ns-resolve 'ai-run-tactics 'host-only-breaker-titles) deref)
+                 "Living Mural")
+           (set titles)))))
+
+(deftest hosted-ika-breaks-non-host-sentry
+  (let [other (assoc (get-in gs [:corp :servers :hq :ices 0])
+                     :cid "other" :title "Sentry" :subtypes ["Sentry"] :rezzed true
+                     :subroutines [{:label "End the run" :broken false :fired false}])
+        ika (assoc botulus :cid "ika" :title "Ika"
+                   :subtypes ["Icebreaker" "Killer" "Trojan"]
+                   :abilities [{:label "Break sentry subroutine" :playable true}
+                               {:dynamic "auto-pump-and-break" :label "Fully break"}])
+        client2 (-> client
+                    (assoc-in [:game-state :corp :servers :hq :ices 0] (dissoc other :hosted))
+                    (update-in [:game-state :runner :rig :program] conj ika)
+                    (assoc-in [:game-state :run]
+                              {:phase "encounter-ice" :server ["hq"] :position 1}))]
+    (is (tactics/breaker-matches-ice? ika other))
+    (is (some #(= "Ika" (:title %)) (tactics/list-available-breakers client2)))
+    (handlers/reset-state!)
+    (with-redefs [actions/use-ability! (fn [_ _] {:status :success})]
+      (is (= "Ika" (:breaker (handlers/handle-runner-full-break
+                               {:side "runner" :run-phase "encounter-ice"
+                                :state client2 :strategy {:full-break true}})))))))
+
+(deftest tactic-selects-only-eligible-hosted-copy
+  (let [ice (assoc (get-in gs [:corp :servers :hq :ices 0]) :rezzed true)
+        bot-a (assoc botulus :abilities [{:dynamic "auto-pump-and-break" :label "Fully break"}])
+        bot-b (assoc bot-a :cid "bot-b" :host (assoc (:host bot-a) :cid "other"))
+        gs2 (-> gs
+                (assoc-in [:corp :servers :hq :ices 0 :hosted] [bot-a])
+                (assoc-in [:corp :servers :hq :ices 1]
+                          (assoc ice :cid "other" :hosted [bot-b])))
+        client2 (assoc client :game-state gs2)
+        sent (atom [])]
+    (with-mock-state client2
+      (with-redefs [core/encountered-ice (fn [_] ice)
+                    actions/use-ability! (fn [name idx]
+                                           (swap! sent conj [name idx]) {:status :success})]
+        (doseq [action [:break-dynamic :use-ability]]
+          (let [result (#'tactics/execute-tactic!
+                         {:card "Botulus" :action action :ability-index 0} "ICE" client2)]
+            (is (= :action-taken (:status result)))
+            (is (= ["Botulus [0]" 0] (last @sent)))))
+        (is (str/includes? (:reason (#'tactics/execute-tactic!
+                                      {:card "Botulus [1]" :action :break-dynamic} "ICE" client2))
+                           "host ICE"))))))
 
 (deftest tactic-duplicate-name-preserves-refusal
   (let [ice (get-in gs [:corp :servers :hq :ices 0])
@@ -159,11 +207,19 @@
         sent (atom nil)]
     (with-redefs [core/encountered-ice (fn [_] ice)
                   actions/use-ability! (fn [name _] (reset! sent name)
-                                         {:status :tactic-failed :reason "Multiple copies"})]
-      (#'tactics/execute-tactic!
-        {:card "Corroder" :action :use-ability :ability-index 0} "Ice Wall"
-        (assoc client :game-state gs2))
-      (is (= "Corroder" @sent)))))
+                                         {:status :success})]
+      (with-mock-state (assoc client :game-state gs2)
+        (doseq [action [:break-dynamic :use-ability]]
+          (is (str/includes? (:reason (#'tactics/execute-tactic!
+                                        {:card "Corroder" :action action :ability-index 0}
+                                        "Ice Wall" (assoc client :game-state gs2)))
+                             "Multiple copies")))
+        (is (nil? @sent))))))
+
+(deftest dynamic-tactic-reports-missing-card
+  (with-mock-state client
+    (is (str/includes? (:reason (#'tactics/execute-break-dynamic! "Absent" client))
+                       "not found installed"))))
 
 (deftest dynamic-tactic-accepts-advertised-reference
   (let [ice (get-in gs [:corp :servers :hq :ices 0])

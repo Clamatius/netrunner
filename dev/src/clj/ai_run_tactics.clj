@@ -32,6 +32,8 @@
 
 (declare trojan-host-matches?)
 
+(def host-only-breaker-titles #{"Botulus" "Slap Vandal" "Knight"})
+
 (defn list-available-breakers
   "List all installed Runner icebreakers with their break abilities."
   [state]
@@ -78,19 +80,16 @@
       :else nil)))
 
 (defn trojan-host-matches?
-  "Hosted Trojans with a break ability can break their host ICE. Living Mural's
-   break ability instead checks the host's server."
+  "Apply the host restrictions in the named break abilities."
   [breaker ice]
-  (if (and (:host breaker)
-           (some #{"Trojan"} (:subtypes breaker))
-           (some #(or (core/break-ability? %)
-                      (some-> (:dynamic %) str
-                              (clojure.string/includes? "break")))
-                 (:abilities breaker)))
-    (if (= "Living Mural" (:title breaker))
-      (= (take 2 (get-in breaker [:host :zone])) (take 2 (:zone ice)))
-      (= (get-in breaker [:host :cid]) (:cid ice)))
-    true))
+  (cond
+    (= "Living Mural" (:title breaker))
+    (= (take 2 (get-in breaker [:host :zone])) (take 2 (:zone ice)))
+
+    (host-only-breaker-titles (:title breaker))
+    (= (get-in breaker [:host :cid]) (:cid ice))
+
+    :else true))
 
 (defn breaker-matches-ice?
   "Check if breaker can break the ICE type."
@@ -247,20 +246,39 @@
                :breakers breakers
                :credits credits}}))
 
+(defn- resolve-tactic-card
+  "Resolve an indexed card first; for a bare title, narrow by the host rule."
+  [card-name state]
+  (let [installed (ai-state/installed-runner-cards (:game-state state))
+        {:keys [title explicit-index? index]} (core/parse-card-reference card-name)
+        matches (filter #(= title (:title %)) installed)
+        ice (core/encountered-ice state)
+        card (if explicit-index?
+               (core/find-installed-card card-name)
+               (let [eligible (filter #(trojan-host-matches? % ice) matches)]
+                 (when (= 1 (count eligible)) (first eligible))))]
+    (cond
+      (and card (trojan-host-matches? card ice)) {:card card}
+      (and card (= "Living Mural" (:title card)))
+      {:reason (str card-name " can break only ICE on its host server")}
+      card {:reason (str card-name " can break only its host ICE")}
+      (empty? matches) {:reason (str "Card not found installed: " card-name)}
+      (and explicit-index? (>= index (count matches)))
+      {:reason (str "No installed copy " card-name " (valid indices 0.." (dec (count matches)) ")")}
+      explicit-index? {:reason (str "Card not found installed: " card-name)}
+      (> (count (filter #(trojan-host-matches? % ice) matches)) 1)
+      {:reason (str "Multiple copies of " title " can break here; name one by index [N]")}
+      (= "Living Mural" title)
+      {:reason (str card-name " can break only ICE on its host server")}
+      :else {:reason (str card-name " can break only its host ICE")})))
+
 (defn- execute-break-dynamic!
   "Execute a :break-dynamic tactic - find and use the card's full-break ability."
   [card-name state]
-  (let [programs (ai-state/runner-programs (:game-state state))
-        ;; Find the specified card
-        ice (core/encountered-ice state)
-        resolved (core/find-installed-card card-name)
-        target-prog (when (and resolved
-                               (some #(= (:cid %) (:cid resolved)) programs)
-                               (trojan-host-matches? resolved ice))
-                      resolved)]
+  (let [{target-prog :card reason :reason} (resolve-tactic-card card-name state)]
     (if-not target-prog
       {:status :tactic-failed
-       :reason (format "Card not found installed: %s" card-name)}
+       :reason reason}
       ;; Find the dynamic break ability
       ;; NOTE: Dynamic abilities have playable=null, so don't require it
       (let [abilities (:abilities target-prog)
@@ -290,30 +308,25 @@
 (defn- execute-tactic!
   "Dispatch and execute a tactic based on its :action type."
   [tactic ice-name state]
-  (let [{:keys [card action]} tactic
-        ice (core/encountered-ice state)
-        matches (filter #(= card (:title %))
-                        (ai-state/installed-runner-cards (:game-state state)))
-        candidates (filter #(trojan-host-matches? % ice) matches)]
-    (if (and (seq matches) (empty? candidates)
-             (contains? #{:break-dynamic :use-ability} action))
-      {:status :tactic-failed :reason (str card " can break only its host ICE")}
-      (case action
+  (let [{:keys [card action]} tactic]
+    (case action
       ;; V1 Actions
       :break-dynamic
       (execute-break-dynamic! card state)
 
       :use-ability
-      (let [ability-index (:ability-index tactic)]
-        (println (format "🎯 Tactic: %s ability %d" card ability-index))
-        (let [result (actions/use-ability!
-                       (if (= 1 (count candidates))
-                         (core/installed-runner-reference (first candidates) (:game-state state))
-                         card)
-                       ability-index)]
-          (if (= :success (:status result))
-            {:status :action-taken :action :tactic-executed :card card}
-            {:status :tactic-failed :reason (:reason result)})))
+      (let [ability-index (:ability-index tactic)
+            {target :card reason :reason} (resolve-tactic-card card state)]
+        (if-not target
+          {:status :tactic-failed :reason reason}
+          (do
+            (println (format "🎯 Tactic: %s ability %d" card ability-index))
+            (let [result (actions/use-ability!
+                           (core/installed-runner-reference target (:game-state state))
+                           ability-index)]
+              (if (= :success (:status result))
+                {:status :action-taken :action :tactic-executed :card card}
+                {:status :tactic-failed :reason (:reason result)})))))
 
       ;; V2 Stubs - recognized but not implemented
       :break-subs
@@ -334,7 +347,7 @@
       ;; Unknown action
       (do
         (println (format "⚠️  Unknown tactic action: %s" action))
-        (pause-with-context state ice-name (format "Unknown action: %s" action)))))))
+        (pause-with-context state ice-name (format "Unknown action: %s" action))))))
 
 ;; ============================================================================
 ;; Handler (called from ai-runs handler chain)
