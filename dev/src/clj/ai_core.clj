@@ -1142,6 +1142,49 @@
             (println (format "   → \"%s [%d]\" (%s)" title idx zone-name))))
         nil))))
 
+(defn ability-title-match-count
+  "Count own-side ability targets after stripping an optional [N] suffix."
+  [card-name]
+  (let [{:keys [title]} (parse-card-reference card-name)]
+    (count (filter #(= title (:title %)) (state/ability-target-cards)))))
+
+(defn find-ability-card
+  "Resolve an own-side card in the UI's ability-click zones. [N] indexes the
+   same ordered collection used by list-playables and its copy labels."
+  [card-name]
+  (let [cards (state/ability-target-cards)
+        {:keys [title index explicit-index?]} (parse-card-reference card-name)
+        matches (vec (filter #(= title (:title %)) cards))]
+    (cond
+      explicit-index? (nth matches index nil)
+      (= 1 (count matches)) (first matches)
+      (> (count matches) 1)
+      (do
+        (println (format "❓ Multiple copies of '%s' installed (%d found)" title (count matches)))
+        (println "   Specify which one:")
+        (doseq [[idx card] (map-indexed vector matches)]
+          (println (format "   → \"%s [%d]\" (%s)"
+                           title idx (or (some-> card :zone last name) "identity"))))
+        nil)
+      :else nil)))
+
+(defn report-ability-lookup-miss!
+  "Report a failed own-side ability lookup after find-ability-card's ambiguity list."
+  [card-name]
+  (let [{:keys [title index explicit-index?]} (parse-card-reference card-name)
+        n (ability-title-match-count card-name)]
+    (cond
+      (and explicit-index? (pos? n))
+      (do (println (format "❌ No copy [%d] of '%s' — valid indices are 0..%d."
+                           index title (dec n)))
+          {:status :error :reason (str "Index out of range: " title)})
+      (> n 1)
+      (do (println (str "   Re-run with the [N] suffix, e.g. \"" title " [0]\""))
+          {:status :error :reason (str "Ambiguous: multiple copies of " title " installed — specify [N]")})
+      :else
+      (do (println (str "❌ Card not found installed: " card-name))
+          {:status :error :reason (str "Card not found: " card-name)}))))
+
 (defn installed-runner-reference
   "Command name for a particular installed Runner card, indexed across both
    roots when titles repeat. `find-installed-card` uses this same walk/order."

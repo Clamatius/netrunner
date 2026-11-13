@@ -39,6 +39,7 @@ test:
 	@echo "Running unit tests..."
 	lein test \
 	  ai-ability-legality-test \
+	  ai-ability-zones-test \
 	  ai-actions-sad-path-test \
 	  ai-actions-test \
 	  ai-basic-actions-test \
@@ -72,6 +73,7 @@ test:
 	  checkout-target-test \
 	  continue-run-rez-test \
 	  game.ai-ability-legality-test \
+	  game.ai-ability-zones-wire-test \
 	  game.ai-approach-unrezzed-wire-test \
 	  game.ai-corp-pass-ledger-wire-test \
 	  game.ai-duplicate-continue-test \

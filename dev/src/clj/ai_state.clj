@@ -508,6 +508,31 @@
                           (mapcat walk (concat (mapcat :hosted rig-roots)
                                                (mapcat :hosted corp-roots)))))))))
 
+(defn ability-target-cards
+  "Own cards whose UI click can open the ordinary ability menu. Keep installed
+   membership in the existing installed walk; add the other active UI zones."
+  ([] (ability-target-cards (get-game-state) (my-side-kw)))
+  ([gs side]
+   (let [mine (get gs side)
+         installed (if (= side :runner)
+                     (installed-runner-cards gs)
+                     (let [servers (get-in gs [:corp :servers])
+                           roots (mapcat (fn [server] (concat (:ices server) (:content server)))
+                                         (vals servers))]
+                       (concat roots
+                               (filter #(and (:installed %)
+                                             (= "Corp" (:side %)))
+                                       (mapcat card-and-hosted (mapcat :hosted roots))))))
+         roots (concat installed
+                       [(:identity mine)]
+                       (:scored mine)
+                       (:current mine)
+                       (:play-area mine))]
+     (vec (filter #(and side (:title %)
+                        (or (nil? (:side %))
+                            (= (name side) (some-> (:side %) name str/lower-case))))
+                  roots)))))
+
 (defn runner-host-label
   "Visible host of an installed Runner card. Name unrezzed Corp ICE by position."
   [gs card]

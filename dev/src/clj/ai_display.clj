@@ -49,6 +49,19 @@
       (str " [" (clojure.string/join "][" parts) "]")
       "")))
 
+(defn- own-playable-ability-lines
+  "Command-ready labels for the seat's own playable card abilities."
+  [gs side]
+  (when side
+    (let [cards (state/ability-target-cards gs side)]
+      (vec (for [card cards
+                 [idx ability] (map-indexed vector (:abilities card))
+                 :when (:playable ability)]
+             (format "%s [%d] %s"
+                     (core/format-card-name-with-index card cards)
+                     idx
+                     (or (:label ability) (:msg ability) (:cost-label ability) "ability")))))))
+
 (defn- rig-card-seq
   "Every card in a rig collection, depth-first, hosted cards included.
 
@@ -781,6 +794,10 @@
             (when (and prompt (not (state/waiting-prompt-type? prompt-type)))
               (println "\n🔔 Active Prompt:" (:msg prompt)))
 
+            (when-let [abilities (seq (own-playable-ability-lines gs (state/my-side-kw {:side my-side})))]
+              (println "\n⚙️  Own playable abilities:")
+              (doseq [line abilities] (println "  " line)))
+
             ;; Show recent log entries (summarized)
             (when-let [log (get-in gs [:log])]
               (let [recent-log (take-last 4 log)
@@ -1069,6 +1086,10 @@
       (section! "📦" "Resources" resources "Resource"
                 (rig-type-count gs :resource "Resource")))
 
+    (when-let [abilities (seq (own-playable-ability-lines gs (state/my-side-kw state)))]
+      (println "\n--- OWN PLAYABLE ABILITIES ---")
+      (doseq [line abilities] (println "  " line)))
+
     ;; Deck/Discard counts
     (println "\n--- DECK STATUS ---")
     (println (str "Corp Deck: " corp-deck-count " | Discard: " (count corp-discard)))
@@ -1164,6 +1185,8 @@
                                                  named)
                                             corp-guests)))
                         ""))))
+    (when-let [abilities (seq (own-playable-ability-lines gs (state/my-side-kw state)))]
+      (println (str "Abilities: " (str/join ", " abilities))))
     nil))
 
 (defn get-game-log
@@ -3606,7 +3629,7 @@
        (show-cards card-names full?)))))
 
 (defn show-card-abilities
-  "Show available abilities for an installed card by name
+  "Show available abilities for an own card in an ability-click zone by name
    Works for both Runner and Corp cards
    Usage: (show-card-abilities \"Smartware Distributor\")
           (show-card-abilities \"Cleaver\")"
@@ -3614,17 +3637,14 @@
   (let [state @state/client-state
         side (:side state)
         corp-viewer? (core/side= "Corp" side)
-        ;; Find card in appropriate location. Use core/side= — client-state stores
-        ;; :side lowercase ("corp"), so a strict (= "Corp" side) is always false
-        ;; and would search the Runner rig, missing every Corp card. (issue #69)
-        card (if corp-viewer?
-               (core/find-installed-corp-card card-name)
-               (core/find-installed-card card-name))
+        ;; Both seats use the same own-card ability lookup. Preserve the
+        ;; existing opponent-card fallback for Runner-usable Corp abilities.
+        card (core/find-ability-card card-name)
         ;; #95: a Runner probing a Corp card (bioroid click-break) used to
         ;; dead-end on "Card not found". Fall back to the opponent's installed
         ;; cards and surface the Runner-usable abilities instead.
         cross-card (when (and (not card) (not corp-viewer?)
-                              (zero? (core/installed-title-match-count card-name :runner)))
+                              (zero? (core/ability-title-match-count card-name)))
                      (core/find-installed-corp-card card-name))]
     (cond
       card
@@ -3634,7 +3654,7 @@
         (println (clojure.string/join "" (repeat 70 "=")))
         (if (seq abilities)
           (doseq [[idx ability] (map-indexed vector abilities)]
-            (let [label (or (:label ability) (:cost-label ability) (str "Ability " idx))
+            (let [label (or (:label ability) (:msg ability) (:cost-label ability) (str "Ability " idx))
                   action-icon (if (:action ability) "[Click] " "")
                   once-str (when (:once ability)
                             (str " (Once " (if (keyword? (:once ability))
@@ -3666,8 +3686,7 @@
       ;; Ambiguity is not absence (#151 item 5): a duplicate title has already
       ;; printed its "❓ Multiple copies" list by the time we get here, and a
       ;; flat not-found beneath it tells the seat its own board is wrong.
-      (core/report-installed-lookup-miss! card-name
-                                          (if corp-viewer? [:corp] [:runner :corp])))))
+      (core/report-ability-lookup-miss! card-name))))
 
 ;; ============================================================================
 ;; High-Level Workflows
@@ -3823,20 +3842,18 @@
                             (:type card)
                             cost-str))))))
 
-    ;; Playable installed abilities
-    (let [all-installed (if (= side :runner)
-                          (state/installed-runner-cards gs)
-                          [])
-          playable-abilities (for [card all-installed
+    ;; Playable abilities on own UI-clickable cards
+    (let [targets (state/ability-target-cards gs side)
+          playable-abilities (for [card targets
                                   [idx ability] (map-indexed vector (:abilities card))
                                   :when (:playable ability)]
                               {:card card
-                               :card-name (core/format-card-name-with-index card all-installed)
+                               :card-name (core/format-card-name-with-index card targets)
                                :idx idx
-                               :label (:label ability)
+                               :label (or (:label ability) (:msg ability) (:cost-label ability))
                                :cost (:cost-label ability)})]
       (when (seq playable-abilities)
-        (println "\n⚙️  Installed Abilities:")
+        (println "\n⚙️  Playable Abilities:")
         (doseq [{:keys [card-name idx label cost]} playable-abilities]
           (println (format "  - %s: Ability %d - %s%s"
                           card-name
@@ -3903,9 +3920,7 @@
 
     ;; Return count of playable actions
     (let [card-count (count (filter :playable hand))
-          ability-count (count (for [card (if (= side :runner)
-                                           (state/installed-runner-cards gs)
-                                           [])
+          ability-count (count (for [card (state/ability-target-cards gs side)
                                     ability (:abilities card)
                                     :when (:playable ability)]
                                 ability))]
