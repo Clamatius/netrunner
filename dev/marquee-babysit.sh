@@ -19,6 +19,9 @@
 #            pointing at the primary seat's log, from which the session id is
 #            read (`codex exec` prints `session id: <uuid>` in its header).
 #            MARQUEE_CODEX_EFFORT overrides reasoning effort (default xhigh).
+#            An askmodel seat runs codex with --json, so it prints no header:
+#            point MARQUEE_PRIMARY_LOG at its <out>.trace.jsonl instead, whose
+#            `thread.started` event carries the same id as `thread_id`.
 #   claude — `claude -p --resume <session-id>`. Resume is BY ID like codex, but
 #            the id is ASSIGNED by the launcher (`claude --session-id <uuid>`)
 #            rather than scraped back out of a log, so there is nothing to parse
@@ -47,12 +50,23 @@ CLAUDE_SESSION="${MARQUEE_CLAUDE_SESSION:-}"
 CLAUDE_TOKEN_FILE="${MARQUEE_CLAUDE_TOKEN_FILE:-$HOME/claude_oauth.txt}"
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs
-LOG="logs/marquee-${SIDE}-${MODEL}-${TAG}-chunks.log"
+# MARQUEE_CHUNK_LOG: a launcher (dev/match) keeps the chunk log in its run dir.
+LOG="${MARQUEE_CHUNK_LOG:-logs/marquee-${SIDE}-${MODEL}-${TAG}-chunks.log}"
+mkdir -p "$(dirname "$LOG")"
 
-# Newest `session id:` in a codex log, or empty.
+# Newest codex session id in a log, or empty. Two spellings: the `session id:`
+# header plain `codex exec` prints (and every resume chunk below), and the
+# `thread.started` event `codex exec --json` emits — which is all an askmodel
+# seat's <out>.trace.jsonl has.
 codex_session_id() {
   [ -f "$1" ] || return 1
-  grep -E '^session id: ' "$1" 2>/dev/null | tail -1 | awk '{print $3}'
+  local id
+  id=$(grep -E '^session id: ' "$1" 2>/dev/null | tail -1 | awk '{print $3}')
+  if [ -z "$id" ]; then
+    id=$(grep -E '"type": *"thread.started"' "$1" 2>/dev/null | tail -1 \
+         | sed -n 's/.*"thread_id": *"\([0-9A-Za-z-]*\)".*/\1/p')
+  fi
+  printf '%s' "$id"
 }
 
 if [ "$BACKEND" = codex ]; then

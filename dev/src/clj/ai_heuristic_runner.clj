@@ -47,8 +47,7 @@
 (defn my-clicks [] (state/runner-clicks))
 (defn my-hand [] (state/runner-hand))
 (defn my-rig [] 
-  (let [rig (state/runner-rig)]
-    (apply concat (vals rig))))
+  (state/installed-runner-cards))
 
 (defn cards-in-hand-by-type [type]
   (filter #(= type (:type %)) (my-hand)))

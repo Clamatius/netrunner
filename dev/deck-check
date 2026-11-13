@@ -1,0 +1,131 @@
+#!/usr/bin/env bb
+;; deck-check — offline System Gateway deck legality + client-capability audit.
+;;
+;;   dev/deck-check [--audit] deck.edn [deck.edn ...]
+;;
+;; Reads data/cards.edn and the deck files; never touches the game server.
+;; Exit 0 only if every deck is legal; each failing deck prints its reasons.
+;; Rules mirror src/cljc/jinteki/validator.cljc (valid-deck? +
+;; build-system-gateway-legality); the differences are listed in the report that
+;; came with this script and in the "STRICTER/LOOSER" notes below.
+;;
+;; STRICTER than the engine: lines for one title are summed before the copy check
+;;   (the engine checks each line alone, so {:qty 2 X}{:qty 2 X} slips through).
+;; LOOSER than the engine: Alliance/Professor influence discounts and singleton
+;;   identities (Catalyst/Syndicate) are not modelled; neither appears in a
+;;   sample deck. Identities with no :influencelimit are treated as unlimited.
+;; SAME: min size, influence (:factioncost x qty out of faction), agenda band
+;;   2*floor(size/5)+2 .. +3 (size = max(deck size, id minimum)), own-faction or
+;;   Neutral agendas only, side match, copies <= min(:quantity box, :deck-limit 3).
+(require '[clojure.edn :as edn] '[clojure.string :as str] '[clojure.java.io :as io])
+
+(def root (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+
+(defn norm [s] (-> s (str/replace #"[ʼ’]" "'") str/trim))
+
+(def cards
+  (->> (edn/read-string (slurp (io/file root "data" "cards.edn")))
+       (group-by (comp norm :title))))
+
+(defn sg-card [title]
+  (let [cs (get cards (norm title))]
+    (or (first (filter #(get-in % [:format :system-gateway :legal]) cs))
+        (first cs))))
+
+;; Known client-capability flags. Static; the SG pool is closed (77 cards).
+;; Delete an entry when its issue closes.
+(def audit-table
+  {"Botulus"        ["HIGH"    "trojan hosted on Corp ICE, invisible to client" "#170/#171"]
+   "Tranquilizer"   ["LOW"     "trojan counters hidden" "#171"]
+   "Anoetic Void"   ["MED"     "Corp optional mid-run + trash-2-from-HQ cost" "#212"]
+   "Longevity Serum" ["MED"    "multi-select up to hand size needing Done" "#212"]
+   "Carnivore"      ["LOW-MED" "trash-2-from-hand cost" "#212"]
+   "Nico Campaign"  ["tempo"   "start-of-turn rez a turn late" "#270"]
+   "Clearinghouse"  ["LOW"     "phase 1.2 rez window" "#270"]
+   "Sprint"         ["LOW"     ":max 2 selects, choose by index" "#212"]
+   "Tāo Salonga: Telepresence Magician" ["LOW" ":max 2 selects, choose by index (Tāo)" "#212"]
+   "Spin Doctor"    ["LOW"     ":max 2 selects, choose by index" "#212"]
+   "Karunā"         ["LOW"     "misleading Corp hint on jack-out offer" "#284"]})
+
+(def severity ["HIGH" "MED" "LOW-MED" "LOW" "tempo"]) ; worst first
+
+(defn check-deck [deck]
+  (let [id-title (get-in deck [:identity :title])
+        id (some-> id-title sg-card)
+        errs (atom [])
+        stats (atom {:size 0 :inf 0})
+        err! (fn [& xs] (swap! errs conj (apply str xs)))
+        lines (:cards deck)
+        by-title (reduce (fn [m {:keys [qty card]}] (update m (norm card) (fnil + 0) qty)) {} lines)
+        resolved (for [[t q] by-title] [t q (sg-card t)])]
+    (cond
+      (nil? id) (err! "unknown identity: " id-title)
+      (not= "Identity" (:type id)) (err! "not an identity: " id-title)
+      (not (get-in id [:format :system-gateway :legal])) (err! "identity not System Gateway legal: " id-title))
+    (doseq [[t q c] resolved]
+      (cond
+        (nil? c) (err! "unknown card: " t)
+        (not (get-in c [:format :system-gateway :legal])) (err! "not System Gateway legal: " t)
+        :else
+        (let [lim (min (:quantity c 3) (:deck-limit c 3))]
+          (when (> q lim) (err! "too many copies of " t ": " q ", max " lim))
+          (when (and id (not= (:side c) (:side id))) (err! "wrong side: " t " is " (:side c) ", identity is " (:side id)))
+          (when (= "Identity" (:type c)) (err! "identity listed as a card: " t)))))
+    (when (and id (= "Identity" (:type id)))
+      (let [known (remove (fn [[_ _ c]] (nil? c)) resolved)
+            size (reduce + (map second by-title))
+            minsize (:minimumdecksize id 0)
+            inf (reduce + (for [[_ q c] known
+                                :when (not= (:faction c) (:faction id))]
+                            (* q (:factioncost c 0))))
+            limit (:influencelimit id)]
+        (when (< size minsize) (err! "deck too small: " size ", min " minsize))
+        (when (and limit (> inf limit)) (err! "influence overspent: " inf ", limit " limit))
+        (doseq [[t _ c] known
+                :when (and (= "Agenda" (:type c)) (not (#{"Neutral" (:faction id)} (:faction c))))]
+          (err! "out-of-faction agenda: " t " (" (:faction c) ")"))
+        (when (= "Corp" (:side id))
+          (let [pts (reduce + (for [[_ q c] known] (* q (:agendapoints c 0))))
+                lo (+ 2 (* 2 (quot (max size minsize) 5)))]
+            (when-not (<= lo pts (inc lo))
+              (err! "agenda points " pts ", need " lo " to " (inc lo) " for " size " cards"))))
+        (reset! stats {:size size :inf inf :limit limit})))
+    (assoc @stats :errs @errs :resolved resolved)))
+
+(defn summarize [deck r]
+  (str (:name deck) ": " (:size r) " cards, influence " (:inf r) "/" (or (:limit r) "unlimited")))
+
+(defn audit [deck r]
+  (let [id-title (get-in deck [:identity :title])
+        rows (cons [id-title 1] (sort-by first (map (fn [[t q _]] [t q]) (:resolved r))))
+        flags (atom [])]
+    (doseq [[t q] rows]
+      (let [c (sg-card t)
+            [sev note issue] (get audit-table (:title c))]
+        (when sev (swap! flags conj sev))
+        (println (format "%-36s x%d  %s" (or (:title c) t) q
+                         (if sev (str sev " - " note " (" issue ")") "-")))))
+    (let [worst (some (set @flags) severity)]
+      (println (str "SUMMARY " (:name deck) ": worst flag " (or worst "none")
+                    " (" (count @flags) " flagged lines)")))))
+
+(let [args *command-line-args*
+      audit? (some #{"--audit"} args)
+      files (remove #{"--audit"} args)]
+  (when (empty? files)
+    (binding [*out* *err*] (println "usage: deck-check [--audit] deck.edn ..."))
+    (System/exit 2))
+  (let [bad (atom 0)]
+    (doseq [f files]
+      (let [deck (try (edn/read-string (slurp f))
+                      (catch Exception e (println (str f ": FAIL cannot read: " (.getMessage e))) nil))
+            r (when deck (check-deck deck))]
+        (cond
+          (nil? deck) (swap! bad inc)
+          (or (nil? r) (seq (:errs r)))
+          (do (swap! bad inc)
+              (println (str f ": FAIL"))
+              (doseq [e (or (:errs r) ["cannot evaluate deck"])] (println (str "  - " e))))
+          :else (do (println (str f ": OK  " (summarize deck r)))
+                    (when audit? (audit deck r))))))
+    (System/exit (if (zero? @bad) 0 1))))

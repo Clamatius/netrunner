@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Null Signal's official Jinteki sample deck,
+;; "Advanced Yomi" (44 cards).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Decklist: https://netrunnerdb.com/en/decklist/c0122ed3-c9b7-446c-bf2b-01e207f22982/advanced-yomi-sg-only-
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Advanced Yomi",
+ :format "system-gateway",
+ :identity {:title "Jinteki: Restoring Humanity"},
+ :cards
+ [{:qty 1, :card "Longevity Serum"}
+  {:qty 3, :card "Offworld Office"}
+  {:qty 2, :card "Orbital Superiority"}
+  {:qty 2, :card "Send a Message"}
+  {:qty 3, :card "Clearinghouse"}
+  {:qty 3, :card "Regolith Mining License"}
+  {:qty 3, :card "Spin Doctor"}
+  {:qty 3, :card "Urtica Cipher"}
+  {:qty 3, :card "Hansei Review"}
+  {:qty 3, :card "Hedge Fund"}
+  {:qty 2, :card "Anoetic Void"}
+  {:qty 3, :card "Palisade"}
+  {:qty 3, :card "Diviner"}
+  {:qty 3, :card "Whitespace"}
+  {:qty 1, :card "Ansel 1.0"}
+  {:qty 3, :card "Karunā"}
+  {:qty 3, :card "Tithe"}]}

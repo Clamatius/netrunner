@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Null Signal's official Weyland sample deck,
+;; "Quick and Dirty" (44 cards).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Decklist: https://netrunnerdb.com/en/decklist/5c7d19c1-ce7b-40ab-811e-e4481078751c/quick-and-dirty-sg-only-
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Quick and Dirty",
+ :format "system-gateway",
+ :identity {:title "Weyland Consortium: Built to Last"},
+ :cards
+ [{:qty 1, :card "Above the Law"}
+  {:qty 3, :card "Offworld Office"}
+  {:qty 2, :card "Orbital Superiority"}
+  {:qty 2, :card "Send a Message"}
+  {:qty 3, :card "Government Subsidy"}
+  {:qty 3, :card "Hedge Fund"}
+  {:qty 3, :card "Predictive Planogram"}
+  {:qty 3, :card "Public Trail"}
+  {:qty 3, :card "Retribution"}
+  {:qty 2, :card "Sprint"}
+  {:qty 2, :card "Malapert Data Vault"}
+  {:qty 3, :card "Palisade"}
+  {:qty 3, :card "Pharos"}
+  {:qty 2, :card "Funhouse"}
+  {:qty 3, :card "Whitespace"}
+  {:qty 3, :card "Ballista"}
+  {:qty 3, :card "Tithe"}]}

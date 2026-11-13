@@ -721,8 +721,8 @@ ${GREEN}Running:${NC}
                        :break-subs     NOT implemented — PAUSES the run
                        :script         NOT implemented — PAUSES the run
                        :prep           NOT implemented — ignored, falls through
-                     Known gap: a breaker HOSTED on another card (e.g. on a
-                     Leprechaun) is not found, so its plan silently won't fire.
+                     Hosted breakers, including programs on Corp ICE, are found;
+                     Botulus can break only its host ICE.
                      Use the FILE form: the inline --tactics flag cannot carry a
                      quoted map from the command line (the quotes break the
                      Clojure form before the parser sees them), so a map with

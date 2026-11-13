@@ -1,0 +1,26 @@
+;; System Gateway Constructed — Null Signal's official Criminal sample deck,
+;; "Stolen Goods" (40 cards).
+;; Source: https://nullsignal.games/players/getting-started-sample-decklists/
+;; Decklist: https://netrunnerdb.com/en/decklist/e6cfb890-c28d-453b-a8aa-57cda3a7ebf8/stolen-goods-sg-only-
+;; Seeded into mongo by dev/seed-decks.sh; selected via `send_command <side> select-deck`.
+{:name "Stolen Goods",
+ :format "system-gateway",
+ :identity {:title "Zahya Sadeghi: Versatile Smuggler"},
+ :cards
+ [{:qty 3, :card "Jailbreak"}
+  {:qty 2, :card "Mutual Favor"}
+  {:qty 3, :card "Overclock"}
+  {:qty 3, :card "Sure Gamble"}
+  {:qty 3, :card "Tread Lightly"}
+  {:qty 3, :card "VRcation"}
+  {:qty 2, :card "Docklands Pass"}
+  {:qty 3, :card "Pennyshaver"}
+  {:qty 1, :card "T400 Memory Diamond"}
+  {:qty 3, :card "Red Team"}
+  {:qty 3, :card "Smartware Distributor"}
+  {:qty 2, :card "Verbal Plasticity"}
+  {:qty 2, :card "Buzzsaw"}
+  {:qty 2, :card "Carmen"}
+  {:qty 2, :card "Marjanah"}
+  {:qty 1, :card "Conduit"}
+  {:qty 2, :card "Leech"}]}
