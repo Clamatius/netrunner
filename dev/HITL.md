@@ -82,8 +82,7 @@ loopback URL (that is how the proofs fired into a local stub).
 - A decision you take within one poll may never be noticed, so not every turn
   pages you; each run window you owe can page once. No mulligan page when you
   are the Corp (the launcher is still in its keep gate; you have just joined).
-- The model's `peer-status` cannot see a browser player; its brief says to
-  ignore that.
+- The model's `peer-status` cannot see you; its brief says to ignore that.
 - Issue #327: the web UI's counter selector offers only 0 on cards like
   Sealed Vault (not in System Gateway).
 - UNVERIFIED with a real browser: login, lobby join, deck pick, play, and
