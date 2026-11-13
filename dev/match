@@ -28,6 +28,13 @@ HUMAN_JOIN_SECS="${MATCH_HUMAN_JOIN_SECS:-1800}"
 REPORT_GRACE_SECS="${MATCH_REPORT_GRACE_SECS:-900}"
 SEAT_TIMEOUT="${MATCH_SEAT_TIMEOUT:-14400}"
 QUOTA_LIMIT=80
+# Human-mode notifications (#50 gap-2): the ntfy topic that pages the owner's
+# devices (dev/umpire-ping's). Override the whole URL (any ntfy server/topic, or
+# a local stub). <repo>/logs/NO-WAKE silences them, as it does umpire-ping
+# --wake; MATCH_NTFY_IGNORE_NO_WAKE=1 lifts that ONLY for a loopback URL, so a
+# proof run can fire into a local stub without arming the real topic.
+NTFY_URL="${MATCH_NTFY_URL:-https://ntfy.sh/ai-netrunner-qualified-animal}"
+NO_WAKE="$ROOT/logs/NO-WAKE"
 
 usage() {
     cat <<'EOF'
@@ -35,7 +42,7 @@ dev/match — run one Netrunner game unattended, start to replay.
 
   dev/match --corp <seat> --runner <seat> [--corp-deck <file.edn> --runner-deck <file.edn>]
             [--effort low|medium|high|xhigh] [--tag <name>] [--no-babysit]
-            [--max-hours N] [--stall-minutes N] [--force] [--dry-run]
+            [--max-hours N] [--stall-minutes N] [--no-notify] [--force] [--dry-run]
 
 <seat> is one of:
   an askmodel seat   opus, fable, sonnet, haiku, sol, astra, luna, argon, ... or any
@@ -60,6 +67,8 @@ Options:
   --max-hours N      give up after N hours (default 6): outcome "timeout".
   --stall-minutes N  "stalled"/"seat-died" needs N minutes with no game-log progress
                      AND a side with no live seat process or babysitter (default 20).
+  --no-notify        human seat only: no ntfy notifications (they are ON by default
+                     with a human seat — see "Human seat" below).
   --force            run even if a game is live on the REPLs (its replay is flushed
                      first) or a codex seat's weekly quota is above 80%.
   --dry-run          print every command it would run; touch nothing.
@@ -89,6 +98,17 @@ winner, reason, score:{corp,runner}, turns, started, ended, duration_s, outcome,
 babysit_chunks:{corp,runner}, replay, reports:{corp,runner}, git_sha}.
 outcome: completed | stalled | seat-died | timeout | launch-failed | interrupted.
 
+Human seat (dev/HITL.md is the how-to): the launcher prints the join steps, waits
+up to MATCH_HUMAN_JOIN_SECS for you, then plays only the model side. Each poll it
+asks the model's REPL who owes the next decision; when that passes to YOU (your
+mulligan, your turn, your call in a run, a prompt of yours) it sends ONE ntfy to
+MATCH_NTFY_URL (default the owner's ntfy.sh topic), and sends no other until the
+decision has gone back to the model, i.e. you acted. One more when the game ends,
+whatever the outcome. Latency is up to one poll (MATCH_POLL_SECS); a decision the
+model holds for less than a poll may not re-arm it. While <repo>/logs/NO-WAKE
+exists nothing is sent (each would-be send is logged instead). Typing "ping" in
+game chat wakes a waiting model seat.
+
 Unattended start that survives the caller (verified: a seat spawned from a
 background launcher outlives the shell that started it):
   nohup dev/match --corp luna --runner luna > /dev/null 2>&1 &
@@ -100,6 +120,8 @@ Tuning/test knobs (env, seconds): MATCH_POLL_SECS (30), MATCH_KEEP_SECS (1200),
 MATCH_HUMAN_JOIN_SECS (1800), MATCH_REPORT_GRACE_SECS (900), MATCH_SEAT_TIMEOUT
 (14400, askmodel --timeout), MATCH_STALL_SECS / MATCH_MAX_SECS (override the minute/
 hour flags), ASKMODEL, CLAUDE_TOKEN_FILE, CODEX_HOME.
+Notifications: MATCH_NTFY_URL (whole URL); logs/NO-WAKE silences them;
+MATCH_NTFY_IGNORE_NO_WAKE=1 overrides that only when MATCH_NTFY_URL is loopback.
 EOF
 }
 
@@ -138,7 +160,7 @@ marker() {
 
 # ── argument parsing (pure: touches nothing) ─────────────────────────────────
 CORP_SEAT=""; RUNNER_SEAT=""; CORP_DECK=""; RUNNER_DECK=""; EFFORT="high"; TAG=""
-BABYSIT=1; MAX_HOURS=6; STALL_MIN=20; FORCE=0
+BABYSIT=1; MAX_HOURS=6; STALL_MIN=20; FORCE=0; NOTIFY=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
@@ -152,6 +174,7 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2 ;;
         --no-babysit) BABYSIT=0; shift ;;
+        --no-notify) NOTIFY=0; shift ;;
         --force) FORCE=1; shift ;;
         --dry-run) DRY=1; shift ;;
         *) die_usage "unknown argument: $1" ;;
@@ -229,6 +252,7 @@ HUMAN_SIDE=""
 for s in corp runner; do [[ "$(gv $s kind)" == human ]] && HUMAN_SIDE="$s"; done
 # The REPL the launcher watches the game through: an AI side that is in the game.
 OBS=corp; [[ "$HUMAN_SIDE" == corp ]] && OBS=runner
+NOTIFY_ON=0; [[ -n "$HUMAN_SIDE" ]] && (( NOTIFY )) && NOTIFY_ON=1
 
 # ── briefs: one template per side ─────────────────────────────────────────────
 brief_values() {  # side -> sets B_KIND B_SELF B_OPP_TITLE B_OPP B_NOTE
@@ -270,6 +294,70 @@ if "{{" in t:
     sys.exit("unfilled placeholder in %s" % src)
 (sys.stdout if dest == "-" else open(dest, "w")).write(t)
 PY
+}
+
+# ── human-mode notifications (#50 gap-2) ─────────────────────────────────────
+# Who owes the next decision, read from the AI side's REPL (the only client the
+# launcher has in the game). The engine hides the human's prompt from the AI, so
+# "the human owes it" is read off what the AI CAN see, most specific first:
+#   mulligan  the opening keep/mulligan flags (ai-state, #87)
+#   prompt    an actionable AI prompt = the AI owes; the AI's "waiting" prompt =
+#             the engine is waiting on the human (prompts block the run, so they
+#             outrank the run ledger)
+#   run       the run/encounter pass ledger (:no-action), via ai-core/owns-run-window?
+#   turn      turn boundary next-player, else whose-turn (game-over-status's fields)
+# Prints "OWNER <ai|human|none> <why> <turn>".
+OWNER_EXPR='(let [s @ai-state/client-state me (ai-state/my-side-kw s) opp (if (= me :corp) :runner :corp) gs (:game-state s) p (ai-state/get-prompt s) ts (ai-state/get-turn-status s) waiting? (and p (ai-state/waiting-prompt-type? (:prompt-type p))) nxt (if (:waiting-to-start? ts) (:next-player ts) (:whose-turn ts)) [who why] (cond (or (nil? me) (not (map? gs))) ["none" "no-game"] (ai-state/game-over? gs) ["none" "over"] (ai-state/my-mulligan-pending? s) ["ai" "mulligan"] (ai-state/opponent-mulligan-pending? s) ["human" "mulligan"] (and p (not waiting?) (or (seq (:choices p)) (seq (:selectable p)))) ["ai" "prompt"] waiting? ["human" "prompt"] (ai-core/owns-run-window? s me) ["ai" "run"] (ai-core/owns-run-window? s opp) ["human" "run"] (contains? #{"corp" "runner"} nxt) [(if (= nxt (name me)) "ai" "human") "turn"] :else ["none" "unknown"])] (println "OWNER" who why (or (:turn-number ts) "?")))'
+ntfy_loopback() {  # 0 when NTFY_URL's host is this machine (no userinfo, no lookalike suffix)
+    [[ "$NTFY_URL" =~ ^https?://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\])(:[0-9]+)?(/|$) ]]
+}
+no_wake_silences() {  # 0 when logs/NO-WAKE stops this send (checked at every send)
+    [[ -e "$NO_WAKE" ]] || return 1
+    [[ "${MATCH_NTFY_IGNORE_NO_WAKE:-}" == 1 ]] && ntfy_loopback && return 1
+    return 0
+}
+notify() {  # text -> one POST to NTFY_URL; a failure is logged, never fatal or retried
+    (( NOTIFY_ON )) || return 0
+    if no_wake_silences; then log "notification NOT sent (logs/NO-WAKE exists): $1"; return 0; fi
+    if (( DRY )); then printf '+ %s\n' "$(quote curl -fsS -m 8 -d "$1" "$NTFY_URL")"; return 0; fi
+    if curl -fsS -m 8 -d "$1" "$NTFY_URL" > /dev/null 2>&1 < /dev/null; then
+        log "notified the human: $1"
+    else
+        log "notify FAILED (curl to $NTFY_URL): $1"
+    fi
+}
+END_NOTIFIED=0
+notify_end() { (( END_NOTIFIED )) && return 0; END_NOTIFIED=1; notify "$1"; }
+handover_text() {  # why turn
+    local what
+    case "$1" in
+        mulligan) what="keep or mulligan your opening hand" ;;
+        turn)     what="your turn" ;;
+        run)      what="your call in the run" ;;
+        *)        what="a decision is waiting for you" ;;
+    esac
+    printf 'Netrunner: %s (%s, turn %s). [dev/match %s]' "$what" "$(Cap "$HUMAN_SIDE")" "$2" "$TAG"
+}
+# One notification per hand-over: sent when the decision is the human's and the
+# watch is armed; re-armed only by seeing the decision back with the AI, which
+# can only happen once the human has acted. "none" (unknown, between states)
+# neither sends nor re-arms.
+NOTIFY_ARMED=1; LAST_OWNER=""
+watch_owner() {
+    (( NOTIFY_ON )) || return 0
+    local who="" why="" turn=""
+    read -r who why turn <<<"$(marker "$OBS" OWNER "$OWNER_EXPR")"
+    if [[ -n "$who" && "$who $why" != "$LAST_OWNER" ]]; then
+        log "next decision: $who ($why), turn ${turn:-?}"; LAST_OWNER="$who $why"
+    fi
+    case "$who" in
+        ai) NOTIFY_ARMED=1 ;;
+        human)
+            if (( NOTIFY_ARMED )); then
+                NOTIFY_ARMED=0
+                notify "$(handover_text "$why" "${turn:-?}")"
+            fi ;;
+    esac
 }
 
 # ── process ownership ─────────────────────────────────────────────────────────
@@ -368,6 +456,11 @@ PY
 finish() {  # outcome reason exit-code
     OUTCOME="$1"; [[ -n "${2:-}" ]] && REASON="$2"
     log "OUTCOME $OUTCOME${REASON:+ — $REASON}"
+    # A human seated in a game that stops without a result would otherwise wait
+    # on a seat that is gone (a completed game was announced at GAME-OVER).
+    if [[ "$OUTCOME" != completed && ( "$PHASE" == playing || "$PHASE" == harvest ) ]]; then
+        notify_end "Netrunner: the game stopped without a result ($OUTCOME): $REASON [dev/match $TAG]"
+    fi
     stop_owned
     if [[ "$OUTCOME" != completed && -n "$GAMEID" ]]; then
         log "lobby $GAMEID left open (resumable). The next dev/match flushes its replay before resetting; by hand: dev/save-replay.sh $GAMEID"
@@ -426,7 +519,10 @@ for s in corp runner; do
     log "$(Cap $s): seat=$(gv $s seat) backend=$(gv $s backend) model=$(gv $s model) effort=$(gv $s effort)"
 done
 [[ -n "$CORP_DECK" ]] && log "decks: corp=$CORP_DECK runner=$RUNNER_DECK (System Gateway Constructed)"
-log "tag=$TAG max=${MAX_SECS}s stall=${STALL_SECS}s babysit=$BABYSIT force=$FORCE head=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "${MATCH_NTFY_IGNORE_NO_WAKE:-}" == 1 ]] && ! ntfy_loopback; then
+    log "MATCH_NTFY_IGNORE_NO_WAKE=1 ignored: $NTFY_URL is not a loopback URL"
+fi
+log "tag=$TAG max=${MAX_SECS}s stall=${STALL_SECS}s babysit=$BABYSIT notify=$NOTIFY_ON force=$FORCE head=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 for s in corp runner; do
     [[ "$(gv $s kind)" == model ]] || continue
@@ -540,6 +636,12 @@ else
         hfile="$CORP_DECK"; [[ "$HUMAN_SIDE" == runner ]] && hfile="$RUNNER_DECK"
         hdeck="a System Gateway Constructed deck in YOUR account — to put $hfile there: dev/seed-decks.sh <your-username> $hfile"
     fi
+    notify_line="  6. Your-turn notifications: OFF (--no-notify)."
+    if (( NOTIFY_ON )) && no_wake_silences; then
+        notify_line="  6. Your-turn notifications: SILENCED while $NO_WAKE exists (delete it to be notified at $NTFY_URL)."
+    elif (( NOTIFY_ON )); then
+        notify_line="  6. Your-turn notifications: ON, one per hand-over to you, sent to $NTFY_URL"
+    fi
     cat <<EOF
 ════════════════════════════════════════════════════════════════════════
 HUMAN SEAT — you are the $(Cap "$HUMAN_SIDE").
@@ -549,6 +651,8 @@ HUMAN SEAT — you are the $(Cap "$HUMAN_SIDE").
   4. The AI $(Cap "$AI") starts the game as soon as you are seated with a deck.
      The launcher waits up to $((HUMAN_JOIN_SECS / 60)) minutes for you.
   5. Play in the browser. Game id: $GAMEID
+$notify_line
+  7. If the model seems asleep, type "ping" in the game chat: any chat containing "ping" wakes it.
 ════════════════════════════════════════════════════════════════════════
 EOF
     if (( DRY )); then
@@ -723,6 +827,7 @@ if (( DRY )); then
     echo "+ (every ${POLL_SECS}s) $SC $OBS game-over-status   # GAME-OVER/GAME-GONE end the wait"
     echo "+ (every ${POLL_SECS}s) $SC <side> eval <cursor + game-log length>   # progress"
     echo "  stall: no progress for ${STALL_SECS}s AND a side with no live seat/babysitter; timeout after ${MAX_SECS}s"
+    (( NOTIFY_ON )) && echo "+ (every ${POLL_SECS}s) $SC $OBS eval <who owes the next decision>   # one ntfy to $NTFY_URL per hand-over to the human"
 else
     log "playing: watching through the $OBS REPL"
     last_prog=""; last_move=$(now); status=""
@@ -732,6 +837,7 @@ else
             GAME-OVER*) log "$status"; break ;;
             GAME-GONE*) log "$status"; finish stalled "GAME-GONE: the server closed the lobby without a result ($status)" 1 ;;
         esac
+        watch_owner
         prog=$(progress)
         if [[ "$prog" != "$last_prog" ]]; then last_prog="$prog"; last_move=$(now); fi
         if (( $(now) - STARTED >= MAX_SECS )); then
@@ -771,6 +877,8 @@ for k, v in (("WINNER", "winner"), ("REASON", "reason"), ("TURNS", "turn"), ("SC
     print("%s=%s" % (k, shlex.quote("" if d.get(v) is None else str(d[v]))))')"
 WINNER=$(printf '%s' "$WINNER" | tr 'A-Z' 'a-z')
 log "result: winner=${WINNER:-?} reason=${REASON:-?} score corp ${SCORE_C:-?} / runner ${SCORE_R:-?} turn ${TURNS:-?}"
+case "$WINNER" in corp|runner) won="$(Cap "$WINNER") wins" ;; *) won="No winner" ;; esac
+notify_end "Netrunner: game over. $won${REASON:+ ($REASON)}, ${SCORE_C:-?}-${SCORE_R:-?}, turn ${TURNS:-?}. [dev/match $TAG]"
 
 log "waiting up to ${REPORT_GRACE_SECS}s for the seats to write their reports"
 deadline=$(( $(now) + REPORT_GRACE_SECS ))
