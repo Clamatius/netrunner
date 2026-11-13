@@ -31,6 +31,13 @@ Usage:
   ./dev/reset.sh           # Quiet mode (logs to file)
   ./dev/reset.sh -v        # Verbose mode (show all output)
 
+Lobby (environment, passed through to dev/ai-self-play.sh):
+  (none)                          System Gateway Intermediate (precon gateway decks)
+  CORP_DECK=.. RUNNER_DECK=..     Constructed in FORMAT (default system-gateway)
+  FORMAT=<f>                      with the decks: dev/deck-check --formats
+  PRECON=<matchup>                preconstructed lobby, no decks: dev/deck-check --precons
+A bad combination is refused before the clients are bounced.
+
 On success:
   - Returns exit code 0
   - Game at mulligan phase (both players need to keep/mulligan)
@@ -98,6 +105,11 @@ echo ""
 echo "=== AI Test Game Reset ===" >> "$LOG_FILE"
 echo "Started: $(date)" >> "$LOG_FILE"
 echo "" >> "$LOG_FILE"
+
+# Step 0: refuse a bad lobby request (FORMAT/PRECON/decks) before bouncing
+# anything - the same check ai-self-play.sh runs, stopped before it acts.
+"$SCRIPT_DIR/ai-self-play.sh" --check 2>&1 | tee -a "$LOG_FILE" || { echo "❌ Reset aborted: lobby request refused (above)"; exit 1; }
+echo ""
 
 # Step 1: Bounce clients
 run_step "Bouncing AI clients" 1 "$SCRIPT_DIR/ai-bounce.sh"

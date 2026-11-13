@@ -792,7 +792,11 @@ ${GREEN}Waiting / Synchronization:${NC}
   ping                    - Send 'ping' chat to wake opponent's wait
 
 ${GREEN}Lobby:${NC}
-  create-game <title> [side] [precon] [gateway-type]  - Create new game
+  create-game <title> [side] [precon] [gateway-type] [format]  - Create new game
+                  (format default system-gateway; precon = matchup key when
+                   format is preconstructed. Refuses, before sending, an unknown
+                   format/matchup or gateway-type: dev/deck-check --lobby.
+                   Lists: dev/deck-check --formats / --precons)
   select-deck <deck-id>  - Constructed lobbies: pick a deck you own (id from dev/seed-decks.sh)
   start-game      - Start game (after opponent joins)
   auto-start      - Auto-start game if lobby is ready
@@ -2502,17 +2506,42 @@ case "$COMMAND" in
 
     # Lobby
     create-game)
-        ensure_connection --allow-dead
         TITLE="${1:-AI Test Game}"
         SIDE="${2:-Any Side}"
         PRECON="${3:-worlds-2012-a}"
         GATEWAY_TYPE="${4:-Intermediate}"
-        info "Creating game: $TITLE (Side: $SIDE, Gateway: $GATEWAY_TYPE)..."
+        # Lobby format. The server keys the lobby KIND off format + one of the
+        # other two (web/lobby.clj validate-precon): system-gateway reads
+        # GATEWAY_TYPE (Beginner/Intermediate = precon decks, else Constructed),
+        # preconstructed reads PRECON (a jinteki.preconstructed matchup key),
+        # every other format is Constructed. The web UI sends all three keys on
+        # every create (src/cljs/nr/new_game.cljs:12-29,50), and so do we.
+        FORMAT="${5:-system-gateway}"
+        # The server accepts ANY combination: an unknown format, an unknown
+        # matchup key or a mistyped gateway-type silently becomes a Constructed
+        # lobby no deck can join. So ask dev/deck-check --lobby (the launch
+        # path's check, an offline mirror of validate-precon) BEFORE anything is
+        # sent or connected. If it cannot run (no bb, file missing) we REFUSE:
+        # skipping it would bring back exactly the silent dead lobby it exists
+        # to stop, and the fix (install bb) is one line to tell the caller.
+        LOBBY_CHECK="${NR_DECK_CHECK:-$SCRIPT_DIR/deck-check}"
+        LOBBY_RC=0
+        LOBBY_OUT=$("$LOBBY_CHECK" --lobby "$FORMAT" "$PRECON" "$GATEWAY_TYPE" 2>&1) || LOBBY_RC=$?
+        if (( LOBBY_RC == 1 )) && [[ "$LOBBY_OUT" == "❌ "* ]]; then
+            echo "$LOBBY_OUT"
+            echo "   Not creating the lobby. Lists: dev/deck-check --formats / --precons"
+            exit 1
+        elif (( LOBBY_RC != 0 )) || [[ "$LOBBY_OUT" != "LOBBY "* ]]; then
+            echo "❌ create-game: cannot check the lobby (dev/deck-check --lobby exit $LOBBY_RC: ${LOBBY_OUT:-no output}) — not creating it. Is bb installed?"
+            exit 1
+        fi
+        ensure_connection --allow-dead
+        info "Creating game: $TITLE (Side: $SIDE, Format: $FORMAT, Gateway: $GATEWAY_TYPE, $LOBBY_OUT)..."
         execute "(do
                    (require (quote [ai-connection :as conn]))
                    (conn/create-lobby! {:title \"$(clj_str "$TITLE")\"
                                         :side \"$(clj_str "$SIDE")\"
-                                        :format \"system-gateway\"
+                                        :format \"$(clj_str "$FORMAT")\"
                                         :gateway-type \"$(clj_str "$GATEWAY_TYPE")\"
                                         :precon \"$(clj_str "$PRECON")\"
                                         :room \"casual\"

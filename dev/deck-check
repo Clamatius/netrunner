@@ -1,36 +1,94 @@
 #!/usr/bin/env bb
-;; deck-check — offline System Gateway deck legality + client-capability audit.
+;; deck-check — offline deck legality + client-capability audit, and the lists
+;; of what a lobby can be asked for. Never touches the game server.
 ;;
-;;   dev/deck-check [--audit] deck.edn [deck.edn ...]
+;;   dev/deck-check [--format <f>] [--audit] deck.edn [deck.edn ...]
+;;   dev/deck-check --audit --precon <matchup-key|all>   audit preconstructed decks
+;;   dev/deck-check --formats        formats a Constructed/precon lobby can use
+;;   dev/deck-check --precons        preconstructed matchup keys, one line each
+;;   dev/deck-check --lobby <format> <precon> <gateway-type>
+;;                   which lobby the server would make from create-game's three
+;;                   values (mirrors web/lobby.clj validate-precon); exit 1 if it
+;;                   is one no deck can join or no matchup the server knows
 ;;
-;; Reads data/cards.edn and the deck files; never touches the game server.
 ;; Exit 0 only if every deck is legal; each failing deck prints its reasons.
-;; Rules mirror src/cljc/jinteki/validator.cljc (valid-deck? +
-;; build-system-gateway-legality); the differences are listed in the report that
-;; came with this script and in the "STRICTER/LOOSER" notes below.
+;; Exit 2 on a usage error (unknown --format, no files).
 ;;
-;; STRICTER than the engine: lines for one title are summed before the copy check
-;;   (the engine checks each line alone, so {:qty 2 X}{:qty 2 X} slips through).
-;; LOOSER than the engine: Alliance/Professor influence discounts and singleton
-;;   identities (Catalyst/Syndicate) are not modelled; neither appears in a
-;;   sample deck. Identities with no :influencelimit are treated as unlimited.
-;; SAME: min size, influence (:factioncost x qty out of faction), agenda band
-;;   2*floor(size/5)+2 .. +3 (size = max(deck size, id minimum)), own-faction or
-;;   Neutral agendas only, side match, copies <= min(:quantity box, :deck-limit 3).
-(require '[clojure.edn :as edn] '[clojure.string :as str] '[clojure.java.io :as io])
+;; LEGALITY is decided twice and a deck passes only if both agree:
+;;  1. the ENGINE's own validator, loaded from source: src/cljc/jinteki/validator.cljc
+;;     calculate-deck-status, on the deck as web.lobby/process-deck would build
+;;     it (exact-title lookup; a title it cannot resolve is DROPPED there, so it
+;;     is an error here). Card legality per format (legal/rotated/banned/
+;;     restricted/points) is each card's :format map in data/cards.edn; the MWL
+;;     point limit is the latest list per format in data/mwls.edn, picked the way
+;;     web/system.clj:156-168 does. NOT checked: that the server's mongo copy of
+;;     those two files matches them (the server reads mongo, `lein fetch` writes
+;;     both). For `casual` the server checks only that the identity resolves
+;;     (web/lobby.clj valid-deck-for-lobby?); the engine's :casual verdict is
+;;     basic deckbuilding, which is STRICTER than the server.
+;;  2. named-rule checks below, kept for their messages. STRICTER than the
+;;     engine: lines for one title are summed before the copy check (the engine
+;;     checks each line alone). Titles match with typographic apostrophes
+;;     normalised, which the server does NOT do — the engine pass catches that.
+;;     system-gateway also caps copies at one box (:quantity), as the engine's
+;;     build-system-gateway-legality does; other formats cap at :deck-limit 3.
+;;
+;; AUDIT has two tiers. Cards in the System Gateway pool (77) use the hand
+;; table below. Every other card gets a STATIC SCAN of its defcard form (and
+;; the same-file helpers it names) in src/clj/game/cards/*.clj for features the
+;; client is known not to handle, each tied to its open issue (scan-flags).
+;; The scan reads parsed forms, so comments never match; it does NOT follow
+;; helpers defined outside the card's own file (game.core.*), so a feature that
+;; lives only in a core helper is invisible to it. "scan: none" means "none of
+;; these patterns", not "the client handles this card".
+(require '[clojure.edn :as edn] '[clojure.string :as str] '[clojure.java.io :as io]
+         '[edamame.core :as e])
 
 (def root (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(defn src [& parts] (str (apply io/file root parts)))
+
+;; ---- the engine's validator and precon data, loaded from source ----
+;; validator.cljc requires game.core.card only for has-subtype?
+;; (src/clj/game/core/card.clj:293), and that ns drags in the whole engine.
+(ns game.core.card)
+(defn has-subtype? [card subtype] (some #(= % subtype) (:subtypes card)))
+(ns user)
+(load-file (src "src" "cljc" "jinteki" "cards.cljc"))
+(load-file (src "src" "cljc" "jinteki" "utils.cljc"))
+(load-file (src "src" "cljc" "jinteki" "validator.cljc"))
+(load-file (src "src" "cljc" "jinteki" "preconstructed.cljc"))
 
 (defn norm [s] (-> s (str/replace #"[ʼ’]" "'") str/trim))
 
-(def cards
-  (->> (edn/read-string (slurp (io/file root "data" "cards.edn")))
-       (group-by (comp norm :title))))
+(def card-list (edn/read-string (slurp (src "data" "cards.edn"))))
+(def cards (group-by (comp norm :title) card-list))
+(def by-exact-title (into {} (map (juxt :title identity)) card-list))
+(reset! jinteki.cards/all-cards by-exact-title)
+(reset! jinteki.cards/mwl
+        (->> (edn/read-string (slurp (src "data" "mwls.edn")))
+             (group-by #(keyword (:format %)))
+             (map (fn [[k v]] [k (last (sort-by :date-start v))]))
+             (into {})))
 
-(defn sg-card [title]
+;; Formats the server computes deck legality for: the keys of the engine's own
+;; status map. A Constructed lobby in any other format can never start.
+(def constructed-formats
+  (->> (keys (jinteki.validator/calculate-deck-status {:cards []}))
+       (remove #{:format}) (map name) sort vec))
+(def format-names
+  (into {"casual" "Casual"}
+        (map (juxt :code :name)) (edn/read-string (slurp (src "data" "formats.edn")))))
+(def format-mwls
+  (into {} (map (juxt :code :mwl)) (edn/read-string (slurp (src "data" "formats.edn")))))
+
+(defn fmt-card [fmt title]
   (let [cs (get cards (norm title))]
-    (or (first (filter #(get-in % [:format :system-gateway :legal]) cs))
+    (or (first (filter #(get-in % [:format (keyword fmt) :legal]) cs))
         (first cs))))
+
+(defn status-word [c fmt]
+  (let [m (get-in c [:format (keyword fmt)])]
+    (cond (:banned m) "banned" (:rotated m) "rotated" :else "not in the format")))
 
 ;; Known client-capability flags. Static; the SG pool is closed (77 cards).
 ;; Delete an entry when its issue closes.
@@ -49,25 +107,108 @@
 
 (def severity ["HIGH" "MED" "LOW-MED" "LOW" "tempo"]) ; worst first
 
-(defn check-deck [deck]
-  (let [id-title (get-in deck [:identity :title])
-        id (some-> id-title sg-card)
+;; ---- tier 2: static defcard scan ----
+;; Each flag: [severity note issue pred]. pred sees the set of symbol names,
+;; keyword names and map keys appearing anywhere in the card's forms, plus the
+;; :choices values. Delete a flag when its issue closes.
+(def scan-flags
+  [["HIGH" "redirect-run/start-next-phase: the seat cannot send start-next-phase, candidate run wedge"
+    "#242/#112" #(some (:syms %) ["redirect-run" "start-next-phase"])]
+   ["HIGH" "bad publicity: the Runner cannot spend it (bad-pub-choice unsendable); a pool-poor payment cannot be answered"
+    "#298/#299" #(some (fn [n] (str/includes? n "bad-publicity")) (concat (:syms %) (:kws %)))]
+   ["MED" "forced encounter: can outlive its run; the bot loops never route a run-less encounter"
+    "#209" #(some (:syms %) ["force-ice-encounter"])]
+   ["MED" "corp-abilities: the Corp cannot send corp-ability"
+    "#112" #(contains? (:keys %) :corp-abilities)]
+   ["LOW-MED" "expend: that play mode is unsendable (normal play/install still works)"
+    "#112" #(contains? (:keys %) :expend)]
+   ["LOW-MED" "flashback: that play mode is unsendable"
+    "#112" #(contains? (:keys %) :flashback)]
+   ["LOW" "prevents subroutines (:resolve false): breaker tactics treat them as live"
+    "#200" #(some (:syms %) ["dont-resolve-subroutine" "dont-resolve-subroutine!"
+                             "dont-resolve-all-subroutines" "dont-resolve-all-subroutines!"])]])
+
+;; Prompts #325 taught the client to answer (merged; never yet run live).
+(def prompt-325
+  [["trace" #(contains? (:keys %) :trace)]
+   ["credit" #(some #{:credit} (:choices %))]
+   ["number" #(some (fn [c] (and (map? c) (contains? c :number))) (:choices %))]
+   ["counter" #(some (fn [c] (and (map? c) (contains? c :counter))) (:choices %))]
+   ["card-title" #(some (fn [c] (and (map? c) (contains? c :card-title))) (:choices %))]])
+
+(defn- def-name [form]
+  (when (and (seq? form) (#{'def 'defn 'defn- 'defmacro 'defonce} (first form)) (symbol? (second form)))
+    (name (second form))))
+
+(def defcards
+  (delay
+    (into {}
+          (for [f (.listFiles (io/file root "src" "clj" "game" "cards"))
+                :when (str/ends-with? (.getName f) ".clj")
+                :let [forms (e/parse-string-all (slurp f) {:all true :read-cond :allow :features #{:clj}
+                                                           :auto-resolve (fn [x] (if (= x :current) 'user x))})
+                      helpers (into {} (keep (fn [x] (when-let [n (def-name x)] [n x]))) forms)]
+                form forms
+                :when (and (seq? form) (= 'defcard (first form)) (string? (second form)))]
+            [(second form) {:form form :helpers helpers}]))))
+
+(defn- features [{:keys [form helpers]}]
+  ;; The card's form plus every same-file top-level def it names, transitively.
+  (loop [todo [form] seen #{} acc {:syms #{} :kws #{} :keys #{} :choices []}]
+    (if (empty? todo)
+      acc
+      (let [nodes (tree-seq coll? #(if (map? %) (mapcat identity %) (seq %)) (first todo))
+            syms (set (map name (filter symbol? nodes)))
+            new (remove seen (filter helpers syms))]
+        (recur (concat (rest todo) (map helpers new))
+               (into seen new)
+               (-> acc
+                   (update :syms into syms)
+                   (update :kws into (map name (filter keyword? nodes)))
+                   (update :keys into (mapcat keys (filter map? nodes)))
+                   (update :choices into (keep :choices (filter map? nodes)))))))))
+
+(defn scan [title]
+  (when-let [dc (get @defcards title)]
+    (let [fs (features dc)]
+      {:flags (vec (for [[sev note issue pred] scan-flags :when (pred fs)] [sev note issue]))
+       :prompts (vec (for [[label pred] prompt-325 :when (pred fs)] label))})))
+
+;; ---- legality ----
+(defn engine-deck
+  "The deck as web.lobby/process-deck builds it: exact-title lookup, unknown
+  titles silently dropped (lobby.clj process-deck)."
+  [deck]
+  (assoc deck
+         :identity (by-exact-title (get-in deck [:identity :title]))
+         :cards (keep #(when-let [c (by-exact-title (:card %))] (assoc % :card c)) (:cards deck))))
+
+(defn check-deck [deck fmt]
+  (let [fk (keyword fmt)
+        sg? (= fmt "system-gateway")
+        casual? (= fmt "casual")
+        fmt-label (if sg? "System Gateway" fmt)
+        legal-in? #(or casual? (get-in % [:format fk :legal]))
+        id-title (get-in deck [:identity :title])
+        id (some->> id-title (fmt-card fmt))
         errs (atom [])
         stats (atom {:size 0 :inf 0})
         err! (fn [& xs] (swap! errs conj (apply str xs)))
         lines (:cards deck)
         by-title (reduce (fn [m {:keys [qty card]}] (update m (norm card) (fnil + 0) qty)) {} lines)
-        resolved (for [[t q] by-title] [t q (sg-card t)])]
+        resolved (for [[t q] by-title] [t q (fmt-card fmt t)])
+        edeck (engine-deck deck)]
     (cond
       (nil? id) (err! "unknown identity: " id-title)
       (not= "Identity" (:type id)) (err! "not an identity: " id-title)
-      (not (get-in id [:format :system-gateway :legal])) (err! "identity not System Gateway legal: " id-title))
+      (not (legal-in? id)) (err! "identity not " fmt-label " legal: " id-title
+                                 (when-not sg? (str " (" (status-word id fmt) ")"))))
     (doseq [[t q c] resolved]
       (cond
         (nil? c) (err! "unknown card: " t)
-        (not (get-in c [:format :system-gateway :legal])) (err! "not System Gateway legal: " t)
+        (not (legal-in? c)) (err! "not " fmt-label " legal: " t (when-not sg? (str " (" (status-word c fmt) ")")))
         :else
-        (let [lim (min (:quantity c 3) (:deck-limit c 3))]
+        (let [lim (if sg? (min (:quantity c 3) (:deck-limit c 3)) (:deck-limit c 3))]
           (when (> q lim) (err! "too many copies of " t ": " q ", max " lim))
           (when (and id (not= (:side c) (:side id))) (err! "wrong side: " t " is " (:side c) ", identity is " (:side id)))
           (when (= "Identity" (:type c)) (err! "identity listed as a card: " t)))))
@@ -75,9 +216,8 @@
       (let [known (remove (fn [[_ _ c]] (nil? c)) resolved)
             size (reduce + (map second by-title))
             minsize (:minimumdecksize id 0)
-            inf (reduce + (for [[_ q c] known
-                                :when (not= (:faction c) (:faction id))]
-                            (* q (:factioncost c 0))))
+            ;; The engine's own count: Alliance and Professor discounts included.
+            inf (if (:identity edeck) (jinteki.validator/influence-count edeck) 0)
             limit (:influencelimit id)]
         (when (< size minsize) (err! "deck too small: " size ", min " minsize))
         (when (and limit (> inf limit)) (err! "influence overspent: " inf ", limit " limit))
@@ -90,42 +230,162 @@
             (when-not (<= lo pts (inc lo))
               (err! "agenda points " pts ", need " lo " to " (inc lo) " for " size " cards"))))
         (reset! stats {:size size :inf inf :limit limit})))
+    ;; The engine pass, on exactly what the server would hold.
+    (let [dropped (remove (set (map (comp :title :card) (:cards edeck))) (map :card lines))
+          verdict (when (:identity edeck)
+                    (get (jinteki.validator/calculate-deck-status edeck) fk))]
+      (doseq [t dropped :when (fmt-card fmt t)]
+        (err! "the server would drop this title (exact-match lookup): " (pr-str t)))
+      (when (and verdict (not (:legal verdict)))
+        (err! "engine (" fmt "): " (or (:reason verdict) "not legal"))))
     (assoc @stats :errs @errs :resolved resolved)))
+
+(defn engine-note [fmt]
+  (str "  engine (" fmt "): legal"
+       (if (= fmt "casual")
+         " - basic deckbuilding only; the server itself checks only that the identity resolves"
+         (str " - offline copy of the server's rules"
+              (when-let [m (get format-mwls fmt)] (str ", " m))
+              "; card data from data/*.edn, not the server's mongo"))))
 
 (defn summarize [deck r]
   (str (:name deck) ": " (:size r) " cards, influence " (:inf r) "/" (or (:limit r) "unlimited")))
 
-(defn audit [deck r]
-  (let [id-title (get-in deck [:identity :title])
-        rows (cons [id-title 1] (sort-by first (map (fn [[t q _]] [t q]) (:resolved r))))
-        flags (atom [])]
+(defn audit [deck rows]
+  (let [flags (atom []) prompts (atom 0) unscanned (atom 0)]
     (doseq [[t q] rows]
-      (let [c (sg-card t)
-            [sev note issue] (get audit-table (:title c))]
-        (when sev (swap! flags conj sev))
-        (println (format "%-36s x%d  %s" (or (:title c) t) q
-                         (if sev (str sev " - " note " (" issue ")") "-")))))
+      (let [c (fmt-card "system-gateway" t)
+            title (or (:title c) t)]
+        (if (or (nil? c) (get-in c [:format :system-gateway :legal]))
+          (let [[sev note issue] (get audit-table (:title c))]
+            (when sev (swap! flags conj sev))
+            (println (format "%-36s x%d  %s" title q
+                             (if sev (str sev " - " note " (" issue ")") "-"))))
+          (let [s (scan title)
+                fl (:flags s)
+                pr (:prompts s)]
+            (when (seq fl) (swap! flags conj (some (set (map first fl)) severity)))
+            (when (seq pr) (swap! prompts inc))
+            (when-not s (swap! unscanned inc))
+            (println (format "%-36s x%d  %s" title q
+                             (str/join "; "
+                                       (concat
+                                        (cond (nil? s) ["scan: no defcard found, not scanned"]
+                                              (empty? fl) ["scan: none"]
+                                              :else (for [[sev note issue] fl]
+                                                      (str "scan: " sev " - " note " (" issue ")")))
+                                        (when (seq pr)
+                                          [(str "exercises #325 (unproven live): " (str/join ", " pr))])))))))))
     (let [worst (some (set @flags) severity)]
       (println (str "SUMMARY " (:name deck) ": worst flag " (or worst "none")
-                    " (" (count @flags) " flagged lines)")))))
+                    " (" (count @flags) " flagged lines)"
+                    (when (pos? @prompts) (str "; " @prompts " lines exercise #325 (unproven live)"))
+                    (when (pos? @unscanned) (str "; " @unscanned " lines not scanned")))))))
 
-(let [args *command-line-args*
-      audit? (some #{"--audit"} args)
-      files (remove #{"--audit"} args)]
-  (when (empty? files)
-    (binding [*out* *err*] (println "usage: deck-check [--audit] deck.edn ..."))
-    (System/exit 2))
-  (let [bad (atom 0)]
-    (doseq [f files]
-      (let [deck (try (edn/read-string (slurp f))
-                      (catch Exception e (println (str f ": FAIL cannot read: " (.getMessage e))) nil))
-            r (when deck (check-deck deck))]
-        (cond
-          (nil? deck) (swap! bad inc)
-          (or (nil? r) (seq (:errs r)))
-          (do (swap! bad inc)
-              (println (str f ": FAIL"))
-              (doseq [e (or (:errs r) ["cannot evaluate deck"])] (println (str "  - " e))))
-          :else (do (println (str f ": OK  " (summarize deck r)))
-                    (when audit? (audit deck r))))))
-    (System/exit (if (zero? @bad) 0 1))))
+(defn deck-rows [deck resolved]
+  (cons [(get-in deck [:identity :title]) 1] (sort-by first (map (fn [[t q _]] [t q]) resolved))))
+
+;; ---- lobby kind: a mirror of web/lobby.clj validate-precon (:102-110) ----
+(defn lobby-kind [fmt client-precon gateway-type]
+  (let [target (if (= fmt "system-gateway") gateway-type client-precon)
+        precon (when (seq target) (keyword (str/lower-case target)))]
+    (cond
+      (and (= fmt "system-gateway") (#{:beginner :intermediate} precon)) [:precon precon]
+      ;; The server reads ANY other gateway-type as Constructed, so a typo of
+      ;; Intermediate is a Constructed lobby nobody seeded decks for.
+      (and (= fmt "system-gateway") (not= :constructed precon))
+      [:error (str "gateway-type '" gateway-type "' is not Beginner, Intermediate or Constructed; the server would silently make it a Constructed lobby")]
+      (and (= fmt "preconstructed") (contains? jinteki.preconstructed/all-matchups precon)) [:precon precon]
+      (= fmt "preconstructed") [:error (str "unknown matchup '" client-precon "' (see dev/deck-check --precons)")]
+      (some #{fmt} constructed-formats) [:constructed fmt]
+      ;; In the web UI's format menu (src/cljs/nr/utils.cljs slug->format) but
+      ;; absent from calculate-deck-status: valid-deck-for-lobby? is always false.
+      (#{"chimera" "quick-draft"} fmt)
+      [:error (str "format '" fmt "' has no deck legality the server computes (validator.cljc calculate-deck-status), so no deck can join a lobby in it")]
+      :else [:error (str "unknown format '" fmt "' (known: " (str/join " " (conj constructed-formats "preconstructed")) ")")])))
+
+(defn die [code & msg] (binding [*out* *err*] (println (apply str msg))) (System/exit code))
+
+(defn precon-line [k]
+  (let [m (jinteki.preconstructed/matchup-by-key k)]
+    (str (name k) "  " (second (:tr-inner m)) " | "
+         (get-in m [:corp :identity :title]) " vs " (get-in m [:runner :identity :title]))))
+
+(let [args (vec *command-line-args*)
+      flag? (set args)
+      opt (fn [f] (when-let [i (some #(when (= f (args %)) %) (range (count args)))]
+                    (or (get args (inc i)) (die 2 f " needs a value"))))]
+  (cond
+    (flag? "--formats")
+    (do (doseq [f constructed-formats]
+          (println (str f "  " (get format-names f f)
+                        (when-let [m (get format-mwls f)] (str " (" m ")"))
+                        (when (= f "system-gateway") " - Constructed with decks; no decks = the Intermediate precon lobby"))))
+        (println "preconstructed  Preconstructed - no decks; PRECON=<matchup>, see --precons"))
+
+    (flag? "--precons")
+    (doseq [k (sort jinteki.preconstructed/all-matchups)] (println (precon-line k)))
+
+    (flag? "--lobby")
+    (let [i (.indexOf args "--lobby")
+          [fmt precon gw] (map #(get args %) (range (inc i) (+ i 4)))
+          [kind v] (lobby-kind (or fmt "") (or precon "") (or gw ""))]
+      (if (= kind :error)
+        (die 1 "❌ " v)
+        (println "LOBBY" (name kind) (name v))))
+
+    :else
+    (let [fmt-opt (opt "--format")
+          precon-opt (opt "--precon")
+          audit? (flag? "--audit")
+          files (remove (set (remove nil? ["--audit" "--format" fmt-opt "--precon" precon-opt])) args)
+          _ (when (and fmt-opt precon-opt)
+              (die 2 "❌ --format does not apply to --precon: a precon lobby has no format legality (the server installs its decks as is, web/game.clj handle-precon-decks)"))
+          _ (when fmt-opt
+              (let [[kind v] (lobby-kind fmt-opt "" "Constructed")]
+                (cond (= fmt-opt "preconstructed")
+                      (die 2 "❌ --format preconstructed: precon lobbies take no deck; use --precon <matchup> to audit one")
+                      (= kind :error) (die 2 "❌ " v))))
+          precon-keys (cond (nil? precon-opt) []
+                            (= precon-opt "all") (sort jinteki.preconstructed/all-matchups)
+                            (contains? jinteki.preconstructed/all-matchups (keyword (str/lower-case precon-opt)))
+                            [(keyword (str/lower-case precon-opt))]
+                            :else (die 2 "❌ unknown matchup '" precon-opt "' (see --precons)"))]
+      (when (and (empty? files) (empty? precon-keys))
+        (die 2 "usage: deck-check [--format <f>] [--audit] deck.edn ...  |  --audit --precon <key|all>  |  --formats  |  --precons  |  --lobby <format> <precon> <gateway-type>"))
+      (let [bad (atom 0)]
+        (doseq [f files]
+          (let [deck (try (edn/read-string (slurp f))
+                          (catch Exception e (println (str f ": FAIL cannot read: " (.getMessage e))) nil))
+                fmt (or fmt-opt (:format deck) "system-gateway")
+                fmt-err (when deck (let [[kind v] (lobby-kind fmt "" "Constructed")] (when (= kind :error) v)))
+                r (when (and deck (not fmt-err)) (check-deck deck fmt))]
+            (cond
+              (nil? deck) (swap! bad inc)
+              fmt-err (do (swap! bad inc) (println (str f ": FAIL deck's own :format: " fmt-err)))
+              (or (nil? r) (seq (:errs r)))
+              (do (swap! bad inc)
+                  (println (str f ": FAIL"))
+                  (doseq [e (or (:errs r) ["cannot evaluate deck"])] (println (str "  - " e))))
+              :else (do (println (str f ": OK  " (summarize deck r)))
+                        (println (engine-note fmt))
+                        (when audit? (audit deck (deck-rows deck (:resolved r))))))))
+        ;; Precon decks are not validated by the server (web/game.clj
+        ;; handle-precon-decks just installs them), so only title resolution
+        ;; is checked: an unresolvable title is silently dropped from the game.
+        (doseq [k precon-keys
+                side [:corp :runner]
+                :let [deck (get (jinteki.preconstructed/matchup-by-key k) side)
+                      dropped (remove by-exact-title (cons (get-in deck [:identity :title]) (map :card (:cards deck))))
+                      label (str "precon " (name k) " " (name side))]]
+          (if (seq dropped)
+            (do (swap! bad inc)
+                (println (str label ": FAIL " (:name deck) ": the server would silently drop "
+                              (pr-str (vec dropped)) " (no such exact title in data/cards.edn)")))
+            (println (str label ": OK  " (:name deck) ": "
+                          (reduce + (map :qty (:cards deck))) " cards (precon: titles resolve; legality not checked, the server installs it as is)")))
+          ;; Audited either way: a short precon still gets played.
+          (when audit?
+            (audit deck (cons [(get-in deck [:identity :title]) 1]
+                              (sort-by first (map (juxt :card :qty) (:cards deck)))))))
+        (System/exit (if (zero? @bad) 0 1))))))

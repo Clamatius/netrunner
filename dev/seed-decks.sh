@@ -10,14 +10,21 @@
 # server's own legality verdict for the lobby format before it, so an illegal
 # list is caught here rather than as a lobby that silently never starts.
 #
-# Usage: ./dev/seed-decks.sh <ai-corp|ai-runner> <deck.edn>
+# Usage: ./dev/seed-decks.sh <ai-corp|ai-runner> <deck.edn> [lobby-format]
 #   e.g. ./dev/seed-decks.sh ai-corp dev/decks/sg-hb-discretion-advised.edn
+#        ./dev/seed-decks.sh ai-corp dev/decks/sg-hb-discretion-advised.edn core
+# lobby-format is the format the deck must be legal in: the LOBBY's, because the
+# server checks a selected deck against the lobby's format, not the deck's own
+# (web/lobby.clj valid-deck-for-lobby?). Default: the deck file's own :format.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/load-env.sh"
 
-USERNAME="${1:?usage: seed-decks.sh <ai-corp|ai-runner> <deck.edn>}"
-DECK_FILE="${2:?usage: seed-decks.sh <ai-corp|ai-runner> <deck.edn>}"
+USERNAME="${1:?usage: seed-decks.sh <ai-corp|ai-runner> <deck.edn> [lobby-format]}"
+DECK_FILE="${2:?usage: seed-decks.sh <ai-corp|ai-runner> <deck.edn> [lobby-format]}"
+LOBBY_FORMAT="${3:-}"
+# Spliced into a Clojure string literal below: a format slug is [a-z-] only.
+[[ "$LOBBY_FORMAT" =~ ^[a-z-]*$ ]] || { echo "❌ Not a format slug: $LOBBY_FORMAT (see dev/deck-check --formats)" >&2; exit 1; }
 [[ -f "$DECK_FILE" ]] || { echo "❌ No such deck file: $DECK_FILE" >&2; exit 1; }
 DECK_PATH="$(cd "$(dirname "$DECK_FILE")" && pwd)/$(basename "$DECK_FILE")"
 # The path is spliced into a Clojure string literal below.
@@ -34,7 +41,7 @@ out=$(TIMEOUT=20 "$SCRIPT_DIR/ai-eval.sh" server "$GAME_SERVER_PORT" "(do
         ;; shorter deck may still be legal — so count what survived.
         dropped (remove (set (map (comp :title :card) (:cards processed)))
                         (map :card (:cards deck)))
-        fmt (keyword (:format deck))
+        fmt (keyword (or (not-empty \"$LOBBY_FORMAT\") (:format deck)))
         legal? (and (empty? dropped) (true? (get-in status [fmt :legal])))
         _ (when legal? (monger.collection/update db \"decks\" {:username \"$USERNAME\" :name (:name deck)}
                                     (assoc deck :date (java.util.Date.)) {:upsert true}))
