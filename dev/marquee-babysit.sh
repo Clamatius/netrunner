@@ -54,6 +54,18 @@
 #   (healthy again within 20 minutes). Cost: a PERMANENT fast failure (a bad
 #   CLI flag) now takes the patience to give up instead of ~2.5 minutes; the
 #   BACKEND-FAIL lines name its cause from the first attempt.
+#   HEARTBEAT (a decision, not an accident): every send_command call from a
+#   side touches that side's heartbeat (dev/send_command, "Peer liveness"), so
+#   the 15s game-over-status poll during backoff keeps this seat's heartbeat
+#   fresh and the opponent's peer-status keeps reporting it alive. Intended: a
+#   seat that went SILENT (stale past PEER_STALE_SECS, 300s) would read to the
+#   opponent as "likely disconnected", and an opponent that concludes that
+#   gives up or escalates, which is what stranded a5891297's Runner. Cost: for
+#   up to MARQUEE_BACKEND_PATIENCE_SECS the opponent is told "alive" about a
+#   seat that cannot act. The pre-backoff loop already had this property: its
+#   per-chunk game-over-status and get-cursor calls touched the heartbeat
+#   every ~33s while the 403 chunks failed. What is new is only the duration;
+#   without the poll, a 600s backoff sleep would let the heartbeat go stale.
 #
 # FAIRNESS NOTE: the *_EFFORT defaults are xhigh, which is DELIBERATELY not the
 # usual seat default. If a match is running both seats at a matched effort, pass
@@ -149,7 +161,11 @@ first_line() {
   local line
   line=$(tail -c "+$(( $1 + 1 ))" "$LOG" 2>/dev/null | tr -d '\r' | grep -m1 '[^[:space:]]')
   line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
-  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then line="${line//"$CLAUDE_CODE_OAUTH_TOKEN"/[REDACTED]}"; fi
+  # Normalise the token as the line was (CRs gone, trimmed), or a CRLF token
+  # file never matches; a token that trims to nothing has nothing to redact.
+  local tok="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+  tok="${tok//$'\r'/}"; tok="${tok#"${tok%%[![:space:]]*}"}"; tok="${tok%"${tok##*[![:space:]]}"}"
+  if [ -n "$tok" ]; then line="${line//"$tok"/[REDACTED]}"; fi
   [ -n "$line" ] || line="(no output)"
   printf '%s' "${line:0:200}"
 }

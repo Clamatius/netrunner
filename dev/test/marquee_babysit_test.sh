@@ -265,5 +265,23 @@ eq "logline: whole output" "claude backend: resuming session 11111111-2222-3333-
 BACKEND-FAIL attempt 1: claude exited 2 after 7s without running the model: API Error: 401 bearer [REDACTED] rejected — retry in 30s at 01:49:49 (backoff 30s of 3600s patience)
 TERMINAL: GAME-OVER winner=corp turn=9 (after 2 chunks)" "$out"
 
+# --- 11. a CRLF token file: the output's CR is stripped, so the token must be too
+t=$(btree crlftoken)
+printf '%s\r\n' "$TOKEN" > "$t/token"
+printf '%s\n' tokenfail end > "$t/plan"
+run_bt "$t" claude
+eq "crlftoken: still redacted" "claude backend: resuming session 11111111-2222-3333-4444-555555555555
+BACKEND-FAIL attempt 1: claude exited 2 after 7s without running the model: API Error: 401 bearer [REDACTED] rejected — retry in 30s at 01:49:49 (backoff 30s of 3600s patience)
+TERMINAL: GAME-OVER winner=corp turn=9 (after 2 chunks)" "$out"
+
+# --- 12. a whitespace-only token redacts nothing (not every character) -------
+t=$(btree blanktoken)
+printf ' \r\n' > "$t/token"
+printf '%s\n' fail end > "$t/plan"
+run_bt "$t" claude
+eq "blanktoken: line logged as-is" "claude backend: resuming session 11111111-2222-3333-4444-555555555555
+BACKEND-FAIL attempt 1: claude exited 1 after 0s without running the model: $F403 — retry in 30s at 01:49:42 (backoff 30s of 3600s patience)
+TERMINAL: GAME-OVER winner=corp turn=9 (after 2 chunks)" "$out"
+
 if [[ $fails -gt 0 ]]; then echo "❌ marquee_babysit_test: $fails failure(s)"; exit 1; fi
 echo "✅ marquee_babysit_test: all passed"
