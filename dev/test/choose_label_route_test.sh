@@ -118,6 +118,16 @@ run_choice runner '000'
 check 'all-zero-choice-is-zero' "$actions" 'runner 7889|(ai-actions/choose-option! 0)
 runner 7889'"$PROMPT_READ"
 
+# The value verb keeps its argument a Clojure string so ai-prompts can decide
+# whether the current wire shape calls for a number, title, or labeled button.
+# Bash still normalizes digit strings through num_arg by VARIABLE NAME.
+run_command runner choose-value 008
+check 'padded-prompt-value-is-decimal' "$actions" 'runner 7889|(ai-actions/choose-by-value! "8")
+runner 7889'"$PROMPT_READ"
+run_command corp choose-value 'Cerberus "Lady" H1'
+check 'card-title-value-is-one-string' "$actions" 'corp 7890|(ai-actions/choose-by-value! "Cerberus \"Lady\" H1")
+corp 7890'"$PROMPT_READ"
+
 run_command runner choose-card 010 --all
 check 'padded-card-index-is-decimal' "$actions" 'runner 7889|(ai-actions/choose-card! 10 true)
 runner 7889'"$PROMPT_READ"

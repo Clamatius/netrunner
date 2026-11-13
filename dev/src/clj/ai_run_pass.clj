@@ -34,7 +34,8 @@
    the structural answer is to resolve own prompts before the run handlers."
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
-            [ai-state :as state]))
+            [ai-state :as state]
+            [ai-prompts :as prompts]))
 
 (defn surface-blocking-prompt
   "Claim this tick and SURFACE our own prompt, instead of passing priority over it
@@ -74,7 +75,11 @@
   (println (format "🛑 Holding our own prompt at the %s window - not passing priority over it" window))
   (when-let [msg (:msg my-prompt)]
     (println (format "   Prompt: %s" msg)))
-  (println "   → answer it (e.g. `choose-value`/`choose-card`), then continue")
+  (println (if (= :card-title (prompts/value-prompt-kind my-prompt))
+             "   → choose-value \"<card title>\", then continue"
+             (if (prompts/value-prompt-kind my-prompt)
+               "   → choose-value <number>, then continue"
+               "   → answer it (e.g. `choose-value`/`choose-card`), then continue")))
   {:status :decision-required
    :wake-reason :blocking-prompt-at-run-window
    :action :awaiting-own-prompt

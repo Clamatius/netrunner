@@ -1,6 +1,7 @@
 (ns ai-display
   "Display functions for game status, board state, and HUD file management"
   (:require [ai-state :as state]
+            [ai-prompts :as prompts]
             [ai-hud-utils :as hud]
             [ai-core :as core]
             [ai-run-corp-decisions :as corp-decisions]
@@ -28,6 +29,7 @@
 ;; displays above them.
 (declare encountered-ice)
 (declare live-encounter?)
+(declare value-prompt-description)
 
 ;; ============================================================================
 ;; Status & Information
@@ -1359,6 +1361,8 @@
             opp-label (if (= my-side "runner") "C" "R")
 
             prompt-str (cond
+                        (and prompt (prompts/value-prompt-kind prompt))
+                        (value-prompt-description state prompt)
                         run-state (format "Run:%s" (run-server-display (last (:server run-state))))
                         ;; #164: no run, but an encounter — the polled one-liner
                         ;; must not read as an idle board at a window we own.
@@ -1400,7 +1404,7 @@
 (defn- access-prompt?
   "Detect if prompt is an access prompt by checking for 'steal' or 'trash' keywords"
   [prompt]
-  (when-let [choices (:choices prompt)]
+  (when-let [choices (when (sequential? (:choices prompt)) (:choices prompt))]
     (let [choice-values (map :value choices)
           choice-text (str/lower-case (str/join " " choice-values))]
       (or (str/includes? choice-text "steal")
@@ -1453,6 +1457,31 @@
 
     prompt))
 
+(defn- value-prompt-description
+  [client-state prompt]
+  (when-let [kind (prompts/value-prompt-kind prompt)]
+    (let [[lo hi] (prompts/value-prompt-range client-state prompt)
+          default (get-in prompt [:choices :default] 0)
+          command (if (= kind :card-title)
+                    "choose-value \"<card title>\""
+                    "choose-value <number>")
+          range-text (if (= kind :card-title)
+                       (format "exact card title from autocomplete (%d legal titles; case-insensitive)"
+                               (count (get-in prompt [:choices :autocomplete])))
+                       (format "range %s–%s, default %s" (or lo "?") (or hi "?") default))
+          trace-text (when (= kind :trace)
+                       (format "; base %s, bonus %s, current strength %s, link %s, corp credits %s, runner credits %s, boosting %s%s%s"
+                               (:base prompt) (or (:bonus prompt) 0)
+                               (or (:strength prompt) "not set") (:link prompt)
+                               (:corp-credits prompt) (:runner-credits prompt)
+                               (if (:strength prompt)
+                                 (if (= "corp" (:player prompt)) "runner" "corp")
+                                 (:player prompt))
+                               (if-let [n (:unbeatable prompt)] (str ", unbeatable at " n) "")
+                               (if-let [n (:beat-trace prompt)] (str ", beat trace at " n) "")))]
+      (format "%s: %s; %s%s; answer: %s"
+              (name kind) (:msg prompt) range-text (or trace-text "") command))))
+
 (defn show-prompt
   "Display current prompt in readable format.
    Detects access prompts and shows enhanced card metadata."
@@ -1464,7 +1493,9 @@
         (println "\n🔔 PROMPT")
         (println "Message:" (:msg prompt))
         (println "Type:" (:prompt-type prompt))
-        (when-let [choices (:choices prompt)]
+        (when-let [description (value-prompt-description @state/client-state prompt)]
+          (println description))
+        (when-let [choices (when (sequential? (:choices prompt)) (:choices prompt))]
           (println "Choices:")
           (doseq [[idx choice] (map-indexed vector choices)]
             (println (str "  " idx ". " (:value choice) " [UUID: " (:uuid choice) "]"))))
@@ -2929,7 +2960,8 @@
         prompt (when side
                  (get-in state [:game-state (keyword (clojure.string/lower-case side)) :prompt-state]))]
     (if prompt
-      (let [has-choices (seq (:choices prompt))
+      (let [has-choices (and (sequential? (:choices prompt)) (seq (:choices prompt)))
+            value-kind (prompts/value-prompt-kind prompt)
             has-selectable (seq (:selectable prompt))
             ;; #104: acting commands auto-append this block, and seats still call
             ;; `prompt` after acting — so the identical block prints twice in a row.
@@ -2945,6 +2977,8 @@
         (post-game-prompt-banner! state)
         (println "  Message:" (:msg prompt))
         (println "  Type:" (:prompt-type prompt))
+        (when value-kind
+          (println (str "  " (value-prompt-description state prompt))))
         (when-let [card (:card prompt)]
           (println (str "  Card: " (:title card)
                         (when (:type card) (str " (" (:type card) ")"))))
@@ -3077,7 +3111,7 @@
                             "):"))
               (core/print-selectable! parts "    "))))
         ;; Handle paid ability windows / passive prompts
-        (when (and (not has-choices) (not has-selectable))
+        (when (and (not has-choices) (not has-selectable) (not value-kind))
           (let [run (get-in state [:game-state :run])
                 run-phase (when run (:phase run))
                 my-side (clojure.string/lower-case (or side "runner"))]
@@ -3147,6 +3181,8 @@
             (do
               (println (format "\n🔔 Current Prompt: unchanged since shown above (not a second one) — \"%s\""
                                (:msg prompt)))
+              (when value-kind
+                (println (str "  " (value-prompt-description state prompt))))
               ;; A state claim, not decoration: a seat must not act in a finished game.
               (post-game-prompt-banner! state)
               (when has-choices
@@ -3739,7 +3775,9 @@
           run (:run gs)
           run-phase (:phase run)
           run-window? (and run active-prompt
-                           (not (seq (:choices active-prompt)))
+                           (not (prompts/value-prompt-kind active-prompt))
+                           (not (seq (when (sequential? (:choices active-prompt))
+                                       (:choices active-prompt))))
                            (not (seq (:selectable active-prompt))))]
       (when blocked?
         (println (format "\n⚠️  Active Prompt: %s" (or msg "(no message)")))
@@ -3938,7 +3976,9 @@
         ;; selectable cards. A passive run priority / paid-ability window has a
         ;; prompt object (sometimes a non-"waiting" :prompt-type) but NO options —
         ;; the next action there is `continue`, not `choose`.
-        has-options? (boolean (or (seq (:choices prompt)) (seq (:selectable prompt))))]
+        has-options? (boolean (or (prompts/value-prompt-kind prompt)
+                                  (seq (when (sequential? (:choices prompt)) (:choices prompt)))
+                                  (seq (:selectable prompt))))]
     (println "\n=== BLOCKER DIAGNOSIS ===")
     (println (format "Side: %s | Turn %s, active: %s | your clicks: %s"
                      (or side "?") (:turn-number ts) (or (:whose-turn ts) "?")
@@ -3961,7 +4001,9 @@
       (do
         (println (format "📋 You have an ACTIONABLE prompt [%s]: %s" ptype (:msg prompt)))
         (println "   → Owner: YOU. Resolve it before any other action.")
-        (println "   → Use: prompt (see choices), then choose <N> / choose-card <N> / choose-value \"<text>\""))
+        (println (if (prompts/value-prompt-kind prompt)
+                   (str "   → Use: " (value-prompt-description cs prompt))
+                   "   → Use: prompt (see choices), then choose <N> / choose-card <N> / choose-value \"<text>\"")))
 
       ;; Passive prompt during a run = a priority / paid-ability window. The next
       ;; action is `continue`, NOT `choose`. This is the branch that used to be

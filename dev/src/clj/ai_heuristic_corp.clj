@@ -992,6 +992,12 @@
         (state/waiting-prompt-type? prompt-type)
         false
 
+        (prompts/value-prompt-kind prompt)
+        (when-let [answer (prompts/heuristic-value @state/client-state prompt)]
+          (log-decision "VALUE PROMPT:" msg "->" answer)
+          (prompts/choose-by-value! answer)
+          true)
+
         ;; Discard prompt - select cards to discard
         ;; Heuristic: discard duplicates first, then lowest-value cards
         (and (str/includes? msg "Discard")

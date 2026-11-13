@@ -251,7 +251,11 @@
   (when same-side?
     (-> prompt
         (update :eid #(when (:eid %) (select-keys % [:eid])))
-        (update :card #(not-empty (select-keys % [:cid :title :printed-title :code :side])))
+        ;; A :counter prompt's selector reads this very card's counter total.
+        ;; Keep it on that prompt only; the ordinary card reference stays small.
+        (update :card #(not-empty (cond-> (select-keys % [:cid :title :printed-title :code :side])
+                                    (and (:counter (:choices prompt)) (:counter %))
+                                    (assoc :counter (:counter %)))))
         (update :choices (fn [choices]
                            (if (sequential? choices)
                              (->> choices
