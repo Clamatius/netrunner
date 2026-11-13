@@ -31,7 +31,7 @@ If you ever feel the urge to "just peek" — don't. That's the whole point.
   install an agenda naked (protect scoring remotes behind ICE), rez ICE only when
   the run actually threatens something worth the credits.
 - Full command list: `./dev/send_command help --full`.
-- System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points** (score agendas
+- The card pool depends on the lobby: `decklist` shows your deck (never assume a list), and `card-text "<name>"` explains any card you do not know. You win at **7 agenda points** (score agendas
   from a protected remote) or by flatlining / decking the Runner.
 
 ## Turn 0 — mulligan (you go FIRST)
