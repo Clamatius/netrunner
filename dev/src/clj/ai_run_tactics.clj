@@ -78,14 +78,18 @@
       :else nil)))
 
 (defn trojan-host-matches?
-  "Apply the card-specific host rule before trying a break. Botulus's break-sub
-   :req checks same-card? against :host; Living Mural checks the host's server.
-   The programs.clj trojan helper itself only limits where installation goes."
+  "Hosted Trojans with a break ability can break their host ICE. Living Mural's
+   break ability instead checks the host's server."
   [breaker ice]
-  (case (:title breaker)
-    "Botulus" (= (get-in breaker [:host :cid]) (:cid ice))
-    "Living Mural" (= (take 2 (get-in breaker [:host :zone]))
-                       (take 2 (:zone ice)))
+  (if (and (:host breaker)
+           (some #{"Trojan"} (:subtypes breaker))
+           (some #(or (core/break-ability? %)
+                      (some-> (:dynamic %) str
+                              (clojure.string/includes? "break")))
+                 (:abilities breaker)))
+    (if (= "Living Mural" (:title breaker))
+      (= (take 2 (get-in breaker [:host :zone])) (take 2 (:zone ice)))
+      (= (get-in breaker [:host :cid]) (:cid ice)))
     true))
 
 (defn breaker-matches-ice?
@@ -249,8 +253,11 @@
   (let [programs (ai-state/runner-programs (:game-state state))
         ;; Find the specified card
         ice (core/encountered-ice state)
-        target-prog (first (filter #(and (= (:title %) card-name)
-                                         (trojan-host-matches? % ice)) programs))]
+        resolved (core/find-installed-card card-name)
+        target-prog (when (and resolved
+                               (some #(= (:cid %) (:cid resolved)) programs)
+                               (trojan-host-matches? resolved ice))
+                      resolved)]
     (if-not target-prog
       {:status :tactic-failed
        :reason (format "Card not found installed: %s" card-name)}
@@ -287,8 +294,8 @@
         ice (core/encountered-ice state)
         matches (filter #(= card (:title %))
                         (ai-state/installed-runner-cards (:game-state state)))
-        installed (first (filter #(trojan-host-matches? % ice) matches))]
-    (if (and (seq matches) (nil? installed)
+        candidates (filter #(trojan-host-matches? % ice) matches)]
+    (if (and (seq matches) (empty? candidates)
              (contains? #{:break-dynamic :use-ability} action))
       {:status :tactic-failed :reason (str card " can break only its host ICE")}
       (case action
@@ -300,8 +307,8 @@
       (let [ability-index (:ability-index tactic)]
         (println (format "🎯 Tactic: %s ability %d" card ability-index))
         (let [result (actions/use-ability!
-                       (if installed
-                         (core/installed-runner-reference installed (:game-state state))
+                       (if (= 1 (count candidates))
+                         (core/installed-runner-reference (first candidates) (:game-state state))
                          card)
                        ability-index)]
           (if (= :success (:status result))

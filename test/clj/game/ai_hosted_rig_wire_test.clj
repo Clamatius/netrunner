@@ -15,6 +15,7 @@
    than a hand-written rig map, because a mock is exactly what would have hidden
    this: the omitted structure IS the bug."
   (:require [game.core.diffs :as diffs]
+            [cheshire.core :as json]
             [game.test-framework :refer :all]
             [clojure.test :refer :all]
             [clojure.string :as str]
@@ -68,6 +69,27 @@
               "the Leech is in the host's :hosted vector")
           (is (= 2 (get-in (first hosted) [:counter :virus]))
               "and it is carrying the counters the seat needs to see"))))))
+
+(deftest runner-hosted-program-wire-fields-and-memory
+  (do-game
+    (new-game {:corp {:deck [(qty "Hedge Fund" 5)] :hand ["Hedge Fund"]}
+               :runner {:credits 15 :hand ["Leprechaun" "Leech"]}})
+    (take-credits state :corp)
+    (play-from-hand state :runner "Leprechaun")
+    (let [used-before (get-in @state [:runner :memory :used])]
+      (play-from-hand state :runner "Leech")
+      (click-prompt state :runner "Leprechaun")
+      (let [wire (-> state diffs/public-states :runner-state
+                     json/generate-string (json/parse-string true))
+            leech (first (:hosted (first (get-in wire [:runner :rig :program]))))
+            memory (get-in wire [:runner :memory])]
+        (is (= "Leech" (:title leech)))
+        (is (= "this-turn" (:installed leech)))
+        (is (= "Runner" (:side leech)))
+        (is (= (get-in @state [:runner :memory :used]) (:used memory)))
+        (is (= (get-in @state [:runner :memory :available]) (:available memory)))
+        (is (= used-before (:used memory))
+            "Leprechaun's no-MU hosting keeps used MU unchanged")))))
 
 (deftest compact-board-names-the-hosted-program-and-its-counters
   (testing "board-compact's rig line shows a hosted Leech under its host (#161)"

@@ -962,6 +962,8 @@
           ;; "position N/M" (idx+1) so the board and the run prompt agree. (#39)
           (if (seq ice-list)
             (let [ice-total (count ice-list)]
+              ;; Limit: guests of a Corp host that is itself hosted are found by
+              ;; installed lookup but are not drawn by this server renderer.
               (when (> ice-total 1)
                 (println "  (top→bottom = Runner encounter order: outermost first)"))
               (doseq [[idx ice] (reverse (map-indexed vector ice-list))]
@@ -1056,18 +1058,7 @@
                                                (str elsewhere " more, hosted on another card")
                                                (str "none at the top level; " elsewhere
                                                     " hosted on another card"))
-                                       ;; Not "in the host's own section": with
-                                       ;; Flame-out hosting a Leprechaun hosting a
-                                       ;; Leech, both programs sit under Hardware,
-                                       ;; and the inner one's host is itself a
-                                       ;; program with no section of its own
-                                       ;; (guest re-review). True at any depth:
-                                       ;; they are somewhere in this rig, under a
-                                       ;; host.
-                                       (if (some #(= type-str (:type %))
-                                                 (corp-hosted-runner-cards gs))
-                                         " — shown on a Corp card above)"
-                                         " — shown elsewhere in this rig, under their hosts)")))
+                                       ")"))
                          (empty? cards) (println "  (none)"))))]
       (section! "💾" "Programs" programs "Program"
                 (rig-type-count gs :program "Program"))
@@ -1104,6 +1095,7 @@
         runner-rig (get-in gs [:runner :rig])]
 
     ;; Corp servers - one line per server with activity
+    ;; Limit: a Runner guest on a Corp host that is itself hosted is omitted here.
     (print "Corp:")
     (doseq [[server-key server] (sort-by first corp-servers)]
       (let [server-name (name server-key)

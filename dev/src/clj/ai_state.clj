@@ -490,7 +490,7 @@
   ([gs]
    (let [rig (get-in gs [:runner :rig])
          servers (get-in gs [:corp :servers])
-         rig-roots (mapcat identity (vals rig))
+         rig-roots (mapcat #(get rig % []) [:program :hardware :resource])
          corp-roots (mapcat (fn [server] (concat (:ices server) (:content server)))
                             (vals servers))
          walk (fn walk [card]
