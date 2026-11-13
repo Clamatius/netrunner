@@ -19,7 +19,9 @@
             ;; LANDED — one definition, deliberately not a second scan (#127
             ;; ratchet). It lives in the corp ns because the Corp was its first
             ;; reader; no cycle, that ns requires only ai-core.
-            [ai-run-corp-decisions :as corp-decisions]))
+            [ai-run-corp-decisions :as corp-decisions]
+            ;; The one gate every automated `continue` goes through (pass-priority!).
+            [ai-run-pass :as pass]))
 
 ;; ============================================================================
 ;; Shared Helpers
@@ -36,48 +38,6 @@
     (keyword? side-value) (name side-value)
     (string? side-value) side-value
     :else (str side-value)))
-
-(defn- send-continue!
-  "Helper to send continue command and return action-taken result.
-
-   Chokepoint guard (#75): never send while the LIVE state shows our own prompt
-   is a 'waiting' prompt — the engine is mid-checkpoint on the OPPONENT and a
-   continue from us re-fires that checkpoint, minting duplicate opponent
-   prompts (the marquee-g2 wedge, mirrored to the Runner seat). Same guard as
-   the ai-runs and ai-run-corp-handlers copies.
-
-   Second guard (#98): if the engine already recorded US as this window's
-   passer (:no-action names us), the opponent owes the window — a repeat
-   continue is a no-op that only feeds the stuck-detector's false alarm."
-  [gameid]
-  (cond
-    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-waiting-prompt
-     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
-
-    (core/i-already-passed-run-window? @state/client-state (:side @state/client-state))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-already-passed
-     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
-
-    :else
-    (let [sent? (boolean (ws/send-message! :game/action
-                                           {:gameid gameid
-                                            :command "continue"
-                                            :args nil}))]
-      (Thread/sleep 100)
-      ;; :sent — the Corp copy of this sender has carried it since #150; this
-      ;; one did not, which is the N-senders-one-command shape again.
-      ;; ws/send-message! reports a failed send (reconnect exhausted) as false,
-      ;; and BOTH suppression branches above return without sending at all.
-      ;; A caller that latches "I have passed here" on :action-taken alone
-      ;; therefore latches on a pass the engine never received — and this
-      ;; handler's re-entry branch then waits for a Corp reply forever
-      ;; (guest panel CRITICAL, #167 review).
-      {:status :action-taken
-       :action :sent-continue
-       :sent sent?})))
 
 (defn- filter-meaningful-log-entries
   "Filter log entries to exclude 'no further action' spam."
@@ -409,7 +369,7 @@
                :position position})
 
             ;; A real prompt, or a waiting prompt (the engine is mid-checkpoint on
-            ;; the Corp, and send-continue! would refuse): someone else's handler.
+            ;; the Corp, and pass-priority! would refuse): someone else's handler.
             (or (has-real-decision? my-prompt)
                 (state/waiting-prompt-type? (:prompt-type my-prompt))
                 (not (core/owns-run-window? state side)))
@@ -417,10 +377,10 @@
 
             :else
             (let [window (approach-window-id state)
-                  result (send-continue! gameid)]
+                  result (pass/pass-priority! gameid)]
               ;; Announce only a send that left the socket (#150: nothing
               ;; printed that was not sent).
-              (when (:sent result)
+              (when (pass/sent? result)
                 (println "   → Passed the unrezzed-ICE approach (the Corp's rez decision follows)")
                 (when-not (await-approach-pass! window side)
                   (println (format "   ⚠️  No sign of that pass on the wire after %.1fs; it is owed again if the window has not moved."
@@ -592,9 +552,10 @@
                   ;; snapshot on to handle-auto-continue, whose can-auto-continue?
                   ;; read the stale empty "run" prompt — type "run", no choices,
                   ;; nothing selectable, every condition still true — and passed
-                  ;; priority over our OWN open select. send-continue! does read
-                  ;; live state, but it guards only a waiting prompt (#75) and our
-                  ;; own recorded pass (#98); a select prompt is neither. Marquee
+                  ;; priority over our OWN open select. send-continue! (as it then
+                  ;; was) read live state, but guarded only a waiting prompt (#75)
+                  ;; and our own recorded pass (#98); a select prompt is neither.
+                  ;; ai-run-pass/pass-priority! now refuses over it too. Marquee
                   ;; A1: Whitespace's subs fired while Unity's payment was still
                   ;; unresolved, costing 3c and the run.
                   ;;
@@ -863,7 +824,7 @@
              ;; mid-subroutine "Jack out?" window) - passing here would mask it.
              (not (has-real-decision? my-prompt))
              ;; And to the opponent when our own prompt is a WAITING prompt: the
-             ;; engine is mid-checkpoint on them and send-continue! will refuse
+             ;; engine is mid-checkpoint on them and pass-priority! will refuse
              ;; the send anyway. Mirroring that chokepoint as an outer guard is
              ;; the Corp handler's #150 rule — "nothing is printed that is not
              ;; going to be sent" — which this handler needed as soon as the
@@ -970,41 +931,44 @@
                :ice ice-title
                :position position})
             ;; First time at this ICE/position - send one continue to pass.
-            (do
-              (println (cond
-                         (and corp-declined? (seq actionable-subs))
-                         (format "   → Corp declined to fire on %s — passing ends the encounter with %d sub(s) unresolved"
-                                 ice-title (count actionable-subs))
-                         ;; "All subs broken" is a claim about state, and with no
-                         ;; subroutines at all it is a false one — (every? :fired [])
-                         ;; and (every? :broken []) are both true, so the old
-                         ;; formats would have reported breaking subs that never
-                         ;; existed (#167).
-                         (empty? subroutines)
-                         (format "   → %s has no subroutines, Runner passing ICE" ice-title)
-                         ;; Two broken plus one fired is neither: "All subs
-                         ;; broken" about a sub that FIRED misreported Brân 1.0
-                         ;; to a marquee seat (#198 comment).
-                         all-fired?
-                         (format "   → All subs resolved on %s, Runner passing ICE" ice-title)
-                         (every? :broken subroutines)
-                         (format "   → All subs broken on %s, Runner passing ICE" ice-title)
-                         :else
-                         (format "   → All subs broken or fired on %s (%d broken, %d fired), Runner passing ICE"
-                                 ice-title
-                                 (count (filter :broken subroutines))
-                                 (count (filter :fired subroutines)))))
+            ;; The line is printed AFTER pass-priority! reports a send: it can
+            ;; now refuse (own blocking prompt), and a "passing" line over a
+            ;; refused send describes an action that did not happen.
+            (let [r (pass/pass-priority! gameid)]
+              (when (pass/sent? r)
+                (println (cond
+                           (and corp-declined? (seq actionable-subs))
+                           (format "   → Corp declined to fire on %s — passing ends the encounter with %d sub(s) unresolved"
+                                   ice-title (count actionable-subs))
+                           ;; "All subs broken" is a claim about state, and with no
+                           ;; subroutines at all it is a false one — (every? :fired [])
+                           ;; and (every? :broken []) are both true, so the old
+                           ;; formats would have reported breaking subs that never
+                           ;; existed (#167).
+                           (empty? subroutines)
+                           (format "   → %s has no subroutines, Runner passing ICE" ice-title)
+                           ;; Two broken plus one fired is neither: "All subs
+                           ;; broken" about a sub that FIRED misreported Brân 1.0
+                           ;; to a marquee seat (#198 comment).
+                           all-fired?
+                           (format "   → All subs resolved on %s, Runner passing ICE" ice-title)
+                           (every? :broken subroutines)
+                           (format "   → All subs broken on %s, Runner passing ICE" ice-title)
+                           :else
+                           (format "   → All subs broken or fired on %s (%d broken, %d fired), Runner passing ICE"
+                                   ice-title
+                                   (count (filter :broken subroutines))
+                                   (count (filter :fired subroutines))))))
               ;; Latch AFTER the send, on a send that actually happened. The
-              ;; latch used to be set first, so a continue suppressed by
-              ;; send-continue!'s own chokepoints — or lost to an exhausted
-              ;; reconnect — still recorded us as having passed, and every later
-              ;; tick took the branch above and waited for a Corp reply to a pass
-              ;; the engine never saw. Same discipline the Corp's
+              ;; latch used to be set first, so a continue suppressed by the
+              ;; sender's own chokepoints — or lost to an exhausted reconnect —
+              ;; still recorded us as having passed, and every later tick took
+              ;; the branch above and waited for a Corp reply to a pass the
+              ;; engine never saw. Same discipline the Corp's
               ;; latch-encounter-pass! has carried since #150.
-              (let [r (send-continue! gameid)]
-                (when (and (= :action-taken (:status r)) (:sent r))
-                  (reset! passed-ice-encounter pass-key))
-                r))))))))
+              (when (pass/sent? r)
+                (reset! passed-ice-encounter pass-key))
+              r)))))))
 
 (defn handle-runner-pass-fired-ice
   "Priority 2.7: Runner at encounter-ice after subs have fired.
@@ -1062,12 +1026,12 @@
              :message (format "Waiting for Corp to pass priority after %s" ice-title)
              :ice ice-title
              :position position})
-          (do
-            (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
-            ;; Same latch-after-a-real-send discipline as its sibling above.
-            ;; These two handlers SHARE passed-ice-encounter, so a dishonest
-            ;; latch set here deadlocks the other one just as surely.
-            (let [r (send-continue! gameid)]
-              (when (and (= :action-taken (:status r)) (:sent r))
-                (reset! passed-ice-encounter pass-key))
-              r)))))))
+          ;; Same latch-after-a-real-send discipline as its sibling above.
+          ;; These two handlers SHARE passed-ice-encounter, so a dishonest
+          ;; latch set here deadlocks the other one just as surely. Printed
+          ;; only once the send happened, for the same reason as the sibling.
+          (let [r (pass/pass-priority! gameid)]
+            (when (pass/sent? r)
+              (println (format "   → Subs resolved on %s, Runner passing ICE" ice-title))
+              (reset! passed-ice-encounter pass-key))
+            r))))))

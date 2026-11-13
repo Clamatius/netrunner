@@ -1911,7 +1911,7 @@
       (into
         [(str "    ⏸️  You have already passed priority here — waiting for " opp
               " to pass before the run advances.")
-         ;; "Re-sending does nothing" is true of a MANUAL repeat — send-continue!'s
+         ;; "Re-sending does nothing" is true of a MANUAL repeat — pass-priority!'s
          ;; #98 guard suppresses it — but it is NOT true of the Runner's run loop.
          ;; handle-stalled-window-self-advance (ai-runs) deliberately sends a
          ;; SECOND pass once a decision-free window has gone unanswered for

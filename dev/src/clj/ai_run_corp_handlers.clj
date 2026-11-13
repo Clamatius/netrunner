@@ -11,7 +11,9 @@
   (:require [ai-websocket-client-v2 :as ws]
             [ai-core :as core]
             [ai-state :as state]
-            [ai-run-corp-decisions :as decisions]))
+            [ai-run-corp-decisions :as decisions]
+            ;; The one gate every automated `continue` goes through (pass-priority!).
+            [ai-run-pass :as pass]))
 
 ;; ============================================================================
 ;; Shared Helpers
@@ -29,44 +31,14 @@
     (string? side-value) side-value
     :else (str side-value)))
 
-(defn- send-continue!
-  "Helper to send continue command and return action-taken result.
-
-   Chokepoint guard (#75): consult the LIVE state at send time — if our own
-   prompt is a 'waiting' prompt, the engine is mid-checkpoint on the OPPONENT
-   (e.g. blocked on the Runner's Manegarm Skunkworks 'Choose one' at
-   :approach-server) and a continue from us is never legitimate. The engine has
-   no in-flight guard there: each duplicate continue re-fires the checkpoint and
-   mints a duplicate opponent prompt (marquee g2 wedge — five stacked Manegarm
-   prompts). Suppress and report an opponent wait so loops idle instead of spin.
-
-   Second guard (#98): if the engine already recorded US as this window's
-   passer (:no-action names us), the opponent owes the window — a repeat
-   continue is a no-op that only feeds the stuck-detector's false alarm."
-  [gameid]
-  (cond
-    (state/waiting-prompt-type? (:prompt-type (state/get-prompt)))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-waiting-prompt
-     :message "Own prompt is a waiting prompt — opponent is deciding; continue suppressed (#75)"}
-
-    (core/i-already-passed-run-window? @state/client-state (:side @state/client-state))
-    {:status :waiting-for-opponent
-     :action :continue-suppressed-already-passed
-     :message "You already passed this window (engine :no-action records you) — opponent owes the decision; continue suppressed (#98)"}
-
-    :else
-    (let [sent? (boolean (ws/send-message! :game/action
-                                           {:gameid gameid
-                                            :command "continue"
-                                            :args nil}))]
-      (Thread/sleep 100)
-      ;; :sent — ws/send-message! reports a failed send (reconnect exhausted)
-      ;; as false; callers that LATCH on having passed must key on this, not
-      ;; on :action-taken (guest panel, second pass).
-      {:status :action-taken
-       :action :sent-continue
-       :sent sent?})))
+(defn- decline-result
+  "A rez-decline's result: pass-priority!'s, tagged with what was declined —
+   EXCEPT a terminal own-prompt surface, which goes back unchanged so its
+   :action :awaiting-own-prompt is not overwritten by a decline that never
+   happened. The suppressions (#75 / #98) keep the tag, as they did before the
+   gate."
+  [r tag]
+  (if (= :decision-required (:status r)) r (merge r tag)))
 
 ;; Track last waiting status to suppress repeated output (Corp-side)
 (defonce last-waiting-status (atom nil))
@@ -275,13 +247,13 @@
         ;; --no-rez: always decline
         (:no-rez strategy)
         (let [status-key [:corp-no-rez position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
+              already-printed? (= @last-waiting-status status-key)
+              r (pass/pass-priority! gameid)]
+          ;; Printed only once pass-priority! reports a send: it can refuse.
+          (when (and (pass/sent? r) (not already-printed?))
             (reset! last-waiting-status status-key)
             (println (format "   Strategy: declining rez on %s" ice-title)))
-          (merge (send-continue! gameid)
-                 {:action :auto-declined-rez
-                  :ice ice-title}))
+          (decline-result r {:action :auto-declined-rez :ice ice-title}))
 
         ;; Wanted to rez, already tried, ICE still unrezzed → the rez failed.
         ;; Report once and decline so the run proceeds instead of looping.
@@ -290,13 +262,13 @@
               credits (get-in state [:game-state :corp :credit] 0)
               status-key [:corp-rez-failed position ice-title]
               already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
-            (reset! last-waiting-status status-key)
-            (println (format "   ⚠️  Rez of %s did not take — likely can't afford it (base cost %d, Corp has %d, plus any run surcharge such as Tread Lightly's +3). Declining."
-                            ice-title base-cost credits)))
-          (merge (send-continue! gameid)
-                 {:action :rez-failed-declined
-                  :ice ice-title}))
+          ;; Printed only once pass-priority! reports a send: it can refuse.
+          (let [r (pass/pass-priority! gameid)]
+            (when (and (pass/sent? r) (not already-printed?))
+              (reset! last-waiting-status status-key)
+              (println (format "   ⚠️  Rez of %s did not take — likely can't afford it (base cost %d, Corp has %d, plus any run surcharge such as Tread Lightly's +3). Declining."
+                               ice-title base-cost credits)))
+            (decline-result r {:action :rez-failed-declined :ice ice-title})))
 
         ;; --rez <ice-name>: rez if in set
         should-rez?
@@ -327,13 +299,15 @@
         ;; doesn't advance state instantly, so an unguarded print fired ×2.
         (and (:rez strategy) ice-rezzed?)
         (let [status-key [:corp-rez-done position ice-title]
-              already-printed? (= @last-waiting-status status-key)]
-          (when-not already-printed?
+              already-printed? (= @last-waiting-status status-key)
+              r (pass/pass-priority! gameid)]
+          ;; "continuing" only once pass-priority! reports a send.
+          (when (and (pass/sent? r) (not already-printed?))
             (reset! last-waiting-status status-key)
             (if (= (:rez-attempted-at strategy) position)
               (println (format "   ✅ Rez confirmed: %s is rezzed — continuing" ice-title))
               (println (format "   ICE %s was already rezzed, continuing" ice-title))))
-          (send-continue! gameid))
+          r)
 
         ;; Named, but more than one installed copy in scope (#151 item 14): no
         ;; guess. At this window the answer is unambiguous — `continue --rez` here
@@ -467,6 +441,53 @@
       {:lines []
        :result (assoc base :status :action-taken)})))
 
+(defn- automated-fire!
+  "The Corp automation's FIRE of the encountered ICE's unbroken subs, for
+   --fire-unbroken and --fire-if-asked. Returns the handler's result.
+
+   Gated like a pass (design r2 I6): if the Corp holds a prompt it owes, the
+   engine REFUSES `unbroken-subroutines` (game.core.actions
+   play-unbroken-subroutines, \"You cannot fire subroutines while abilities are
+   being resolved\"), yet this used to report the fire and return
+   :fired-at-encounter, which the caller latches — so the Corp remembered a fire
+   that never happened and lost those subs. Now: nothing sent, nothing latched,
+   and the same terminal surface pass-priority! returns
+   (ai-run-pass/own-prompt-surface).
+
+   The latch also waited on nothing else: a fire the SOCKET refused (send-message!
+   false) latched the same way. Without a sent fire there is no
+   :fired-at-encounter in the result, so the next tick tries again.
+
+   `announce` is printed only once the fire has been sent. On a sent fire, the
+   pre-fire prompt is captured so that — if a fired sub OPENS a prompt (issue
+   #24) — it surfaces as :decision-required instead of letting the loop march on
+   (the same honest reporting the manual fire-subs path got in #23). The caller
+   must set-strategy! the :fired-at-encounter the result carries."
+  [gameid current-ice ice-title sub-count enc-key announce]
+  (or (pass/own-prompt-surface)
+      (let [card-ref (core/create-card-ref current-ice)
+            old-prompt (state/get-prompt)
+            sent (boolean (ws/send-message! :game/action
+                                            {:gameid gameid
+                                             :command "unbroken-subroutines"
+                                             :args {:card card-ref}}))]
+        (if-not sent
+          {:status :action-taken
+           :action :auto-fire-not-sent
+           :ice ice-title
+           :sent false}
+          (do
+            (println announce)
+            (Thread/sleep core/medium-delay)
+            (let [cur-prompt (state/get-prompt)
+                  ;; eid-aware so a stale leftover prompt isn't mistaken for a
+                  ;; sub-opened one (see core/new-prompt? rationale).
+                  new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
+                  {:keys [lines result]} (fire-unbroken-strategy-result
+                                          ice-title sub-count enc-key new-prompt)]
+              (doseq [l lines] (println l))
+              result))))))
+
 (defn handle-corp-fire-unbroken
   "Priority 1.6: Corp fire-unbroken strategy - auto-fire unbroken subs.
 
@@ -513,35 +534,15 @@
         (empty? unbroken-subs) nil
         (not authorization) nil
         :else
-        (do
-          ;; Say which authorization, because "Runner signaled" about a Runner
-          ;; who merely passed is a false claim about the other seat — the same
-          ;; defect this issue fixes in the guidance text (#169, guest panel).
-          (println (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (%s)"
-                          (count unbroken-subs) ice-title
-                          (if (= :runner-passed authorization)
-                            "Runner passed the encounter"
-                            "Runner signaled")))
-          ;; Note: caller must call set-strategy! to mark fired-at-encounter
-          ;; (result carries it in both branches). We capture the pre-fire prompt
-          ;; so that — if a fired sub OPENS a prompt (issue #24) — we surface it as
-          ;; :decision-required instead of letting the loop march on (the same
-          ;; honest-reporting the manual fire-subs path got in #23).
-          (let [card-ref (core/create-card-ref current-ice)
-                old-prompt (state/get-prompt)]
-            (ws/send-message! :game/action
-                             {:gameid gameid
-                              :command "unbroken-subroutines"
-                              :args {:card card-ref}})
-            (Thread/sleep core/medium-delay)
-            (let [cur-prompt (state/get-prompt)
-                  ;; eid-aware so a stale leftover prompt isn't mistaken for a
-                  ;; sub-opened one (see core/new-prompt? rationale).
-                  new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
-                  {:keys [lines result]} (fire-unbroken-strategy-result
-                                          ice-title (count unbroken-subs) enc-key new-prompt)]
-              (doseq [l lines] (println l))
-              result)))))))
+        ;; Say which authorization, because "Runner signaled" about a Runner
+        ;; who merely passed is a false claim about the other seat — the same
+        ;; defect this issue fixes in the guidance text (#169, guest panel).
+        (automated-fire! gameid current-ice ice-title (count unbroken-subs) enc-key
+                         (format "   Strategy: --fire-unbroken, firing %d sub(s) on %s (%s)"
+                                 (count unbroken-subs) ice-title
+                                 (if (= :runner-passed authorization)
+                                   "Runner passed the encounter"
+                                   "Runner signaled")))))))
 
 (defn handle-corp-fire-decision
   "Priority 1.7: Corp at encounter-ice with a fire decision nobody automated -
@@ -662,25 +663,10 @@
 
             ;; The Runner asked for the subs to fire - auto-fire!
             (= :runner-signaled authorization)
-            (do
-              (println (format "   --fire-if-asked: Runner signaled, firing %d sub(s) on %s"
-                              (count unbroken-subs) ice-title))
-              ;; Same honest-prompt detection as --fire-unbroken (issue #24): a
-              ;; fired sub can open a Corp prompt, which must surface as
-              ;; :decision-required rather than letting the loop march on.
-              (let [card-ref (core/create-card-ref current-ice)
-                    old-prompt (state/get-prompt)]
-                (ws/send-message! :game/action
-                                 {:gameid gameid
-                                  :command "unbroken-subroutines"
-                                  :args {:card card-ref}})
-                (Thread/sleep core/medium-delay)
-                (let [cur-prompt (state/get-prompt)
-                      new-prompt (when (core/new-prompt? old-prompt cur-prompt) cur-prompt)
-                      {:keys [lines result]} (fire-unbroken-strategy-result
-                                              ice-title (count unbroken-subs) enc-key new-prompt)]
-                  (doseq [l lines] (println l))
-                  result)))
+            ;; Same gate and honest-prompt detection as --fire-unbroken.
+            (automated-fire! gameid current-ice ice-title (count unbroken-subs) enc-key
+                             (format "   --fire-if-asked: Runner signaled, firing %d sub(s) on %s"
+                                     (count unbroken-subs) ice-title))
 
             ;; The Runner is still deciding - silently wait (poll again)
             :else
@@ -719,9 +705,9 @@
              (empty? (:choices my-prompt))
              (empty? (:selectable my-prompt))
              (not (#{"success" "access"} run-phase)))
-        ;; Route through send-continue! so the #75 waiting-prompt chokepoint
+        ;; Route through pass-priority! so the #75 waiting-prompt chokepoint
         ;; also covers this send (belt to the prompt-type guard above).
-        (let [r (send-continue! gameid)]
+        (let [r (pass/pass-priority! gameid)]
           (if (= :action-taken (:status r))
             (assoc r :action :auto-continue-fire-if-asked)
             r))
@@ -752,7 +738,7 @@
    and the engine never resets it when subs fire. Reading only run-level
    :no-action left the guard blind, so every persistent tick re-entered here,
    printed 'All subs resolved on Tithe, Corp continuing', and THEN had the send
-   suppressed by send-continue!'s #98 chokepoint (which does read the encounter)
+   suppressed by the sender's #98 chokepoint (which does read the encounter)
    — hundreds of lines until the 300s timeout, both Fable/Sol rematch games.
    Same predicate as the chokepoint (core/i-already-passed-run-window?), so the
    handler and the sender can no longer disagree; the waiting-prompt half of the
@@ -784,19 +770,22 @@
           ;; Mixed broken+fired is neither "broken" nor "resolved" — the Runner
           ;; sibling misreported Brân 1.0 that way to a marquee seat (#198);
           ;; name both, with counts.
-          (println (cond
-                     (empty? subroutines)
-                     (format "   %s has no subroutines, Corp continuing" ice-title)
-                     all-broken?
-                     (format "   All subs broken on %s, Corp continuing" ice-title)
-                     all-fired?
-                     (format "   All subs resolved on %s, Corp continuing" ice-title)
-                     :else
-                     (format "   All subs broken or fired on %s (%d broken, %d fired), Corp continuing"
-                             ice-title
-                             (count (filter :broken subroutines))
-                             (count (filter :fired subroutines)))))
-          (let [r (send-continue! gameid)]
+          ;; Printed only once pass-priority! reports a send: it can refuse
+          ;; (our own blocking prompt — the Brân / Ansel install select, A2).
+          (let [r (pass/pass-priority! gameid)]
+            (when (pass/sent? r)
+              (println (cond
+                         (empty? subroutines)
+                         (format "   %s has no subroutines, Corp continuing" ice-title)
+                         all-broken?
+                         (format "   All subs broken on %s, Corp continuing" ice-title)
+                         all-fired?
+                         (format "   All subs resolved on %s, Corp continuing" ice-title)
+                         :else
+                         (format "   All subs broken or fired on %s (%d broken, %d fired), Corp continuing"
+                                 ice-title
+                                 (count (filter :broken subroutines))
+                                 (count (filter :fired subroutines))))))
             (when (= :action-taken (:status r))
               (latch-encounter-pass! pass-key (:sent r)))
             r))))))
@@ -843,12 +832,13 @@
                    ;; tick — the burst just moved one handler down. While the
                    ;; latch holds, this is an opponent/ack wait, not a send.
                    (not (passed-encounter-recently? pass-key)))
-            (do
-              (println (format "   Runner passed, Corp continuing past %s" ice-title))
-              (let [r (send-continue! gameid)]
-                (when (= :action-taken (:status r))
-                  (latch-encounter-pass! pass-key (:sent r)))
-                r))
+            ;; Printed only once pass-priority! reports a send: it can refuse.
+            (let [r (pass/pass-priority! gameid)]
+              (when (pass/sent? r)
+                (println (format "   Runner passed, Corp continuing past %s" ice-title)))
+              (when (= :action-taken (:status r))
+                (latch-encounter-pass! pass-key (:sent r)))
+              r)
             (let [status-key [:corp-waiting-after-fire position ice-title]
                   already-printed? (= @last-waiting-status status-key)]
               (when-not already-printed?
@@ -934,14 +924,14 @@
             (when (= "runner" (normalize-side (get-in state [:game-state :run :no-action])))
               (let [credits (get-in state [:game-state :corp :credit] 0)
                     status-key [:corp-upgrade-rez-failed cid]
-                    already-printed? (= @last-waiting-status status-key)]
-                (when-not already-printed?
+                    already-printed? (= @last-waiting-status status-key)
+                    r (pass/pass-priority! gameid)]
+                ;; Printed only once pass-priority! reports a send: it can refuse.
+                (when (and (pass/sent? r) (not already-printed?))
                   (reset! last-waiting-status status-key)
                   (println (format "   ⚠️  Rez of %s did not take — likely can't afford it (Corp has %d). Declining."
                                    card-title credits)))
-                (merge (send-continue! gameid)
-                       {:action :upgrade-rez-failed-declined
-                        :card card-title})))
+                (decline-result r {:action :upgrade-rez-failed-declined :card card-title})))
 
             ;; --rez listed and not yet attempted → rez it now (the only window
             ;; where an approach-triggered ability fires).
@@ -1056,12 +1046,13 @@
    guard itself is phase-independent, so nothing about the fix rested on them.
 
    SCOPE, deliberately: it still CLAIMS the tick in both cases — only the report
-   changes. Making it DECLINE over our own prompt is #305 (#303 piece 2) and waits on
-   #297 and #302, because below it sit senders with no prompt guard at all
-   (`handle-runner-tactics` has none; the `send-continue!` sites here do not
-   consult the predicate), and handing them the tick would arm a dormant path.
-   That is #301 round 1's CRITICAL one level down, and it is why `my-prompt` buys
-   a truthful message here rather than a fall-through.
+   changes. #305 (#303 piece 2) asked for a DECLINE over our own prompt, which
+   waited on the senders below having no prompt guard. Those `continue` senders
+   now all go through ai-run-pass/pass-priority!, which refuses over our own
+   blocking prompt, so #305 closes as \"keeps claiming the tick, nothing left to
+   guard\": the claim stays because it is the truthful report, not because a
+   sender below would pass over the prompt. (`handle-runner-tactics` still has no
+   prompt guard of its own — #297, deferred; the engine refuses its ability.)
 
    WHICH SHAPES still report an opponent wait, because the guard is narrower than
    \"do we hold anything?\":

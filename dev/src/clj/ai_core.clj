@@ -2552,7 +2552,7 @@
        ;; Guard (#102 item 5): our OWN prompt is a 'waiting' prompt — the engine is
        ;; blocked on the opponent's decision (Runner mid-Wildcat-Strike while the
        ;; Corp picks the mode, marquee 471ef829). Nothing of ours is actionable
-       ;; until it clears: has-prompt? already excludes it and send-continue!'s
+       ;; until it clears: has-prompt? already excludes it and pass-priority!'s
        ;; #75 chokepoint refuses to pass under it. But my-turn-to-act? is true for
        ;; the whole of our turn, so `wait --since` returned instantly and
        ;; repeatedly with :my-turn / '(no new entries)'. Everything below that

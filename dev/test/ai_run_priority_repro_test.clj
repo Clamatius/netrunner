@@ -1,17 +1,10 @@
 (ns ai-run-priority-repro-test
-  "REPRODUCTIONS for the run-automation analysis (B1/B2/B3/A1/A2/A3), before any
-   redesign goes to review. Each test asserts the CORRECT behaviour, so a test that
-   is red today is a reproduced claim and a test that is green is evidence the
-   claim is false (or that the window is already guarded).
-
-   KNOWN-RED BY DESIGN. This namespace is deliberately NOT in the Makefile's
-   `make test` list, and it is named in test_registration_test.sh's EXCLUDED so
-   that guard stays green. Run it on its own:
-
-       lein test ai-run-priority-repro-test
-
-   When a fix lands, its red tests here go green; move them into the regular
-   suite then (and drop the EXCLUDED entry when nothing red is left).
+  "REPRODUCTIONS for the run-automation analysis (B1/B2/B3/A1/A2/A3), committed
+   red before the fix (470f65b57). Each test asserts the CORRECT behaviour; the
+   B and A cells went green with plan v3's two changes (a tank survives a
+   mid-run command; ai-run-pass/pass-priority! is the one gate for automated
+   passes and fires), whose own tests are the change1-* / change2-* below. The
+   namespace is registered in the Makefile's `make test` list.
 
    EVERY FIXTURE IS ENGINE-BUILT. No hand-written board: a real game is driven
    with game.test-framework, each seat's client state is the real serializer's
@@ -55,12 +48,16 @@
             [game.test-framework :refer :all]
             [ai-core :as ai-core]
             [ai-runs :as runs]
+            [ai-run-pass :as pass]
             [ai-run-corp-decisions :as corp-decisions]
             [ai-run-corp-handlers :as corp-handlers]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-state :as ai-state]
             [ai-websocket-client-v2 :as ws]
             [cheshire.core :as json]
+            [clojure.java.io :as io]
+            [clojure.tools.reader :as tr]
+            [clojure.tools.reader.reader-types :as rt]
             [clojure.string :as str]
             [clojure.test :refer :all]))
 
@@ -87,6 +84,11 @@
 
 ;; side -> {:strategy <run-strategy atom value> :reported <reported-events value>}
 (def ^:private seats (atom {}))
+
+(def ^:dynamic *refused-commands*
+  "Commands the stub socket REFUSES (send-message! returns false, nothing is
+   delivered or recorded) — what an exhausted reconnect looks like to a sender."
+  #{})
 (def ^:private reported-events-atom @#'runs/reported-events)
 
 (defn- reset-seats! []
@@ -127,11 +129,14 @@
         result (atom nil)
         orig-loop runs/auto-continue-loop!
         out (with-redefs [ws/send-message! (fn [evt {:keys [command args] :as data}]
-                                             (swap! sent conj data)
-                                             (when (= evt :game/action)
-                                               (core/process-action command state (keyword side) args))
-                                             (reset! ai-state/client-state (wire-state state side))
-                                             true)
+                                             (if (contains? *refused-commands* command)
+                                               false
+                                               (do
+                                                 (swap! sent conj data)
+                                                 (when (= evt :game/action)
+                                                   (core/process-action command state (keyword side) args))
+                                                 (reset! ai-state/client-state (wire-state state side))
+                                                 true)))
                           ;; NO REAL SOCKET. ws/select-card! (and every other
                           ;; safe-action! sender) runs ensure-connected! first, which
                           ;; finds no :socket in this client state, calls it broken,
@@ -831,3 +836,215 @@
               (str "RED CELL [" site "]: continue sent over " side "'s own blocking prompt. status "
                    (:status (:result blocked)) ", action " (:action (:result blocked))
                    "\n--- output ---\n" (:out blocked))))))))
+
+;; ===========================================================================
+;; Change 2 (plan v3): one gate, ai-run-pass/pass-priority!
+;; ===========================================================================
+
+(defn- counting-continue-run
+  "Run `f` with runs/continue-run! wrapped to count its calls. Returns [n result]."
+  [f]
+  (let [n (atom 0)
+        orig runs/continue-run!]
+    (with-redefs [runs/continue-run! (fn [& args] (swap! n inc) (apply orig args))]
+      (let [r (f)] [@n r]))))
+
+(def ^:private formerly-red-blocked-states
+  "Every state a cell above found a continue sent over the seat's own blocking
+   prompt in, as [name side setup] where (setup f) builds it and calls (f state)
+   with the seat's strategy in place."
+  (into
+   [["A1 runner unrezzed approach, lone-Done credit select" "runner"
+     (fn [f] (runner-bad-pub-game false 1 (fn [state] (run-on state "HQ") (pump-on-bad-pub! state) (f state))))]]
+   (concat
+    (for [[ice-title install-idx] a2-shapes
+          runner-done [:passed :tanked]]
+      [(str "A2 " ice-title " install select, Runner " (name runner-done)) "corp"
+       (fn [f] (install-sub-open ice-title install-idx runner-done f))])
+    (for [{:keys [site side cell]} a3-cells
+          :when (re-find #"\[A1\]|\[A2\]|rez-strategy" site)]
+      [(str "A3 " site) side (fn [f] (cell true f))]))))
+
+(def ^:private pass-claim
+  "Every sender's \"I passed\" line (the a3-cells :line patterns, and their
+   siblings). None may print over a pass that was refused."
+  #"passing ICE|[Cc]ontinuing|[Dd]eclining|Passed the unrezzed|Auto-passing|self-advancing|did not take")
+
+(deftest change2-formerly-red-cells-hand-back-on-the-first-tick
+  (is (= 11 (count formerly-red-blocked-states)) "fixture: every formerly-red state is enumerated")
+  (doseq [[nm side setup] formerly-red-blocked-states]
+    (testing (str nm ": five single steps")
+      (setup
+       (fn [state]
+         (let [msg (:msg (seat-prompt state side))
+               steps (vec (repeatedly 5 #(as-seat! state side (cmd-continue-single))))]
+           (is (empty? (mapcat (comp continues :sent) steps))
+               (str "zero continues over five ticks. sent " (mapv :commands steps)))
+           (is (every? #(= :decision-required (get-in % [:result :status])) steps)
+               (str "every tick hands back a decision: " (mapv #(get-in % [:result :status]) steps)))
+           (is (every? #(= msg (get-in % [:result :prompt :msg])) steps)
+               (str "naming the seat's own prompt " (pr-str msg)))
+           (is (not-any? #(re-find pass-claim (:out %)) steps)
+               (str "and no line claims a pass that was refused:\n" (apply str (map :out steps))))))))
+    (testing (str nm ": the run loop")
+      (setup
+       (fn [state]
+         (let [msg (:msg (seat-prompt state side))
+               [n obs] (counting-continue-run #(as-seat! state side (fn [] (runs/auto-continue-loop!))))]
+           (is (empty? (continues (:sent obs))) (str "zero continues. sent " (:commands obs)))
+           (is (= 1 n) (str "the loop returned on its FIRST tick; ticks " n))
+           (is (= :decision-required (get-in obs [:result :status])) (str "result " (pr-str (:result obs))))
+           (is (str/includes? (:out obs) (str "Prompt: " msg))
+               (str "with the prompt named. output:\n" (:out obs)))
+           (is (not (re-find pass-claim (:out obs)))
+               (str "and no line claims a pass that was refused:\n" (:out obs)))))))))
+
+(deftest change2-persistent-corp-loop-over-a-waiting-prompt-keeps-polling
+  (testing "Funhouse on-encounter: the Runner chooses, the Corp holds a WAITING prompt; `monitor-run --persistent`"
+    (do-game
+      (new-game {:corp {:hand ["Funhouse"] :credits 20}
+                 :runner {:credits 10}})
+      (play-from-hand state :corp "Funhouse" "HQ")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :corp)
+      (run-on state "HQ")
+      (run-continue state :encounter-ice)
+      (is (= "waiting" (:prompt-type (seat-prompt state "corp"))) "fixture: the Corp holds a waiting prompt")
+      (is (= "Choose one" (:msg (seat-prompt state "runner"))) "fixture: the Runner owes the Funhouse choice")
+      (let [[n obs] (counting-continue-run #(as-seat! state "corp" (cmd-continue "--persistent")))]
+        (is (empty? (continues (:sent obs))) (str "no continue over the opponent's checkpoint. sent " (:commands obs)))
+        (is (not= :decision-required (get-in obs [:result :status]))
+            (str "not surfaced as the Corp's decision: " (pr-str (:result obs))))
+        (is (> n 1) (str "the loop kept polling; ticks " n))))))
+
+(deftest change2-already-passed-then-own-prompt-is-a-decision
+  (testing "the Corp passed the encounter, THEN rezzed Malia (select open): pass-priority! surfaces the prompt"
+    (do-game
+      (new-game {:corp {:hand ["Hourglass" "Malia Z0L0K4"] :credits 30}
+                 :runner {:hand ["Liberated Account"] :credits 10}})
+      (play-from-hand state :corp "Hourglass" "HQ")
+      (play-from-hand state :corp "Malia Z0L0K4" "New remote")
+      (rez state :corp (get-ice state :hq 0))
+      (take-credits state :corp)
+      (play-from-hand state :runner "Liberated Account")
+      (run-on state "HQ")
+      (run-continue state :encounter-ice)
+      (engine-pass! state :corp)
+      (is (= :corp (:no-action (core/get-current-encounter state))) "fixture: the Corp's pass is on the ledger")
+      (rez-malia! state)
+      (let [{:keys [result sent]} (as-seat! state "corp" #(pass/pass-priority! gameid))]
+        (is (empty? sent))
+        (is (= :decision-required (:status result))
+            (str "a decision, not waiting-for-opponent: " (pr-str result)))
+        (is (= :awaiting-own-prompt (:action result)))))))
+
+(defn- malia-at-hourglass
+  "Hourglass encounter, the Runner's pass on the ledger, the Corp holding Malia's
+   on-rez select."
+  [f]
+  (do-game
+    (new-game {:corp {:hand ["Hourglass" "Malia Z0L0K4"] :credits 30}
+               :runner {:hand ["Liberated Account"] :credits 10}})
+    (play-from-hand state :corp "Hourglass" "HQ")
+    (play-from-hand state :corp "Malia Z0L0K4" "New remote")
+    (rez state :corp (get-ice state :hq 0))
+    (take-credits state :corp)
+    (play-from-hand state :runner "Liberated Account")
+    (run-on state "HQ")
+    (run-continue state :encounter-ice)
+    (engine-pass! state :runner)
+    (is (= :runner (:no-action (core/get-current-encounter state))) "fixture: the Runner's pass is on the ledger")
+    (rez-malia! state)
+    (f state)))
+
+(deftest change2-automated-fire-over-own-prompt
+  (doseq [[command f] [["continue --single --fire-unbroken" (cmd-continue-single "--fire-unbroken")]
+                       ["monitor-run --fire-unbroken" (cmd-continue "--fire-unbroken")]]]
+    (testing (str "Corp holds Malia's select, Runner passed, `" command "`")
+      (malia-at-hourglass
+       (fn [state]
+         (let [clicks-before (get-in @state [:runner :click])
+               {:keys [result commands out]} (as-seat! state "corp" f)]
+           (is (not-any? #{"unbroken-subroutines"} commands)
+               (str "no fire sent over the Corp's own prompt (the engine refuses it). sent " commands "\n" out))
+           (is (nil? (:fired-at-encounter (seat-strategy "corp")))
+               (str "and no fired-at latch. strategy " (pr-str (seat-strategy "corp"))))
+           (is (= :decision-required (:status result)) (str "result " (pr-str result)))
+           (is (= :awaiting-own-prompt (:action result)))
+           (is (= clicks-before (get-in @state [:runner :click])) "fixture check: Hourglass did not fire")))))))
+
+(deftest change2-fire-refused-by-the-socket-is-not-latched
+  (testing "Runner tanked Hourglass; the socket refuses the Corp's fire: no fired-at latch, so the next tick retries"
+    (at-hourglass-encounter
+     (fn [state]
+       (as-seat! state "runner" (cmd-tank "Hourglass"))
+       (is (corp-sees-signal? state "Hourglass") "fixture: the signal landed")
+       (let [{:keys [result out]} (binding [*refused-commands* #{"unbroken-subroutines"}]
+                                    (as-seat! state "corp" (cmd-continue-single "--fire-unbroken")))]
+         (is (nil? (:fired-at-encounter (seat-strategy "corp")))
+             (str "latched a fire the socket refused. result " (pr-str result) "\n" out))
+         (is (not (str/includes? out "firing")) (str "nor announced it:\n" out)))))))
+
+;; ---------------------------------------------------------------------------
+;; Structure: a client-sent continue lives only in the gate and force mode
+;; ---------------------------------------------------------------------------
+
+(def ^:private send-fns
+  "Senders that take the command as their first argument."
+  #{"send-action!" "safe-action!"})
+
+(defn- continue-literal? [x]
+  (or (= x "continue") (= x :continue) (= x 'continue)))
+
+(defn- continue-send-sites
+  "Every place in `src` (Clojure source) that sends a `continue`, as the name of
+   the enclosing top-level def. READ, not grepped: comments are gone and a
+   docstring is a string, so prose that mentions a continue is not a site. The
+   spellings: a map with :command \"continue\" (or :continue / 'continue) — the
+   ws/send-message! payload — and (send-action! \"continue\" …) /
+   (safe-action! \"continue\" …)."
+  [label src]
+  (let [eof (Object.)
+        rdr (rt/indexing-push-back-reader src)]
+    (binding [*read-eval* false
+              tr/*data-readers* (into {} (map (fn [[tag _]] [tag (fn [v] (tagged-literal tag v))]))
+                                      clojure.core/*data-readers*)
+              tr/*alias-map* (fn [a] (symbol (str "unresolved." a)))]
+      (loop [sites []]
+        (let [form (tr/read {:eof eof} rdr)]
+          (if (identical? eof form)
+            sites
+            (let [def-name (when (and (seq? form) (symbol? (second form))) (str (second form)))
+                  hit? (some (fn [x]
+                               (or (and (map? x) (continue-literal? (:command x)))
+                                   (and (seq? x) (symbol? (first x))
+                                        (contains? send-fns (name (first x)))
+                                        (continue-literal? (second x)))))
+                             (tree-seq coll? seq form))]
+              (recur (if hit? (conj sites [label def-name]) sites)))))))))
+
+(defn- tree-continue-sites [overrides]
+  (set (mapcat (fn [f]
+                 (let [label (.getName f)]
+                   (continue-send-sites label (get overrides label (slurp f)))))
+               (->> (file-seq (io/file "dev/src/clj"))
+                    (filter #(and (.isFile %) (str/ends-with? (.getName %) ".clj")))))))
+
+(def ^:private allowed-continue-sites
+  #{["ai_run_pass.clj" "pass-priority!"]
+    ["ai_runs.clj" "handle-force-mode"]})
+
+(deftest change2-client-continue-is-sent-only-by-the-gate-and-force-mode
+  (is (= allowed-continue-sites (tree-continue-sites {})))
+  (testing "mutant: a raw continue added to a handler is caught (and its removal is the green above)"
+    (let [f (io/file "dev/src/clj/ai_run_corp_handlers.clj")
+          mutant (str (slurp f)
+                      "\n(defn mutant-handler [gameid] (ws/send-message! :game/action {:gameid gameid :command \"continue\" :args nil}))\n")]
+      (is (= (conj allowed-continue-sites ["ai_run_corp_handlers.clj" "mutant-handler"])
+             (tree-continue-sites {"ai_run_corp_handlers.clj" mutant})))))
+  (testing "mutant: the send-action! spelling is caught too"
+    (let [mutant "(ns x) (defn h [] (ws/send-action! \"continue\" nil))"]
+      (is (= [["m.clj" "h"]] (continue-send-sites "m.clj" mutant)))))
+  (testing "a docstring or comment that SAYS :command \"continue\" is not a site"
+    (is (empty? (continue-send-sites "m.clj" "(ns x) (defn h \"sends {:command \\\"continue\\\"}\" [] nil) ;; {:command \"continue\"}")))))
+

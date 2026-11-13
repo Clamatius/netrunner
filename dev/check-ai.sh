@@ -55,6 +55,7 @@ AI_NAMESPACES=(
     ai-connection
     ai-loop-sync
     ai-goldfish-runner
+    ai-run-pass
     ai-run-corp-handlers
     ai-run-tactics
     ai-run-runner-handlers

@@ -12,6 +12,7 @@
             [ai-prompts :as ai-prompts]
             [ai-run-runner-handlers :as runner-handlers]
             [ai-run-corp-handlers :as corp-handlers]
+            [ai-run-pass :as pass]
             [ai-stall :as stall]
             [ai-card-actions :as card-actions]
             [ai-websocket-client-v2 :as ws]))
@@ -124,7 +125,13 @@
          :run-phase "approach-ice"
          :position 1
          :ice [{:title "Ice Wall" :rezzed false}]
-         :prompt (make-prompt :msg "Rez Ice Wall?"))
+         ;; The Corp's prompt at an approach is the engine's dummy RUN prompt
+         ;; (show-run-prompts); a rez is not a prompt. This fixture used to be
+         ;; make-prompt's default "select", a shape the engine never puts here —
+         ;; and one the pass-priority! gate (plan v3 Change 2) correctly refuses
+         ;; to pass over. The engine-built twin is ai-run-priority-repro-test's
+         ;; --no-rez A3 cell.
+         :prompt (make-prompt :msg "The Runner is running on HQ" :prompt-type "run"))
         (with-redefs [ws/send-message! (mock-websocket-send! sent)]
           ;; Set strategy before calling
           (runs/set-strategy! {:no-rez true})
@@ -2533,13 +2540,13 @@
 ;; and returning :action-taken for it spun the stuck-detector into a false
 ;; '⚠️ Stuck in same state' alarm while the Runner was legitimately thinking
 ;; (3+ marquee occurrences: Funhouse tag decision, Tithe post-fire window).
-;; The guard lives in ALL THREE send-continue! copies.
+;; The guard lived in ALL THREE send-continue! copies; since plan v3 Change 2
+;; there is one sender, ai-run-pass/pass-priority!, and these tests run against
+;; it (the map is kept so each testing label still names the sender).
 ;; ============================================================================
 
 (def ^:private send-continue-copies
-  {"corp-handlers"   #'corp-handlers/send-continue!
-   "runner-handlers" #'runner-handlers/send-continue!
-   "ai-runs"         #'runs/send-continue!})
+  {"ai-run-pass" #'pass/pass-priority!})
 
 (defn- no-action-state
   "Corp seat mid-encounter with no own prompt; :no-action per args."
@@ -2596,7 +2603,7 @@
     (let [sent (atom [])]
       (with-mock-state (assoc (no-action-state :run-no-action "runner") :side "runner")
         (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
-          (let [r (#'runs/send-continue! "fake-gameid" :second-pass? true)]
+          (let [r (pass/pass-priority! "fake-gameid" :second-pass? true)]
             (is (= :action-taken (:status r)))
             (is (= 1 (count @sent))))))))
   (testing "the waiting-prompt guard (#75) is NOT bypassed by :second-pass?"
@@ -2608,7 +2615,7 @@
                                      :run {:phase "approach-ice" :position 1
                                            :no-action "runner"}})
         (with-redefs [ws/send-message! (fn [& args] (swap! sent conj args) true)]
-          (let [r (#'runs/send-continue! "fake-gameid" :second-pass? true)]
+          (let [r (pass/pass-priority! "fake-gameid" :second-pass? true)]
             (is (= :continue-suppressed-waiting-prompt (:action r))
                 "a blocked checkpoint must never receive a continue, even a deliberate second pass")
             (is (zero? (count @sent)))))))))

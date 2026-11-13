@@ -64,13 +64,7 @@ die()  { echo "NOT OK [fixture] $1" >&2; exit 1; }
 # Namespaces excluded from `make test` on purpose. ai-behavioral-test is slow and
 # has its own target (`make test-behavioral`). Anything added here is a deliberate
 # exemption and should say why.
-#
-# ai-run-priority-repro-test is RED BY DESIGN: reproductions of the run-automation
-# analysis (B1/B2/A1/A2/A3), committed before any fix so the redesign has failing
-# tests to turn green. Registering it would turn `make test` red; run it with
-# `lein test ai-run-priority-repro-test`. Each test that goes green with a fix
-# moves into the regular suite; drop this entry when nothing red is left.
-EXCLUDED="ai-behavioral-test ai-run-priority-repro-test"
+EXCLUDED="ai-behavioral-test"
 
 WORK="$(mktemp -d)" || die "mktemp failed"
 trap 'rm -rf "$WORK"' EXIT
