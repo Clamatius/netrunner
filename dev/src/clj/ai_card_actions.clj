@@ -4,7 +4,8 @@
             [ai-state :as state]
             [ai-core :as core]
             [ai-basic-actions :as basic]
-            [ai-prompts :as prompts]))
+            [ai-prompts :as prompts]
+            [jinteki.cards :as cards]))
 
 ;; ============================================================================
 ;; Card Actions
@@ -184,7 +185,16 @@
    confirmation of the trash — and calling that 'server selection' names a
    decision the seat already made. Nor is the card 'Installed:' yet."
   [card-title normalized-server prompt]
-  (let [;; diffs.clj serializes card-valued choices as {:cid :title ...} maps;
+  (let [wire-prompt (state/get-prompt)]
+    (if (or (nil? wire-prompt) (not= (:eid prompt) (:eid wire-prompt)))
+      (do
+        (println (str "⏳ Install of " card-title ": "
+                      (if wire-prompt
+                        "prompt changed; run 'prompt' for the current decision."
+                        "selection prompt resolved; check board for final install state.")))
+        {:status :prompt-resolved :card-title card-title})
+  (let [prompt wire-prompt
+        ;; diffs.clj serializes card-valued choices as {:cid :title ...} maps;
         ;; a hint must never print raw EDN (guest panel), so only a plain
         ;; string value earns the choose-value line.
         choices (map #(cond (string? %) % (map? %) (:value %) :else nil)
@@ -196,15 +206,20 @@
                     ;; Ownership first: a passive waiting prompt is the
                     ;; OPPONENT's decision (guest panel).
                     (state/waiting-prompt-type? (:prompt-type prompt)) "waiting for the opponent"
+                    (and (state/select-prompt-type? (:prompt-type prompt))
+                         (seq (:selectable prompt)))
+                    "choose a card with choose-card <index>; run 'prompt' to see selectable cards."
+                    (state/select-prompt-type? (:prompt-type prompt))
+                    "run 'prompt' to inspect the card selection."
                     sole-choice (str "waiting for your confirmation → choose-value \"" sole-choice "\"")
                     normalized-server "waiting for you to answer a prompt → run 'prompt', then choose-card <N> / choose-value \"<text>\""
-                    :else "waiting for server selection"))))
+                    :else "waiting for server selection")))
   (println (str "   Prompt: " (:msg prompt)))
   (core/show-turn-indicator)
   (flush)
   {:status :waiting-input
    :card-title card-title
-   :prompt prompt})
+   :prompt prompt}))))
 
 (defn- handle-install-error!
   "Handle failed install."
@@ -429,6 +444,7 @@
       ;; issue #95) — route to the runner-ability command instead of
       ;; dead-ending; a Corp card's :abilities aren't the Runner's to use.
       (if-let [corp-card (and (not (core/side= "Corp" side))
+                              (zero? (core/installed-title-match-count card-name :runner))
                               (core/find-installed-corp-card card-name))]
         (if (seq (:runner-abilities corp-card))
           (do
@@ -608,8 +624,21 @@
                 ;; it does happen and needs blocking.
                 is-ice? (= card-type "ICE")
                 valid-ice-rez? (or (not is-ice?)
-                                   (= run-phase "approach-ice"))]
-            (if (not valid-ice-rez?)
+                                   (= run-phase "approach-ice"))
+                same-rezzed? (some (fn [other]
+                                     (and (:rezzed other)
+                                          (some? (:code card))
+                                          (not= (:cid card) (:cid other))
+                                          (= (:code card) (:code other))))
+                                   (filter #(not (contains? #{"Runner" :runner} (:side %)))
+                                           (mapcat state/card-and-hosted
+                                                   (mapcat #(concat (:ices %) (:content %))
+                                                           (vals (state/corp-servers))))))
+                _ (when same-rezzed? (core/load-cards-from-api!))
+                unique-conflict? (and same-rezzed?
+                                      (:uniqueness (get @cards/all-cards (:title card))))]
+            (cond
+              (not valid-ice-rez?)
               (do
                 (if (nil? run)
                   (do
@@ -619,6 +648,11 @@
                     (println (format "❌ Cannot rez ICE during %s phase" run-phase))
                     (println "   → ICE can only be rezzed during approach-ice phase")))
                 nil)
+              unique-conflict?
+              (do
+                (println (str "❌ Cannot rez " card-name ": this card is unique and another copy is already rezzed."))
+                {:status :error :reason :unique-rez-conflict :card-name card-name})
+              :else
               ;; Ground truth for a rez is the card's own :rezzed flag flipping
               ;; in client state — NOT the log. verify-action-in-log's name
               ;; check scans the last 5 log lines, which routinely already
@@ -845,8 +879,7 @@
               (core/with-cursor {:status :error :reason :unnameable-encounter}))
 
           (not card)
-          (do (println (str "❌ ICE not found installed: " ice-name))
-              (core/with-cursor {:status :error :reason "ICE not found"}))
+          (core/with-cursor (core/report-installed-lookup-miss! ice-name [:corp]))
 
           (not encountering-this?)
           (do (println (format "❌ Cannot fire %s's subroutines: the Runner is not encountering it." (:title card)))
@@ -915,7 +948,7 @@
           (cond
             ;; Card not found
             (not card)
-            (println (str "❌ Card not found installed: " card-name))
+            (core/report-installed-lookup-miss! card-name [:corp])
 
             ;; Would overadvance but flag not set
             (and would-overadvance? (not overadvance?))
@@ -1055,4 +1088,4 @@
                       (println (str "⚠️  " card-name " did NOT score (Corp agenda points unchanged at "
                                    before-score "). The engine refused it — check advancement counters/timing.")))))))
             (println (str "❌ Card is not an Agenda: " (:title card) " (type: " (:type card) ")")))
-          (println (str "❌ Card not found installed: " card-name)))))))
+          (core/report-installed-lookup-miss! card-name [:corp]))))))

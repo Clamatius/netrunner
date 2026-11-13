@@ -1269,6 +1269,7 @@
   (if (ensure-can-act!)
     (let [client-state @state/client-state
           side (:side client-state)
+          hand-before (get-in client-state [:game-state (state/my-side-kw client-state) :hand])
           before-hand (count (get-in client-state [:game-state (keyword side) :hand]))
           before-clicks (get-in client-state [:game-state (keyword side) :click])
           ;; #127: through the authority, not a bare keyword-of-side.
@@ -1298,9 +1299,11 @@
             hand (get-in client-state [:game-state (keyword side) :hand])
             after-hand (count hand)
             after-clicks (get-in client-state [:game-state (keyword side) :click])
-            ;; Get the newly drawn card (last card in hand)
-            new-card (last hand)
-            card-title (get new-card :title "Unknown")]
+            old-cids (set (keep :cid hand-before))
+            newly-present (when (and (= before-hand (count old-cids))
+                                     (every? :cid hand))
+                            (filterv #(not (contains? old-cids (:cid %))) hand))
+            drawn-count (- after-hand before-hand)]
         (println (str "🃏 Hand: " before-hand " → " after-hand " cards"))
         ;; Same no-op guard as take-credit!, and sharper here: "Drew: X" reads
         ;; the LAST card in hand, so a refused draw doesn't just claim success —
@@ -1313,11 +1316,19 @@
                                  :data {:before-hand before-hand
                                         :before-clicks before-clicks}}))
           (do
-            (println (str "   Drew: " card-title))
-            (core/show-card-on-first-sight! card-title)
+            (if (and (pos? drawn-count)
+                     (= drawn-count (count newly-present))
+                     (every? :title newly-present))
+              (do
+                (println (str "   Drew: " (clojure.string/join ", " (map :title newly-present))))
+                (doseq [card newly-present]
+                  (core/show-card-on-first-sight! (:title card))))
+              (println (if (pos? drawn-count)
+                         (str "   Drew " drawn-count " cards")
+                         "   Draw completed; hand count did not increase")))
             (core/show-before-after "⏱️  Clicks" before-clicks after-clicks)
             (check-auto-end-turn!)
-            (core/with-cursor {:status :success :card-drawn card-title})))))))
+            (core/with-cursor {:status :success :card-drawn (some-> newly-present last :title)})))))))
     (core/with-cursor {:status :error :reason "Failed to start turn"}))))
 
 (defn- burn-clicks-for-credits!

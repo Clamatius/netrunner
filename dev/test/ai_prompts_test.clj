@@ -54,6 +54,11 @@
       (is (not (str/includes? out "Timeout")))
       (is (not (str/includes? out "multi-choose"))))))
 
+(deftest wait-for-prompt-change!-closed-select
+  (with-mock-state (mock-client-state :prompt nil)
+    (is (true? (prompts/wait-for-prompt-change! "serum-1" :old-msg "Choose cards for Longevity Serum"
+                                                 :timeout-ms 100)))))
+
 ;; ============================================================================
 ;; choose-by-value! reaches a SELECT prompt's meta-button (laundry-list #5)
 ;;

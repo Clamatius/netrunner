@@ -468,6 +468,9 @@ declare -a FAST=(
 STUB="$TMP/stub-eval.sh"
 cat > "$STUB" <<'STUBEOF'
 #!/usr/bin/env bash
+if [[ -n "${STUB_ALL_CALLS_FILE:-}" ]]; then
+    printf '%s\n' "$*" >> "$STUB_ALL_CALLS_FILE"
+fi
 if [[ "${1:-}" == "--stdin" ]]; then
     expr="$(cat)"
 else
@@ -577,6 +580,72 @@ if [[ "$LABEL_COUNT" -lt 50 ]]; then
        broken and would silently pass over everything"
 else
     ok "inventory" "$LABEL_COUNT dispatch labels derived from send_command"
+fi
+
+# A help token anywhere in a command's arguments must be intercepted before
+# dispatch. Reuse the census above so a newly added arm cannot escape this guard.
+export STUB_TIMEOUT_FILE="$TMP/help-stub-calls"
+export STUB_ALL_CALLS_FILE="$TMP/help-all-stub-calls"
+while read -r label; do
+    [[ -z "$label" ]] && continue
+    for help_flag in --help -h; do
+        : > "$STUB_TIMEOUT_FILE"
+        : > "$STUB_ALL_CALLS_FILE"
+        if [[ "$label" == --help || "$label" == -h ]]; then
+            # These are themselves aliases for the top-level help view.
+            expected=$(AI_EVAL="$STUB" "$SEND_CMD" corp "$label" 2>&1)
+        else
+            expected=$(AI_EVAL="$STUB" "$SEND_CMD" corp help "$label" 2>&1)
+        fi
+        actual=$(AI_EVAL="$STUB" "$SEND_CMD" corp "$label" "$help_flag" 2>&1) || true
+        if [[ "$actual" != "$expected" ]]; then
+            fail "trailing-help:$label:$help_flag" "help output differs from help $label; first line: $(head -1 <<<"$actual")"
+        elif [[ -s "$STUB_ALL_CALLS_FILE" ]]; then
+            fail "trailing-help:$label:$help_flag" "called eval stub: $(cat "$STUB_ALL_CALLS_FILE")"
+        fi
+    done
+done <<< "$LABELS"
+[[ "$fails" -gt 0 ]] || ok "trailing-help" "$LABEL_COUNT dispatcher labels, both help spellings, exact output and zero eval calls"
+for scenario in middle action-escape; do
+    : > "$STUB_ALL_CALLS_FILE"
+    if [[ "$scenario" == middle ]]; then
+        actual=$(AI_EVAL="$STUB" "$SEND_CMD" corp chat "hello" --help "tail" 2>&1) || true
+        expected=$(AI_EVAL="$STUB" "$SEND_CMD" corp help chat 2>&1)
+    else
+        actual=$(AI_EVAL="$STUB" "$SEND_CMD" corp end-turn -- --help 2>&1) || true
+        expected=$(AI_EVAL="$STUB" "$SEND_CMD" corp help end-turn 2>&1)
+    fi
+    if [[ "$actual" == "$expected" && ! -s "$STUB_ALL_CALLS_FILE" ]]; then
+        ok "help-token:$scenario" "same help output, zero eval calls"
+    else
+        fail "help-token:$scenario" "help token escaped central guard"
+    fi
+done
+# Free text that merely contains the spelling is still data. Exact standalone
+# tokens are reserved (the census above includes chat --help and chat -h).
+: > "$STUB_TIMEOUT_FILE"
+AI_EVAL="$STUB" NR_NO_AUTO_PROMPT=1 "$SEND_CMD" corp chat "please type --help" >/dev/null 2>&1 || true
+if [[ -s "$STUB_TIMEOUT_FILE" ]]; then
+    ok "chat-help-text" "embedded --help remained ordinary message text"
+else
+    fail "chat-help-text" "embedded --help was intercepted as help"
+fi
+: > "$STUB_TIMEOUT_FILE"
+escaped=$(AI_EVAL="$STUB" NR_NO_AUTO_PROMPT=1 "$SEND_CMD" corp chat -- --help 2>&1) || true
+if [[ "$escaped" == *"No help entry"* || ! -s "$STUB_TIMEOUT_FILE" ]] || \
+   ! grep -qF 'send-chat! "--help"' "$STUB_TIMEOUT_FILE"; then
+    fail "chat-literal-help" "chat -- --help did not send the exact literal text"
+else
+    ok "chat-literal-help" "-- terminates option scanning and sends --help as chat text"
+fi
+: > "$STUB_TIMEOUT_FILE"
+literal_dashes=$(AI_EVAL="$STUB" NR_NO_AUTO_PROMPT=1 "$SEND_CMD" corp chat -- 2>&1) || true
+if [[ "$literal_dashes" == *"Usage: send_command"* || \
+      ! -s "$STUB_TIMEOUT_FILE" ]] || \
+   ! grep -qF 'send-chat! "--"' "$STUB_TIMEOUT_FILE"; then
+    fail "chat-literal-dashes" "chat -- did not send the exact literal text"
+else
+    ok "chat-literal-dashes" "chat -- sent the two-character message"
 fi
 
 classified_names() {

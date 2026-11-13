@@ -1062,6 +1062,28 @@
           (is (not (re-find #"Drew:" (str out)))
               "Must not claim to have drawn a card it did not draw"))))))
 
+(deftest draw-names-every-new-card
+  (with-mock-state (mock-client-state
+                     :side "runner"
+                     :game-state {:runner {:click 4 :credit 5 :deck-count 20
+                                           :hand [{:cid 1 :title "Old A"} {:cid 2 :title "Old B"}]}
+                                  :corp {} :active-player "runner"})
+    (with-redefs [basic/ensure-can-act! (constantly true)
+                  basic/check-auto-end-turn! (constantly nil)
+                  core/show-card-on-first-sight! (constantly nil)
+                  ws/send-message! (fn [_ _]
+                                     (swap! state/client-state
+                                            (fn [s] (-> s
+                                                        (update-in [:game-state :runner :hand]
+                                                                   into [{:cid 3 :title "Leech"}
+                                                                         {:cid 4 :title "Diesel"}])
+                                                        (update-in [:game-state :runner :click] dec))))
+                                     true)]
+      (let [lines (str/split-lines (with-out-str (basic/draw-card!)))]
+        (is (some #(= "🃏 Hand: 2 → 4 cards" %) lines))
+        (is (some #(= "   Drew: Leech, Diesel" %) lines))
+        (is (not-any? #(= "   Drew: Diesel" %) lines))))))
+
 (deftest repeat-action-does-not-amplify-a-no-op
   (testing "The count must stop on the refusal rather than repeat it N times
             and summarise with a confident '✅ Completed N'."
