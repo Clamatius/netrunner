@@ -246,6 +246,11 @@ refuse "bad tag"                 "--tag may only use"          --corp luna --run
 refuse "corp deck only"          "decks are both or neither"   --corp luna --runner luna --corp-deck "$T/dev/decks/corp.edn"
 refuse "runner deck only"        "decks are both or neither"   --corp luna --runner luna --runner-deck "$T/dev/decks/runner.edn"
 refuse "missing deck file"       "no such deck file: $T/dev/decks/nope.edn" --corp luna --runner luna --corp-deck "$T/dev/decks/corp.edn" --runner-deck "$T/dev/decks/nope.edn"
+refuse "precon with decks"        "--precon is a ready-made matchup; it cannot be combined with --corp-deck/--runner-deck" --corp luna --runner luna --precon worlds-2014-b --corp-deck "$T/dev/decks/corp.edn" --runner-deck "$T/dev/decks/runner.edn"
+refuse "format without decks"     "--format needs --corp-deck and --runner-deck" --corp luna --runner luna --format standard
+refuse "precon with format"       "--precon has no format; drop --format" --corp luna --runner luna --precon worlds-2014-b --format standard
+refuse "precon with a human seat" "--precon and --format are not supported with a human seat yet" --corp human --runner luna --precon worlds-2014-b
+refuse "format with a human seat" "--precon and --format are not supported with a human seat yet" --corp human --runner luna --format standard --corp-deck "$T/dev/decks/corp.edn" --runner-deck "$T/dev/decks/runner.edn"
 rm -f "$T/token"
 refuse "claude seat, no token"   "needs an OAuth token"        --corp opus --runner luna
 
@@ -498,6 +503,17 @@ check "human corp: only the AI side's deck is seeded" bash -c "grep -q '^seed ai
 check "human corp: Constructed lobby on the runner side" grep -qF "sc runner create-game dev/match g18 Runner  Constructed" "$ST/events.log"
 check "human corp: model runner waits for the human's keep" bash -c "(( $(line_of "$ST/events.log" "keep-set") < $(line_of "$ST/events.log" "seat-start runner") ))"
 check "human corp: tells the human how to load their deck" bash -c "[[ \"\$1\" == *'dev/seed-decks.sh <your-username> $T/dev/decks/corp.edn'* ]]" _ "$OUT"
+
+# --precon / --format reach reset.sh as env, and nothing else changes.
+mk_tree dryprecon
+run_match --corp luna --runner luna --precon worlds-2014-b --tag dp --dry-run
+check "dry-run precon: reset gets PRECON and no decks" bash -c "[[ \"\$1\" == *'env PRECON=worlds-2014-b '*'reset.sh'* && \"\$1\" != *'CORP_DECK='* ]]" _ "$OUT"
+mk_tree dryformat
+run_match --corp luna --runner luna --format standard --corp-deck dev/decks/corp.edn --runner-deck dev/decks/runner.edn --tag df --dry-run
+check "dry-run format: reset gets FORMAT and both decks" bash -c "[[ \"\$1\" == *'env FORMAT=standard CORP_DECK=$T/dev/decks/corp.edn RUNNER_DECK=$T/dev/decks/runner.edn '*'reset.sh'* ]]" _ "$OUT"
+mk_tree drydefault
+run_match --corp luna --runner luna --corp-deck dev/decks/corp.edn --runner-deck dev/decks/runner.edn --tag dd --dry-run
+check "dry-run decks without --format: no FORMAT in the reset env (unchanged)" bash -c "[[ \"\$1\" == *'env CORP_DECK='* && \"\$1\" != *'FORMAT='* && \"\$1\" != *'PRECON='* ]]" _ "$OUT"
 
 # Same-model brief wording (the luna-v-luna smoke).
 mk_tree same

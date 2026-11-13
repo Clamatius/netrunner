@@ -59,6 +59,13 @@ Options:
   --corp-deck/--runner-deck  both or neither. Both = System Gateway Constructed with
                      these lists (seeded via dev/seed-decks.sh); neither = the default
                      Intermediate lobby. A missing file is refused before anything runs.
+  --format F         with both decks: a Constructed lobby in format F instead of System
+                     Gateway (dev/deck-check --formats lists them; legality is checked
+                     against F before any lobby is created). Model/bot seats only.
+  --precon K         one of the engine's shipped matchups instead of decks
+                     (dev/deck-check --precons lists them, e.g. worlds-2014-b). Model/bot
+                     seats only. Cards outside System Gateway reach client code that has
+                     never run live: dev/deck-check --precon K prints what is known.
   --effort E         reasoning effort for BOTH model seats and BOTH babysitters
                      (default high). Matched named settings, not equal compute.
                      Not applied to devin seats (effort rides in the model string).
@@ -159,17 +166,18 @@ marker() {
 }
 
 # ── argument parsing (pure: touches nothing) ─────────────────────────────────
-CORP_SEAT=""; RUNNER_SEAT=""; CORP_DECK=""; RUNNER_DECK=""; EFFORT="high"; TAG=""
+CORP_SEAT=""; RUNNER_SEAT=""; CORP_DECK=""; RUNNER_DECK=""; EFFORT="high"; TAG=""; FORMAT=""; PRECON=""
 BABYSIT=1; MAX_HOURS=6; STALL_MIN=20; FORCE=0; NOTIFY=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
-        --corp|--runner|--corp-deck|--runner-deck|--effort|--tag|--max-hours|--stall-minutes)
+        --corp|--runner|--corp-deck|--runner-deck|--effort|--tag|--max-hours|--stall-minutes|--format|--precon)
             [[ $# -ge 2 && -n "$2" ]] || die_usage "$1 needs a value"
             case "$1" in
                 --corp) CORP_SEAT="$2" ;; --runner) RUNNER_SEAT="$2" ;;
                 --corp-deck) CORP_DECK="$2" ;; --runner-deck) RUNNER_DECK="$2" ;;
                 --effort) EFFORT="$2" ;; --tag) TAG="$2" ;;
+                --format) FORMAT="$2" ;; --precon) PRECON="$2" ;;
                 --max-hours) MAX_HOURS="$2" ;; --stall-minutes) STALL_MIN="$2" ;;
             esac
             shift 2 ;;
@@ -184,6 +192,11 @@ done
 [[ -n "$CORP_SEAT" ]]   || die_usage "--corp <seat> is required"
 [[ -n "$RUNNER_SEAT" ]] || die_usage "--runner <seat> is required"
 [[ "$CORP_SEAT" == human && "$RUNNER_SEAT" == human ]] && die_usage "both seats human: nothing for the launcher to seat (open the web client)"
+# A human seat builds its lobby by hand (create-game + join), a path that has only
+# ever made System Gateway lobbies. Refused rather than half-supported.
+if [[ "$CORP_SEAT" == human || "$RUNNER_SEAT" == human ]] && [[ -n "$FORMAT" || -n "$PRECON" ]]; then
+    die_usage "--precon and --format are not supported with a human seat yet"
+fi
 case "$EFFORT" in low|medium|high|xhigh) ;; *) die_usage "--effort must be low|medium|high|xhigh, got '$EFFORT'" ;; esac
 [[ "$MAX_HOURS" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk "BEGIN{exit !($MAX_HOURS>0)}" || die_usage "--max-hours must be a positive number, got '$MAX_HOURS'"
 [[ "$STALL_MIN" =~ ^[0-9]+$ && "$STALL_MIN" -gt 0 ]] || die_usage "--stall-minutes must be a positive whole number, got '$STALL_MIN'"
@@ -198,6 +211,18 @@ if [[ -n "$CORP_DECK" || -n "$RUNNER_DECK" ]]; then
     done
     CORP_DECK="$(cd "$(dirname "$CORP_DECK")" && pwd)/$(basename "$CORP_DECK")"
     RUNNER_DECK="$(cd "$(dirname "$RUNNER_DECK")" && pwd)/$(basename "$RUNNER_DECK")"
+fi
+
+# Lobby kind beyond System Gateway (dev/reset.sh takes FORMAT / PRECON and refuses
+# an unknown format, an unknown matchup or an illegal deck before any lobby exists).
+#   --format F   a Constructed lobby in format F, with both deck files
+#   --precon K   one of the engine's shipped matchups (dev/deck-check --precons); no decks
+if [[ -n "$PRECON" ]]; then
+    [[ -z "$FORMAT" ]] || die_usage "--precon has no format; drop --format"
+    [[ -z "$CORP_DECK" ]] || die_usage "--precon is a ready-made matchup; it cannot be combined with --corp-deck/--runner-deck"
+fi
+if [[ -n "$FORMAT" && -z "$CORP_DECK" ]]; then
+    die_usage "--format needs --corp-deck and --runner-deck"
 fi
 
 [[ -z "$TAG" ]] && TAG="$(date +%Y%m%d-%H%M%S)-${CORP_SEAT}-v-${RUNNER_SEAT}"
@@ -427,7 +452,7 @@ write_result() {
     R_SC="$SCORE_C" R_SR="$SCORE_R" R_TURNS="$TURNS" R_STARTED="$(iso "$STARTED")" R_ENDED="$(iso "$ended")" \
     R_DUR="$((ended - STARTED))" R_REPLAY="$REPLAY" R_REP_C="$REPORT_corp" R_REP_R="$REPORT_runner" \
     R_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)" \
-    R_CDECK="$CORP_DECK" R_RDECK="$RUNNER_DECK" \
+    R_CDECK="$CORP_DECK" R_RDECK="$RUNNER_DECK" R_FORMAT="$FORMAT" R_PRECON="$PRECON" \
     R_C_SEAT="$(gv corp seat)" R_C_BACK="$(gv corp backend)" R_C_MODEL="$(gv corp model)" R_C_EFF="$(gv corp effort)" \
     R_R_SEAT="$(gv runner seat)" R_R_BACK="$(gv runner backend)" R_R_MODEL="$(gv runner model)" R_R_EFF="$(gv runner effort)" \
     R_CH_C="$(chunks_of corp)" R_CH_R="$(chunks_of runner)" \
@@ -441,6 +466,7 @@ r = {
     "gameid": s("R_GAMEID"), "tag": e["R_TAG"],
     "corp": side("R_C_"), "runner": side("R_R_"),
     "decks": {"corp": e["R_CDECK"], "runner": e["R_RDECK"]} if e.get("R_CDECK") else None,
+    "format": s("R_FORMAT"), "precon": s("R_PRECON"),
     "winner": s("R_WINNER"), "reason": s("R_REASON"),
     "score": {"corp": n("R_SC"), "runner": n("R_SR")}, "turns": n("R_TURNS"),
     "started": e["R_STARTED"], "ended": e["R_ENDED"], "duration_s": int(e["R_DUR"]),
@@ -520,7 +546,8 @@ fi
 for s in corp runner; do
     log "$(Cap $s): seat=$(gv $s seat) backend=$(gv $s backend) model=$(gv $s model) effort=$(gv $s effort)"
 done
-[[ -n "$CORP_DECK" ]] && log "decks: corp=$CORP_DECK runner=$RUNNER_DECK (System Gateway Constructed)"
+[[ -n "$CORP_DECK" ]] && log "decks: corp=$CORP_DECK runner=$RUNNER_DECK (${FORMAT:-System Gateway} Constructed)"
+[[ -n "$PRECON" ]] && log "preconstructed matchup: $PRECON"
 if [[ "${MATCH_NTFY_IGNORE_NO_WAKE:-}" == 1 ]] && ! ntfy_loopback; then
     log "MATCH_NTFY_IGNORE_NO_WAKE=1 ignored: $NTFY_URL is not a loopback URL"
 fi
@@ -606,7 +633,11 @@ GATEWAY=Intermediate; [[ -n "$CORP_DECK" ]] && GATEWAY=Constructed
 read_gameid() { marker "$1" GAMEID '(println "GAMEID" (str (:gameid @ai-state/client-state)))'; }
 
 if [[ -z "$HUMAN_SIDE" ]]; then
-    if [[ -n "$CORP_DECK" ]]; then
+    if [[ -n "$PRECON" ]]; then
+        x env PRECON="$PRECON" "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"
+    elif [[ -n "$FORMAT" ]]; then
+        x env FORMAT="$FORMAT" CORP_DECK="$CORP_DECK" RUNNER_DECK="$RUNNER_DECK" "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"
+    elif [[ -n "$CORP_DECK" ]]; then
         x env CORP_DECK="$CORP_DECK" RUNNER_DECK="$RUNNER_DECK" "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"
     else
         x "$SCRIPT_DIR/reset.sh" || launch_failed "dev/reset.sh failed (output above)"

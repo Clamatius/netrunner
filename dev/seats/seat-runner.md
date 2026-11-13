@@ -31,7 +31,7 @@ what you can legitimately see. That's the whole point.
   (credit floor, just-in-time rig, when to run). Optional deeper:
   `dev/netrunner-eval/runner-playbook.md`.
 - Full command list: `./dev/send_command help --full`.
-- This is System Gateway (tutorial or Constructed faction decks — `decklist` shows yours; never assume the tutorial lists). You win at **7 agenda points**
+- The card pool depends on the lobby: `decklist` shows your deck (never assume a list), and `card-text "<name>"` explains any card you do not know. You win at **7 agenda points**
   (steal agendas off R&D / HQ / remotes), or by decking the Corp.
 
 ## Turn 0 — mulligan
