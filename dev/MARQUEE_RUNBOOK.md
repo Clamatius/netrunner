@@ -1,3 +1,7 @@
+> **SUPERSEDED for launching a game: use `dev/match` (`dev/match --help`).** It runs the whole
+> sequence below (reset, Corp first, keep gate, Runner, babysitters, harvest, result.json) in one
+> command. This file is kept for the umpire protocol and history; its launch steps are stale.
+
 # Marquee Runbook — cross-model game pair (Opus ↔ GPT-5.5)
 
 > ## Current round: Fable ↔ GPT-5.6 Sol (2026-08-03) — deltas from the base runbook
